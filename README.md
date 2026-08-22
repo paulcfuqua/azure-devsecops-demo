@@ -8,12 +8,14 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 
 ## Status
 
-**Pre-G1.** Awaiting master-plan approval. Nothing has been written to Azure.
+**Phase P (pre-tenant scaffold).** Decisions locked 2026-08-22: monorepo, Anthropic
+API, dual E5 trials. Scaffold work proceeds; nothing has been written to Azure and the
+tenant is deliberately not yet activated.
 
 | Gate | Meaning | Status |
 |------|---------|--------|
-| G0 | Human bootstrap (tenant, OIDC root, Fabric capacity, licensing) | Checklist issued — see `docs/runbooks/g0-bootstrap.md` |
-| G1 | One-time master plan approval | **Pending** |
+| G0 | Human bootstrap (tenant, OIDC root, Fabric capacity, licensing) | Deferred by sponsor — trial-rate strategy in `docs/runbooks/g0-bootstrap.md` |
+| G1 | One-time master plan approval | **Amended 2026-08-22:** scaffold phase approved (Phase P); Azure deploy authorization (G1b) awaits tenant activation |
 | G2 | Spend-profile changes (per occurrence) | n/a |
 | G3 | Tenant-level destructive ops (per occurrence) | n/a |
 | G4 | Exception escalation (event-driven) | n/a |

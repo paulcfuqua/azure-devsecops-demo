@@ -143,11 +143,18 @@ Per the brief's stack decisions (final, restated for one-page reference):
 - **Observability:** OpenTelemetry SDKs → App Insights (workspace-based) → same Log
   Analytics workspace the control tower queries.
 
-## 4. Open decisions for G1
+## 4. Decisions resolved at G1 (sponsor, 2026-08-22)
 
-1. **Repo shape:** monorepo (recommended, F3) vs multi-repo.
-2. **LLM provider:** Anthropic API direct (recommended, F4) vs Azure AI Foundry.
-3. **Licensing path:** EMS E5 trial at G0 (recommended, F1) vs degrade-gracefully scope.
+1. **Repo shape:** single public monorepo (F3 recommendation adopted).
+2. **LLM provider:** Anthropic API direct (F4 recommendation adopted).
+3. **Licensing path:** dual free trials — M365 E5 (30 d, provides the Exchange-backed
+   compliance portal for label creation) + EMS E5 (90 d, keeps CA/sign-in-risk
+   licensed); full E3-vs-E5 breakdown in `docs/runbooks/g0-bootstrap.md` §B.
+4. **G1 amended:** scaffold phase approved immediately (Phase P, pre-tenant, no cloud
+   writes — see `docs/superpowers/plans/2026-08-22-phase-p-pre-tenant-scaffold.md`);
+   deploy authorization (G1b) deferred until the sponsor activates the tenant on the
+   trial-rate strategy. Fabric plan updated: 60-day trial capacity first, paid F2 as
+   the post-trial G2 path.
 
 ## 5. Success criteria
 

@@ -24,6 +24,13 @@ Trivy, ZAP, Syft/sbom-tool, OpenTelemetry.
 **Spec:** `docs/superpowers/specs/2026-08-22-azure-devsecops-demo-design.md`
 **Decision record:** `docs/BRIEF.md`
 
+> **G1 status (2026-08-22):** sponsor approved the plan's shape and locked the three
+> open decisions (monorepo / Anthropic API / dual E5 trials), and amended execution:
+> **Phase P** (pre-tenant scaffold — see
+> `2026-08-22-phase-p-pre-tenant-scaffold.md`) runs first with zero cloud writes;
+> layers L1+ deploy only after the sponsor activates the tenant (G1b) and G0
+> completes. Fabric plan updated: 60-day trial capacity first; paid F2 via G2 later.
+
 ## Global constraints
 
 - No Azure/Entra/Fabric/GitHub-org writes before G1 approval; per-layer unblock rules in
@@ -255,7 +262,7 @@ post-up: all layer audits green; wall-clock < 60 min; run-rate returns to idle p
 | Active demo | **~$0.60–1.20/hour** | Fabric F2 $0.36/hr + SQL serverless $0.10–0.50/hr + ACA $0.10–0.30/hr (+ Defender ~$0.01/hr if toggled) |
 | LLM usage | $1–5/demo day | copilot + self-heal triage (Anthropic API, pending Q2) |
 | Build/rebuild cycle | ~$1–2 each | Fabric resume window + CI (free on public repo) |
-| Licensing | $0 for 90 days | EMS E5 trial; after trial: ~$9/user/mo × 6 if kept, or descope per spec F1 |
+| Licensing | $0 during trials | M365 E5 (30 d) + EMS E5 (90 d); after trials: EMS E3 ≈ $11/user/mo or E5 ≈ $16/user/mo × 6 if kept, or descope per spec F1 |
 | **Worst-case monthly** (4 demo days + weekly rebuilds, in-trial) | **≈ $40–60** | backstopped by $75 budget + alerts (G0 B6) |
 
 ## Risk register (top 5)
