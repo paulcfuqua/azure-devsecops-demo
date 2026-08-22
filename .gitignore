@@ -1,0 +1,29 @@
+# Local secrets and environment
+.env
+.env.*
+*.local.json
+.claude/settings.local.json
+
+# Node
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Bicep build output
+*.azrm.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Generated data (seed scripts are source; generated CSVs are artifacts)
+data/generated/
