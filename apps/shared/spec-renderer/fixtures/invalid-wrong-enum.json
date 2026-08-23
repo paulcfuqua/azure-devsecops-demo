@@ -1,0 +1,11 @@
+{
+  "version": "1",
+  "layout": "flow",
+  "components": [
+    {
+      "type": "statCard",
+      "title": "Launch Success Rate",
+      "value": 98.3
+    }
+  ]
+}

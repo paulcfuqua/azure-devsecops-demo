@@ -1,0 +1,19 @@
+{
+  "version": "1",
+  "layout": "stack",
+  "components": [
+    {
+      "type": "barChart",
+      "title": "Launches per Vehicle",
+      "description": "Completed launches by vehicle family, all pads.",
+      "data": [
+        { "x": "Aurora", "y": 412 },
+        { "x": "Halcyon", "y": 355 },
+        { "x": "Kestrel Heavy", "y": 220 },
+        { "x": "Meridian One", "y": 213 }
+      ],
+      "unit": "launches",
+      "decimals": 0
+    }
+  ]
+}

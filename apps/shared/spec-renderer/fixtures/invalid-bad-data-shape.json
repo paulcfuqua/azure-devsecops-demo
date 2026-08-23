@@ -1,0 +1,14 @@
+{
+  "version": "1",
+  "layout": "stack",
+  "components": [
+    {
+      "type": "donutChart",
+      "title": "Scrub Causes",
+      "data": [
+        { "x": "Weather", "y": 38 },
+        { "x": "Vehicle", "y": 21 }
+      ]
+    }
+  ]
+}

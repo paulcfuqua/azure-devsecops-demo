@@ -1,0 +1,16 @@
+{
+  "version": "1",
+  "layout": "grid",
+  "components": [
+    {
+      "type": "kpiRow",
+      "title": "Mission Operations KPIs",
+      "items": [
+        { "label": "Launches YTD", "value": 131, "decimals": 0, "trend": "up" },
+        { "label": "Scrub Rate", "value": 7.4, "unit": "%", "decimals": 1, "trend": "down" },
+        { "label": "Avg Turnaround", "value": 11.2, "unit": "days", "decimals": 1, "trend": "flat" },
+        { "label": "Next Window", "value": "Sat 06:40 UTC" }
+      ]
+    }
+  ]
+}

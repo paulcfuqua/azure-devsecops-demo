@@ -1,0 +1,21 @@
+{
+  "version": "1",
+  "layout": "stack",
+  "components": [
+    {
+      "type": "lineChart",
+      "title": "Launch Cadence by Month",
+      "description": "Monthly completed launches over the trailing half year.",
+      "data": [
+        { "x": "2026-02-01", "y": 14 },
+        { "x": "2026-03-01", "y": 17 },
+        { "x": "2026-04-01", "y": 12 },
+        { "x": "2026-05-01", "y": 19 },
+        { "x": "2026-06-01", "y": 21 },
+        { "x": "2026-07-01", "y": 18 }
+      ],
+      "unit": "launches",
+      "decimals": 0
+    }
+  ]
+}

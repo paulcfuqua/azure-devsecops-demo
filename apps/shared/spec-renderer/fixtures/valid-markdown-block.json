@@ -1,0 +1,11 @@
+{
+  "version": "1",
+  "layout": "stack",
+  "components": [
+    {
+      "type": "markdownBlock",
+      "title": "Analysis Summary",
+      "markdown": "# Saturday launch bias\n\nSaturday is the **busiest launch day** of the week, with roughly *twice* the cadence of midweek days.\n\n- Weekend range availability is higher\n- Customer integration schedules cluster late in the week\n- See `launches` table, column `weekday`\n\nFull methodology in the [ops handbook](https://example.com/handbook)."
+    }
+  ]
+}

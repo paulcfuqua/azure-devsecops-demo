@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://meridianlaunch.example/schemas/spec-renderer/spec.schema.json",
+  "title": "Spec",
+  "description": "Top-level UI spec rendered by @mls/spec-renderer. The copilot service may only emit JSON documents that validate against this schema — never UI code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "layout", "components"],
+  "properties": {
+    "version": {
+      "const": "1",
+      "description": "Spec contract version. Always the string \"1\"."
+    },
+    "layout": {
+      "enum": ["stack", "grid"],
+      "description": "How components are arranged: a vertical stack or a responsive grid."
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 24,
+      "items": { "$ref": "#/$defs/componentSpec" }
+    }
+  },
+  "$defs": {
+    "componentSpec": {
+      "type": "object",
+      "required": ["type"],
+      "discriminator": { "propertyName": "type" },
+      "oneOf": [
+        { "$ref": "#/$defs/barChart" },
+        { "$ref": "#/$defs/lineChart" },
+        { "$ref": "#/$defs/areaChart" },
+        { "$ref": "#/$defs/statCard" },
+        { "$ref": "#/$defs/kpiRow" },
+        { "$ref": "#/$defs/dataTable" },
+        { "$ref": "#/$defs/timeline" },
+        { "$ref": "#/$defs/donutChart" },
+        { "$ref": "#/$defs/markdownBlock" }
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "unit": {
+      "type": "string",
+      "maxLength": 16,
+      "description": "Display unit appended to formatted values, e.g. \"%\", \"kg\", \"$\"."
+    },
+    "decimals": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6,
+      "description": "Number of fraction digits when formatting numeric values."
+    },
+    "trend": {
+      "enum": ["up", "down", "flat"]
+    },
+    "xyPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": ["string", "number"] },
+        "y": { "type": "number" }
+      }
+    },
+    "labelValuePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "value"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "value": { "type": "number" }
+      }
+    },
+    "barChart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "data"],
+      "properties": {
+        "type": { "const": "barChart" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/description" },
+        "data": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/xyPoint" }
+        },
+        "unit": { "$ref": "#/$defs/unit" },
+        "decimals": { "$ref": "#/$defs/decimals" }
+      }
+    },
+    "lineChart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "data"],
+      "properties": {
+        "type": { "const": "lineChart" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/description" },
+        "data": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/xyPoint" }
+        },
+        "unit": { "$ref": "#/$defs/unit" },
+        "decimals": { "$ref": "#/$defs/decimals" }
+      }
+    },
+    "areaChart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "data"],
+      "properties": {
+        "type": { "const": "areaChart" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/description" },
+        "data": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/xyPoint" }
+        },
+        "unit": { "$ref": "#/$defs/unit" },
+        "decimals": { "$ref": "#/$defs/decimals" }
+      }
+    },
+    "statCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "value"],
+      "properties": {
+        "type": { "const": "statCard" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/description" },
+        "value": { "type": ["number", "string"] },
+        "unit": { "$ref": "#/$defs/unit" },
+        "decimals": { "$ref": "#/$defs/decimals" },
+        "trend": { "$ref": "#/$defs/trend" },
+        "delta": {
+          "type": "number",
+          "description": "Change versus the previous period, shown next to the trend arrow."
+        }
+      }
+    },
+    "kpiRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "items"],
+      "properties": {
+        "type": { "const": "kpiRow" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/description" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/kpiItem" }
+        }
+      }
+    },
+    "kpiItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "value"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "value": { "type": ["number", "string"] },
+        "unit": { "$ref": "#/$defs/unit" },
+        "decimals": { "$ref": "#/$defs/decimals" },
+        "trend": { "$ref": "#/$defs/trend" }
+      }
+    },
+    "dataTable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "columns", "rows"],
+      "properties": {
+        "type": { "const": "dataTable" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/description" },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "label"],
+            "properties": {
+              "key": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "align": { "enum": ["left", "center", "right"] }
+            }
+          }
+        },
+        "rows": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+          }
+        }
+      }
+    },
+    "timeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "events"],
+      "properties": {
+        "type": { "const": "timeline" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/description" },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "label"],
+            "properties": {
+              "date": { "type": "string", "minLength": 1, "maxLength": 40 },
+              "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "description": { "$ref": "#/$defs/description" },
+              "kind": { "enum": ["info", "success", "warning", "danger"] }
+            }
+          }
+        }
+      }
+    },
+    "donutChart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "data"],
+      "properties": {
+        "type": { "const": "donutChart" },
+        "title": { "$ref": "#/$defs/title" },
+        "description": { "$ref": "#/$defs/description" },
+        "data": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "items": { "$ref": "#/$defs/labelValuePoint" }
+        },
+        "unit": { "$ref": "#/$defs/unit" },
+        "decimals": { "$ref": "#/$defs/decimals" }
+      }
+    },
+    "markdownBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "markdown"],
+      "properties": {
+        "type": { "const": "markdownBlock" },
+        "title": { "$ref": "#/$defs/title" },
+        "markdown": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000,
+          "description": "Markdown subset: headings, paragraphs, bold, italic, inline code, fenced code, lists, and http(s) links. Rendered as React elements — raw HTML is never injected."
+        }
+      }
+    }
+  }
+}

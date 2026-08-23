@@ -1,0 +1,20 @@
+{
+  "version": "1",
+  "layout": "stack",
+  "components": [
+    {
+      "type": "areaChart",
+      "title": "Cumulative Payload Mass",
+      "description": "Cumulative payload mass to orbit, year to date.",
+      "data": [
+        { "x": 1, "y": 182.5 },
+        { "x": 2, "y": 341.0 },
+        { "x": 3, "y": 512.25 },
+        { "x": 4, "y": 705.75 },
+        { "x": 5, "y": 934.5 }
+      ],
+      "unit": "t",
+      "decimals": 2
+    }
+  ]
+}

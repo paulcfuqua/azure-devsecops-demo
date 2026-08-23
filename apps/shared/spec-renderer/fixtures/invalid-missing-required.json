@@ -1,0 +1,13 @@
+{
+  "version": "1",
+  "layout": "stack",
+  "components": [
+    {
+      "type": "barChart",
+      "data": [
+        { "x": "Aurora", "y": 412 },
+        { "x": "Halcyon", "y": 355 }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "version": "1",
+  "layout": "stack",
+  "components": [
+    {
+      "type": "dataTable",
+      "title": "Recent Launches",
+      "description": "Last three completed missions.",
+      "columns": [
+        { "key": "mission", "label": "Mission" },
+        { "key": "vehicle", "label": "Vehicle" },
+        { "key": "payloadKg", "label": "Payload (kg)", "align": "right" },
+        { "key": "success", "label": "Success", "align": "center" }
+      ],
+      "rows": [
+        { "mission": "MLS-131", "vehicle": "Aurora", "payloadKg": 14250, "success": true },
+        { "mission": "MLS-130", "vehicle": "Kestrel Heavy", "payloadKg": 21800, "success": true },
+        { "mission": "MLS-129", "vehicle": "Halcyon", "payloadKg": null, "success": false }
+      ]
+    }
+  ]
+}

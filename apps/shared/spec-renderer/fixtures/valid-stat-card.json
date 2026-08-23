@@ -1,0 +1,16 @@
+{
+  "version": "1",
+  "layout": "stack",
+  "components": [
+    {
+      "type": "statCard",
+      "title": "Launch Success Rate",
+      "description": "Trailing 12 months, all vehicle families.",
+      "value": 98.3,
+      "unit": "%",
+      "decimals": 1,
+      "trend": "up",
+      "delta": 1.2
+    }
+  ]
+}

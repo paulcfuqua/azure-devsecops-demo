@@ -1,0 +1,20 @@
+{
+  "version": "1",
+  "layout": "grid",
+  "components": [
+    {
+      "type": "donutChart",
+      "title": "Scrub Causes",
+      "description": "Distribution of scrub causes, trailing 24 months.",
+      "data": [
+        { "label": "Weather", "value": 38 },
+        { "label": "Vehicle", "value": 21 },
+        { "label": "Range", "value": 12 },
+        { "label": "Payload", "value": 7 },
+        { "label": "Other", "value": 4 }
+      ],
+      "unit": "scrubs",
+      "decimals": 0
+    }
+  ]
+}
