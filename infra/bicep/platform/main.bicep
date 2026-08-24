@@ -1,0 +1,339 @@
+// =============================================================================
+// platform/main.bicep — L6: shared runtime platform (Bicep/AVM).
+//
+// Deployed at SUBSCRIPTION scope by the L6 workflow (layer-06-platform.yml):
+//
+//   az deployment sub create \
+//     --location $AZURE_LOCATION \
+//     --template-file infra/bicep/platform/main.bicep \
+//     --parameters infra/bicep/platform/demo.bicepparam
+//
+// Creates the four demo resource groups (CLAUDE.md RG layout) and, per the
+// [derived] placement map (see infra/bicep/README.md):
+//   mls-rg-platform : Log Analytics workspace, workspace-based App Insights,
+//                     Container Apps environment (wired to LAW), Key Vault
+//   mls-rg-data     : Azure SQL logical server + serverless per-app database
+//                     (auto-pause 60 min, min 0.5 vCore, max 2 vCore)
+//   mls-rg-ops      : storage account for Cost Management daily exports
+//   mls-rg-apps     : created empty here; L7 app deployments target it
+//
+// Everything is scale-to-zero / auto-pause / consumption. Anything that bills
+// while idle is a design error (master plan: built-but-parked < $15/month).
+// The ANTHROPIC_API_KEY secret VALUE is written into Key Vault by the layer-06
+// workflow from the GitHub secret (G0 item C5) — never by Bicep, never in repo.
+// The Cost Management export definition + ingestion Function are wired by the
+// same workflow (subscription-scope config, not resources of this template).
+// =============================================================================
+targetScope = 'subscription'
+
+import * as naming from '../naming.bicep'
+
+// ------------------------------------------------------------------ parameters
+
+@description('Company prefix. Single source: naming.bicep.')
+param companyPrefix string = naming.defaultCompanyPrefix
+
+@description('Environment segment for names and the env tag.')
+param env string = naming.defaultEnv
+
+@description('Region for all platform resources. From AZURE_LOCATION at deploy time.')
+param location string = deployment().location
+
+@description('costCenter tag value.')
+param costCenter string = naming.defaultCostCenter
+
+@description('owner tag value.')
+param owner string = naming.defaultOwner
+
+@description('dataClassification tag value for platform resources.')
+param dataClassification string = naming.defaultDataClassification
+
+@description('Entra admin login name for the SQL server (Entra-only auth — no SQL passwords, CLAUDE.md hard rule 5). Supplied from the environment at deploy time.')
+param sqlAadAdminLogin string = ''
+
+@description('Entra object ID (sid) of the SQL admin principal. Supplied from the environment at deploy time.')
+param sqlAadAdminObjectId string = ''
+
+@allowed(['Application', 'Group', 'User'])
+@description('Principal type of the SQL Entra admin.')
+param sqlAadAdminPrincipalType string = 'Group'
+
+@description('SQL serverless auto-pause delay in minutes. Pinned to 60 by the master plan; the L6 audit (V6.1) fails on any other value.')
+param sqlAutoPauseDelayMinutes int = 60
+
+@description('SQL serverless minimum capacity in vCores. Pinned to 0.5 by the master plan (V6.1).')
+param sqlMinCapacity string = '0.5'
+
+@description('SQL serverless maximum capacity in vCores (GP_S_Gen5 SKU capacity).')
+param sqlMaxCapacity int = 2
+
+@allowed(['default', 'recover'])
+@description('Key Vault create mode. Flip to recover when a soft-deleted vault with the target name exists (kill/rebuild replay — L6 playbook rollback note).')
+param keyVaultCreateMode string = 'default'
+
+@description('[derived] Log Analytics retention in days: 30 keeps retention inside the free window so idle LAW cost is ingestion-only.')
+param lawDataRetentionDays int = 30
+
+@description('[derived] Log Analytics daily ingestion cap in GB — runaway-ingest guard for the idle-cost model. -1 disables the cap.')
+param lawDailyQuotaGb string = '1'
+
+// ------------------------------------------------------------------ names + tags
+
+var rgPlatformName = naming.resourceGroupName(companyPrefix, naming.rgPurposes.platform)
+var rgAppsName = naming.resourceGroupName(companyPrefix, naming.rgPurposes.apps)
+var rgDataName = naming.resourceGroupName(companyPrefix, naming.rgPurposes.data)
+var rgOpsName = naming.resourceGroupName(companyPrefix, naming.rgPurposes.ops)
+
+var lawName = naming.logAnalyticsWorkspaceName(companyPrefix, env)
+var appiName = naming.appInsightsName(companyPrefix, env)
+var caeName = naming.containerAppsEnvironmentName(companyPrefix, env)
+var kvName = naming.keyVaultName(companyPrefix, env)
+var sqlName = naming.sqlServerName(companyPrefix, env)
+var sqlDbName = naming.sqlDatabaseName(companyPrefix, naming.appKeys.launchOps, env)
+var exportStorageName = naming.storageAccountName(companyPrefix, 'cost', env)
+
+// app tag values follow the role segment of each resource name (README: derived).
+var tagsPlatform = naming.requiredTags(env, 'platform', costCenter, owner, dataClassification)
+var tagsApps = naming.requiredTags(env, 'apps', costCenter, owner, dataClassification)
+var tagsData = naming.requiredTags(env, 'data', costCenter, owner, dataClassification)
+var tagsOps = naming.requiredTags(env, 'ops', costCenter, owner, dataClassification)
+var tagsSqlServer = naming.requiredTags(env, 'ops', costCenter, owner, dataClassification)
+var tagsSqlDb = naming.requiredTags(env, naming.appKeys.launchOps, costCenter, owner, dataClassification)
+var tagsCostStorage = naming.requiredTags(env, 'cost', costCenter, owner, dataClassification)
+
+// ------------------------------------------------------------------ resource groups (all four — single owner of RG creation)
+
+module rgPlatform 'br/public:avm/res/resources/resource-group:0.4.4' = {
+  name: 'l6-rg-platform'
+  params: {
+    name: rgPlatformName
+    location: location
+    tags: tagsPlatform
+  }
+}
+
+module rgApps 'br/public:avm/res/resources/resource-group:0.4.4' = {
+  name: 'l6-rg-apps'
+  params: {
+    name: rgAppsName
+    location: location
+    tags: tagsApps
+  }
+}
+
+module rgData 'br/public:avm/res/resources/resource-group:0.4.4' = {
+  name: 'l6-rg-data'
+  params: {
+    name: rgDataName
+    location: location
+    tags: tagsData
+  }
+}
+
+module rgOps 'br/public:avm/res/resources/resource-group:0.4.4' = {
+  name: 'l6-rg-ops'
+  params: {
+    name: rgOpsName
+    location: location
+    tags: tagsOps
+  }
+}
+
+// ------------------------------------------------------------------ observability (mls-rg-platform)
+
+module logAnalytics 'br/public:avm/res/operational-insights/workspace:0.16.1' = {
+  name: 'l6-law'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    name: lawName
+    location: location
+    tags: tagsPlatform
+    skuName: 'PerGB2018' // pay-as-you-go: $0 when nothing ingests
+    dataRetention: lawDataRetentionDays
+    dailyQuotaGb: lawDailyQuotaGb
+  }
+  dependsOn: [rgPlatform]
+}
+
+module appInsights 'br/public:avm/res/insights/component:0.8.0' = {
+  name: 'l6-appi'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    name: appiName
+    location: location
+    tags: tagsPlatform
+    workspaceResourceId: logAnalytics.outputs.resourceId // workspace-based (master plan)
+  }
+  dependsOn: [rgPlatform]
+}
+
+// ------------------------------------------------------------------ Container Apps environment (mls-rg-platform)
+
+module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.15.0' = {
+  name: 'l6-cae'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    name: caeName
+    location: location
+    tags: tagsPlatform
+    // Wired to the Log Analytics workspace (master plan L6).
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsWorkspaceResourceId: logAnalytics.outputs.resourceId
+    }
+    // Consumption-only environment: no workload profiles, no VNet, no
+    // zone-redundancy (which would require an infrastructure subnet). The
+    // environment itself bills nothing; apps bill only while replicas run.
+    zoneRedundant: false
+    // AVM defaults publicNetworkAccess to Disabled; the two frontend apps have
+    // external ingress by design, so the environment must accept public traffic.
+    publicNetworkAccess: 'Enabled'
+  }
+  dependsOn: [rgPlatform]
+}
+
+// ------------------------------------------------------------------ Key Vault (mls-rg-platform)
+
+module keyVault 'br/public:avm/res/key-vault/vault:0.14.0' = {
+  name: 'l6-kv'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    name: kvName
+    location: location
+    tags: tagsPlatform
+    sku: 'standard' // [derived] AVM defaults to premium; standard suffices, HSM not needed
+    enableRbacAuthorization: true // RBAC mode (Track E requirement)
+    enableSoftDelete: true // soft-delete on (Track E requirement)
+    softDeleteRetentionInDays: 90
+    // [derived] Purge protection off: the G3 full-teardown path must be able to
+    // purge, and the standard kill/rebuild cycle recovers the soft-deleted vault
+    // via createMode=recover instead (L6 playbook rollback note).
+    enablePurgeProtection: false
+    createMode: keyVaultCreateMode
+  }
+  dependsOn: [rgPlatform]
+}
+
+// ------------------------------------------------------------------ Azure SQL serverless (mls-rg-data)
+
+module sqlServer 'br/public:avm/res/sql/server:0.22.0' = {
+  name: 'l6-sql'
+  scope: resourceGroup(rgDataName)
+  params: {
+    name: sqlName
+    location: location
+    tags: tagsSqlServer
+    // Entra-only authentication — no SQL passwords anywhere (CLAUDE.md rule 5).
+    administrators: empty(sqlAadAdminObjectId)
+      ? null
+      : {
+          azureADOnlyAuthentication: true
+          administratorType: 'ActiveDirectory'
+          login: sqlAadAdminLogin
+          principalType: sqlAadAdminPrincipalType
+          sid: sqlAadAdminObjectId
+        }
+    minimalTlsVersion: '1.2'
+    // [derived] Apps reach SQL over the public endpoint (no VNet in the
+    // consumption-only design); 0.0.0.0-0.0.0.0 is the ARM idiom for
+    // "allow Azure services" so Container Apps can connect.
+    firewallRules: [
+      {
+        name: 'AllowAllWindowsAzureIps'
+        startIpAddress: '0.0.0.0'
+        endIpAddress: '0.0.0.0'
+      }
+    ]
+    databases: [
+      {
+        name: sqlDbName
+        tags: tagsSqlDb
+        // Serverless general purpose: auto-pause 60 min, 0.5–2 vCores —
+        // values the L6 audit (V6.1) asserts field-for-field.
+        sku: {
+          name: 'GP_S_Gen5'
+          tier: 'GeneralPurpose'
+          family: 'Gen5'
+          capacity: sqlMaxCapacity
+        }
+        autoPauseDelay: sqlAutoPauseDelayMinutes
+        minCapacity: sqlMinCapacity
+        availabilityZone: -1 // no zone pinning in the single-region demo
+        zoneRedundant: false
+        maxSizeBytes: 34359738368 // 32 GiB
+      }
+    ]
+  }
+  dependsOn: [rgData]
+}
+
+// ------------------------------------------------------------------ cost-export storage (mls-rg-ops)
+
+module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
+  name: 'l6-cost-st'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    name: exportStorageName
+    location: location
+    tags: tagsCostStorage
+    skuName: 'Standard_LRS' // cheapest redundancy; exports are reproducible data
+    kind: 'StorageV2'
+    accessTier: 'Hot'
+    allowBlobPublicAccess: false
+    // [derived] Entra/RBAC-only data plane: Cost Management exports write via
+    // the service's identity (Storage Blob Data Contributor granted by the
+    // layer-06 workflow when it creates the export definition), so shared keys
+    // stay off (L6 playbook failure mode 3 assumes the RBAC path).
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    blobServices: {
+      containers: [
+        {
+          name: 'cost-exports' // container name pinned by the L6 audit (V6.3)
+          publicAccess: 'None'
+        }
+      ]
+    }
+  }
+  dependsOn: [rgOps]
+}
+
+// ------------------------------------------------------------------ outputs (the L6 layer manifest for the Verifier)
+
+@description('Resource ID of the Log Analytics workspace.')
+output logAnalyticsWorkspaceResourceId string = logAnalytics.outputs.resourceId
+
+@description('Log Analytics workspace (customer) ID used by KQL queries (V6.2).')
+output logAnalyticsWorkspaceCustomerId string = logAnalytics.outputs.logAnalyticsWorkspaceId
+
+@description('Application Insights connection string (workspace-based; not a secret).')
+output appInsightsConnectionString string = appInsights.outputs.connectionString
+
+@description('Resource ID of the Container Apps environment (input to L7 app deploys).')
+output containerAppsEnvironmentResourceId string = containerAppsEnvironment.outputs.resourceId
+
+@description('Default domain of the Container Apps environment.')
+output containerAppsEnvironmentDefaultDomain string = containerAppsEnvironment.outputs.defaultDomain
+
+@description('Key Vault URI holding the anthropic-api-key secret reference.')
+output keyVaultUri string = keyVault.outputs.uri
+
+@description('Key Vault resource ID.')
+output keyVaultResourceId string = keyVault.outputs.resourceId
+
+@description('Fully qualified domain name of the SQL logical server.')
+output sqlServerFqdn string = sqlServer.outputs.fullyQualifiedDomainName
+
+@description('Name of the serverless SQL database (V6.1 / V6.4 target).')
+output sqlDatabaseName string = sqlDbName
+
+@description('Resource ID of the cost-export storage account.')
+output costExportStorageResourceId string = costExportStorage.outputs.resourceId
+
+@description('Names of the four demo resource groups, as created.')
+output resourceGroupNames object = {
+  platform: rgPlatform.outputs.name
+  apps: rgApps.outputs.name
+  data: rgData.outputs.name
+  ops: rgOps.outputs.name
+}
