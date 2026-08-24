@@ -27,6 +27,30 @@ tenant is deliberately not yet activated.
 - [G1 master plan](docs/superpowers/plans/2026-08-22-g1-master-plan.md)
 - [Working agreements for all agents](CLAUDE.md)
 
+## Run locally
+
+The apps run pre-tenant in **local data mode** — no Azure, no credentials. Requires
+Node 20+ and Python 3.11+.
+
+```sh
+# 1. Generate the synthetic dataset (deterministic, seed 20260822; gitignored output)
+cd data && python -m generators build && cd ..
+
+# 2. Install the npm workspaces (root manifest covers apps/* and apps/shared/*)
+npm install
+
+# 3. Run an app — http://localhost:5173 and http://localhost:5174
+npm run dev:launch-ops
+npm run dev:control-tower
+```
+
+`launch-ops` reads `data/generated/*.json`; `control-tower` reads committed feed
+fixtures for its Dev/Sec tabs and `data/generated/` for Ops. Dev mode defaults to
+local data; set `LOCAL_DATA=1` to force it for a production build, or
+`VITE_DATA_MODE=api` to point at the live backends wired at L7.
+
+`npm run build` and `npm test` at the root run across all workspaces.
+
 ## The three showpieces
 
 1. **Copilot service** — natural-language questions over the Fabric lakehouse + ops/sec/

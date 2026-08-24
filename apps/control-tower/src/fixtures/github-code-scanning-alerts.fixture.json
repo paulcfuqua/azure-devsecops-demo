@@ -1,0 +1,106 @@
+[
+  {
+    "number": 42,
+    "state": "open",
+    "created_at": "2026-08-18T04:11:32Z",
+    "rule": {
+      "id": "js/sql-injection",
+      "severity": "error",
+      "security_severity_level": "critical",
+      "description": "Database query built from user-controlled sources"
+    },
+    "tool": { "name": "CodeQL" },
+    "most_recent_instance": { "location": { "path": "apps/vuln-lab/src/report.ts" } }
+  },
+  {
+    "number": 41,
+    "state": "open",
+    "created_at": "2026-08-18T04:11:32Z",
+    "rule": {
+      "id": "js/prototype-polluting-assignment",
+      "severity": "error",
+      "security_severity_level": "high",
+      "description": "Prototype-polluting assignment from untrusted input"
+    },
+    "tool": { "name": "CodeQL" },
+    "most_recent_instance": { "location": { "path": "apps/vuln-lab/src/merge.ts" } }
+  },
+  {
+    "number": 38,
+    "state": "fixed",
+    "created_at": "2026-08-12T04:10:15Z",
+    "rule": {
+      "id": "py/clear-text-logging-sensitive-data",
+      "severity": "error",
+      "security_severity_level": "high",
+      "description": "Clear-text logging of sensitive information"
+    },
+    "tool": { "name": "CodeQL" },
+    "most_recent_instance": { "location": { "path": "data/generators/writers.py" } }
+  },
+  {
+    "number": 35,
+    "state": "open",
+    "created_at": "2026-08-09T04:12:51Z",
+    "rule": {
+      "id": "js/incomplete-url-substring-sanitization",
+      "severity": "warning",
+      "security_severity_level": "medium",
+      "description": "Incomplete URL substring sanitization"
+    },
+    "tool": { "name": "CodeQL" },
+    "most_recent_instance": { "location": { "path": "apps/copilot-svc/src/tools/fetch.ts" } }
+  },
+  {
+    "number": 33,
+    "state": "open",
+    "created_at": "2026-08-07T04:09:44Z",
+    "rule": {
+      "id": "js/insecure-randomness",
+      "severity": "warning",
+      "security_severity_level": "medium",
+      "description": "Insecure randomness used in a security context"
+    },
+    "tool": { "name": "CodeQL" },
+    "most_recent_instance": { "location": { "path": "apps/vuln-lab/src/token.ts" } }
+  },
+  {
+    "number": 29,
+    "state": "dismissed",
+    "created_at": "2026-08-02T04:08:19Z",
+    "rule": {
+      "id": "js/regex/redos",
+      "severity": "warning",
+      "security_severity_level": "medium",
+      "description": "Inefficient regular expression vulnerable to ReDoS"
+    },
+    "tool": { "name": "CodeQL" },
+    "most_recent_instance": { "location": { "path": "apps/launch-ops/src/providers/specs.ts" } }
+  },
+  {
+    "number": 27,
+    "state": "open",
+    "created_at": "2026-07-30T04:07:02Z",
+    "rule": {
+      "id": "js/unused-local-variable",
+      "severity": "note",
+      "security_severity_level": "low",
+      "description": "Unused variable, import, function or class"
+    },
+    "tool": { "name": "CodeQL" },
+    "most_recent_instance": { "location": { "path": "apps/control-tower/src/App.tsx" } }
+  },
+  {
+    "number": 24,
+    "state": "open",
+    "created_at": "2026-07-28T04:06:38Z",
+    "rule": {
+      "id": "py/weak-cryptographic-algorithm",
+      "severity": "warning",
+      "security_severity_level": "low",
+      "description": "Use of a broken or weak cryptographic algorithm"
+    },
+    "tool": { "name": "CodeQL" },
+    "most_recent_instance": { "location": { "path": "scripts/bootstrap/hash-check.py" } }
+  }
+]

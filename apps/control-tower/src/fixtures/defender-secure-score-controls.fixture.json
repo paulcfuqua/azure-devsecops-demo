@@ -1,0 +1,64 @@
+{
+  "value": [
+    {
+      "name": "a9909064-42b4-4d34-8143-275477afe18b",
+      "type": "Microsoft.Security/secureScores/secureScoreControls",
+      "properties": {
+        "displayName": "Enable MFA",
+        "healthyResourceCount": 4,
+        "unhealthyResourceCount": 0,
+        "score": { "max": 10, "current": 10, "percentage": 1.0 }
+      }
+    },
+    {
+      "name": "34a42fb3-e6db-409c-b56b-5cd8a2c98c73",
+      "type": "Microsoft.Security/secureScores/secureScoreControls",
+      "properties": {
+        "displayName": "Secure management ports",
+        "healthyResourceCount": 3,
+        "unhealthyResourceCount": 1,
+        "score": { "max": 8, "current": 6, "percentage": 0.75 }
+      }
+    },
+    {
+      "name": "1e9c25a4-2c8f-42d5-8bde-6a3b7f3b2a91",
+      "type": "Microsoft.Security/secureScores/secureScoreControls",
+      "properties": {
+        "displayName": "Remediate vulnerabilities",
+        "healthyResourceCount": 5,
+        "unhealthyResourceCount": 3,
+        "score": { "max": 6, "current": 3.75, "percentage": 0.625 }
+      }
+    },
+    {
+      "name": "8c5e2f7a-489b-4b8e-b6c2-9f4d3a1e0c55",
+      "type": "Microsoft.Security/secureScores/secureScoreControls",
+      "properties": {
+        "displayName": "Apply system updates",
+        "healthyResourceCount": 6,
+        "unhealthyResourceCount": 2,
+        "score": { "max": 6, "current": 4.5, "percentage": 0.75 }
+      }
+    },
+    {
+      "name": "4db2b6e8-1f7c-44b1-97ac-2d0e5b7a9f13",
+      "type": "Microsoft.Security/secureScores/secureScoreControls",
+      "properties": {
+        "displayName": "Encrypt data in transit",
+        "healthyResourceCount": 7,
+        "unhealthyResourceCount": 1,
+        "score": { "max": 4, "current": 3.5, "percentage": 0.875 }
+      }
+    },
+    {
+      "name": "f9d5432e-6b1a-4f02-9c47-8a3d21e6b7c4",
+      "type": "Microsoft.Security/secureScores/secureScoreControls",
+      "properties": {
+        "displayName": "Restrict unauthorized network access",
+        "healthyResourceCount": 2,
+        "unhealthyResourceCount": 3,
+        "score": { "max": 4, "current": 1.6, "percentage": 0.4 }
+      }
+    }
+  ]
+}

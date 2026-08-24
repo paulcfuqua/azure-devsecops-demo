@@ -1,0 +1,24 @@
+{
+  "name": "azure-devsecops",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Meridian Launch Systems demo monorepo — npm workspace root for the apps tree.",
+  "engines": {
+    "node": ">=20"
+  },
+  "//workspaces": "Explicit list, not a glob: apps/vuln-lab is deliberately excluded. It pins known-vulnerable dependency versions for the L10 self-healing showpiece, and root hoisting would resolve those pins to patched versions and neuter the seeded CVEs. It also must never enter a deployed app's dependency graph. vuln-lab keeps its own standalone package.json + lockfile and is installed and audited on its own.",
+  "workspaces": [
+    "apps/launch-ops",
+    "apps/control-tower",
+    "apps/copilot-svc",
+    "apps/shared/*"
+  ],
+  "scripts": {
+    "build": "npm run build:renderer && npm run build --workspaces --if-present",
+    "build:renderer": "npm run build --workspace apps/shared/spec-renderer --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:launch-ops": "npm run dev --workspace apps/launch-ops",
+    "dev:control-tower": "npm run dev --workspace apps/control-tower"
+  }
+}
