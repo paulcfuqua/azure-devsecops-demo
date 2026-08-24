@@ -93,6 +93,14 @@ Wave 1 (parallel, no interdependencies): A, B, C, D, H.
 Wave 2 (needs A/B/H): E, F.
 Wave 3 (needs everything lintable): G.
 
+## Open items carried out of Phase P
+
+| # | Item | Raised by | Closes at |
+|---|---|---|---|
+| P-1 | `infra/bicep/apps/demo.bicepparam` target ports default to **80** (matching the `containerapps-helloworld` placeholder image). Must be repointed to each app's real container port once Track F images publish to GHCR. | Track E | L7 image wiring |
+| P-2 | L2's NIST initiative assignment carries a system-assigned identity with Contributor — the built-in initiative contains deployIfNotExists/modify members that ARM rejects without an identity, even in `DoNotEnforce` mode. Verify this survives the Verifier's least-privilege review. | Track E | L2 audit |
+| P-3 | Key Vault purge protection is **off** and `createMode` is parameterized so G3 teardown can purge and kill/rebuild can `recover`. Confirm this matches the L6 rollback note in practice. | Track E | L6 audit |
+
 ## What Phase P cannot cover (waits for tenant)
 
 Real Graph/Fabric/ARM calls, OIDC federation, policy/NIST state, CA/label creation,
