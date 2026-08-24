@@ -13,6 +13,11 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./validate": {
+      "types": "./dist/validate.d.ts",
+      "import": "./dist/validate.js",
+      "require": "./dist/validate.cjs"
+    },
     "./spec.schema.json": "./spec.schema.json"
   },
   "files": [

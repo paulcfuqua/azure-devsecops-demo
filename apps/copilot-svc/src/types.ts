@@ -5,7 +5,7 @@
  * the model NEVER returns UI code; it returns a spec that is validated against
  * spec.schema.json before this service returns it to any client.
  */
-import type { SpecValidationError } from "@mls/spec-renderer";
+import type { SpecValidationError } from "@mls/spec-renderer/validate";
 
 /** One entry in the tool-call trace returned with every answer (audit trail for V8.2). */
 export interface ToolTraceEntry {

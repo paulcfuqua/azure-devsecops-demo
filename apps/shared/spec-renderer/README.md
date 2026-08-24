@@ -95,6 +95,47 @@ and the full `Spec`/`ComponentSpec` types plus the raw `specSchema` object are
 exported too (`@mls/spec-renderer/spec.schema.json` resolves to the schema
 file itself, e.g. for the copilot's system prompt).
 
+## Entry points: `.` for UI, `./validate` for servers
+
+The package ships **two** entries. Pick by whether you have a DOM.
+
+| Import                          | Use it from                                          | Exports                                                                                     | Pulls in            |
+| ------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------- |
+| `@mls/spec-renderer`            | Browser / React apps (`launch-ops`, `control-tower`) | `SpecRenderer`, `formatValue`, plus everything below                                          | React + Fluent UI   |
+| `@mls/spec-renderer/validate`   | Node servers (`copilot-svc`), CLIs, CI checks        | `validateSpec`, `isSpec`, `specSchema`, `SpecValidationResult`/`SpecValidationError`, all types | `ajv` only          |
+| `@mls/spec-renderer/spec.schema.json` | Anything that needs the raw schema document    | the JSON Schema file itself                                                                   | nothing             |
+
+```ts
+// Server-side: validate copilot output before it ever reaches a client.
+import { validateSpec } from "@mls/spec-renderer/validate";
+
+const { ok, errors } = validateSpec(candidate);
+```
+
+**Why the subpath exists.** The root entry imports React and Fluent UI at
+module scope, so `import("@mls/spec-renderer")` in a plain Node process dies
+with `'tabster' does not provide an export named 'createTabster'`. Before this
+entry existed, `copilot-svc` had to re-implement validation against
+`spec.schema.json` — two copies of the copilot's output contract, free to
+drift. `./validate` is built from `src/validate-entry.ts`, whose entire import
+graph is `src/validate.ts` -> `ajv` + `spec.schema.json` (plus the type-only
+`src/types.ts`), so the server runs the *same* `validateSpec` the renderer
+runs. Both entries are emitted as ESM + CJS + `.d.ts` with no shared chunks,
+so nothing can leak the renderer into a server bundle.
+
+That invariant is enforced, not just documented:
+[`tests/node/import-graph.test.ts`](./tests/node/import-graph.test.ts) walks
+the `validate-entry` import graph and fails on any `react`/`@fluentui`/
+`tabster`/`keyborg` specifier or any `src/components/` file, and
+[`tests/node/validate-node.test.ts`](./tests/node/validate-node.test.ts) runs
+in a vitest project with `environment: "node"` (no jsdom, no DOM setup file)
+and additionally spawns a real `node` process that imports the built
+`@mls/spec-renderer/validate` subpath.
+
+If you add an import to `src/validate.ts`, `src/types.ts`, or
+`src/validate-entry.ts`, keep it DOM-free — otherwise the copilot's validation
+gate stops loading and the safety boundary goes with it.
+
 ## How the apps consume it
 
 The package is `private` and consumed as an **npm workspace dependency** from
@@ -114,8 +155,11 @@ from this directory.
 
 ```sh
 npm install
-npm test        # vitest + @testing-library/react (jsdom), 46 tests
-npm run build   # tsc typecheck, then tsup -> dist/ (ESM + CJS + .d.ts)
+npm test        # vitest, 59 tests across two projects:
+                #   renderer — jsdom + @testing-library/react (46)
+                #   node     — no jsdom, guards the ./validate entry (13)
+npm run build   # tsc typecheck, then tsup -> dist/ (ESM + CJS + .d.ts,
+                # entries: index + validate)
 ```
 
 Golden fixtures live in [`fixtures/`](./fixtures): one valid spec per
