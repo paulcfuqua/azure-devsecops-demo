@@ -1,0 +1,17 @@
+{
+  "name": "@mls/vuln-lab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DELIBERATELY VULNERABLE dependency lab (L10 self-healing showpiece seed). NEVER imported by any deployed app.",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "node index.js",
+    "audit:expected": "npm audit --json"
+  },
+  "dependencies": {
+    "json5": "2.2.0",
+    "minimist": "1.2.5",
+    "semver": "7.5.1"
+  }
+}

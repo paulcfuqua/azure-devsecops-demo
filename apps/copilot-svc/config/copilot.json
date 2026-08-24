@@ -1,0 +1,7 @@
+{
+  "$comment": "Committed model configuration for copilot-svc (L8). The model is pinned here so upgrades are deliberate PRs, not drift (L08 playbook, failure mode 4). Model id per the claude-api skill's current recommendation. Overridable at runtime via COPILOT_MODEL.",
+  "model": "claude-opus-5",
+  "maxTokens": 16000,
+  "maxToolRounds": 8,
+  "thinking": { "type": "adaptive" }
+}

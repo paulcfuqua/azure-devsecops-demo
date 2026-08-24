@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# Eval artifact is a run output (uploaded by CI), not source.
+evals/eval-results.json

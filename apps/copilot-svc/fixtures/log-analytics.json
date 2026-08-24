@@ -1,0 +1,28 @@
+{
+  "$comment": "Committed local fixture for query_log_analytics — shaped exactly like the Azure Monitor Log Analytics query API response (POST https://api.loganalytics.io/v1/workspaces/{id}/query). Synthetic data only. The Azure adapter (L8) returns this same shape from the real mls LAW.",
+  "tables": [
+    {
+      "name": "PrimaryResult",
+      "columns": [
+        { "name": "TimeGenerated", "type": "datetime" },
+        { "name": "AppRoleName", "type": "string" },
+        { "name": "OperationName", "type": "string" },
+        { "name": "DurationMs", "type": "real" },
+        { "name": "Success", "type": "bool" },
+        { "name": "ResultCode", "type": "string" }
+      ],
+      "rows": [
+        ["2026-08-21T14:02:11.503Z", "mls-launch-ops", "GET /api/launches", 42.7, true, "200"],
+        ["2026-08-21T14:02:13.118Z", "mls-launch-ops", "GET /api/launches/LNH-1042", 18.3, true, "200"],
+        ["2026-08-21T14:03:01.940Z", "mls-control-tower", "GET /api/ops/summary", 87.5, true, "200"],
+        ["2026-08-21T14:03:44.221Z", "mls-copilot-svc", "POST /ask", 6412.9, true, "200"],
+        ["2026-08-21T14:05:19.017Z", "mls-launch-ops", "POST /api/work-orders", 133.4, true, "201"],
+        ["2026-08-21T14:07:52.660Z", "mls-control-tower", "GET /api/sec/findings", 64.1, true, "200"],
+        ["2026-08-21T14:09:03.312Z", "mls-launch-ops", "GET /api/launches", 5023.8, false, "500"],
+        ["2026-08-21T14:09:04.101Z", "mls-launch-ops", "GET /api/launches", 39.9, true, "200"],
+        ["2026-08-21T14:12:40.774Z", "mls-copilot-svc", "POST /ask", 8917.2, true, "200"],
+        ["2026-08-21T14:15:00.038Z", "mls-control-tower", "GET /api/cost/series", 71.6, true, "200"]
+      ]
+    }
+  ]
+}

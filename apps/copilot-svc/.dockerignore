@@ -1,0 +1,4 @@
+node_modules
+dist
+evals/eval-results.json
+*.log

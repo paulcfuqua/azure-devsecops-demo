@@ -1,0 +1,77 @@
+{
+  "$comment": "Committed local fixture for get_defender_posture — shaped like Microsoft Defender for Cloud ARM responses: Microsoft.Security/secureScores ('ascScore') and its secureScoreControls list. Synthetic subscription id. The Azure adapter (L8) returns this same shape live.",
+  "secure_score": {
+    "id": "/subscriptions/00000000-1111-2222-3333-444444444444/providers/Microsoft.Security/secureScores/ascScore",
+    "name": "ascScore",
+    "type": "Microsoft.Security/secureScores",
+    "properties": {
+      "displayName": "ASC score",
+      "score": { "max": 58, "current": 43.15, "percentage": 0.7439 },
+      "weight": 178
+    }
+  },
+  "controls": {
+    "value": [
+      {
+        "id": "/subscriptions/00000000-1111-2222-3333-444444444444/providers/Microsoft.Security/secureScores/ascScore/secureScoreControls/EnableMFA",
+        "name": "EnableMFA",
+        "type": "Microsoft.Security/secureScores/secureScoreControls",
+        "properties": {
+          "displayName": "Enable MFA",
+          "score": { "max": 10, "current": 10, "percentage": 1.0 },
+          "healthyResourceCount": 6,
+          "unhealthyResourceCount": 0,
+          "weight": 6
+        }
+      },
+      {
+        "id": "/subscriptions/00000000-1111-2222-3333-444444444444/providers/Microsoft.Security/secureScores/ascScore/secureScoreControls/RemediateVulnerabilities",
+        "name": "RemediateVulnerabilities",
+        "type": "Microsoft.Security/secureScores/secureScoreControls",
+        "properties": {
+          "displayName": "Remediate vulnerabilities",
+          "score": { "max": 6, "current": 3.6, "percentage": 0.6 },
+          "healthyResourceCount": 9,
+          "unhealthyResourceCount": 6,
+          "weight": 15
+        }
+      },
+      {
+        "id": "/subscriptions/00000000-1111-2222-3333-444444444444/providers/Microsoft.Security/secureScores/ascScore/secureScoreControls/RestrictUnauthorizedNetworkAccess",
+        "name": "RestrictUnauthorizedNetworkAccess",
+        "type": "Microsoft.Security/secureScores/secureScoreControls",
+        "properties": {
+          "displayName": "Restrict unauthorized network access",
+          "score": { "max": 4, "current": 2.4, "percentage": 0.6 },
+          "healthyResourceCount": 12,
+          "unhealthyResourceCount": 8,
+          "weight": 20
+        }
+      },
+      {
+        "id": "/subscriptions/00000000-1111-2222-3333-444444444444/providers/Microsoft.Security/secureScores/ascScore/secureScoreControls/ApplySystemUpdates",
+        "name": "ApplySystemUpdates",
+        "type": "Microsoft.Security/secureScores/secureScoreControls",
+        "properties": {
+          "displayName": "Apply system updates",
+          "score": { "max": 6, "current": 6, "percentage": 1.0 },
+          "healthyResourceCount": 4,
+          "unhealthyResourceCount": 0,
+          "weight": 4
+        }
+      },
+      {
+        "id": "/subscriptions/00000000-1111-2222-3333-444444444444/providers/Microsoft.Security/secureScores/ascScore/secureScoreControls/EnableEncryptionAtRest",
+        "name": "EnableEncryptionAtRest",
+        "type": "Microsoft.Security/secureScores/secureScoreControls",
+        "properties": {
+          "displayName": "Enable encryption at rest",
+          "score": { "max": 4, "current": 3.0, "percentage": 0.75 },
+          "healthyResourceCount": 3,
+          "unhealthyResourceCount": 1,
+          "weight": 4
+        }
+      }
+    ]
+  }
+}
