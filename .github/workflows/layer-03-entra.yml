@@ -1,0 +1,212 @@
+name: layer-03-entra
+
+# =============================================================================
+# L3 — Entra: users, groups, app registrations, Conditional Access (report-only).
+# Playbook: docs/runbooks/layers/L03.md   Assets: infra/entra/apply-entra.ps1
+#
+# The apply script is manifest-driven and idempotent create-if-absent /
+# converge-if-drifted, so a standard kill/rebuild replay no-ops in seconds
+# (spec F6). Teardown of these objects is G3 and lives in
+# infra/entra/teardown.ps1 — never in this workflow.
+#
+# Pre-G0 guard: every job is gated on the `demo` environment variables.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      location:
+        description: Unused by L3 (Entra is tenant-scoped); accepted so infra-up can call every layer uniformly.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run only the -WhatIf plan job; do not apply.
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      location:
+        description: Unused by L3 (Entra is tenant-scoped).
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run only the -WhatIf plan job; do not apply.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L3 Entra
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L3 verification (mls-verifier)
+
+  plan:
+    name: plan L3 (apply-entra.ps1 -WhatIf)
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Microsoft.Graph.Authentication
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module Microsoft.Graph.Authentication -Force -Scope CurrentUser -AllowClobber
+          Get-Module -ListAvailable Microsoft.Graph.Authentication |
+            Select-Object Name, Version | Format-Table
+
+      - name: Plan the Entra manifest
+        shell: pwsh
+        env:
+          ENTRA_DOMAIN: ${{ vars.ENTRA_DOMAIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # App-only Graph session derived from the OIDC login — no stored secret.
+          $token = az account get-access-token --resource-type ms-graph --query accessToken -o tsv
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Could not obtain a Microsoft Graph token.' }
+          Import-Module Microsoft.Graph.Authentication
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force) -NoWelcome
+          $domain = if ($env:ENTRA_DOMAIN) { $env:ENTRA_DOMAIN } else { '' }
+          ./infra/entra/apply-entra.ps1 -Domain $domain -WhatIf *>&1 |
+            Tee-Object -FilePath entra-plan.txt
+
+      - name: Upload the Entra plan
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-03-entra-plan
+          path: entra-plan.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  apply:
+    name: apply L3 Entra manifest
+    needs: [preflight, plan]
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Microsoft.Graph.Authentication
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module Microsoft.Graph.Authentication -Force -Scope CurrentUser -AllowClobber
+
+      - name: Apply the Entra manifest
+        shell: pwsh
+        env:
+          ENTRA_DOMAIN: ${{ vars.ENTRA_DOMAIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = az account get-access-token --resource-type ms-graph --query accessToken -o tsv
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Could not obtain a Microsoft Graph token.' }
+          Import-Module Microsoft.Graph.Authentication
+          Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force) -NoWelcome
+          $domain = if ($env:ENTRA_DOMAIN) { $env:ENTRA_DOMAIN } else { '' }
+          # CA policies are created report-only; apply-entra.ps1 refuses `enabled`.
+          ./infra/entra/apply-entra.ps1 -Domain $domain -Confirm:$false *>&1 |
+            Tee-Object -FilePath entra-apply.txt
+
+      - name: Record the manifest commit SHA for the Verifier
+        run: |
+          set -euo pipefail
+          {
+            echo "### L3 applied"
+            echo
+            echo "- manifest: \`infra/entra/manifest.json\`"
+            echo "- commit: \`${GITHUB_SHA}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the Entra apply log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-03-entra-apply
+          path: entra-apply.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify:
+    name: verify L3 (mls-verifier)
+    needs: [preflight, apply]
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-verifier — Reader / Directory.Read.All)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run verification/layer-03-audit.ps1
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '03'
+
+      - name: Upload audit report
+        if: ${{ steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-03-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

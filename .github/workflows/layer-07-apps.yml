@@ -1,0 +1,228 @@
+name: layer-07-apps
+
+# =============================================================================
+# L7 — Apps layer: the three container apps in mls-rg-apps.
+# Playbook: docs/runbooks/layers/L07.md   Template: infra/bicep/apps/main.bicep
+#
+# Relationship to the per-app CI workflows:
+#   * app-<name>-ci.yml builds, scans and pushes each image and then rolls it onto
+#     an EXISTING container app (`az containerapp update`). That is the day-to-day
+#     deploy path (L07 playbook step 1).
+#   * THIS workflow is the declarative one: it creates/converges the three apps
+#     from Bicep, and is what `infra-up.yml` replays on a rebuild (playbook step 2).
+#
+# ---------------------------------------------------------------------------
+# OPEN ITEM P-1 — container target ports
+#
+# infra/bicep/apps/demo.bicepparam defaults every target port to **80**, which
+# matches the `containerapps-helloworld` placeholder image, NOT the real apps.
+# The real images listen on **8080** (see the EXPOSE lines in
+# apps/launch-ops/Dockerfile, apps/control-tower/Dockerfile and
+# apps/copilot-svc/Dockerfile — nginx and Node both bind 8080).
+#
+# When the first real images publish to GHCR, set these in the `demo` GitHub
+# environment and the whole estate repoints with no code change:
+#     LAUNCH_OPS_PORT=8080  CONTROL_TOWER_PORT=8080  COPILOT_SVC_PORT=8080
+# Until then the fallback below stays 80 so the placeholder image keeps working.
+# This is open item P-1 out of Phase P; it closes at L7 image wiring.
+# ---------------------------------------------------------------------------
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      location:
+        description: Azure region for the apps deployment.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run `az deployment group what-if` only; make no writes.
+        type: boolean
+        required: false
+        default: false
+      image_tag:
+        description: GHCR tag to deploy for all three apps (empty keeps the bicepparam placeholder).
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      location:
+        description: Azure region for the apps deployment.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run `az deployment group what-if` only; make no writes.
+        type: boolean
+        required: false
+        default: false
+      image_tag:
+        description: GHCR tag to deploy for all three apps (empty keeps the bicepparam placeholder).
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L7 apps
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L7 verification (mls-verifier)
+
+  deploy:
+    name: deploy L7 apps
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # Consumed by infra/bicep/apps/demo.bicepparam via readEnvironmentVariable().
+      AZURE_LOCATION: ${{ inputs.location }}
+      # P-1: flip these to 8080 by setting the demo environment variables.
+      LAUNCH_OPS_PORT: ${{ vars.LAUNCH_OPS_PORT || '80' }}
+      CONTROL_TOWER_PORT: ${{ vars.CONTROL_TOWER_PORT || '80' }}
+      COPILOT_SVC_PORT: ${{ vars.COPILOT_SVC_PORT || '80' }}
+      COPILOT_EXTERNAL_INGRESS: ${{ vars.COPILOT_EXTERNAL_INGRESS || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Resolve GHCR image references
+        id: images
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # ghcr.io/<owner>/<repo>/<app>:<tag> — free anonymous pull on a public
+          # repo, so there is no ACR resource and no registry credential.
+          if [ -z "${IMAGE_TAG}" ]; then
+            echo "No image_tag supplied; keeping the demo.bicepparam placeholder images."
+            exit 0
+          fi
+          registry="ghcr.io/${REPO}"
+          {
+            echo "LAUNCH_OPS_IMAGE=${registry}/launch-ops:${IMAGE_TAG}"
+            echo "CONTROL_TOWER_IMAGE=${registry}/control-tower:${IMAGE_TAG}"
+            echo "COPILOT_SVC_IMAGE=${registry}/copilot-svc:${IMAGE_TAG}"
+          } >> "${GITHUB_ENV}"
+          echo "resolved=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if the apps deployment
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+        run: |
+          set -euo pipefail
+          az deployment group what-if \
+            --resource-group "${RG_APPS}" \
+            --template-file infra/bicep/apps/main.bicep \
+            --parameters infra/bicep/apps/demo.bicepparam \
+            --name "l7-apps-${GITHUB_RUN_ID}" \
+            | tee what-if-l7.txt
+
+      - name: Deploy the apps
+        if: ${{ !inputs.dry_run }}
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --resource-group "${RG_APPS}" \
+            --template-file infra/bicep/apps/main.bicep \
+            --parameters infra/bicep/apps/demo.bicepparam \
+            --name "l7-apps-${GITHUB_RUN_ID}" \
+            --output json > l7-outputs.json
+          jq '.properties.outputs' l7-outputs.json > l7-manifest.json
+          {
+            echo "### L7 app endpoints"
+            echo '```json'
+            cat l7-manifest.json
+            echo '```'
+            echo
+            echo "Target ports in effect — launch-ops: ${LAUNCH_OPS_PORT}, control-tower: ${CONTROL_TOWER_PORT}, copilot-svc: ${COPILOT_SVC_PORT}."
+            if [ "${LAUNCH_OPS_PORT}" = "80" ]; then
+              echo
+              echo "> **P-1 open:** ports are still on the placeholder 80. Set LAUNCH_OPS_PORT / CONTROL_TOWER_PORT / COPILOT_SVC_PORT to 8080 in the demo environment once real images are published."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload L7 artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-07-apps
+          path: |
+            what-if-l7.txt
+            l7-manifest.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify:
+    name: verify L7 (mls-verifier)
+    needs: [preflight, deploy]
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-verifier — Reader only)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run verification/layer-07-audit.ps1
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '07'
+
+      - name: Upload audit report
+        if: ${{ steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-07-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

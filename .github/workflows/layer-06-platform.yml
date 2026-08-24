@@ -1,0 +1,226 @@
+name: layer-06-platform
+
+# =============================================================================
+# L6 — Core platform: ACA environment, Log Analytics + App Insights, Key Vault,
+#      serverless SQL, cost-export storage.
+# Playbook: docs/runbooks/layers/L06.md   Template: infra/bicep/platform/main.bicep
+#
+# Subscription-scope deployment. The template creates all four demo resource
+# groups, so this is the layer that makes `infra-down.yml`'s RG deletes meaningful.
+#
+# The ANTHROPIC_API_KEY *value* is never in Bicep and never in this repo
+# (CLAUDE.md hard rule 5). This workflow copies it from the GitHub secret into
+# the L6 Key Vault, which is the only place the apps read it from.
+#
+# Pre-G0 guard: all jobs gated on the `demo` environment variables.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      location:
+        description: Azure region for the platform deployment.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run `az deployment sub what-if` only; make no writes.
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      location:
+        description: Azure region for the platform deployment.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run `az deployment sub what-if` only; make no writes.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L6 platform
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L6 verification (mls-verifier)
+
+  deploy:
+    name: deploy L6 platform
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # Consumed by infra/bicep/platform/demo.bicepparam via readEnvironmentVariable().
+      AZURE_LOCATION: ${{ inputs.location }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      SQL_AAD_ADMIN_LOGIN: ${{ vars.SQL_AAD_ADMIN_LOGIN }}
+      SQL_AAD_ADMIN_OBJECT_ID: ${{ vars.SQL_AAD_ADMIN_OBJECT_ID }}
+      # Set to `recover` in the demo environment when replaying against a
+      # soft-deleted vault (kill/rebuild — see the L6 playbook rollback note).
+      KEY_VAULT_CREATE_MODE: ${{ vars.KEY_VAULT_CREATE_MODE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if the platform deployment
+        run: |
+          set -euo pipefail
+          az deployment sub what-if \
+            --location "${AZURE_LOCATION}" \
+            --template-file infra/bicep/platform/main.bicep \
+            --parameters infra/bicep/platform/demo.bicepparam \
+            --name "l6-platform-${GITHUB_RUN_ID}" \
+            | tee what-if-l6.txt
+
+      - name: Deploy the platform
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          az deployment sub create \
+            --location "${AZURE_LOCATION}" \
+            --template-file infra/bicep/platform/main.bicep \
+            --parameters infra/bicep/platform/demo.bicepparam \
+            --name "l6-platform-${GITHUB_RUN_ID}" \
+            --output json > l6-outputs.json
+          jq '.properties.outputs' l6-outputs.json > l6-manifest.json
+          {
+            echo "### L6 deployment manifest"
+            echo '```json'
+            cat l6-manifest.json
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Write ANTHROPIC_API_KEY into Key Vault
+        if: ${{ !inputs.dry_run }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          KEY_VAULT_NAME: ${{ steps.names.outputs.key-vault }}
+          SECRET_NAME: ${{ steps.names.outputs.anthropic-secret-name }}
+        run: |
+          set -euo pipefail
+          # The value arrives at G0 (item C5) as a GitHub secret and is copied here.
+          # It is never printed: `az keyvault secret set` output is discarded.
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::notice title=ANTHROPIC_API_KEY not set::Key Vault secret ${SECRET_NAME} was not written; copilot-svc will start in mock mode."
+            exit 0
+          fi
+          az keyvault secret set \
+            --vault-name "${KEY_VAULT_NAME}" \
+            --name "${SECRET_NAME}" \
+            --value "${ANTHROPIC_API_KEY}" \
+            --output none
+          echo "Key Vault secret ${SECRET_NAME} updated in ${KEY_VAULT_NAME}."
+
+      - name: Wire the Cost Management daily export
+        if: ${{ !inputs.dry_run }}
+        env:
+          RG_OPS: ${{ steps.names.outputs.rg-ops }}
+          PREFIX: ${{ steps.names.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          # Subscription-scope configuration, not a resource of the template
+          # (L06 playbook step 3). Removed again by infra-down.yml so it never
+          # points at deleted storage.
+          storage_id="$(jq -r '.costExportStorageResourceId.value // empty' l6-manifest.json)"
+          if [ -z "${storage_id}" ]; then
+            echo "::notice title=Cost export not wired::costExportStorageResourceId was not in the deployment outputs."
+            exit 0
+          fi
+          export_name="${PREFIX}-cost-daily"
+          az costmanagement export create \
+            --name "${export_name}" \
+            --scope "/subscriptions/${AZURE_SUBSCRIPTION_ID}" \
+            --storage-account-id "${storage_id}" \
+            --storage-container costexports \
+            --storage-directory "${RG_OPS}" \
+            --timeframe MonthToDate \
+            --type ActualCost \
+            --recurrence Daily \
+            --recurrence-period from="$(date -u +%Y-%m-%dT00:00:00Z)" to="$(date -u -d '+1 year' +%Y-%m-%dT00:00:00Z)" \
+            --schedule-status Active \
+            --output none
+          echo "Cost Management daily export ${export_name} configured."
+
+      - name: Upload L6 artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-06-platform
+          path: |
+            what-if-l6.txt
+            l6-manifest.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify:
+    name: verify L6 (mls-verifier)
+    needs: [preflight, deploy]
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-verifier — Reader only)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run verification/layer-06-audit.ps1
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '06'
+
+      - name: Upload audit report
+        if: ${{ steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-06-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

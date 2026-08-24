@@ -1,0 +1,77 @@
+name: run layer verification audit
+description: >-
+  Invokes verification/layer-<nn>-audit.ps1 defensively. The audit scripts are the
+  Verifier's deliverable (master plan: "verification/layer-<nn>-audit.ps1 — Verifier-only,
+  runs as mls-verifier (Reader)") and do not exist yet in Phase P, so a missing script is
+  a NOTICE, never a failure. The caller is responsible for having authenticated as the
+  verifier identity (mls-verifier) before this step — CLAUDE.md forbids running audits as
+  the deployer SP.
+
+inputs:
+  layer:
+    description: 'Two-digit layer number, e.g. "02".'
+    required: true
+  script-dir:
+    description: 'Directory holding the audit scripts.'
+    required: false
+    default: verification
+  report-dir:
+    description: 'Directory the audit transcript is written to (uploaded as an artifact by the caller).'
+    required: false
+    default: verification/reports
+  identity:
+    description: 'Label for the identity the audit ran as, used in the run summary.'
+    required: false
+    default: mls-verifier
+
+outputs:
+  ran:
+    description: "'true' when the audit script existed and was executed."
+    value: ${{ steps.audit.outputs.ran }}
+  report:
+    description: 'Path of the transcript written by this step (empty when the audit did not run).'
+    value: ${{ steps.audit.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run layer audit (skip with notice when absent)
+      id: audit
+      shell: bash
+      env:
+        AUDIT_LAYER: ${{ inputs.layer }}
+        AUDIT_SCRIPT_DIR: ${{ inputs.script-dir }}
+        AUDIT_REPORT_DIR: ${{ inputs.report-dir }}
+        AUDIT_IDENTITY: ${{ inputs.identity }}
+      run: |
+        set -euo pipefail
+
+        script="${AUDIT_SCRIPT_DIR}/layer-${AUDIT_LAYER}-audit.ps1"
+
+        if [ ! -f "${script}" ]; then
+          echo "ran=false" >> "${GITHUB_OUTPUT}"
+          echo "report=" >> "${GITHUB_OUTPUT}"
+          echo "::notice title=Verification audit not authored yet::${script} does not exist. L${AUDIT_LAYER} deployed but was NOT independently verified. Handoff: the Verifier owns this script (master plan, verification/)."
+          {
+            echo "### L${AUDIT_LAYER} verification: SKIPPED"
+            echo
+            echo "\`${script}\` does not exist yet. The layer deployed, but nothing"
+            echo "independently audited it. This script is the Verifier's deliverable"
+            echo "and is tracked as the L-layer handoff out of Phase P Track G."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit 0
+        fi
+
+        mkdir -p "${AUDIT_REPORT_DIR}"
+        report="${AUDIT_REPORT_DIR}/L${AUDIT_LAYER}-$(date -u +%Y%m%dT%H%M%SZ).md"
+
+        echo "Running ${script} as ${AUDIT_IDENTITY}"
+        pwsh -NoProfile -NonInteractive -File "${script}" 2>&1 | tee "${report}"
+
+        echo "ran=true" >> "${GITHUB_OUTPUT}"
+        echo "report=${report}" >> "${GITHUB_OUTPUT}"
+        {
+          echo "### L${AUDIT_LAYER} verification: ran as ${AUDIT_IDENTITY}"
+          echo
+          echo "Transcript: \`${report}\` (uploaded as a run artifact)."
+        } >> "${GITHUB_STEP_SUMMARY}"

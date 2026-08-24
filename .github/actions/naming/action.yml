@@ -1,0 +1,98 @@
+name: resolve estate naming
+description: >-
+  Derives the company prefix, environment segment and every fixed resource name the
+  workflows need from infra/bicep/naming.bicep, so no workflow hardcodes the company
+  prefix (CLAUDE.md: "Company name and prefix are set once in infra/bicep/naming.bicep
+  — do not hardcode 'mls' elsewhere").
+
+inputs:
+  naming-file:
+    description: 'Path to naming.bicep, relative to the workspace.'
+    required: false
+    default: infra/bicep/naming.bicep
+
+outputs:
+  prefix:
+    description: 'Company prefix (naming.bicep defaultCompanyPrefix).'
+    value: ${{ steps.resolve.outputs.prefix }}
+  env:
+    description: 'Environment segment (naming.bicep defaultEnv).'
+    value: ${{ steps.resolve.outputs.env }}
+  management-group:
+    description: 'Management group name — managementGroupName(prefix).'
+    value: ${{ steps.resolve.outputs.management-group }}
+  rg-platform:
+    description: 'resourceGroupName(prefix, "platform").'
+    value: ${{ steps.resolve.outputs.rg-platform }}
+  rg-apps:
+    description: 'resourceGroupName(prefix, "apps").'
+    value: ${{ steps.resolve.outputs.rg-apps }}
+  rg-data:
+    description: 'resourceGroupName(prefix, "data").'
+    value: ${{ steps.resolve.outputs.rg-data }}
+  rg-ops:
+    description: 'resourceGroupName(prefix, "ops").'
+    value: ${{ steps.resolve.outputs.rg-ops }}
+  rg-list:
+    description: 'Space-separated list of the four demo resource groups (teardown scope).'
+    value: ${{ steps.resolve.outputs.rg-list }}
+  ca-launch-ops:
+    description: 'containerAppName(prefix, "launch-ops", env).'
+    value: ${{ steps.resolve.outputs.ca-launch-ops }}
+  ca-control-tower:
+    description: 'containerAppName(prefix, "control-tower", env).'
+    value: ${{ steps.resolve.outputs.ca-control-tower }}
+  ca-copilot:
+    description: 'containerAppName(prefix, "copilot", env) — copilot-svc shortens to "copilot".'
+    value: ${{ steps.resolve.outputs.ca-copilot }}
+  key-vault:
+    description: 'keyVaultName(prefix, env).'
+    value: ${{ steps.resolve.outputs.key-vault }}
+  anthropic-secret-name:
+    description: 'naming.bicep anthropicApiKeySecretName.'
+    value: ${{ steps.resolve.outputs.anthropic-secret-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve names from naming.bicep
+      id: resolve
+      shell: bash
+      env:
+        NAMING_FILE: ${{ inputs.naming-file }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "${NAMING_FILE}" ]; then
+          echo "::error title=naming.bicep missing::${NAMING_FILE} not found; cannot resolve estate names."
+          exit 1
+        fi
+
+        read_var() {
+          sed -n "s/^var $1 = '\([^']*\)'.*/\1/p" "${NAMING_FILE}" | head -n 1
+        }
+
+        prefix="$(read_var defaultCompanyPrefix)"
+        envseg="$(read_var defaultEnv)"
+        secret="$(read_var anthropicApiKeySecretName)"
+
+        if [ -z "${prefix}" ] || [ -z "${envseg}" ]; then
+          echo "::error title=naming.bicep unreadable::Could not parse defaultCompanyPrefix / defaultEnv from ${NAMING_FILE}."
+          exit 1
+        fi
+
+        {
+          echo "prefix=${prefix}"
+          echo "env=${envseg}"
+          echo "management-group=${prefix}"
+          echo "rg-platform=${prefix}-rg-platform"
+          echo "rg-apps=${prefix}-rg-apps"
+          echo "rg-data=${prefix}-rg-data"
+          echo "rg-ops=${prefix}-rg-ops"
+          echo "rg-list=${prefix}-rg-platform ${prefix}-rg-apps ${prefix}-rg-data ${prefix}-rg-ops"
+          echo "ca-launch-ops=${prefix}-launch-ops-${envseg}-ca"
+          echo "ca-control-tower=${prefix}-control-tower-${envseg}-ca"
+          echo "ca-copilot=${prefix}-copilot-${envseg}-ca"
+          echo "key-vault=${prefix}-sec-${envseg}-kv"
+          echo "anthropic-secret-name=${secret:-anthropic-api-key}"
+        } >> "${GITHUB_OUTPUT}"

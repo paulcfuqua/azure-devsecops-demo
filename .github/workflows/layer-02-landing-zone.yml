@@ -1,0 +1,211 @@
+name: layer-02-landing-zone
+
+# =============================================================================
+# L2 — Landing zone: management group, governance policies, NIST 800-53 R5.
+# Playbook: docs/runbooks/layers/L02.md   Templates: infra/bicep/landing-zone/
+#
+# Callable (workflow_call) from infra-up.yml and dispatchable on its own.
+# Every Azure-facing job is gated on the `demo` GitHub environment already
+# carrying the G0 identity variables — see .github/actions/demo-env-guard.
+# Nothing here runs, and nothing fails, before G0.
+#
+# Teardown of this layer is G3 (tenant-level): infra/policy/teardown.ps1.
+# The standard kill/rebuild cycle deliberately leaves L2 in place.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      location:
+        description: Azure region for the deployment and the allowed-locations guardrail.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run `az deployment mg what-if` only; make no writes.
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      location:
+        description: Azure region for the deployment and the allowed-locations guardrail.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run `az deployment mg what-if` only; make no writes.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L2 landing zone
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L2 verification (mls-verifier)
+
+  deploy:
+    name: deploy L2 landing zone
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AZURE_LOCATION: ${{ inputs.location }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure management group and subscription placement
+        env:
+          MG_NAME: ${{ steps.names.outputs.management-group }}
+        run: |
+          set -euo pipefail
+          # Idempotent: create-if-absent, then (re)place the demo subscription.
+          if az account management-group show --name "${MG_NAME}" >/dev/null 2>&1; then
+            echo "Management group ${MG_NAME} already exists."
+          else
+            az account management-group create --name "${MG_NAME}" --display-name 'Meridian Launch Systems'
+          fi
+          az account management-group subscription add \
+            --name "${MG_NAME}" \
+            --subscription "${AZURE_SUBSCRIPTION_ID}" 2>/dev/null \
+            || echo "Subscription already placed under ${MG_NAME}."
+
+      - name: What-if the landing zone
+        env:
+          MG_NAME: ${{ steps.names.outputs.management-group }}
+        run: |
+          set -euo pipefail
+          az deployment mg what-if \
+            --management-group-id "${AZURE_TENANT_ID}" \
+            --location "${AZURE_LOCATION}" \
+            --template-file infra/bicep/landing-zone/main.bicep \
+            --parameters infra/bicep/landing-zone/demo.bicepparam \
+            --name "l2-landing-zone-${GITHUB_RUN_ID}" \
+            | tee what-if-l2.txt
+          echo "Target management group: ${MG_NAME}"
+
+      - name: Deploy the landing zone
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # Deployed at the TENANT ROOT management group (id == tenant id), which is
+          # where infra/bicep/landing-zone/main.bicep creates MG <prefix> beneath.
+          az deployment mg create \
+            --management-group-id "${AZURE_TENANT_ID}" \
+            --location "${AZURE_LOCATION}" \
+            --template-file infra/bicep/landing-zone/main.bicep \
+            --parameters infra/bicep/landing-zone/demo.bicepparam \
+            --name "l2-landing-zone-${GITHUB_RUN_ID}" \
+            --output json > l2-outputs.json
+          {
+            echo "### L2 deployment outputs"
+            echo '```json'
+            jq '.properties.outputs // {}' l2-outputs.json
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Negative canary — untagged RG must be denied by policy
+        if: ${{ !inputs.dry_run }}
+        env:
+          CANARY_RG: ${{ steps.names.outputs.prefix }}-rg-canary-untagged
+        run: |
+          set -euo pipefail
+          # L02 playbook: the write attempt lives with the deployer; the Verifier
+          # confirms the denial independently from the Activity Log (V2.2).
+          if az group create --name "${CANARY_RG}" --location "${AZURE_LOCATION}" >canary.log 2>&1; then
+            echo "::error title=Tag deny policy did not fire::${CANARY_RG} was created without tags. Deleting the canary; L2 has FAILED its negative test."
+            az group delete --name "${CANARY_RG}" --yes --no-wait || true
+            exit 1
+          fi
+          if grep -q 'RequestDisallowedByPolicy' canary.log; then
+            echo "Tag deny policy fired as expected (RequestDisallowedByPolicy)."
+          else
+            echo "::error title=Canary failed for the wrong reason::Expected RequestDisallowedByPolicy."
+            cat canary.log
+            exit 1
+          fi
+
+      - name: Upload L2 artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-02-landing-zone
+          path: |
+            what-if-l2.txt
+            l2-outputs.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify:
+    name: verify L2 (mls-verifier)
+    needs: [preflight, deploy]
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-verifier — Reader only)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run verification/layer-02-audit.ps1
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '02'
+
+      - name: Upload audit report
+        if: ${{ steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-02-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

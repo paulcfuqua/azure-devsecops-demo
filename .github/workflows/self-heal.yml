@@ -1,0 +1,419 @@
+name: self-heal
+
+# =============================================================================
+# Showpiece #3 — the self-healing pipeline (L10).
+# Playbook: docs/runbooks/layers/L10.md
+#
+#   security alert -> Claude triage (explanation comment) -> patch PR
+#                  -> CI gauntlet -> auto-merge on green -> deploy -> alert closed
+#
+# ---------------------------------------------------------------------------
+# WHY AUTO-MERGE-ON-GREEN IS DELIBERATE HERE, AND ONLY HERE
+#
+# Merging a machine-authored patch without a human approval is normally a
+# terrible idea. In this repository it is the entire point of the demo:
+#
+#   * The brief makes the closed loop the deliverable — "auto-merge on green"
+#     is written into the master plan's L10 definition, and L10 V10.1 stage 4
+#     explicitly FAILS the audit if `mergedBy.login` is a human. A
+#     hand-assisted chain is a failed chain.
+#   * The human still sees everything. Per the brief they see the PR trail —
+#     the triage comment, the check runs, the merge — just not an approval
+#     prompt. Nothing is hidden; the review is post-hoc and fully auditable.
+#   * The blast radius is a public demo repo full of synthetic data. There is
+#     no customer, no production traffic and no real secret in the diff path.
+#     The estate it deploys to is disposable by design (`infra-down.yml`).
+#   * The merge is not unconditional: the PR must clear the SAME gauntlet as any
+#     other change — lint-ci, both test suites, CodeQL, gitleaks, the Trivy
+#     CRITICAL gate, and ZAP. `--auto` only fires when every required check is
+#     green, and a heal that breaks the build simply never merges (L10 failure
+#     mode 4: "the pipeline honestly refusing a bad heal").
+#   * Scope is narrow: this workflow only ever bumps a dependency version named
+#     by a GitHub security advisory, on its own `self-heal/*` branch.
+#
+# DO NOT copy this pattern into a repository that ships to real users without
+# replacing auto-merge with a required human review.
+# ---------------------------------------------------------------------------
+#
+# ---------------------------------------------------------------------------
+# TRIGGER DEVIATION (important — this is not what the playbook assumed)
+#
+# L10's deploy procedure names `dependabot_alert` / `code_scanning_alert` as the
+# triggers, flagged `[derived trigger detail]`. Neither is a valid GitHub Actions
+# workflow event — they exist as webhook events only, and actionlint rejects them
+# outright ("unknown Webhook event"). Verified against actionlint 1.7.12.
+#
+# The closest honest equivalents, all wired below:
+#   * `schedule` — poll open alerts and heal the next un-healed one. This is the
+#     no-external-infrastructure path and the one the demo relies on; L10's audit
+#     window is 24 h from re-seed, which a 6-hourly poll sits comfortably inside.
+#   * `repository_dispatch` — a real event bridge. Point an org/repo webhook for
+#     `dependabot_alert` / `code_scanning_alert` at
+#     `POST /repos/{owner}/{repo}/dispatches` with the matching event_type and the
+#     alert in `client_payload`, and the chain fires on alert creation.
+#   * `workflow_dispatch` — manual, for demos and for re-running one alert.
+# ---------------------------------------------------------------------------
+# =============================================================================
+
+on:
+  schedule:
+    # Every 6 hours. Alerts appear minutes-to-hours after a re-seed merge.
+    - cron: '13 */6 * * *'
+  repository_dispatch:
+    types:
+      - dependabot-alert
+      - code-scanning-alert
+  workflow_dispatch:
+    inputs:
+      alert_kind:
+        description: Which alert surface to heal
+        type: choice
+        options:
+          - dependabot
+          - code-scanning
+        default: dependabot
+      alert_number:
+        description: 'Alert number to heal (empty = pick the oldest open alert)'
+        type: string
+        default: ''
+      dry_run:
+        description: 'Open the PR but do not enable auto-merge'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-heal
+  cancel-in-progress: false
+
+jobs:
+  select:
+    name: select the alert to heal
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    outputs:
+      found: ${{ steps.pick.outputs.found }}
+      kind: ${{ steps.pick.outputs.kind }}
+      number: ${{ steps.pick.outputs.number }}
+    steps:
+      - name: Resolve the alert
+        id: pick
+        env:
+          # A PAT with `security_events` reads Dependabot alerts reliably; the
+          # default GITHUB_TOKEN may be refused on that endpoint. Either way a
+          # 403 is a NOTICE, never a failed run.
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          INPUT_KIND: ${{ inputs.alert_kind }}
+          INPUT_NUMBER: ${{ inputs.alert_number }}
+          PAYLOAD_KIND: ${{ github.event.client_payload.alert_kind }}
+          PAYLOAD_NUMBER: ${{ github.event.client_payload.alert_number }}
+        run: |
+          set -euo pipefail
+
+          kind="dependabot"
+          number=""
+
+          case "${EVENT}" in
+            workflow_dispatch)
+              kind="${INPUT_KIND:-dependabot}"
+              number="${INPUT_NUMBER}"
+              ;;
+            repository_dispatch)
+              kind="${PAYLOAD_KIND:-dependabot}"
+              number="${PAYLOAD_NUMBER}"
+              ;;
+          esac
+
+          if [ -n "${number}" ]; then
+            {
+              echo "found=true"
+              echo "kind=${kind}"
+              echo "number=${number}"
+            } >> "${GITHUB_OUTPUT}"
+            echo "Healing ${kind} alert #${number} (explicitly requested)."
+            exit 0
+          fi
+
+          if [ "${kind}" = "dependabot" ]; then
+            endpoint="repos/${REPO}/dependabot/alerts?state=open&per_page=100"
+          else
+            endpoint="repos/${REPO}/code-scanning/alerts?state=open&per_page=100"
+          fi
+
+          if ! gh api "${endpoint}" > alerts.json 2>alerts.err; then
+            echo "::notice title=Could not read alerts::$(head -c 400 alerts.err). Set the SELF_HEAL_TOKEN secret (a token with security_events read) if this is a permissions problem."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Skip alerts that already have an open self-heal branch.
+          gh pr list --state open --json headRefName --jq '.[].headRefName' > open-branches.txt || true
+
+          number="$(jq -r '.[].number' alerts.json | while read -r n; do
+            if ! grep -q "self-heal/${kind}-${n}-" open-branches.txt; then
+              echo "${n}"
+              break
+            fi
+          done)"
+
+          if [ -z "${number}" ]; then
+            echo "::notice title=Nothing to heal::No open ${kind} alert without an existing self-heal PR."
+            {
+              echo "## self-heal: nothing to do"
+              echo
+              echo "No open ${kind} alert is waiting for a patch."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          {
+            echo "found=true"
+            echo "kind=${kind}"
+            echo "number=${number}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Healing ${kind} alert #${number}."
+
+  triage:
+    name: triage the finding with Claude
+    needs: select
+    if: ${{ needs.select.outputs.found == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    outputs:
+      action: ${{ steps.triage.outputs.action }}
+      package: ${{ steps.triage.outputs.package }}
+      ecosystem: ${{ steps.triage.outputs.ecosystem }}
+      patched_version: ${{ steps.triage.outputs.patched_version }}
+      manifest_directory: ${{ steps.triage.outputs.manifest_directory }}
+      severity: ${{ steps.triage.outputs.severity }}
+      mode: ${{ steps.triage.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Fetch the alert payload
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          KIND: ${{ needs.select.outputs.kind }}
+          NUMBER: ${{ needs.select.outputs.number }}
+        run: |
+          set -euo pipefail
+          if [ "${KIND}" = "dependabot" ]; then
+            gh api "repos/${REPO}/dependabot/alerts/${NUMBER}" > alert.json
+          else
+            gh api "repos/${REPO}/code-scanning/alerts/${NUMBER}" > alert.json
+          fi
+          jq -r '.state // "unknown"' alert.json
+
+      - name: Install the Anthropic SDK for the triage script
+        run: |
+          set -euo pipefail
+          # @anthropic-ai/sdk is a dependency of the apps/copilot-svc workspace,
+          # so it does not land in the root node_modules that an ESM script in
+          # .github/scripts resolves against. Install it here, unsaved.
+          npm install --no-save --no-audit --no-fund --workspaces=false '@anthropic-ai/sdk@^0.120.0'
+
+      - name: Run the triage script
+        id: triage
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ALERT_FILE: alert.json
+          ALERT_KIND: ${{ needs.select.outputs.kind }}
+          OUTPUT_DIR: self-heal
+        run: node .github/scripts/self-heal-triage.mjs
+
+      - name: Upload the triage artefacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-heal-triage-${{ needs.select.outputs.kind }}-${{ needs.select.outputs.number }}
+          path: |
+            alert.json
+            self-heal/triage.json
+            self-heal/triage.md
+          if-no-files-found: warn
+          retention-days: 30
+
+  patch:
+    name: open the patch PR and arm auto-merge
+    needs: [select, triage]
+    if: ${{ needs.select.outputs.found == 'true' && needs.triage.outputs.action == 'bump-dependency' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-heal-triage-${{ needs.select.outputs.kind }}-${{ needs.select.outputs.number }}
+
+      - name: Apply the version bump
+        id: apply
+        env:
+          PACKAGE: ${{ needs.triage.outputs.package }}
+          ECOSYSTEM: ${{ needs.triage.outputs.ecosystem }}
+          VERSION: ${{ needs.triage.outputs.patched_version }}
+          MANIFEST_DIR: ${{ needs.triage.outputs.manifest_directory }}
+        run: |
+          set -euo pipefail
+          dir="${MANIFEST_DIR:-.}"
+          case "${ECOSYSTEM}" in
+            npm)
+              # --package-lock-only: update package.json + the lockfile without
+              # materialising node_modules. The CI gauntlet does the real install.
+              if [ "${dir}" = "apps/vuln-lab" ]; then
+                # Deliberately outside the root workspaces list (open item P-6).
+                npm install --prefix apps/vuln-lab --package-lock-only "${PACKAGE}@${VERSION}"
+              elif [ "${dir}" = "." ]; then
+                npm install --package-lock-only "${PACKAGE}@${VERSION}"
+              else
+                npm install --package-lock-only --workspace "${dir}" "${PACKAGE}@${VERSION}"
+              fi
+              ;;
+            pip)
+              file=data/generators/requirements.txt
+              sed -i -E "s|^${PACKAGE}([<>=!~].*)?\$|${PACKAGE}>=${VERSION}|" "${file}"
+              ;;
+            *)
+              echo "::warning title=Unsupported ecosystem::No automated patch path for '${ECOSYSTEM}'. The triage explanation is still published as a run artefact."
+              echo "changed=false" >> "${GITHUB_OUTPUT}"
+              exit 0
+              ;;
+          esac
+          if git diff --quiet; then
+            echo "::notice title=No change produced::The manifest already satisfies ${PACKAGE}@${VERSION}."
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+            git --no-pager diff --stat
+          fi
+
+      - name: Commit on a self-heal branch and open the PR
+        id: pr
+        if: ${{ steps.apply.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KIND: ${{ needs.select.outputs.kind }}
+          NUMBER: ${{ needs.select.outputs.number }}
+          PACKAGE: ${{ needs.triage.outputs.package }}
+          VERSION: ${{ needs.triage.outputs.patched_version }}
+          SEVERITY: ${{ needs.triage.outputs.severity }}
+        run: |
+          set -euo pipefail
+          branch="self-heal/${KIND}-${NUMBER}-${PACKAGE}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "${branch}"
+          git add -A
+          git commit \
+            -m "fix(security): bump ${PACKAGE} to ${VERSION}" \
+            -m "Automated remediation for ${KIND} alert #${NUMBER} (${SEVERITY}). The triage explanation is posted as a comment on this pull request."
+          git push --force-with-lease origin "${branch}"
+
+          url="$(gh pr create \
+            --base main \
+            --head "${branch}" \
+            --title "fix(security): bump ${PACKAGE} to ${VERSION} (alert #${NUMBER})" \
+            --body-file self-heal/triage.md \
+            --label security \
+            --label self-heal)"
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+          echo "branch=${branch}" >> "${GITHUB_OUTPUT}"
+          echo "Opened ${url}"
+
+      - name: Post the triage explanation as a PR comment
+        if: ${{ steps.pr.outputs.url != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          set -euo pipefail
+          # L10 V10.1 stage 2 looks for a comment containing "self-heal triage".
+          gh pr comment "${PR_URL}" --body-file self-heal/triage.md
+
+      - name: Enable auto-merge (see the header for why this is intentional)
+        if: ${{ steps.pr.outputs.url != '' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          set -euo pipefail
+          # --auto merges ONLY once every required check is green. If the gauntlet
+          # rejects the heal, the PR simply sits there — which is the honest
+          # outcome, not a failure of this workflow.
+          if gh pr merge "${PR_URL}" --auto --squash --delete-branch; then
+            echo "Auto-merge armed."
+          else
+            echo "::warning title=Auto-merge not armed::Enable 'Allow auto-merge' in repository settings, and make sure branch protection's required checks match the gauntlet's job names exactly (L10 failure mode 2)."
+          fi
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          PR_URL: ${{ steps.pr.outputs.url }}
+          PACKAGE: ${{ needs.triage.outputs.package }}
+          VERSION: ${{ needs.triage.outputs.patched_version }}
+          MODE: ${{ needs.triage.outputs.mode }}
+          NUMBER: ${{ needs.select.outputs.number }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## self-heal"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Alert | #${NUMBER} |"
+            echo "| Patch | \`${PACKAGE}\` → \`${VERSION}\` |"
+            echo "| Triage mode | ${MODE} |"
+            echo "| Pull request | ${PR_URL:-none opened} |"
+            echo
+            echo "The PR now runs the same gauntlet as any other change and merges"
+            echo "itself only if all of it is green."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  no-patch:
+    name: record a finding that needs a human
+    needs: [select, triage]
+    if: ${{ needs.select.outputs.found == 'true' && needs.triage.outputs.action != 'bump-dependency' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-heal-triage-${{ needs.select.outputs.kind }}-${{ needs.select.outputs.number }}
+
+      - name: Publish the triage explanation
+        env:
+          NUMBER: ${{ needs.select.outputs.number }}
+          ACTION: ${{ needs.triage.outputs.action }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## self-heal: no automated patch for alert #${NUMBER}"
+            echo
+            echo "Triage verdict: \`${ACTION}\` — this finding needs a human."
+            echo
+            cat self-heal/triage.md
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -1,0 +1,73 @@
+name: codeql
+
+# =============================================================================
+# CodeQL static analysis — L9 DevSecOps chain.
+# Playbook: docs/runbooks/layers/L09.md (V9.1 expects at least one completed
+# analysis per language matrix, tool.name == "CodeQL").
+#
+# Two languages, matching the master plan: `javascript-typescript` (the three
+# apps + the shared renderer) and `python` (data/generators).
+#
+# No Azure contact, no tenant dependency — this workflow is live on the public
+# repo from Phase P onward and needs no pre-G0 guard.
+#
+# If a run ever fails with "CodeQL analyses from advanced configurations cannot
+# be processed", repo-level default setup is competing with this file; disable it
+# with `gh api -X PATCH repos/.../code-scanning/default-setup -f state=not-configured`
+# (L09 failure mode 1) rather than deleting this workflow.
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly baseline so the Security tab stays current between merges.
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+          config: |
+            paths-ignore:
+              - '**/node_modules'
+              - '**/dist'
+              - '**/*.min.js'
+              - 'data/generated'
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

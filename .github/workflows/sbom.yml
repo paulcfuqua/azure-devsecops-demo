@@ -1,0 +1,101 @@
+name: sbom
+
+# =============================================================================
+# SPDX SBOMs via Syft — L9 DevSecOps chain.
+# Playbook: docs/runbooks/layers/L09.md (V9.3 expects one `*.spdx.json` per app
+# attached to the release, SPDX-valid, package list non-empty).
+#
+# Triggers:
+#   * push to main / manual  -> SBOMs uploaded as run artifacts (always available)
+#   * release published      -> the same SBOMs are ALSO attached as release assets
+#
+# Syft is version-pinned (L09 failure mode 4: pin the generator and the validator
+# together, and upgrade both deliberately in one PR).
+#
+# No tenant dependency — this workflow is live from Phase P and needs no pre-G0
+# guard.
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sbom-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sbom:
+    name: generate SPDX SBOMs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # required only to attach assets to a published release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: workspace-root
+            path: .
+          - name: launch-ops
+            path: apps/launch-ops
+          - name: control-tower
+            path: apps/control-tower
+          - name: copilot-svc
+            path: apps/copilot-svc
+          - name: spec-renderer
+            path: apps/shared/spec-renderer
+          - name: vuln-lab
+            path: apps/vuln-lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies so the SBOM sees the resolved tree
+        run: |
+          set -euo pipefail
+          # A manifest-only scan lists direct deps; an installed tree gives Syft the
+          # full transitive closure, which is what an SBOM is for.
+          npm ci
+          npm ci --prefix apps/vuln-lab
+
+      - name: Generate the SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: ${{ matrix.path }}
+          format: spdx-json
+          artifact-name: sbom-${{ matrix.name }}.spdx.json
+          output-file: sbom-${{ matrix.name }}.spdx.json
+          upload-artifact: true
+          upload-release-assets: false
+
+      - name: Sanity-check the document
+        run: |
+          set -euo pipefail
+          file="sbom-${{ matrix.name }}.spdx.json"
+          test -s "${file}"
+          jq -e '.spdxVersion and .creationInfo and (.packages | length > 0)' "${file}" >/dev/null
+          packages="$(jq '.packages | length' "${file}")"
+          echo "${file}: ${packages} packages, $(jq -r .spdxVersion "${file}")"
+          {
+            echo "- \`${file}\` — ${packages} packages, $(jq -r .spdxVersion "${file}")"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Attach the SBOM to the release
+        if: ${{ github.event_name == 'release' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "${TAG}" "sbom-${{ matrix.name }}.spdx.json" --clobber
+          echo "Attached sbom-${{ matrix.name }}.spdx.json to release ${TAG}."

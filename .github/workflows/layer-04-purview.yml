@@ -1,0 +1,190 @@
+name: layer-04-purview
+
+# =============================================================================
+# L4 — Purview sensitivity labels (Public / Internal / Confidential / Export-Controlled).
+# Playbook: docs/runbooks/layers/L04.md   Assets: infra/purview/labels.ps1
+#
+# labels.ps1 never authenticates on its own: the caller must already hold a
+# Security & Compliance PowerShell session (Connect-IPPSSession). S&C PowerShell
+# has no OIDC/federated path, so unattended CI needs certificate-based app-only
+# auth. This workflow therefore has TWO guards:
+#
+#   1. the standard `demo` environment guard (pre-G0 no-op), and
+#   2. an S&C credential guard — when PURVIEW_APP_ID / PURVIEW_ORGANIZATION /
+#      PURVIEW_CERT_BASE64 are absent the apply step skips with a notice and the
+#      layer stays a human-run step under the sponsor's login, exactly as the
+#      playbook's degrade path allows. It never fails the run.
+#
+# Labels persist across kill/rebuild by design; their teardown is G3.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      location:
+        description: Unused by L4 (labels are tenant-scoped); accepted for uniform layer calls.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run labels.ps1 with -WhatIf only.
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      location:
+        description: Unused by L4 (labels are tenant-scoped).
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run labels.ps1 with -WhatIf only.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight (demo environment + S&C credential guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+      scc: ${{ steps.scc.outputs.available }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L4 Purview
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L4 verification (mls-verifier)
+      - name: Check Security & Compliance app-only credentials
+        id: scc
+        env:
+          PURVIEW_APP_ID: ${{ vars.PURVIEW_APP_ID }}
+          PURVIEW_ORGANIZATION: ${{ vars.PURVIEW_ORGANIZATION }}
+          PURVIEW_CERT_BASE64: ${{ secrets.PURVIEW_CERT_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PURVIEW_APP_ID}" ] && [ -n "${PURVIEW_ORGANIZATION}" ] && [ -n "${PURVIEW_CERT_BASE64}" ]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice title=L4 runs under the human login::Security & Compliance app-only credentials are not configured (PURVIEW_APP_ID / PURVIEW_ORGANIZATION / PURVIEW_CERT_BASE64). labels.ps1 is a human-run step for this cycle; see docs/runbooks/layers/L04.md."
+          fi
+
+  apply:
+    name: apply L4 label taxonomy
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' && needs.preflight.outputs.scc == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ExchangeOnlineManagement
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module ExchangeOnlineManagement -Force -Scope CurrentUser -AllowClobber
+
+      - name: Connect S&C PowerShell and apply the label taxonomy
+        shell: pwsh
+        env:
+          PURVIEW_APP_ID: ${{ vars.PURVIEW_APP_ID }}
+          PURVIEW_ORGANIZATION: ${{ vars.PURVIEW_ORGANIZATION }}
+          PURVIEW_CERT_BASE64: ${{ secrets.PURVIEW_CERT_BASE64 }}
+          PURVIEW_CERT_PASSWORD: ${{ secrets.PURVIEW_CERT_PASSWORD }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'purview-app.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PURVIEW_CERT_BASE64))
+          try {
+            Import-Module ExchangeOnlineManagement
+            $connect = @{
+              AppId        = $env:PURVIEW_APP_ID
+              Organization = $env:PURVIEW_ORGANIZATION
+              ShowBanner   = $false
+            }
+            if ($env:PURVIEW_CERT_PASSWORD) {
+              $connect['Certificate'] = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $pfx, (ConvertTo-SecureString $env:PURVIEW_CERT_PASSWORD -AsPlainText -Force))
+            }
+            else {
+              $connect['CertificateFilePath'] = $pfx
+            }
+            Connect-IPPSSession @connect
+            if ($env:DRY_RUN -eq 'true') {
+              ./infra/purview/labels.ps1 -WhatIf *>&1 | Tee-Object -FilePath purview-plan.txt
+            }
+            else {
+              ./infra/purview/labels.ps1 -Confirm:$false *>&1 | Tee-Object -FilePath purview-apply.txt
+            }
+          }
+          finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+            Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload the label transcript
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-04-purview
+          path: |
+            purview-plan.txt
+            purview-apply.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify:
+    name: verify L4 (mls-verifier)
+    needs: [preflight, apply]
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.apply.result != 'failure' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-verifier)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run verification/layer-04-audit.ps1
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '04'
+
+      - name: Upload audit report
+        if: ${{ steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-04-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

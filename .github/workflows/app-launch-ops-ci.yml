@@ -1,0 +1,261 @@
+name: app-launch-ops-ci
+
+# =============================================================================
+# Path-filtered CI for apps/launch-ops (L7).
+# Playbook: docs/runbooks/layers/L07.md
+# build -> test -> container build -> Trivy (fail on CRITICAL) -> GHCR push
+#       -> deploy to ACA via OIDC (guarded on the demo environment).
+#
+# ---------------------------------------------------------------------------
+# OPEN ITEM P-7 — the Docker build context is the REPO ROOT, not apps/launch-ops.
+# apps/launch-ops/Dockerfile copies the root package-lock.json and the
+# @mls/spec-renderer workspace, so an app-directory context cannot build it.
+# `context: .` below is that requirement; the Dockerfiles were never built
+# locally (no Docker on the dev host), so this job is their first real proof.
+#
+# OPEN ITEM P-1 — target port. The image serves on 8080 (nginx, see the Dockerfile
+# EXPOSE line) but infra/bicep/apps/demo.bicepparam still defaults the container
+# app's target port to the placeholder 80. Set LAUNCH_OPS_PORT=8080 in the `demo`
+# GitHub environment when the first real image publishes; until then the deploy
+# job warns loudly and leaves ingress alone rather than silently mutating infra.
+# ---------------------------------------------------------------------------
+#
+# PRE-G0 GUARD: build/test/scan/push run from day one; the deploy job is gated on
+# the `demo` environment variables and simply skips until G0 completes.
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/launch-ops/**
+      - apps/shared/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/app-launch-ops-ci.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - apps/launch-ops/**
+      - apps/shared/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/app-launch-ops-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-launch-ops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: apps/launch-ops
+  APP_SLUG: launch-ops
+  WORKSPACE: apps/launch-ops
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: launch-ops deploy
+
+  build-test:
+    name: build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Build @mls/spec-renderer (workspace dependency)
+        run: npm run build:renderer
+
+      - name: Typecheck and build launch-ops
+        run: |
+          set -euo pipefail
+          npm run typecheck --workspace "${WORKSPACE}"
+          npm run build --workspace "${WORKSPACE}"
+
+      - name: Test the renderer and the app
+        run: |
+          set -euo pipefail
+          npm run test --workspace apps/shared/spec-renderer
+          npm run test --workspace "${WORKSPACE}"
+
+  image:
+    name: container build, scan and push
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute the GHCR reference
+        id: tag
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          registry="ghcr.io/$(printf '%s' "${REPO}" | tr '[:upper:]' '[:lower:]')/${APP_SLUG}"
+          tag="sha-${GITHUB_SHA:0:7}"
+          {
+            echo "registry=${registry}"
+            echo "tag=${tag}"
+            echo "image=${registry}:${tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image (context = repo root, open item P-7)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.APP_DIR }}/Dockerfile
+          load: true
+          push: false
+          tags: ${{ steps.tag.outputs.image }}
+          cache-from: type=gha,scope=launch-ops
+          cache-to: type=gha,mode=max,scope=launch-ops
+
+      - name: Trivy gate — fail the build on CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.tag.outputs.image }}
+          format: table
+          severity: CRITICAL
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Trivy SARIF for the Security tab (non-blocking)
+        if: ${{ always() && github.event_name != 'pull_request' }}
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.tag.outputs.image }}
+          format: sarif
+          output: trivy-launch-ops.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload the Trivy SARIF
+        if: ${{ always() && github.event_name != 'pull_request' && hashFiles('trivy-launch-ops.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-launch-ops.sarif
+          category: trivy-launch-ops
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the scanned image
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.APP_DIR }}/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.tag.outputs.image }}
+            ${{ steps.tag.outputs.registry }}:latest
+          cache-from: type=gha,scope=launch-ops
+          cache-to: type=gha,mode=max,scope=launch-ops
+
+  deploy:
+    name: deploy to Container Apps
+    needs: [preflight, image]
+    if: ${{ needs.preflight.outputs.configured == 'true' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Roll the new image onto the container app
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          APP_NAME: ${{ steps.names.outputs.ca-launch-ops }}
+          IMAGE: ${{ needs.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          # minReplicas stays 0: a nonzero floor is an un-gated spend change and a
+          # V7.5 audit failure.
+          az containerapp update \
+            --resource-group "${RG_APPS}" \
+            --name "${APP_NAME}" \
+            --image "${IMAGE}" \
+            --min-replicas 0 \
+            --output none
+          echo "Deployed ${IMAGE} to ${APP_NAME}."
+
+      - name: Check the ingress target port (open item P-1)
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          APP_NAME: ${{ steps.names.outputs.ca-launch-ops }}
+          CONFIGURED_PORT: ${{ vars.LAUNCH_OPS_PORT }}
+        run: |
+          set -euo pipefail
+          current="$(az containerapp show -g "${RG_APPS}" -n "${APP_NAME}" \
+            --query properties.configuration.ingress.targetPort -o tsv)"
+          echo "Current ingress target port: ${current}"
+          if [ "${current}" = "80" ] && [ -z "${CONFIGURED_PORT}" ]; then
+            echo "::warning title=P-1 open — target port still 80::${APP_NAME} serves a real image on 8080 but ingress still targets the placeholder port 80. Set LAUNCH_OPS_PORT=8080 in the demo environment and re-run layer-07-apps.yml. Ingress was deliberately NOT mutated here."
+          fi
+
+      - name: Deployment summary
+        env:
+          APP_NAME: ${{ steps.names.outputs.ca-launch-ops }}
+          IMAGE: ${{ needs.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### launch-ops deployed"
+            echo
+            echo "- container app: \`${APP_NAME}\`"
+            echo "- image: \`${IMAGE}\`"
+            echo
+            echo "Verification: \`verification/layer-07-audit.ps1\` (V7.1 endpoint +"
+            echo "content-hash marker, V7.4 path-filtered CI, V7.5 scale 0-N-0)."
+          } >> "${GITHUB_STEP_SUMMARY}"

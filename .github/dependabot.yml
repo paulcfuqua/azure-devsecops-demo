@@ -1,0 +1,145 @@
+# =============================================================================
+# Dependabot configuration — L9 DevSecOps chain, feeding the L10 self-healing
+# showpiece. Playbook: docs/runbooks/layers/L09.md (failure mode 5: "Dependabot
+# config valid but silent" — wrong directory globs or an ecosystem typo means no
+# alerts ever fire, which L10 then discovers the expensive way).
+#
+# Two different Dependabot features are in play, and they are easy to conflate:
+#
+#   * Dependabot ALERTS come from the dependency graph and are enabled as a REPO
+#     SETTING. They do not read this file. Every manifest below is detected and
+#     alerted on whether or not it is listed here.
+#   * Dependabot VERSION UPDATES (the scheduled PRs) are what this file
+#     configures.
+#
+# Both matter for the demo, and apps/vuln-lab needs them pulled apart — see its
+# entry below.
+# =============================================================================
+
+version: 2
+
+updates:
+  # --- npm: workspace root -------------------------------------------------
+  # The root manifest owns the shared toolchain (vite, vitest, typescript) for
+  # every workspace member, so this is where most app-facing bumps land.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+    commit-message:
+      prefix: 'fix'
+      prefix-development: 'chore'
+      include: scope
+
+  # --- npm: per app --------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /apps/launch-ops
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+      - launch-ops
+
+  - package-ecosystem: npm
+    directory: /apps/control-tower
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+      - control-tower
+
+  - package-ecosystem: npm
+    directory: /apps/copilot-svc
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+      - copilot-svc
+
+  - package-ecosystem: npm
+    directory: /apps/shared/spec-renderer
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+      - spec-renderer
+
+  # --- npm: the deliberately vulnerable lab --------------------------------
+  # apps/vuln-lab pins three known-vulnerable versions (json5 2.2.0,
+  # minimist 1.2.5, semver 7.5.1) on purpose: they are the seed for the L10
+  # self-healing showpiece. It is deliberately OUTSIDE the root `workspaces`
+  # list (open item P-6) so root hoisting cannot silently patch the pins.
+  #
+  # Listing it here is what L09 failure mode 5 asks for — the directory is
+  # explicitly covered, so a graph/ecosystem mistake is visible in config review.
+  #
+  # `open-pull-requests-limit: 0` disables Dependabot's *version-update* PRs for
+  # this directory ONLY. Alerts still fire (they come from the dependency graph,
+  # not this file), which is exactly what the demo needs: the alert is the
+  # trigger, and `self-heal.yml` — not Dependabot — must be the thing that opens
+  # the patch PR. If Dependabot healed the lab first there would be no showpiece.
+  #
+  # Same reasoning applies to the repo-level "Dependabot security updates"
+  # setting: leave it OFF, or it will race self-heal.yml for these three CVEs.
+  # See .github/README.md § Repository settings this layer assumes.
+  - package-ecosystem: npm
+    directory: /apps/vuln-lab
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+      - vuln-lab
+      - do-not-auto-bump
+
+  # --- pip: the synthetic data generators ----------------------------------
+  # data/generators is pure stdlib at runtime; pytest is the only dependency.
+  - package-ecosystem: pip
+    directory: /data/generators
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - python
+
+  # --- github-actions ------------------------------------------------------
+  # Keeps the pinned action versions in .github/workflows and the two composite
+  # actions in .github/actions current. This is the supply chain the whole
+  # estate deploys through, so it gets the same treatment as app code.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions

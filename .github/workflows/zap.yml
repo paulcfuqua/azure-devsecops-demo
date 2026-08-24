@@ -1,0 +1,143 @@
+name: zap
+
+# =============================================================================
+# OWASP ZAP baseline scan against the staging URL — L9 DevSecOps chain.
+# Playbook: docs/runbooks/layers/L09.md (V9.4: report artifact
+# `zap-baseline-report` exists and contains zero High-risk alerts).
+#
+# GUARDED: a staging URL only exists after L7 deploys the apps. With neither a
+# `target_url` input nor a `STAGING_URL` demo-environment variable, this workflow
+# reports a notice and exits green — it never fails for want of a tenant.
+#
+# The action itself is run with `fail_action: false` and the High-risk gate is
+# applied here, so the report is always produced and archived even on a failing
+# scan. An unreachable target produces an empty report, which this workflow
+# treats as a FAILURE, not a pass (L09 V9.4 retry note).
+#
+# `allow_issue_writing: false`: the scan must not open GitHub issues. Findings
+# ride the PR/report trail like every other check in this repo.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      target_url:
+        description: Staging URL to scan. Empty falls back to vars.STAGING_URL.
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: Staging URL to scan. Empty falls back to vars.STAGING_URL.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zap-baseline
+  cancel-in-progress: false
+
+jobs:
+  target:
+    name: resolve the scan target
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      url: ${{ steps.resolve.outputs.url }}
+      ready: ${{ steps.resolve.outputs.ready }}
+    steps:
+      - name: Resolve target URL
+        id: resolve
+        env:
+          INPUT_URL: ${{ inputs.target_url }}
+          STAGING_URL: ${{ vars.STAGING_URL }}
+        run: |
+          set -euo pipefail
+          url="${INPUT_URL:-${STAGING_URL}}"
+          if [ -z "${url}" ]; then
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            echo "url=" >> "${GITHUB_OUTPUT}"
+            echo "::notice title=No staging URL::Neither the target_url input nor the demo variable STAGING_URL is set. ZAP is a post-L7 check; skipping cleanly."
+            {
+              echo "## ZAP baseline: skipped"
+              echo
+              echo "No staging URL yet. This is the expected state until L7 deploys"
+              echo "launch-ops and the demo environment gains STAGING_URL."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          case "${url}" in
+            https://*) ;;
+            *)
+              echo "::error title=Invalid staging URL::The scan target must be an https:// URL."
+              exit 1
+              ;;
+          esac
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+
+  baseline:
+    name: ZAP baseline scan
+    needs: target
+    if: ${{ needs.target.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: ${{ needs.target.outputs.url }}
+          # -a includes alpha passive rules; -J writes the JSON report V9.4 parses.
+          cmd_options: '-a -J report.json'
+          # The gate below owns pass/fail so the report is always archived.
+          fail_action: false
+          allow_issue_writing: false
+          artifact_name: zap-scan-raw
+
+      - name: Publish the report artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          # Artifact name is load-bearing: V9.4 downloads `zap-baseline-report`.
+          name: zap-baseline-report
+          path: |
+            report.json
+            report_html.html
+            report_md.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Gate on High-risk alerts
+        env:
+          TARGET_URL: ${{ needs.target.outputs.url }}
+        run: |
+          set -euo pipefail
+          if [ ! -s report.json ]; then
+            echo "::error title=ZAP produced no report::The scan of ${TARGET_URL} produced no report.json. An unreachable target is a FAILURE, not a pass (L09 V9.4)."
+            exit 1
+          fi
+          high="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("High"))] | length' report.json)"
+          medium="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("Medium"))] | length' report.json)"
+          low="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("Low"))] | length' report.json)"
+          {
+            echo "## ZAP baseline — ${TARGET_URL}"
+            echo
+            echo "| Risk | Alerts |"
+            echo "|---|---|"
+            echo "| High | ${high} |"
+            echo "| Medium | ${medium} |"
+            echo "| Low | ${low} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [ "${high}" -gt 0 ]; then
+            echo "::error title=ZAP High-risk alerts::${high} High-risk alerts against ${TARGET_URL}. Fix the finding (or rule-tune via a committed zap.conf with justification) — never by editing the report."
+            jq -r '.site[]?.alerts[]? | select(.riskdesc | startswith("High")) | "- \(.alert) [\(.riskdesc)]"' report.json
+            exit 1
+          fi
+          echo "Zero High-risk alerts."

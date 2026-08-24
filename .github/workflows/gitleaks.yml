@@ -1,0 +1,74 @@
+name: gitleaks
+
+# =============================================================================
+# Secret scanning with gitleaks — L1 deliverable ("gitleaks in CI").
+# Playbook: docs/runbooks/layers/L01.md (failure mode 4: a gitleaks hit on a
+# commit already on main is a real incident — rotate first, scrub second, and
+# only with sponsor sign-off since the repo is public).
+#
+# This is the belt to GitHub's own braces: secret scanning + push protection are
+# repo settings (V1.2), gitleaks is the in-repo check that also runs on forks and
+# on full history.
+#
+# The only real secret in this system is ANTHROPIC_API_KEY (CLAUDE.md hard rule
+# 5). Everything Azure authenticates via OIDC, and tenant/subscription IDs live
+# in GitHub environment variables — so a hit here is either that key or a test
+# fixture that pattern-matches a credential (rewrite the fixture; never use the
+# push-protection bypass for convenience).
+#
+# gitleaks-action v2 is free for public repositories; GITLEAKS_LICENSE is only
+# required for organization-owned private repos.
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitleaks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: scan history for secrets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the point is to catch a leak already on main, not just
+          # the diff (L01 failure mode 4).
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'true'
+          GITLEAKS_ENABLE_SUMMARY: 'true'
+
+      - name: What a finding means
+        if: ${{ failure() }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## gitleaks found something"
+            echo
+            echo "Treat this as an incident, in this order:"
+            echo
+            echo "1. **Rotate** whatever leaked. The only live credential in this"
+            echo "   system is \`ANTHROPIC_API_KEY\`; everything Azure is OIDC."
+            echo "2. If it is a **test fixture** that merely pattern-matches a"
+            echo "   credential, rewrite the fixture so it stops matching."
+            echo "3. Only then consider history rewriting — and only with sponsor"
+            echo "   sign-off, because this repository is public and shared."
+          } >> "${GITHUB_STEP_SUMMARY}"

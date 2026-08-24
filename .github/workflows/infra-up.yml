@@ -1,0 +1,305 @@
+name: infra-up
+
+# =============================================================================
+# Layer-ordered full instantiation of the Meridian Launch Systems demo estate.
+# Master plan: docs/superpowers/plans/2026-08-22-g1-master-plan.md
+# Operational runbook: docs/runbooks/kill-rebuild.md § 4 (replay order) and § 5
+# (the <60-minute clock). `scripts/up.ps1` is the local wrapper over this file.
+#
+# Replay graph — L5 and L6 run in PARALLEL, which is what buys the margin in the
+# <60-minute critical path (kill-rebuild.md § 5):
+#
+#   oidc-login
+#     └─ L2 landing zone  ~1-2m   (idempotent no-op on a standard rebuild)
+#          └─ L3 Entra    ~1-2m   (create-if-absent, no-ops in seconds)
+#               └─ L4 labels ~1m  (create-if-absent, GUIDs preserved)
+#                    ├─ L5 Fabric + seed  ~20-25m ─┐  (parallel)
+#                    └─ L6 platform Bicep ~12-18m ─┤
+#                                                  └─ L7 apps ~10-15m
+#                                                        └─ summary
+#
+# L7 depends on L6 only (it needs the ACA environment, not the lakehouse), so a
+# slow L5 leg never serializes the app deploy. L8's copilot eval is the leg that
+# needs L5 — it rides the per-app CI + eval path, not this workflow.
+#
+# ---------------------------------------------------------------------------
+# PRE-G0 GUARD
+# Every Azure-facing job hangs off `preflight`, which reads the `demo` GitHub
+# environment. Before G0 those variables do not exist, `preflight` reports
+# configured=false, and every deploy job is skipped — the run is GREEN and this
+# file is safe to push before the tenant exists (Phase P Track G).
+# No tenant/subscription/client ID is ever committed (CLAUDE.md hard rule 5).
+# ---------------------------------------------------------------------------
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'full = layer-ordered instantiation; oidc-smoke = run only the oidc-login job (L1 V1.1)'
+        type: choice
+        options:
+          - full
+          - oidc-smoke
+        default: full
+      layers:
+        description: "Layers to run: 'all', 'none', or a comma list of l2..l7 (e.g. l5,l6)"
+        type: string
+        default: all
+      location:
+        description: Azure region for every layer deployment
+        type: string
+        default: eastus2
+      dry_run:
+        description: 'Plan only — what-if / -WhatIf everywhere, no writes'
+        type: boolean
+        default: false
+      image_tag:
+        description: 'GHCR tag for the L7 apps deployment (empty keeps the placeholder image)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  # infra-up and infra-down share one group: the estate is never built and torn
+  # down at the same time.
+  group: mls-demo-estate
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      missing: ${{ steps.guard.outputs.missing }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            FABRIC_CAPACITY_ID=${{ vars.FABRIC_CAPACITY_ID }}
+          layer: infra-up (full estate)
+
+  plan:
+    name: plan layer selection
+    runs-on: ubuntu-latest
+    outputs:
+      l2: ${{ steps.select.outputs.l2 }}
+      l3: ${{ steps.select.outputs.l3 }}
+      l4: ${{ steps.select.outputs.l4 }}
+      l5: ${{ steps.select.outputs.l5 }}
+      l6: ${{ steps.select.outputs.l6 }}
+      l7: ${{ steps.select.outputs.l7 }}
+    steps:
+      - name: Resolve which layers this run replays
+        id: select
+        env:
+          MODE: ${{ inputs.mode }}
+          LAYERS: ${{ inputs.layers }}
+        run: |
+          set -euo pipefail
+          selection="$(printf '%s' "${LAYERS}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          # oidc-smoke (L01 playbook step 4) runs the login job and nothing else.
+          if [ "${MODE}" = "oidc-smoke" ]; then
+            selection="none"
+          fi
+          [ -n "${selection}" ] || selection="all"
+          for layer in l2 l3 l4 l5 l6 l7; do
+            case "${selection}" in
+              none) enabled=false ;;
+              all) enabled=true ;;
+              *)
+                if printf ',%s,' "${selection}" | grep -q ",${layer},"; then
+                  enabled=true
+                else
+                  enabled=false
+                fi
+                ;;
+            esac
+            echo "${layer}=${enabled}" >> "${GITHUB_OUTPUT}"
+          done
+          echo "Selection: ${selection}"
+
+  oidc-login:
+    # Job name is load-bearing: verification/layer-01-audit.ps1 selects the job
+    # named "oidc-login" for V1.1 (docs/runbooks/layers/L01.md).
+    name: oidc-login
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Azure login (OIDC, mls-github-deployer — zero stored cloud secrets)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Assert the runner landed in the demo subscription
+        env:
+          EXPECTED_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          # V1.1: the run conclusion is the Verifier's independent signal, so this
+          # assertion must fail the job when the OIDC round-trip lands elsewhere.
+          actual="$(az account show --query id -o tsv)"
+          if [ "${actual}" != "${EXPECTED_SUBSCRIPTION_ID}" ]; then
+            echo "::error title=OIDC landed in the wrong subscription::az account show returned a subscription that is not the demo subscription."
+            exit 1
+          fi
+          echo "OIDC round-trip verified against the demo subscription."
+          {
+            echo "### OIDC round-trip"
+            echo
+            echo "\`azure/login\` succeeded and \`az account show\` matched \`vars.AZURE_SUBSCRIPTION_ID\`."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  layer-02:
+    name: L2 landing zone
+    needs: [preflight, plan, oidc-login]
+    if: ${{ needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l2 == 'true' }}
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/layer-02-landing-zone.yml
+    with:
+      location: ${{ inputs.location }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  layer-03:
+    name: L3 Entra
+    needs: [preflight, plan, layer-02]
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l3 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-02.result) }}
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/layer-03-entra.yml
+    with:
+      location: ${{ inputs.location }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  layer-04:
+    name: L4 Purview labels
+    needs: [preflight, plan, layer-03]
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l4 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-03.result) }}
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/layer-04-purview.yml
+    with:
+      location: ${{ inputs.location }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  layer-05:
+    # Parallel with layer-06 — see the replay graph above.
+    name: L5 Fabric + seed
+    needs: [preflight, plan, layer-04]
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l5 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-04.result) }}
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/layer-05-fabric.yml
+    with:
+      location: ${{ inputs.location }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  layer-06:
+    # Parallel with layer-05 — see the replay graph above.
+    name: L6 platform
+    needs: [preflight, plan, layer-04]
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l6 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-04.result) }}
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/layer-06-platform.yml
+    with:
+      location: ${{ inputs.location }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  layer-07:
+    name: L7 apps
+    needs: [preflight, plan, layer-06]
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l7 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-06.result) }}
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/layer-07-apps.yml
+    with:
+      location: ${{ inputs.location }}
+      dry_run: ${{ inputs.dry_run }}
+      image_tag: ${{ inputs.image_tag }}
+    secrets: inherit
+
+  summary:
+    name: run summary
+    needs: [preflight, plan, oidc-login, layer-02, layer-03, layer-04, layer-05, layer-06, layer-07]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write the layer result table
+        env:
+          CONFIGURED: ${{ needs.preflight.outputs.configured }}
+          MISSING: ${{ needs.preflight.outputs.missing }}
+          R_OIDC: ${{ needs.oidc-login.result }}
+          R_L2: ${{ needs.layer-02.result }}
+          R_L3: ${{ needs.layer-03.result }}
+          R_L4: ${{ needs.layer-04.result }}
+          R_L5: ${{ needs.layer-05.result }}
+          R_L6: ${{ needs.layer-06.result }}
+          R_L7: ${{ needs.layer-07.result }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## infra-up results"
+            echo
+            if [ "${CONFIGURED}" != "true" ]; then
+              echo "**Pre-G0 no-op.** Missing demo environment variables: ${MISSING}"
+              echo
+              echo "Nothing was deployed and nothing failed. Complete G0"
+              echo "(\`docs/runbooks/g0-bootstrap.md\`) then L1 step 1"
+              echo "(\`docs/runbooks/layers/L01.md\`) to arm this workflow."
+              echo
+            fi
+            echo "| Leg | Result |"
+            echo "|---|---|"
+            echo "| oidc-login (L1 V1.1) | ${R_OIDC} |"
+            echo "| L2 landing zone | ${R_L2} |"
+            echo "| L3 Entra | ${R_L3} |"
+            echo "| L4 Purview labels | ${R_L4} |"
+            echo "| L5 Fabric + seed | ${R_L5} |"
+            echo "| L6 platform | ${R_L6} |"
+            echo "| L7 apps | ${R_L7} |"
+            echo
+            echo "Verifier follow-up: \`verification/layer-01-audit.ps1\` … \`layer-07-audit.ps1\`,"
+            echo "run as \`mls-verifier\`, reports committed to \`verification/reports/\`."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Fail the run if any selected layer failed
+        env:
+          RESULTS: ${{ needs.oidc-login.result }} ${{ needs.layer-02.result }} ${{ needs.layer-03.result }} ${{ needs.layer-04.result }} ${{ needs.layer-05.result }} ${{ needs.layer-06.result }} ${{ needs.layer-07.result }}
+        run: |
+          set -euo pipefail
+          case " ${RESULTS} " in
+            *" failure "*)
+              echo "::error title=infra-up incomplete::At least one layer failed; see the table above."
+              exit 1
+              ;;
+          esac
+          echo "No layer reported failure."

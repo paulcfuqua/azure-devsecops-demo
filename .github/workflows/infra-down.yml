@@ -1,0 +1,279 @@
+name: infra-down
+
+# =============================================================================
+# RG-scoped teardown of the demo estate. `scripts/down.ps1` is the local wrapper.
+# Runbook: docs/runbooks/kill-rebuild.md § 2 ("down.ps1 — semantics").
+#
+# ---------------------------------------------------------------------------
+# GATE-FREE BY DESIGN — and there is no confirmation input on purpose.
+#
+# CLAUDE.md hard rule 2: "RG-scoped teardown of demo resources is gate-free by
+# design." kill-rebuild.md § 2: "Idempotent, order-safe, no confirmation prompt."
+# The whole demo rests on being able to destroy the estate on a whim, so adding
+# friction here would break the showpiece, not protect it. Money is disposable;
+# identity is not — and this workflow cannot reach identity.
+#
+# THE LINE THIS WORKFLOW NEVER CROSSES (kill-rebuild.md § 1). Nothing below
+# touches, and no code path here can reach:
+#   * Entra users / groups / CA policies / app registrations (L3)
+#   * Purview labels and their GUIDs (L4)
+#   * the Fabric workspace SHELL `mls-operations` and its role assignments
+#   * the Fabric capacity itself, MG `mls`, policy + NIST assignments, the budget
+#   * the OIDC federation on mls-github-deployer, mls-verifier, this repo
+# All of those are G3 and live in separate scripts (infra/*/teardown.ps1).
+#
+# Order (kill-rebuild.md § 2): Fabric items -> capacity pause -> cost-export
+# definition -> four parallel RG deletes. Each stage runs even if an earlier one
+# stumbles (`!cancelled()`), because a half-finished teardown that strands a
+# billable RG is worse than a noisy one — the stage that failed still fails the
+# run, so nothing is hidden.
+#
+# PRE-G0 GUARD: same as infra-up — before the `demo` environment variables exist
+# every job skips and the run is green.
+# ---------------------------------------------------------------------------
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_fabric:
+        description: 'Skip the Fabric item delete + capacity pause (RG deletes only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mls-demo-estate
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      missing: ${{ steps.guard.outputs.missing }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: infra-down (estate teardown)
+
+  fabric:
+    name: Fabric items + capacity pause
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.skip_fabric }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Delete workspace items (workspace shell and roles survive)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # infra/fabric/teardown-items.ps1 is the L5 lead's deliverable (named in
+          # kill-rebuild.md § 2 step 1). Until it exists this is a NOTICE: the
+          # lakehouse items stay, which costs OneLake storage pennies and is
+          # visible to verification/layer-11-audit.ps1's down-state check.
+          $script = 'infra/fabric/teardown-items.ps1'
+          if (-not (Test-Path $script)) {
+            Write-Host "::notice title=Fabric item teardown not authored yet::$script does not exist; workspace items were NOT deleted. Handoff to the L5 lead."
+            exit 0
+          }
+          $token = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Could not obtain a Fabric API token.' }
+          & $script -Token $token -Confirm:$false
+
+      - name: Pause the Fabric capacity
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          case "${FABRIC_CAPACITY_ID}" in
+            /subscriptions/*)
+              az resource invoke-action --ids "${FABRIC_CAPACITY_ID}" --action suspend
+              echo "Paid capacity suspended (\$0 from here)."
+              ;;
+            *)
+              echo "Trial capacity — pause is a no-op (\$0 either way)."
+              ;;
+          esac
+
+  cost-export:
+    name: remove the cost-export definition
+    needs: [preflight, fabric]
+    if: ${{ !cancelled() && needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Delete the subscription-scope daily export
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          PREFIX: ${{ steps.names.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          # Removed so it never points at deleted storage (kill-rebuild.md § 1).
+          # Idempotent: a missing export is a no-op, not an error.
+          export_name="${PREFIX}-cost-daily"
+          scope="/subscriptions/${AZURE_SUBSCRIPTION_ID}"
+          if az costmanagement export show --name "${export_name}" --scope "${scope}" >/dev/null 2>&1; then
+            az costmanagement export delete --name "${export_name}" --scope "${scope}" --yes
+            echo "Deleted cost export ${export_name}."
+          else
+            echo "Cost export ${export_name} not present — nothing to delete."
+          fi
+
+  resource-groups:
+    name: delete the four demo resource groups
+    needs: [preflight, cost-export]
+    if: ${{ !cancelled() && needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Delete in parallel, then wait for the estate to drain
+        timeout-minutes: 45
+        env:
+          RG_LIST: ${{ steps.names.outputs.rg-list }}
+          PREFIX: ${{ steps.names.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          read -r -a rgs <<< "${RG_LIST}"
+
+          # Empty or missing RGs no-op harmlessly: down is safe to re-run at any
+          # time, from any state (kill-rebuild.md § 2 step 4).
+          for rg in "${rgs[@]}"; do
+            if az group exists --name "${rg}" | grep -q true; then
+              echo "Deleting ${rg}"
+              az group delete --name "${rg}" --yes --no-wait
+            else
+              echo "${rg} already absent."
+            fi
+          done
+
+          echo "Waiting for deletes to drain..."
+          deadline=$(( $(date +%s) + 2400 ))
+          while true; do
+            remaining=""
+            for rg in "${rgs[@]}"; do
+              if az group exists --name "${rg}" | grep -q true; then
+                remaining="${remaining} ${rg}"
+              fi
+            done
+            if [ -z "${remaining}" ]; then
+              echo "All demo resource groups are gone."
+              break
+            fi
+            if [ "$(date +%s)" -ge "${deadline}" ]; then
+              echo "::error title=RG delete stuck::Still present after 40 minutes:${remaining}. See kill-rebuild.md failure mode 2 (locks, Key Vault soft-delete, resources in Failed state)."
+              exit 1
+            fi
+            echo "Still deleting:${remaining}"
+            sleep 30
+          done
+
+          {
+            echo "## Estate torn down"
+            echo
+            echo "Deleted: \`${RG_LIST}\`"
+            echo
+            echo "Persisted by design (G3 to touch): Entra objects, Purview labels,"
+            echo "the Fabric workspace shell and capacity, MG \`${PREFIX}\` + policy"
+            echo "assignments, the budget, the OIDC federation, and this repo."
+            echo
+            echo "Down-state audit: \`verification/layer-11-audit.ps1\` (down half),"
+            echo "plus \`layer-03-audit.ps1\` and \`layer-04-audit.ps1\` which must"
+            echo "still PASS — a regression there means the teardown crossed the line."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  summary:
+    name: run summary
+    needs: [preflight, fabric, cost-export, resource-groups]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write the teardown result table
+        env:
+          CONFIGURED: ${{ needs.preflight.outputs.configured }}
+          MISSING: ${{ needs.preflight.outputs.missing }}
+          R_FABRIC: ${{ needs.fabric.result }}
+          R_COST: ${{ needs.cost-export.result }}
+          R_RG: ${{ needs.resource-groups.result }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## infra-down results"
+            echo
+            if [ "${CONFIGURED}" != "true" ]; then
+              echo "**Pre-G0 no-op.** Missing demo environment variables: ${MISSING}"
+              echo
+              echo "There is no estate to tear down yet; nothing failed."
+              echo
+            fi
+            echo "| Stage | Result |"
+            echo "|---|---|"
+            echo "| Fabric items + capacity pause | ${R_FABRIC} |"
+            echo "| Cost-export definition | ${R_COST} |"
+            echo "| Resource group deletes | ${R_RG} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Fail the run if any teardown stage failed
+        env:
+          RESULTS: ${{ needs.fabric.result }} ${{ needs.cost-export.result }} ${{ needs.resource-groups.result }}
+        run: |
+          set -euo pipefail
+          case " ${RESULTS} " in
+            *" failure "*)
+              echo "::error title=Teardown incomplete::At least one stage failed; re-running infra-down is safe and idempotent."
+              exit 1
+              ;;
+          esac
+          echo "Teardown clean."

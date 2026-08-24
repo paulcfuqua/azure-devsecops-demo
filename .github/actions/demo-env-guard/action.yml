@@ -1,0 +1,110 @@
+name: demo environment guard
+description: >-
+  Reports whether the GitHub `demo` environment already carries the Azure identity
+  variables written at G0. Before G0 those variables do not exist, so every
+  Azure-facing job must no-op cleanly instead of failing: this action is the single
+  place that decision is made.
+
+# ---------------------------------------------------------------------------
+# Why this exists (pre-G0 guard, Phase P Track G)
+#
+# The repo is pushed and CI must be green BEFORE the Azure tenant exists
+# (docs/superpowers/plans/2026-08-22-phase-p-pre-tenant-scaffold.md, Track G:
+# "deploy jobs guarded behind the existence of the `demo` environment variables
+# so they no-op until G0").
+#
+# The variables are written by the L1 deploy procedure
+# (docs/runbooks/layers/L01.md step 1) as GitHub *environment variables* — they
+# are never committed (CLAUDE.md hard rule 5 / spec F5). A caller job therefore
+# has to declare `environment: demo` for `vars.*` to resolve at all; this action
+# only inspects the values the caller passes in and NEVER prints them.
+# ---------------------------------------------------------------------------
+
+inputs:
+  client-id:
+    description: '${{ vars.AZURE_CLIENT_ID }} read from the demo environment.'
+    required: false
+    default: ''
+  tenant-id:
+    description: '${{ vars.AZURE_TENANT_ID }} read from the demo environment.'
+    required: false
+    default: ''
+  subscription-id:
+    description: '${{ vars.AZURE_SUBSCRIPTION_ID }} read from the demo environment.'
+    required: false
+    default: ''
+  additional:
+    description: >-
+      Optional newline-separated NAME=VALUE pairs for variables a specific layer
+      also needs (e.g. FABRIC_CAPACITY_ID for L5). Only NAMES are ever logged.
+    required: false
+    default: ''
+  layer:
+    description: 'Label used in the notice/summary, e.g. "L5 Fabric".'
+    required: false
+    default: 'this workflow'
+
+outputs:
+  configured:
+    description: "'true' when every required variable is non-empty, otherwise 'false'."
+    value: ${{ steps.check.outputs.configured }}
+  missing:
+    description: 'Space-separated names of the variables that were empty.'
+    value: ${{ steps.check.outputs.missing }}
+
+runs:
+  using: composite
+  steps:
+    - name: Inspect demo environment variables
+      id: check
+      shell: bash
+      env:
+        AZURE_CLIENT_ID: ${{ inputs.client-id }}
+        AZURE_TENANT_ID: ${{ inputs.tenant-id }}
+        AZURE_SUBSCRIPTION_ID: ${{ inputs.subscription-id }}
+        GUARD_ADDITIONAL: ${{ inputs.additional }}
+        GUARD_LAYER: ${{ inputs.layer }}
+      run: |
+        set -euo pipefail
+
+        missing=""
+
+        for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+          value="$(printenv "${name}" || true)"
+          if [ -z "${value}" ]; then
+            missing="${missing} ${name}"
+          fi
+        done
+
+        while IFS= read -r line; do
+          [ -n "${line}" ] || continue
+          case "${line}" in
+            *=*) ;;
+            *) continue ;;
+          esac
+          name="${line%%=*}"
+          value="${line#*=}"
+          if [ -z "${value}" ]; then
+            missing="${missing} ${name}"
+          fi
+        done <<< "${GUARD_ADDITIONAL}"
+
+        if [ -n "${missing}" ]; then
+          echo "configured=false" >> "${GITHUB_OUTPUT}"
+          echo "missing=${missing# }" >> "${GITHUB_OUTPUT}"
+          echo "::notice title=Pre-G0 no-op::${GUARD_LAYER} is not configured yet. Missing demo environment variables:${missing}. Azure-facing jobs will be skipped."
+          {
+            echo "## Pre-G0 no-op — ${GUARD_LAYER}"
+            echo
+            echo "The **demo** GitHub environment does not yet define:${missing}"
+            echo
+            echo "Every Azure-facing job in this run was skipped, and the run is green."
+            echo "This is the expected state until the human completes G0"
+            echo "(\`docs/runbooks/g0-bootstrap.md\`) and the L1 deploy procedure"
+            echo "(\`docs/runbooks/layers/L01.md\` step 1) populates the environment."
+          } >> "${GITHUB_STEP_SUMMARY}"
+        else
+          echo "configured=true" >> "${GITHUB_OUTPUT}"
+          echo "missing=" >> "${GITHUB_OUTPUT}"
+          echo "::notice title=demo environment configured::${GUARD_LAYER} has every required variable; Azure-facing jobs will run."
+        fi

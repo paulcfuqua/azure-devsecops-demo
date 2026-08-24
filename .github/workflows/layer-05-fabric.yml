@@ -1,0 +1,237 @@
+name: layer-05-fabric
+
+# =============================================================================
+# L5 — Fabric workspace `mls-operations`, lakehouse, generators, seeding.
+# Playbook: docs/runbooks/layers/L05.md
+# Assets:   infra/fabric/provision-workspace.ps1, data/generators (seed 20260822)
+#
+# Cost discipline (master plan L5 / CLAUDE.md gate G2):
+#   * resuming a PAID F2 capacity is a spend increase and is G2-gated per resume;
+#     on the 60-day trial capacity it is a no-op with a $0 delta. The resume step
+#     states the delta in the run summary either way — the discipline is the point.
+#   * the pause step runs with `if: always()`, so a failed seed can never leave a
+#     paid capacity running.
+#
+# Pre-G0 guard: FABRIC_CAPACITY_ID joins the three identity variables, so the
+# whole layer no-ops before G0.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      location:
+        description: Unused by L5 (Fabric is capacity-scoped); accepted for uniform layer calls.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run provision-workspace.ps1 with -WhatIf and skip the seed.
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      location:
+        description: Unused by L5 (Fabric is capacity-scoped).
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run provision-workspace.ps1 with -WhatIf and skip the seed.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            FABRIC_CAPACITY_ID=${{ vars.FABRIC_CAPACITY_ID }}
+          layer: L5 Fabric
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L5 verification (mls-verifier)
+
+  deploy:
+    name: provision and seed the lakehouse
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resume the Fabric capacity (G2 statement)
+        id: resume
+        run: |
+          set -euo pipefail
+          case "${FABRIC_CAPACITY_ID}" in
+            /subscriptions/*)
+              echo 'Paid capacity detected — resuming (G2: ~0.36 USD/hr for the seed window).'
+              az resource invoke-action --ids "${FABRIC_CAPACITY_ID}" --action resume
+              echo "paid=true" >> "${GITHUB_OUTPUT}"
+              {
+                echo '### L5 capacity resume (G2)'
+                echo
+                echo '- capacity: **paid F2**'
+                echo '- stated delta: ~0.36 USD/hour for the resume window (seed + eval)'
+                echo '- the pause step runs unconditionally, even on a failed seed'
+              } >> "${GITHUB_STEP_SUMMARY}"
+              ;;
+            *)
+              echo 'Trial capacity (no ARM resource id) — resume is a no-op.'
+              echo "paid=false" >> "${GITHUB_OUTPUT}"
+              {
+                echo '### L5 capacity resume (G2)'
+                echo
+                echo '- capacity: **trial**'
+                echo '- stated delta: **0 USD**'
+              } >> "${GITHUB_STEP_SUMMARY}"
+              ;;
+          esac
+
+      - name: Provision workspace and lakehouse
+        shell: pwsh
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Could not obtain a Fabric API token.' }
+          $provisionArgs = @{
+            Token      = $token
+            CapacityId = $env:FABRIC_CAPACITY_ID
+          }
+          if ($env:DRY_RUN -eq 'true') {
+            ./infra/fabric/provision-workspace.ps1 @provisionArgs -WhatIf *>&1 | Tee-Object -FilePath fabric-plan.txt
+          }
+          else {
+            ./infra/fabric/provision-workspace.ps1 @provisionArgs -Confirm:$false *>&1 | Tee-Object -FilePath fabric-apply.txt
+          }
+
+      - name: Generate the synthetic dataset (seed 20260822)
+        if: ${{ !inputs.dry_run }}
+        working-directory: data
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r generators/requirements.txt
+          python -m generators build
+          python -m generators summary | tee ../generator-summary.txt
+
+      - name: Load the 10 Delta tables
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # data/seed/ loaders are the L5 lead's deliverable (Track A hands over the
+          # generated CSV/JSON; the loaders write them into the lakehouse). Until
+          # they exist this step is a NOTICE, not a failure: the workspace and
+          # lakehouse are provisioned, the tables are simply not seeded yet, and
+          # verification/layer-05-audit.ps1 is the thing that will say so.
+          if [ -d data/seed ] && compgen -G 'data/seed/*' >/dev/null; then
+            for loader in data/seed/*.ps1; do
+              [ -f "${loader}" ] || continue
+              echo "Running ${loader}"
+              pwsh -NoProfile -NonInteractive -File "${loader}"
+            done
+          else
+            echo "::notice title=Lakehouse seed loaders not authored yet::data/seed/ is empty; the lakehouse was provisioned but no Delta tables were loaded."
+          fi
+
+      - name: Pause the Fabric capacity
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          # Unconditional: a failed seed must never leave a paid capacity running.
+          case "${FABRIC_CAPACITY_ID}" in
+            /subscriptions/*)
+              az resource invoke-action --ids "${FABRIC_CAPACITY_ID}" --action suspend
+              echo "Paid capacity suspended."
+              ;;
+            *)
+              echo "Trial capacity — pause is a no-op (\$0 either way)."
+              ;;
+          esac
+
+      - name: Upload L5 artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-05-fabric
+          path: |
+            fabric-plan.txt
+            fabric-apply.txt
+            generator-summary.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify:
+    name: verify L5 (mls-verifier)
+    needs: [preflight, deploy]
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-verifier — Reader + workspace Viewer)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run verification/layer-05-audit.ps1
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '05'
+
+      - name: Upload audit report
+        if: ${{ steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-05-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

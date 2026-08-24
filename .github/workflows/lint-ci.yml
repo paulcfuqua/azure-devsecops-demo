@@ -1,0 +1,227 @@
+name: lint-ci
+
+# =============================================================================
+# The repository's single green-check entry point: everything that can be proven
+# without a tenant, in one workflow.
+#
+#   actionlint       every workflow + both composite actions
+#   PSScriptAnalyzer every PowerShell file under scripts/, infra/ and verification/
+#   Pester           the mocked bootstrap / Entra / Purview / Fabric suites
+#   pytest           data/generators (determinism, row counts, distributions)
+#   vitest           the npm workspace (spec-renderer + the three apps)
+#
+# ---------------------------------------------------------------------------
+# OPEN ITEM P-4 — PSScriptAnalyzer MUST be installed explicitly.
+#
+# On the dev host PSScriptAnalyzer resolves by accident of PSModulePath, from a
+# Windows PowerShell 5.1 module directory
+# (~/OneDrive/Documents/WindowsPowerShell/Modules) rather than from a pwsh 7
+# path. On an `ubuntu-latest` runner that module does not exist at all, and
+# `Invoke-ScriptAnalyzer` would simply not be a command — so a lint step written
+# the way it works locally would either error obscurely or, worse, be swallowed
+# and silently no-op, reporting a clean repo it never analysed.
+#
+# The `Install-Module PSScriptAnalyzer -Force -Scope CurrentUser` step below is
+# therefore mandatory, and the step after it ASSERTS the command exists before
+# analysing anything. A lint job that cannot lint must fail loudly, not pass.
+# ---------------------------------------------------------------------------
+#
+# No tenant dependency: this workflow is entirely local computation and is green
+# from the first push, long before G0.
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ACTIONLINT_VERSION: 1.7.12
+
+jobs:
+  actionlint:
+    name: actionlint (workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          # Pinned release binary rather than a third-party action: this job is
+          # the thing that validates the workflows, so it should depend on as
+          # little workflow machinery as possible.
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          chmod +x actionlint
+          ./actionlint --version
+
+      - name: Lint every workflow (shellcheck + pyflakes included)
+        run: |
+          set -euo pipefail
+          # ubuntu-latest ships shellcheck, so actionlint also shell-checks every
+          # `run:` block here — stricter than the dev host, deliberately.
+          shellcheck --version | head -n 2
+          ./actionlint -color
+
+  powershell:
+    name: PSScriptAnalyzer + Pester
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer and Pester (open item P-4)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          Install-Module Pester -Force -Scope CurrentUser -MinimumVersion 5.5.0
+          Get-Module -ListAvailable PSScriptAnalyzer, Pester |
+            Select-Object Name, Version | Format-Table
+
+      - name: Analyse scripts/, infra/ and verification/
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # P-4 assertion: if the module did not install, FAIL — never no-op.
+          if (-not (Get-Command Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue)) {
+            Write-Host '::error title=PSScriptAnalyzer missing::Invoke-ScriptAnalyzer is not available after Install-Module. The lint step would have silently analysed nothing (open item P-4).'
+            exit 1
+          }
+
+          $paths = @('scripts', 'infra', 'verification', '.github') |
+            Where-Object { Test-Path $_ }
+          $files = Get-ChildItem -Path $paths -Recurse -Include *.ps1, *.psm1 -File
+          Write-Host "Analysing $($files.Count) PowerShell file(s)."
+          if ($files.Count -eq 0) {
+            Write-Host '::error title=Nothing to analyse::No .ps1/.psm1 files were found; the glob is wrong.'
+            exit 1
+          }
+
+          $results = $files | ForEach-Object {
+            Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error, Warning -ReportSummary:$false
+          }
+
+          if ($results) {
+            $results |
+              Select-Object Severity, RuleName, ScriptName, Line, Message |
+              Sort-Object Severity, ScriptName, Line |
+              Format-Table -AutoSize -Wrap |
+              Out-String -Width 200 |
+              Write-Host
+            Write-Host "::error title=PSScriptAnalyzer findings::$($results.Count) finding(s) at Error/Warning severity."
+            exit 1
+          }
+          Write-Host 'PSScriptAnalyzer: clean.'
+
+      - name: Run the Pester suites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Pester -MinimumVersion 5.5.0
+          $config = New-PesterConfiguration
+          $config.Run.Path = @('scripts', 'infra') | Where-Object { Test-Path $_ }
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputPath = 'pester-results.xml'
+          Invoke-Pester -Configuration $config
+
+      - name: Upload the Pester results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-results
+          path: pester-results.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  python:
+    name: pytest (data generators)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install test dependencies
+        working-directory: data
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r generators/requirements.txt
+
+      - name: Run the generator test suite
+        working-directory: data
+        run: python -m pytest generators/tests -q
+
+      - name: Prove the dataset still builds deterministically
+        working-directory: data
+        run: python -m generators summary
+
+  node:
+    name: vitest (npm workspace)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Syntax-check the committed CI scripts
+        run: |
+          set -euo pipefail
+          # The repo has no ESLint; this at least stops a broken .mjs reaching a
+          # self-heal run, where it would only surface mid-incident.
+          for script in .github/scripts/*.mjs; do
+            node --check "${script}"
+            echo "node --check ${script}: OK"
+          done
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Build (renderer first — the apps import it)
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Confirm the vuln-lab CVE seed is still intact
+        run: |
+          set -euo pipefail
+          # apps/vuln-lab pins three known-vulnerable versions on purpose (L10
+          # showpiece seed) and is deliberately outside the root workspaces list
+          # so hoisting cannot patch them (open item P-6, closed 2026-08-24).
+          # If this count ever drops, the seed has been silently healed.
+          npm ci --prefix apps/vuln-lab
+          npm audit --prefix apps/vuln-lab --json > vuln-lab-audit.json || true
+          total="$(jq '.metadata.vulnerabilities.total' vuln-lab-audit.json)"
+          echo "vuln-lab advisories: ${total}"
+          {
+            echo "### vuln-lab CVE seed"
+            echo
+            echo "\`npm audit\` reports **${total}** advisories (expected: 3 while the seed is armed)."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [ "${total}" -lt 3 ]; then
+            echo "::warning title=vuln-lab seed weakened::Expected at least 3 advisories in apps/vuln-lab but found ${total}. Re-arm with apps/vuln-lab/reseed.ps1 before demoing L10."
+          fi
