@@ -8,9 +8,12 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 
 ## Status
 
-**Phase P (pre-tenant scaffold).** Decisions locked 2026-08-22: monorepo, Anthropic
-API, dual E5 trials. Scaffold work proceeds; nothing has been written to Azure and the
-tenant is deliberately not yet activated.
+**Phase P complete (2026-08-24)** — [completion report](verification/reports/phase-p-completion.md).
+Decisions locked 2026-08-22: monorepo, Anthropic API, dual E5 trials. The entire
+scaffold is authored and locally validated: data generators, renderer library, both
+frontends, the copilot service, the Bicep tree, all bootstrap/governance scripts, 11
+layer playbooks, and 17 CI workflows. **Nothing has been written to Azure**, and the
+public repo has not been published — both await sponsor go-ahead.
 
 | Gate | Meaning | Status |
 |------|---------|--------|
