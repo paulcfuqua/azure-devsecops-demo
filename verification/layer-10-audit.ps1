@@ -19,6 +19,17 @@
     as a failed chain - which is the point: never hand-close alerts, hand-write a fix, or
     hand-merge PRs to "complete" a run (L10.md Rollback).
 
+    THE DEPLOY STAGE (V10.1 stage 6, V10.2 stage 5) reads revisions of
+    mls-vuln-lab-demo-ca, the L10 deployment witness provisioned by
+    infra/bicep/apps/main.bicep. apps/vuln-lab itself is never containerised - its pins are
+    CRITICAL and would fail the very Trivy gate the heal PR has to pass, and its seeds are
+    unstarted server factories whose safety rests on nothing ever running them - so the
+    witness carries a pinned public placeholder image plus the heal's identity as
+    configuration. The criterion is therefore not "some revision appeared", which any
+    unrelated redeploy satisfies, but "the revision after the merge carries
+    MLS_HEAL_COMMIT == this PR's merge commit", which nothing satisfies by accident.
+    .github/workflows/vuln-lab-witness.yml is what stamps it.
+
     Both criteria carry a 24 h window measured from the re-seed merge. This audit does not
     block for a day: it evaluates the trail now and records PENDING while that declared
     window is still open, FAIL once it has passed.
@@ -54,8 +65,17 @@ function Get-PullRequestDetail {
     )
     return Invoke-MlsGh -AllowFailure -Argument @(
         'pr', 'view', $Number, '--repo', $Repository,
-        '--json', 'number,headRefOid,body,commits,mergedAt,mergedBy,autoMergeRequest,state,title'
+        # mergeCommit is what binds the estate half of the trail to this PR: the deploy
+        # stage requires the witness revision to be stamped with THIS merge's commit, not
+        # merely to exist after it.
+        '--json', 'number,headRefOid,body,commits,mergedAt,mergedBy,autoMergeRequest,mergeCommit,state,title'
     )
+}
+
+function Get-MergeCommitSha {
+    <# The oid gh reports for a merged PR's merge commit, or '' when it is not merged. #>
+    param([AllowNull()]$PullRequest)
+    return "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $PullRequest -Name 'mergeCommit') -Name 'oid')"
 }
 
 function Get-CheckConclusion {
@@ -68,22 +88,88 @@ function Get-CheckConclusion {
 }
 
 function Get-RevisionAfter {
-    <# Stage 6 for both tracks: a new ACA revision timestamped after the merge. #>
+    <#
+    .SYNOPSIS
+        The deploy stage for both tracks (V10.1 stage 6, V10.2 stage 5): a new revision of
+        the L10 deployment witness, timestamped after the merge AND stamped with that
+        merge's commit.
+    .DESCRIPTION
+        The app is mls-vuln-lab-demo-ca, provisioned by infra/bicep/apps/main.bicep. It is a
+        witness, not a fifth serving app: apps/vuln-lab is never containerised (its pins are
+        CRITICAL and would fail the very Trivy gate the heal PR has to pass, and its seeds
+        are unstarted server factories whose safety argument is that nothing ever runs
+        them), so the container carries a pinned public placeholder image and the heal's
+        identity as configuration. .github/workflows/vuln-lab-witness.yml re-stamps
+        MLS_HEAL_COMMIT on every push to main touching apps/vuln-lab/**.
+
+        The commit match is the point. "Some revision appeared after the merge" is satisfied
+        by any unrelated redeploy and proves nothing; "the revision after the merge carries
+        this heal's merge commit" cannot be satisfied by accident, and it is the estate's own
+        record - read from ARM with Reader - that the merged fix reached Azure.
+    .OUTPUTS
+        After   - revisions created at or after the merge
+        Matched - of those, the ones stamped with this merge commit
+        Stamp   - the MLS_HEAL_COMMIT values seen on After, for the report's observed line
+    #>
     param(
         [Parameter(Mandatory)][string]$ResourceGroupName,
         [Parameter(Mandatory)][string]$AppName,
-        [AllowNull()][datetime]$MergedUtc
+        [AllowNull()][datetime]$MergedUtc,
+        [AllowEmptyString()][AllowNull()][string]$MergeCommit
     )
     $revisions = @(Invoke-MlsAz -AllowFailure -Argument @(
             'containerapp', 'revision', 'list', '--resource-group', $ResourceGroupName, '--name', $AppName,
-            '--query', '[].{name:name, created:properties.createdTime}', '--output', 'json'
+            '--query', "[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}",
+            '--output', 'json'
         ))
-    if ($null -eq $MergedUtc) { return @() }
-    return @($revisions | Where-Object {
+    $empty = [pscustomobject]@{ After = @(); Matched = @(); Stamp = @() }
+    if ($null -eq $MergedUtc) { return $empty }
+    $after = @($revisions | Where-Object {
             $created = "$(Get-MlsProperty -InputObject $_ -Name 'created')"
             $slot = [datetime]::MinValue
             [datetime]::TryParse($created, [ref]$slot) -and $slot.ToUniversalTime() -ge $MergedUtc
         })
+    $stamp = @($after | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'healCommit')" })
+    $matched = @()
+    if (-not [string]::IsNullOrWhiteSpace($MergeCommit)) {
+        $matched = @($after | Where-Object {
+                "$(Get-MlsProperty -InputObject $_ -Name 'healCommit')" -eq $MergeCommit
+            })
+    }
+    return [pscustomobject]@{ After = $after; Matched = $matched; Stamp = $stamp }
+}
+
+function Test-DeployStage {
+    <#
+    .SYNOPSIS
+        Shared verdict for the deploy stage: returns the matched revision (or $null) plus the
+        problem text, so both trails phrase the same failure the same way.
+    #>
+    param(
+        [Parameter(Mandatory)]$Deploy,
+        [AllowEmptyString()][AllowNull()][string]$MergeCommit
+    )
+    if ($Deploy.After.Count -lt 1) {
+        return [pscustomobject]@{
+            Revision = $null
+            Problem  = 'no new container app revision timestamped after the merge (the vuln-lab deployment witness was not rolled - check .github/workflows/vuln-lab-witness.yml ran for the merge commit)'
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($MergeCommit)) {
+        return [pscustomobject]@{
+            Revision = $null
+            Problem  = 'the PR reports no merge commit, so the revision after the merge could not be bound to this heal'
+        }
+    }
+    if ($Deploy.Matched.Count -lt 1) {
+        $seen = @($Deploy.Stamp | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+        $describe = if ($seen.Count -gt 0) { $seen -join ', ' } else { '(none stamped)' }
+        return [pscustomobject]@{
+            Revision = $null
+            Problem  = "$($Deploy.After.Count) revision(s) exist after the merge but none carries MLS_HEAL_COMMIT=$MergeCommit (stamps seen: $describe) - a revision that is not this heal's does not prove this heal shipped"
+        }
+    }
+    return [pscustomobject]@{ Revision = $Deploy.Matched[0]; Problem = '' }
 }
 
 function Test-AutofixTrail {
@@ -158,16 +244,19 @@ function Test-AutofixTrail {
     if ($mergedBy -ne $AutomationLogin) { $problem.Add("mergedBy='$mergedBy', expected the automation identity '$AutomationLogin' (no human merger anywhere in the trail)") }
     if ($null -eq $autoMerge) { $problem.Add('no auto-merge request on the PR') }
 
-    # 6. new ACA revision after the merge
+    # 6. new witness revision after the merge, stamped with this merge's commit
     $mergedUtc = $null
     if ($mergedAt) {
         $slot = [datetime]::MinValue
         if ([datetime]::TryParse($mergedAt, [ref]$slot)) { $mergedUtc = $slot.ToUniversalTime() }
     }
-    $revision = Get-RevisionAfter -ResourceGroupName $ResourceGroupName -AppName $AppName -MergedUtc $mergedUtc
-    $stage.Add("6 revisions after merge=$($revision.Count)")
-    if ($revision.Count -lt 1) { $problem.Add('no new container app revision timestamped after the merge') }
-    elseif ($revision.Count -ge 1) { $timestamp.Add("$(Get-MlsProperty -InputObject $revision[0] -Name 'created')") }
+    $mergeCommit = Get-MergeCommitSha -PullRequest $pullRequest
+    $deploy = Get-RevisionAfter -ResourceGroupName $ResourceGroupName -AppName $AppName `
+        -MergedUtc $mergedUtc -MergeCommit $mergeCommit
+    $verdict = Test-DeployStage -Deploy $deploy -MergeCommit $mergeCommit
+    $stage.Add("6 revisions after merge=$($deploy.After.Count) stamped with $($mergeCommit.Substring(0, [math]::Min(7, $mergeCommit.Length)))=$($deploy.Matched.Count)")
+    if ($verdict.Problem) { $problem.Add($verdict.Problem) }
+    else { $timestamp.Add("$(Get-MlsProperty -InputObject $verdict.Revision -Name 'created')") }
 
     # 7. alert closed
     $final = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/code-scanning/alerts/$AlertNumber")
@@ -234,9 +323,12 @@ function Test-DependabotTrailForAlert {
         $slot = [datetime]::MinValue
         if ([datetime]::TryParse($mergedAt, [ref]$slot)) { $mergedUtc = $slot.ToUniversalTime() }
     }
-    $revision = Get-RevisionAfter -ResourceGroupName $ResourceGroupName -AppName $AppName -MergedUtc $mergedUtc
-    if ($revision.Count -lt 1) { $problem.Add('no new container app revision after the merge') }
-    else { $timestamp.Add("$(Get-MlsProperty -InputObject $revision[0] -Name 'created')") }
+    $mergeCommit = Get-MergeCommitSha -PullRequest $pullRequest
+    $deploy = Get-RevisionAfter -ResourceGroupName $ResourceGroupName -AppName $AppName `
+        -MergedUtc $mergedUtc -MergeCommit $mergeCommit
+    $verdict = Test-DeployStage -Deploy $deploy -MergeCommit $mergeCommit
+    if ($verdict.Problem) { $problem.Add($verdict.Problem) }
+    else { $timestamp.Add("$(Get-MlsProperty -InputObject $verdict.Revision -Name 'created')") }
 
     $final = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/dependabot/alerts/$AlertNumber")
     $finalState = "$(Get-MlsProperty -InputObject $final -Name 'state')"
@@ -335,8 +427,8 @@ function Invoke-Main {
 
     Invoke-MlsCriterion -Context $context -Id 'V10.1' `
         -Description 'For the seeded CodeQL alert, the full Autofix trail holds (alert -> autofix success -> PR with Autofix commit and explanation -> gauntlet green -> merged by automation -> new ACA revision -> alert fixed, timestamps monotonic)' `
-        -Command "gh api repos/$repositoryName/code-scanning/alerts/<n> --jq '{state, created_at, rule:.rule.id}'`ngh api repos/$repositoryName/code-scanning/alerts/<n>/autofix --jq '{status, description, started_at}'`ngh pr view <pr> --json headRefOid,body,commits`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName`ngh api repos/$repositoryName/code-scanning/alerts/<n> --jq '.state'" `
-        -Expected "seven stages hold: autofix status success with a non-empty description carried in the PR body; head commit from autofix/commits; all check-run conclusions success; mergedBy == $AutomationLogin with an auto-merge request; a revision after the merge; alert state fixed; timestamps monotonic" `
+        -Command "gh api repos/$repositoryName/code-scanning/alerts/<n> --jq '{state, created_at, rule:.rule.id}'`ngh api repos/$repositoryName/code-scanning/alerts/<n>/autofix --jq '{status, description, started_at}'`ngh pr view <pr> --json headRefOid,body,commits`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest,mergeCommit`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName --query `"[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}`"`ngh api repos/$repositoryName/code-scanning/alerts/<n> --jq '.state'" `
+        -Expected "seven stages hold: autofix status success with a non-empty description carried in the PR body; head commit from autofix/commits; all check-run conclusions success; mergedBy == $AutomationLogin with an auto-merge request; a witness revision after the merge carrying MLS_HEAL_COMMIT == the PR's merge commit; alert state fixed; timestamps monotonic" `
         -RetryWindowMinutes $windowMinutes -InProcessWaitMinutes 0 -WindowStartUtc $windowStart -PendingWhenUnexpired:$pendingAllowed `
         -Test {
         Test-AutofixTrail -Repository $repositoryName -AlertNumber $codeqlAlert -PullRequestNumber $healPr `
@@ -345,7 +437,7 @@ function Invoke-Main {
 
     Invoke-MlsCriterion -Context $context -Id 'V10.2' `
         -Description 'For at least 2 of the 3 seeded dependency pins, the Dependabot trail holds (alert -> patch PR -> gauntlet green -> merged by automation -> new ACA revision -> alert fixed)' `
-        -Command "gh api repos/$repositoryName/dependabot/alerts/<n> --jq '{state, created_at, dep:.dependency.package.name}'`ngh pr list --author `"app/dependabot`" --json number,title,headRefName`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName`ngh api repos/$repositoryName/dependabot/alerts/<n> --jq '.state'" `
+        -Command "gh api repos/$repositoryName/dependabot/alerts/<n> --jq '{state, created_at, dep:.dependency.package.name}'`ngh pr list --author `"app/dependabot`" --json number,title,headRefName`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest,mergeCommit`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName --query `"[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}`"`ngh api repos/$repositoryName/dependabot/alerts/<n> --jq '.state'" `
         -Expected "all six stages hold for at least $DependencyPassBar of the seeded pins (3/3 is the target, $DependencyPassBar/3 is the pass line)" `
         -RetryWindowMinutes $windowMinutes -InProcessWaitMinutes 0 -WindowStartUtc $windowStart -PendingWhenUnexpired:$pendingAllowed `
         -Test {

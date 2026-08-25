@@ -54,6 +54,16 @@ outputs:
       proxy /api to. naming.bicep gained the `dataApi` app key with the same value,
       so this and the Bicep agree by construction.
     value: ${{ steps.resolve.outputs.ca-data-api }}
+  ca-vuln-lab:
+    description: >-
+      containerAppName(prefix, "vuln-lab", env) — the L10 deployment witness. It is not a
+      serving app: apps/vuln-lab is never containerised (see infra/bicep/apps/main.bicep),
+      and this container runs a pinned public placeholder with ingress disabled. Both
+      self-heal.yml and vuln-lab-witness.yml address it by this name, and
+      verification/layer-10-audit.ps1 reads its revisions for the deploy stage of each
+      healing trail. Composed here rather than in each workflow so the prefix stays owned
+      by naming.bicep (CLAUDE.md).
+    value: ${{ steps.resolve.outputs.ca-vuln-lab }}
   key-vault:
     description: 'keyVaultName(prefix, env).'
     value: ${{ steps.resolve.outputs.key-vault }}
@@ -108,6 +118,7 @@ runs:
           echo "ca-control-tower=${prefix}-control-tower-${envseg}-ca"
           echo "ca-mcp=${prefix}-mcp-${envseg}-ca"
           echo "ca-data-api=${prefix}-data-api-${envseg}-ca"
+          echo "ca-vuln-lab=${prefix}-vuln-lab-${envseg}-ca"
           echo "key-vault=${prefix}-sec-${envseg}-kv"
           echo "law=${prefix}-obs-${envseg}-law"
           echo "app-insights=${prefix}-obs-${envseg}-appi"

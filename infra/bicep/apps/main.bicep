@@ -1,5 +1,5 @@
 // =============================================================================
-// apps/main.bicep — L7: the four container apps.
+// apps/main.bicep — L7: the four container apps, plus the L10 deployment witness.
 //
 // Deployed at RESOURCE GROUP scope into mls-rg-apps (created at L6):
 //
@@ -13,6 +13,9 @@
 //   launch-ops     external ingress   minReplicas=0
 //   control-tower  external ingress   minReplicas=0
 //   mcp-tools      external ingress   minReplicas=0
+//
+// Plus one non-serving resource:
+//   vuln-lab       INGRESS DISABLED   minReplicas=0   (L10 deployment witness)
 //
 // minReplicas=0 everywhere: idle cost is $0 by design; a nonzero floor is an
 // un-gated spend change and an audit failure (V6.1/V7.5).
@@ -175,6 +178,12 @@ param logAnalyticsTimespan string = 'P14D'
 @description('[derived] HTTP path the MCP Streamable HTTP endpoint is served on. ASSUMPTION pending reconciliation with apps/mcp-tools/ — see infra/copilot-studio/README.md. Used only to compose the mcpToolsEndpoint output that the Copilot Studio connector consumes; changing it deploys nothing.')
 param mcpEndpointPath string = '/mcp'
 
+@description('L10 deployment witness image. A pinned PUBLIC placeholder on purpose: apps/vuln-lab is never containerised (see the vuln-lab block below), so this image contains none of the lab\'s code and none of its deliberately vulnerable dependencies.')
+param vulnLabWitnessImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
+@description('Commit the L10 witness revision attests to. "unset" until a heal merges; .github/workflows/vuln-lab-witness.yml re-stamps it on every push to main that touches apps/vuln-lab/**, which is what creates the revision V10.1 stage 6 / V10.2 stage 5 look for.')
+param vulnLabHealCommit string = 'unset'
+
 @description('[derived] Replica ceiling — enough for a demo burst, small enough to cap active spend.')
 param maxReplicas int = 2
 
@@ -232,6 +241,7 @@ var launchOpsName = naming.containerAppName(companyPrefix, naming.appKeys.launch
 var controlTowerName = naming.containerAppName(companyPrefix, naming.appKeys.controlTower, env)
 var mcpToolsName = naming.containerAppName(companyPrefix, naming.appKeys.mcpTools, env)
 var dataApiName = naming.containerAppName(companyPrefix, naming.appKeys.dataApi, env)
+var vulnLabName = naming.containerAppName(companyPrefix, naming.appKeys.vulnLab, env)
 var mcpToolsIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.mcpTools, env)
 var dataApiIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.dataApi, env)
 
@@ -239,6 +249,7 @@ var tagsLaunchOps = naming.requiredTags(env, naming.appKeys.launchOps, costCente
 var tagsControlTower = naming.requiredTags(env, naming.appKeys.controlTower, costCenter, owner, dataClassification)
 var tagsMcpTools = naming.requiredTags(env, naming.appKeys.mcpTools, costCenter, owner, dataClassification)
 var tagsDataApi = naming.requiredTags(env, naming.appKeys.dataApi, costCenter, owner, dataClassification)
+var tagsVulnLab = naming.requiredTags(env, naming.appKeys.vulnLab, costCenter, owner, dataClassification)
 
 // Empty means "decide from what L5 handed us": cloud when there is a Fabric SQL
 // analytics endpoint to read the three analytical tables from, local otherwise.
@@ -495,6 +506,85 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
   }
 }
 
+// ------------------------------------------------------------------ L10 deployment witness
+//
+// mls-vuln-lab-demo-ca. verification/layer-10-audit.ps1 reads
+// `az containerapp revision list -g <rg-apps> -n mls-vuln-lab-demo-ca` for the deploy
+// stage of BOTH healing trails (V10.1 stage 6, V10.2 stage 5): "a new ACA revision
+// timestamped after the merge". Nothing created that app, so both criteria failed on a
+// resource that did not exist — a pipeline defect wearing an estate defect's clothes.
+//
+// WHAT THIS IS, STATED PLAINLY. It is a deployment witness, not a fifth serving app, and
+// apps/vuln-lab's own code is NOT in it. That is deliberate and non-negotiable:
+//
+//   1. apps/vuln-lab pins three known-vulnerable packages, one of them CRITICAL
+//      (minimist 1.2.5, CVE-2021-44906). Building it into an image would put a CRITICAL
+//      finding in front of the L9 Trivy gate — the same gauntlet L10 requires the heal PR
+//      to pass green. The Autofix track does not touch the pins, so its heal PR would go
+//      red every time, and the only ways out are suppressing the gate (L10 failure mode 3
+//      forbids it outright) or shipping known-vulnerable containers into an estate that
+//      has Defender for Containers toggled on at L9. Both are worse than the gap.
+//   2. The seeds are HTTP server factories for a path traversal and a command injection.
+//      apps/vuln-lab/README.md's safety argument is precisely that "no server is ever
+//      started" — nothing calls either factory, so the lab holds a live alert without
+//      holding a live risk. Deploying them would invalidate that argument.
+//   3. The repo-root package.json excludes apps/vuln-lab from the workspaces list so the
+//      pins can never resolve to patched versions, and the README's guarantee is that it
+//      is "not in any Dockerfile". This app keeps both true: no build, no Dockerfile, no
+//      dependency graph.
+//
+// So the witness runs a pinned public placeholder image and carries the heal's identity
+// as configuration. .github/workflows/vuln-lab-witness.yml re-stamps MLS_HEAL_COMMIT (and
+// the lab's post-heal advisory count) on every push to main touching apps/vuln-lab/**,
+// which is what rolls a revision timestamped after the heal merge. The audit does not
+// settle for "some revision appeared": it requires the newest revision after the merge to
+// carry THIS heal's commit, so an unrelated redeploy cannot satisfy the stage.
+//
+// Ingress is DISABLED and minReplicas is 0: the witness never listens, never scales up and
+// never serves anyone. Its revisions and their environment are the whole product, and they
+// are readable from ARM with Reader — which is all the Verifier holds.
+//
+// Cost: $0. A container app with no ingress, no scale rule and minReplicas 0 runs zero
+// replicas; Container Apps bills active usage only. It dies with mls-rg-apps in down.ps1,
+// exactly as docs/runbooks/layers/L10.md's teardown section already says it does.
+module vulnLabWitnessApp 'br/public:avm/res/app/container-app:0.23.0' = {
+  name: 'l7-ca-vuln-lab-witness'
+  params: {
+    name: vulnLabName
+    location: location
+    tags: tagsVulnLab
+    environmentResourceId: caeResourceId
+    // No ingress at all. Not "internal": there is nothing to reach.
+    disableIngress: true
+    scaleSettings: scaleToZero
+    containers: [
+      {
+        name: naming.appKeys.vulnLab
+        image: vulnLabWitnessImage
+        resources: {
+          cpu: json(containerCpu)
+          memory: containerMemory
+        }
+        env: [
+          {
+            // The heal this revision attests to. Rewritten by
+            // .github/workflows/vuln-lab-witness.yml on each vuln-lab merge; the L10 audit
+            // compares it with the heal PR's merge commit.
+            name: 'MLS_HEAL_COMMIT'
+            value: vulnLabHealCommit
+          }
+          {
+            // Static, and true of the image rather than of the lab: nothing from
+            // apps/vuln-lab is in this container.
+            name: 'MLS_WITNESS_ROLE'
+            value: 'l10-deployment-witness'
+          }
+        ]
+      }
+    ]
+  }
+}
+
 // ------------------------------------------------------------------ outputs
 
 @description('Public FQDN of launch-ops.')
@@ -521,13 +611,19 @@ output dataApiIdentityClientId string = dataApiIdentity.outputs.clientId
 @description('Principal (object) ID of the data-api user-assigned identity, for role assignments made outside this template.')
 output dataApiIdentityPrincipalId string = dataApiIdentity.outputs.principalId
 
-@description('Container app NAME per app key. verification/layer-07-audit.ps1 addresses apps by name (-AppName), and the L7 workflow builds the V7.1 deploy manifest from these.')
+@description('Container app NAME per app key. verification/layer-07-audit.ps1 addresses apps by name (-AppName), and the L7 workflow builds the V7.1 deploy manifest from these. The L10 witness is deliberately NOT here: it serves nothing, has no image digest to bind an endpoint to, and V7.1 would report it as an app whose /healthz never answers. It is published separately as vulnLabWitnessAppName.')
 output containerAppNames object = {
   launchOps: launchOpsName
   controlTower: controlTowerName
   mcpTools: mcpToolsName
   dataApi: dataApiName
 }
+
+@description('Name of the L10 deployment witness container app (mls-vuln-lab-demo-ca) — the app verification/layer-10-audit.ps1 reads revisions from and .github/workflows/vuln-lab-witness.yml stamps.')
+output vulnLabWitnessAppName string = vulnLabName
+
+@description('Resource ID of the L10 deployment witness.')
+output vulnLabWitnessResourceId string = vulnLabWitnessApp.outputs.resourceId
 
 @description('MLS_IMAGE_DIGEST as deployed, per app. This is the deploy run\'s record of what each endpoint should be serving; the L7 workflow writes it into the manifest V7.1 compares against /healthz.')
 output imageDigests object = {

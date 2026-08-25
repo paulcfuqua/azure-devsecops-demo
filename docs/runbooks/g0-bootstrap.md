@@ -238,15 +238,18 @@ has run. Each one is an audit input that cannot be derived from ARM:
 | `MLS_L7_CANARY_PR` | canary PR number | V7.4. The L7 lead opens the PR — the Verifier never writes to the repo — and `layer-07-apps.yml` also accepts it as a `canary_pr` dispatch input | L7 |
 | `MLS_L10_RESEED_MERGED_AT` | UTC time the `apps/vuln-lab/reseed.ps1` PR **merged**, e.g. `2026-08-24T14:05:00Z` | V10.1/V10.2's 24-hour chain deadline. Without it an incomplete healing trail is recorded FAIL instead of PENDING, because there is no deadline to compare against. `reseed.ps1` cannot set it: the clock starts at merge, after the script has finished | each demo cycle |
 | `MLS_L10_DEPENDABOT_ALERTS` | the three seeded Dependabot alert numbers, comma- or space-separated | V10.2. `self-heal.yml` appends the alert its own run picked, so a fresh alert is covered before anyone updates this | L10 |
-| `MLS_L9_RUN_ID` | `layer-09-devsecops.yml` run ID | V9.2's Trivy negative test | L9 |
-| `MLS_L9_RELEASE_TAG` | release tag carrying the SBOMs | V9.3 | L9 |
-| `MLS_L9_ZAP_RUN_ID` | `zap.yml` run ID whose artifact holds the baseline report | V9.4 | L9 |
+| `MLS_L9_RUN_ID` | `layer-09-devsecops.yml` run ID | V9.2's Trivy negative test | **no longer hand-set** — see below |
+| `MLS_L9_RELEASE_TAG` | release tag carrying the SBOMs | V9.3 | **no longer hand-set** |
+| `MLS_L9_ZAP_RUN_ID` | run ID whose artifact holds the ZAP baseline report | V9.4 | **no longer hand-set** |
 
-> The three `MLS_L9_*` values are set **by hand** today. `layer-09-devsecops.yml` — the
-> workflow the L09 playbook prescribes, which would orchestrate the Trivy negative test,
-> the SBOM release build, the ZAP baseline and the Defender toggle — does not exist yet,
-> so nothing publishes them automatically and no workflow runs `layer-09-audit.ps1`. It is
-> the one layer whose audit still has no home.
+> **The three `MLS_L9_*` values are now produced by the layer run.**
+> `.github/workflows/layer-09-devsecops.yml` exists (2026-08-24) and passes all three to
+> the audit as explicit arguments: `-LayerRunId` and `-ZapRunId` are its own
+> `github.run_id`, and `-ReleaseTag` is the tag its `release` job created. `zap.yml` and
+> `sbom.yml` are **called** with `uses:` rather than dispatched, so a reusable workflow's
+> jobs and artifacts belong to the caller's run — which is what makes one run id serve
+> both V9.2 and V9.4. Leave all three variables unset on the happy path; they survive only
+> as an override for re-verifying an older run by hand.
 
 **Optional tuning** (each has a working default, so leave them unset until you need them):
 

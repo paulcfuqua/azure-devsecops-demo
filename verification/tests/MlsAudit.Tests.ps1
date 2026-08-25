@@ -363,6 +363,97 @@ Describe 'transport wrappers' {
     }
 }
 
+Describe 'Invoke-MlsSqlQuery authentication' {
+    # The demo's SQL server sets azureADOnlyAuthentication: true and the audits run on a
+    # Linux runner, so Invoke-Sqlcmd has no integrated-security path to degrade to: a token
+    # is mandatory. This module used to pass -AccessToken $null, which could only ever
+    # produce a driver-level "Login failed" that says nothing about the real cause. These
+    # tests pin the whole resolution order and the failure message.
+    #
+    # Invoke-MlsSqlcmd (private) is the seam: mocking it proves WHICH token reaches the
+    # driver without a SqlServer module installed anywhere in CI.
+    BeforeEach {
+        Mock Assert-MlsCommand {} -ModuleName 'MlsAudit'
+        Mock Invoke-MlsSqlcmd { @([pscustomobject]@{ t = 'launches'; n = 1200 }) } -ModuleName 'MlsAudit'
+        Mock Invoke-MlsAz { [pscustomobject]@{ accessToken = 'minted-token' } } -ModuleName 'MlsAudit'
+        Remove-Item -LiteralPath 'env:MLS_SQL_ACCESS_TOKEN' -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath 'env:MLS_VERIFIER_SQL_TOKEN' -ErrorAction SilentlyContinue
+    }
+
+    It 'passes an explicitly supplied token to the driver and mints nothing' {
+        $rows = @(Invoke-MlsSqlQuery -ServerName 'endpoint.datawarehouse.fabric.microsoft.com' `
+                -DatabaseName 'mls_operations' -Query 'SELECT COUNT(*) FROM launches' -AccessToken 'explicit-token')
+        $rows[0].n | Should -Be 1200
+        Should -Invoke Invoke-MlsSqlcmd -ModuleName 'MlsAudit' -Exactly -Times 1 -ParameterFilter {
+            $AccessToken -eq 'explicit-token'
+        }
+        Should -Invoke Invoke-MlsAz -ModuleName 'MlsAudit' -Exactly -Times 0
+    }
+
+    It 'falls back to the environment before minting, exactly like the other module inputs' {
+        $env:MLS_SQL_ACCESS_TOKEN = 'env-token'
+        try {
+            Invoke-MlsSqlQuery -ServerName 's' -DatabaseName 'd' -Query 'SELECT 1' | Out-Null
+        }
+        finally {
+            Remove-Item -LiteralPath 'env:MLS_SQL_ACCESS_TOKEN' -ErrorAction SilentlyContinue
+        }
+        Should -Invoke Invoke-MlsSqlcmd -ModuleName 'MlsAudit' -Exactly -Times 1 -ParameterFilter {
+            $AccessToken -eq 'env-token'
+        }
+        Should -Invoke Invoke-MlsAz -ModuleName 'MlsAudit' -Exactly -Times 0
+    }
+
+    It 'mints a database.windows.net token through the read-only az wrapper when none is supplied' {
+        Invoke-MlsSqlQuery -ServerName 's' -DatabaseName 'd' -Query 'WITH x AS (SELECT 1 AS n) SELECT * FROM x' | Out-Null
+        Should -Invoke Invoke-MlsAz -ModuleName 'MlsAudit' -Exactly -Times 1 -ParameterFilter {
+            $Argument -contains 'get-access-token' -and $Argument -contains 'https://database.windows.net'
+        }
+        Should -Invoke Invoke-MlsSqlcmd -ModuleName 'MlsAudit' -Exactly -Times 1 -ParameterFilter {
+            $AccessToken -eq 'minted-token'
+        }
+    }
+
+    It 'the minting path stays inside the read-only contract' {
+        # get-access-token is in $script:AzReadOnlyVerb, so the guard the rest of the module
+        # relies on is not bypassed to authenticate.
+        { Assert-MlsReadOnlyAzArgument -Argument @('account', 'get-access-token', '--resource', 'https://database.windows.net') } |
+            Should -Not -Throw
+    }
+
+    It 'fails with an actionable message naming what to supply when az cannot mint one' {
+        Mock Invoke-MlsAz { throw "Please run 'az login' to setup account." } -ModuleName 'MlsAudit'
+        { Invoke-MlsSqlQuery -ServerName 's' -DatabaseName 'd' -Query 'SELECT 1' } |
+            Should -Throw '*Could not mint an Azure SQL access token*'
+        Should -Invoke Invoke-MlsSqlcmd -ModuleName 'MlsAudit' -Exactly -Times 0
+    }
+
+    It 'names -AccessToken and the environment variables in that message' {
+        Mock Invoke-MlsAz { throw 'no subscription found' } -ModuleName 'MlsAudit'
+        $message = ''
+        try { Invoke-MlsSqlQuery -ServerName 's' -DatabaseName 'd' -Query 'SELECT 1' }
+        catch { $message = $_.Exception.Message }
+        $message | Should -BeLike '*-AccessToken*'
+        $message | Should -BeLike '*MLS_SQL_ACCESS_TOKEN*'
+        $message | Should -BeLike '*Entra-only*'
+    }
+
+    It 'never falls through to a null token when az answers without one' {
+        Mock Invoke-MlsAz { [pscustomobject]@{ expiresOn = '2026-08-24 12:00:00' } } -ModuleName 'MlsAudit'
+        { Invoke-MlsSqlQuery -ServerName 's' -DatabaseName 'd' -Query 'SELECT 1' } |
+            Should -Throw '*returned no accessToken*'
+        Should -Invoke Invoke-MlsSqlcmd -ModuleName 'MlsAudit' -Exactly -Times 0
+    }
+
+    It 'rejects a non-SELECT before it touches a token, a driver or the CLI' {
+        { Invoke-MlsSqlQuery -ServerName 's' -DatabaseName 'd' -Query 'DROP TABLE launches' -AccessToken 'explicit-token' } |
+            Should -Throw '*only reads*'
+        Should -Invoke Assert-MlsCommand -ModuleName 'MlsAudit' -Exactly -Times 0
+        Should -Invoke Invoke-MlsAz -ModuleName 'MlsAudit' -Exactly -Times 0
+        Should -Invoke Invoke-MlsSqlcmd -ModuleName 'MlsAudit' -Exactly -Times 0
+    }
+}
+
 Describe 'Resolve-MlsInput' {
     It 'prefers the explicit value, then the environment, then the default' {
         Resolve-MlsInput -Name 'X' -Value 'explicit' -Hint 'h' | Should -Be 'explicit'

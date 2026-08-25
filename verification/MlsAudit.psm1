@@ -83,6 +83,15 @@ $script:GhReadOnlyCommand = @(
 
 $script:McpReadOnlyMethod = @('initialize', 'notifications/initialized', 'tools/list')
 
+# Entra audience for the SQL data plane. Both endpoints the audit queries - the Fabric
+# lakehouse SQL analytics endpoint (V5.3, V8.2) and the Entra-only Azure SQL database -
+# speak TDS and accept an access token for this resource, which is exactly the audience
+# .github/workflows/layer-06-platform.yml mints for the seed loader.
+$script:SqlResourceUrl = 'https://database.windows.net'
+
+# Where Invoke-MlsSqlQuery looks for a caller-supplied token before minting one.
+$script:SqlAccessTokenVariable = @('MLS_SQL_ACCESS_TOKEN', 'MLS_VERIFIER_SQL_TOKEN')
+
 # Adaptive Cards profile this repo pins (L08.md V8.4): schema 1.5 and Action.Submit only,
 # so one payload renders identically in the Direct Line Web Chat embed and in Teams.
 $script:AdaptiveCardElementType = @(
@@ -469,24 +478,100 @@ function Invoke-MlsHttp {
     }
 }
 
-function Invoke-MlsSqlQuery {
+function Get-MlsSqlAccessToken {
     <#
     .SYNOPSIS
-        Read-only query against the lakehouse SQL analytics endpoint as mls-verifier
-        (workspace Viewer, granted at L5). Rejects anything that is not a SELECT.
+        Entra access token for the SQL data plane: explicit value, then environment, then
+        minted from the current read-only login. Private - Invoke-MlsSqlQuery owns it.
+    .DESCRIPTION
+        The demo's SQL server enforces Entra-only authentication
+        (azureADOnlyAuthentication: true in infra/bicep/platform/main.bicep) and the audits
+        run on a Linux runner, where Invoke-Sqlcmd has no integrated-security fallback to
+        degrade to. A token is therefore mandatory, not optional, and passing -AccessToken
+        $null - which is what this module used to do - could only ever produce a login
+        failure whose message says nothing about the real cause.
+
+        Resolution order mirrors Get-VerifierFabricToken in verification/layer-05-audit.ps1:
+        an explicit parameter wins, then the environment (so CI passes a token as a job-level
+        `env:` rather than as a process argument, which is visible on the runner), then
+        `az account get-access-token`. That last path goes through Invoke-MlsAz, so the
+        read-only assertions still apply - `get-access-token` is in $script:AzReadOnlyVerb.
+
+        Every failure names what to supply. A null token is never returned.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$AccessToken)
+
+    if (-not [string]::IsNullOrWhiteSpace($AccessToken)) { return $AccessToken }
+    foreach ($variable in $script:SqlAccessTokenVariable) {
+        $fromEnvironment = [Environment]::GetEnvironmentVariable($variable)
+        if (-not [string]::IsNullOrWhiteSpace($fromEnvironment)) { return $fromEnvironment }
+    }
+
+    $hint = "Sign in as mls-verifier (az login --service-principal ...), or supply the token with -AccessToken / `$env:$($script:SqlAccessTokenVariable -join ' / $env:'). The server enforces Entra-only authentication, so there is no password or integrated-security fallback."
+    $response = $null
+    try {
+        $response = Invoke-MlsAz -Argument @(
+            'account', 'get-access-token', '--resource', $script:SqlResourceUrl, '--output', 'json'
+        )
+    }
+    catch {
+        throw "Could not mint an Azure SQL access token: az account get-access-token --resource $($script:SqlResourceUrl) failed ($($_.Exception.Message)). $hint"
+    }
+    $token = Get-MlsProperty -InputObject $response -Name 'accessToken'
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        throw "Could not mint an Azure SQL access token: az account get-access-token --resource $($script:SqlResourceUrl) returned no accessToken. $hint"
+    }
+    return "$token"
+}
+
+function Invoke-MlsSqlcmd {
+    <#
+    .SYNOPSIS
+        Private passthrough to Invoke-Sqlcmd - the single place this module touches TDS,
+        mirroring Invoke-MlsRest's relationship to Invoke-RestMethod.
+    .DESCRIPTION
+        Deliberately NOT exported: it takes any statement, and the read-only contract lives
+        one level up in Invoke-MlsSqlQuery. Keeping it separate is what lets the tests prove
+        which token reaches the driver without a SqlServer module installed.
     #>
     param(
         [Parameter(Mandatory)][string]$ServerName,
         [Parameter(Mandatory)][string]$DatabaseName,
         [Parameter(Mandatory)][string]$Query,
+        [Parameter(Mandatory)][string]$AccessToken,
         [int]$TimeoutSec = 120
     )
+    return Invoke-Sqlcmd -ServerInstance $ServerName -Database $DatabaseName -Query $Query `
+        -ConnectionTimeout $TimeoutSec -AccessToken $AccessToken -ErrorAction Stop
+}
+
+function Invoke-MlsSqlQuery {
+    <#
+    .SYNOPSIS
+        Read-only query against the lakehouse SQL analytics endpoint as mls-verifier
+        (workspace Viewer, granted at L5). Rejects anything that is not a SELECT.
+    .PARAMETER AccessToken
+        Entra token for https://database.windows.net. Omit it and the module resolves one
+        from $env:MLS_SQL_ACCESS_TOKEN / $env:MLS_VERIFIER_SQL_TOKEN, then mints one from
+        the current login. There is no unauthenticated path: the statement guard runs first,
+        the token is resolved second, and a resolution failure is an actionable error rather
+        than a driver-level "Login failed".
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ServerName,
+        [Parameter(Mandatory)][string]$DatabaseName,
+        [Parameter(Mandatory)][string]$Query,
+        [AllowEmptyString()][AllowNull()][string]$AccessToken,
+        [int]$TimeoutSec = 120
+    )
+    # First, and before anything reaches a token or a network: the read-only contract.
     if ($Query -notmatch '(?is)^\s*(select|with)\b') {
         throw 'Refusing a non-SELECT statement: the Verifier only reads.'
     }
-    Assert-MlsCommand -Name 'Invoke-Sqlcmd' -Hint 'Install SqlServer (Install-Module SqlServer -Scope CurrentUser) so the audit can query the lakehouse SQL analytics endpoint as mls-verifier.'
-    return Invoke-Sqlcmd -ServerInstance $ServerName -Database $DatabaseName -Query $Query `
-        -ConnectionTimeout $TimeoutSec -AccessToken $null -ErrorAction Stop
+    Assert-MlsCommand -Name 'Invoke-Sqlcmd' -Hint 'Install SqlServer 22+ (Install-Module SqlServer -Scope CurrentUser -MinimumVersion 22.0.0) so the audit can query the lakehouse SQL analytics endpoint as mls-verifier; -AccessToken needs that major version.'
+    $token = Get-MlsSqlAccessToken -AccessToken $AccessToken
+    return Invoke-MlsSqlcmd -ServerName $ServerName -DatabaseName $DatabaseName -Query $Query `
+        -AccessToken $token -TimeoutSec $TimeoutSec
 }
 
 function Connect-MlsCompliance {

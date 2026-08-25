@@ -26,10 +26,15 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
     ├── layer-04-purview.yml          # │ (workflow_call + workflow_dispatch)
     ├── layer-05-fabric.yml           # │
     ├── layer-06-platform.yml         # │
-    ├── layer-07-apps.yml             # ┘
+    ├── layer-07-apps.yml             # │
+    ├── layer-08-copilot-studio.yml   # │
+    ├── layer-09-devsecops.yml        # ┘
+    ├── verify-l1.yml                 # L1 audit (workflow_run: infra-up)
     ├── app-launch-ops-ci.yml         # ┐
     ├── app-control-tower-ci.yml      # │ path-filtered per-app CI
-    ├── app-copilot-svc-ci.yml        # ┘ (renaming to the MCP tools service)
+    ├── app-mcp-tools-ci.yml          # │
+    ├── app-data-api-ci.yml           # ┘
+    ├── vuln-lab-witness.yml          # stamps the heal commit onto the witness app
     ├── codeql.yml                    # ┐
     ├── sbom.yml                      # │ DevSecOps chain (L9)
     ├── zap.yml                       # │
@@ -48,7 +53,12 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
 | `sbom.yml` | L9 | SPDX SBOMs (Syft) per app; attached to published releases | **No** — runs today |
 | `app-launch-ops-ci.yml` | L7 | build → test → image → Trivy → GHCR | **Deploy job only** |
 | `app-control-tower-ci.yml` | L7 | build → test → image → Trivy → GHCR | **Deploy job only** |
-| `app-copilot-svc-ci.yml` | L8 | build → test → mock eval → image → Trivy → GHCR | **Deploy job only** |
+| `app-mcp-tools-ci.yml` | L8 | build → test → tool eval → image → Trivy → GHCR | **Deploy job only** |
+| `app-data-api-ci.yml` | L7 | build → test → image → Trivy → GHCR | **Deploy job only** |
+| `layer-08-copilot-studio.yml` | L8 | Power Platform solution import + agent eval | **Yes** — every job |
+| `layer-09-devsecops.yml` | L9 | GHAS report, Trivy negative tests, release + SBOM, ZAP, Defender toggle | **Yes** — every deploy job |
+| `verify-l1.yml` | L1 | L1 audit, on `workflow_run` after `infra-up` (V1.1 reads that run's conclusion, which is null from inside it) | **Yes** |
+| `vuln-lab-witness.yml` | L10 | Stamps `MLS_HEAL_COMMIT` onto the witness container app so V10.1/V10.2 can bind a heal to a deployment | **Yes** |
 | `self-heal.yml` | L10 | finding → GitHub-generated fix → PR → gauntlet → auto-merge | Runs today; needs no Azure and no stored LLM key |
 | `zap.yml` | L9 | ZAP baseline vs the staging URL | **Yes** — skips with a notice until a staging URL exists |
 | `infra-up.yml` | L1–L7 | Layer-ordered instantiation, L5 ∥ L6 | **Yes** — every deploy job |
@@ -58,7 +68,9 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
 | `layer-04-purview.yml` | L4 | `infra/purview/labels.ps1` — 4-label taxonomy | **Yes**, plus an S&C credential guard |
 | `layer-05-fabric.yml` | L5 | Capacity resume → workspace/lakehouse → generators → seed → pause | **Yes** |
 | `layer-06-platform.yml` | L6 | `infra/bicep/platform` (sub scope), Key Vault secret, cost export | **Yes** |
-| `layer-07-apps.yml` | L7 | `infra/bicep/apps` (RG scope) — the three container apps | **Yes** |
+| `layer-07-apps.yml` | L7 | `infra/bicep/apps` (RG scope) — the four container apps plus the L10 deployment witness | **Yes** |
+| `layer-09-devsecops.yml` | L9 | GHAS state report (read-only), `trivy-negative-fail`/`-pass`, SBOM release (calls `sbom.yml`), ZAP baseline (calls `zap.yml`), Defender `Containers` round-trip (**G2**) | **Yes** |
+| `vuln-lab-witness.yml` | L10 | Stamps a heal's merge commit onto `mls-vuln-lab-demo-ca`, rolling the revision V10.1/V10.2's deploy stage reads | **Yes** |
 
 L1 has no workflow of its own: it *is* the repo, the `demo` environment, and the OIDC
 job inside `infra-up.yml` (the job named `oidc-login`, which `layer-01-audit.ps1`
@@ -109,8 +121,8 @@ All of these live in the **`demo` GitHub environment**. None is committed
 | `AZURE_VERIFIER_CLIENT_ID` | variable | every `verify` job | `mls-verifier`; audits never run as the deployer |
 | `SQL_AAD_ADMIN_LOGIN` / `SQL_AAD_ADMIN_OBJECT_ID` | variables | L6 | Entra-only SQL auth; no SQL password exists |
 | `KEY_VAULT_CREATE_MODE` | variable | L6 | set to `recover` when replaying onto a soft-deleted vault |
-| `LAUNCH_OPS_PORT` / `CONTROL_TOWER_PORT` / `COPILOT_SVC_PORT` | variables | L7, app CI | **open item P-1** — set all three to `8080` when real images publish |
-| `COPILOT_EXTERNAL_INGRESS` | variable | L7 | `false` keeps copilot-svc internal |
+| `LAUNCH_OPS_PORT` / `CONTROL_TOWER_PORT` / `MCP_TOOLS_PORT` / `DATA_API_PORT` | variables | L7, app CI | **open item P-1** — set all four to `8080` when real images publish |
+| `DATA_API_ORIGIN` | set by L7 on both frontends | L7 | the data-api URL their nginx `/api/` proxy targets; unset leaves `/api` on an unreachable loopback and both dashboards render empty |
 | `STAGING_URL` | variable | `zap.yml` | the L7 `launch-ops` FQDN |
 | `ENTRA_DOMAIN` | variable | L3 | verified tenant domain for UPNs |
 | `PURVIEW_APP_ID` / `PURVIEW_ORGANIZATION` | variables | L4 | S&C app-only auth (optional) |
@@ -225,7 +237,7 @@ Two more scripts are referenced defensively by the deploy paths and also do not 
 |---|---|
 | **P-1** | Target ports default to the placeholder `80`. `layer-07-apps.yml` reads `*_PORT` variables with an `80` fallback and flags it in the run summary; each app CI deploy job emits a **warning** if ingress is still on 80 and deliberately does not mutate ingress itself. Set the three variables to `8080` to close it. |
 | **P-4** | `lint-ci.yml` installs PSScriptAnalyzer explicitly and then *asserts* `Invoke-ScriptAnalyzer` exists, so the lint step can never silently no-op on a runner that lacks the module. |
-| **P-7** | Every app image builds with `context: .` (the repo root) and `file: apps/<app>/Dockerfile`. `app-copilot-svc-ci.yml` additionally runs `npm run build:renderer` before `docker build`, because that Dockerfile copies `apps/shared/spec-renderer/dist`, which is gitignored build output. |
+| **P-7** | **Closed.** Every app image still builds with `context: .` (the repo root) and `file: apps/<app>/Dockerfile`, but the extra `npm run build:renderer` prerequisite is gone: `apps/mcp-tools` (which replaced `copilot-svc`) no longer depends on `@mls/spec-renderer`, because nothing in it emits a component spec — the Copilot Studio agent renders Adaptive Cards. |
 | **P-8** | **`apps/directline-token` has no workflow yet.** The amendment's embedded answer surface needs a Direct Line token endpoint (an Azure Function; see `apps/directline-token/README.md`), and nothing here builds, tests or deploys it. Its tests run on Node's built-in runner with no dependencies (`npm test` from that directory), so a CI job is a handful of lines; its deploy belongs with L6/L7, alongside the `DIRECTLINE_SECRET` Key Vault write that replaces the retired `anthropic-api-key` one. |
 
 ## Copilot Autofix: what it does, and what `self-heal.yml` orchestrates

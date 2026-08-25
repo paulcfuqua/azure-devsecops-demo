@@ -51,12 +51,13 @@ var requiredTagNames = [
 ]
 
 @export()
-@description('[derived] Short app keys used in resource names. mcp-tools shortens to "mcp", giving mls-mcp-demo-ca — the Copilot Studio amendment (2026-08-24) replaced the copilot-svc LLM service (mls-copilot-demo-ca, the CLAUDE.md worked example) with an MCP tool server. dataApi keeps its full slug so the container app is mls-data-api-demo-ca, which is the name .github/workflows/app-data-api-ci.yml already derives as <prefix>-<APP_SLUG>-<env>-ca.')
+@description('[derived] Short app keys used in resource names. mcp-tools shortens to "mcp", giving mls-mcp-demo-ca — the Copilot Studio amendment (2026-08-24) replaced the copilot-svc LLM service (mls-copilot-demo-ca, the CLAUDE.md worked example) with an MCP tool server. dataApi keeps its full slug so the container app is mls-data-api-demo-ca, which is the name .github/workflows/app-data-api-ci.yml already derives as <prefix>-<APP_SLUG>-<env>-ca. vulnLab names the L10 deployment witness (mls-vuln-lab-demo-ca) — the name verification/layer-10-audit.ps1 reads revisions from; it is NOT a fifth serving app, and apps/vuln-lab is never containerised (see infra/bicep/apps/main.bicep).')
 var appKeys = {
   launchOps: 'launch-ops'
   controlTower: 'control-tower'
   mcpTools: 'mcp'
   dataApi: 'data-api'
+  vulnLab: 'vuln-lab'
 }
 
 @export()

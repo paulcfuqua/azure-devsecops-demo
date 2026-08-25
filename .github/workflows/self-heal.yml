@@ -728,7 +728,7 @@ jobs:
             -ResourceGroupName
             ${{ steps.names.outputs.rg-apps }}
             -VulnLabAppName
-            ${{ steps.names.outputs.prefix }}-vuln-lab-${{ steps.names.outputs.env }}-ca
+            ${{ steps.names.outputs.ca-vuln-lab }}
             ${{ needs.autofix.outputs.alert && '-CodeQlAlertNumber' || '' }}
             ${{ needs.autofix.outputs.alert }}
             ${{ needs.autofix.outputs.pr && '-AutofixPrNumber' || '' }}

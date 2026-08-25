@@ -62,8 +62,12 @@ updates:
       - npm
       - control-tower
 
+  # apps/copilot-svc was deleted by the 2026-08-24 Copilot Studio amendment and
+  # its ecosystem entry removed with it: Dependabot errors on a directory that
+  # holds no manifest. Its successor is apps/mcp-tools, below, joined by the
+  # services that did not exist when this file was written.
   - package-ecosystem: npm
-    directory: /apps/copilot-svc
+    directory: /apps/mcp-tools
     schedule:
       interval: weekly
       day: monday
@@ -72,7 +76,43 @@ updates:
     labels:
       - dependencies
       - npm
-      - copilot-svc
+      - mcp-tools
+
+  - package-ecosystem: npm
+    directory: /apps/data-api
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+      - data-api
+
+  - package-ecosystem: npm
+    directory: /apps/directline-token
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+      - directline-token
+
+  - package-ecosystem: npm
+    directory: /apps/cost-ingest
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+      - cost-ingest
 
   - package-ecosystem: npm
     directory: /apps/shared/spec-renderer

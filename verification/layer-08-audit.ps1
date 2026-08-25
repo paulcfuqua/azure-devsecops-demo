@@ -48,6 +48,10 @@ param(
     [double]$LatencyBudgetSeconds = 20,
     [int]$EvalPassBar = 9,
     [string]$SqlEndpoint,
+    # Entra token for https://database.windows.net, used by V8.2's re-derivation. Omit it in
+    # CI and pass $env:MLS_SQL_ACCESS_TOKEN instead - process arguments are visible on the
+    # runner - or omit both and MlsAudit mints one from the mls-verifier login.
+    [string]$SqlAccessToken,
     [string]$LakehouseName = 'mls_operations',
     [string]$ReportRoot,
     [switch]$NoRetry
@@ -160,6 +164,7 @@ function Test-EvalSuite {
         [AllowNull()]$Artifact,
         [Parameter(Mandatory)][int]$PassBar,
         [AllowEmptyString()][string]$SqlEndpoint,
+        [AllowEmptyString()][AllowNull()][string]$SqlAccessToken,
         [Parameter(Mandatory)][string]$LakehouseName
     )
     if ($null -eq $Artifact) {
@@ -193,7 +198,7 @@ function Test-EvalSuite {
             $problem.Add("$id has no referenceSql for the Verifier to re-derive from")
             continue
         }
-        $rows = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName -Query $referenceSql)
+        $rows = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName -Query $referenceSql -AccessToken $SqlAccessToken)
         if ($rows.Count -eq 0) {
             $problem.Add("$id reference SQL returned no rows")
             continue
@@ -355,6 +360,7 @@ function Invoke-Main {
         [double]$LatencyBudgetSeconds = 20,
         [int]$EvalPassBar = 9,
         [string]$SqlEndpoint,
+        [string]$SqlAccessToken,
         [string]$LakehouseName = 'mls_operations',
         [string]$ReportRoot,
         [switch]$NoRetry
@@ -391,6 +397,11 @@ function Invoke-Main {
     if ([string]::IsNullOrWhiteSpace($serverUrl)) { $serverUrl = [Environment]::GetEnvironmentVariable('MLS_MCP_SERVER_URL') }
     $endpoint = $SqlEndpoint
     if ([string]::IsNullOrWhiteSpace($endpoint)) { $endpoint = [Environment]::GetEnvironmentVariable('MLS_SQL_ENDPOINT') }
+    # V8.2 re-derives every figure over TDS against the Entra-only analytics endpoint, so it
+    # needs a bearer token: explicit, then the environment, then minted by MlsAudit from the
+    # mls-verifier login. Never logged.
+    $sqlToken = $SqlAccessToken
+    if ([string]::IsNullOrWhiteSpace($sqlToken)) { $sqlToken = [Environment]::GetEnvironmentVariable('MLS_SQL_ACCESS_TOKEN') }
 
     $context = New-MlsAuditContext -Layer 8 -Title 'Copilot: custom Copilot Studio agent' `
         -ScriptName 'verification/layer-08-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
@@ -399,6 +410,8 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Eval artifact' -Value "$evalPath" -Status $(if ($artifact) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'MCP server' -Value "$serverUrl" -Status $(if ($serverUrl) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Lakehouse SQL endpoint' -Value "$endpoint" -Status $(if ($endpoint) { 'OK' } else { 'ABSENT' })
+    Add-MlsPreflight -Context $context -Name 'SQL access token' `
+        -Value $(if ($sqlToken) { 'supplied (value never logged)' } else { 'minted from the current az login at query time' })
     if ($null -ne $artifact) {
         $path = "$(Get-MlsProperty -InputObject $artifact -Name 'path')"
         Add-MlsNote -Context $context -Message "Eval path recorded by the run: '$path' (fabric-data-agent or mcp-tools-only). Both paths must pass V8.2 identically; the report names the path so the evidence is unambiguous (L08.md fallback)."
@@ -415,7 +428,7 @@ function Invoke-Main {
         -Description "Eval suite passes >= 9/10 against the deployed agent, with each answer's number independently re-derived by the Verifier from the lakehouse" `
         -Command "read eval-results.json`nfor each question: run the fixture's pinned reference SQL on the lakehouse SQL analytics endpoint as mls-verifier and compare with the agent's stated figure" `
         -Expected ">= $EvalPassBar questions pass both checks; canonical: weekday argmax of launches = Saturday" -NoRetry `
-        -Test { Test-EvalSuite -Artifact $artifact -PassBar $EvalPassBar -SqlEndpoint $endpoint -LakehouseName $LakehouseName } | Out-Null
+        -Test { Test-EvalSuite -Artifact $artifact -PassBar $EvalPassBar -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V8.3' `
         -Description 'No tool invoked outside the five-tool allowlist and the agent declares exactly those five' `
@@ -444,7 +457,7 @@ if (-not $env:MLS_SKIP_MAIN) {
             -SolutionPath $SolutionPath -EvalResultPath $EvalResultPath -McpServerUrl $McpServerUrl `
             -AllowedTool $AllowedTool -AdaptiveCardVersion $AdaptiveCardVersion `
             -LatencyBudgetSeconds $LatencyBudgetSeconds -EvalPassBar $EvalPassBar -SqlEndpoint $SqlEndpoint `
-            -LakehouseName $LakehouseName -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -SqlAccessToken $SqlAccessToken -LakehouseName $LakehouseName -ReportRoot $ReportRoot -NoRetry:$NoRetry
     }
     catch {
         Write-MlsStatus -Message "layer-08-audit could not start: $($_.Exception.Message)" -Color Red

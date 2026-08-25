@@ -57,7 +57,14 @@ Describe 'layer-10-audit' {
         $script:AutoMerge = [pscustomobject]@{ enabledBy = 'github-actions[bot]' }
         $script:CheckConclusion = 'success'
         $script:PrBody = "Autofix says: $($script:AutofixDescription)"
-        $script:Revision = @([pscustomobject]@{ name = 'mls-vuln-lab-demo-ca--rev7'; created = '2026-08-24T11:00:00Z' })
+        # The witness revision the deploy stage looks for: created after the merge AND
+        # stamped with that merge's commit by .github/workflows/vuln-lab-witness.yml.
+        $script:MergeCommit = [pscustomobject]@{ oid = 'mergecommitsha' }
+        $script:Revision = @([pscustomobject]@{
+                name       = 'mls-vuln-lab-demo-ca--rev7'
+                created    = '2026-08-24T11:00:00Z'
+                healCommit = 'mergecommitsha'
+            })
         $script:DependabotPr = @(
             [pscustomobject]@{ number = 41; title = 'Bump lodash from 4.17.20 to 4.17.21'; headRefName = 'dependabot/npm_and_yarn/lodash-4.17.21' }
             [pscustomobject]@{ number = 42; title = 'Bump minimist from 1.2.5 to 1.2.8'; headRefName = 'dependabot/npm_and_yarn/minimist-1.2.8' }
@@ -91,6 +98,7 @@ Describe 'layer-10-audit' {
                     mergedAt         = '2026-08-24T10:30:00Z'
                     mergedBy         = [pscustomobject]@{ login = $script:MergedBy }
                     autoMergeRequest = $script:AutoMerge
+                    mergeCommit      = $script:MergeCommit
                     state            = 'MERGED'
                     title            = 'Fix js/sql-injection'
                 }
@@ -126,6 +134,15 @@ Describe 'layer-10-audit' {
             foreach ($stage in 1..7) { $observed | Should -BeLike "*$stage *" }
             $observed | Should -BeLike '*autofix status=success*'
             $observed | Should -BeLike '*alert state=fixed*'
+        }
+
+        It 'binds the deploy stage to the merge commit the witness was stamped with' {
+            $context = Invoke-AuditForTest
+            $observed = (Get-Row -Context $context -Id 'V10.1').Observed
+            $observed | Should -BeLike '*stamped with mergeco=1*'
+            Should -Invoke Invoke-MlsAz -Exactly -Times 4 -ParameterFilter {
+                ($Argument -join ' ') -like '*MLS_HEAL_COMMIT*'
+            }
         }
 
         It 'accepts 2 of 3 dependency trails as the pass line' {
@@ -169,9 +186,42 @@ Describe 'layer-10-audit' {
         }
 
         It 'fails V10.1 when no new container app revision followed the merge' {
-            $script:Revision = @([pscustomobject]@{ name = 'old'; created = '2026-08-20T10:00:00Z' })
+            $script:Revision = @([pscustomobject]@{ name = 'old'; created = '2026-08-20T10:00:00Z'; healCommit = 'unset' })
             $context = Invoke-AuditForTest -NoRetry
             (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*no new container app revision*'
+        }
+
+        It 'fails V10.1 when a revision followed the merge but is not this heal''s' {
+            # An unrelated redeploy of the witness must not satisfy the deploy stage: the
+            # criterion is that THIS heal shipped, not that something shipped.
+            $script:Revision = @([pscustomobject]@{
+                    name       = 'mls-vuln-lab-demo-ca--rev8'
+                    created    = '2026-08-24T11:00:00Z'
+                    healCommit = 'someothercommit'
+                })
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*none carries MLS_HEAL_COMMIT=mergecommitsha*'
+            $row.Observed | Should -BeLike '*does not prove this heal shipped*'
+        }
+
+        It 'fails V10.1 when the witness was never stamped at all' {
+            $script:Revision = @([pscustomobject]@{
+                    name       = 'mls-vuln-lab-demo-ca--rev1'
+                    created    = '2026-08-24T11:00:00Z'
+                    healCommit = $null
+                })
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*stamps seen: (none stamped)*'
+        }
+
+        It 'fails V10.2 for a pin whose merge did not roll the witness' {
+            $script:Revision = @([pscustomobject]@{ name = 'old'; created = '2026-08-20T10:00:00Z'; healCommit = 'unset' })
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*no new container app revision*'
         }
 
         It 'fails V10.2 when only one dependency trail completes' {

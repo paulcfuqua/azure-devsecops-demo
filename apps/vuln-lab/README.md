@@ -225,6 +225,30 @@ seeds/
   reports/                        a real directory so report-viewer.js is plausible
 ```
 
+## `mls-vuln-lab-demo-ca` — a witness, not this package
+
+There is a container app named after this lab. **It does not contain this lab.**
+
+L10's audit ends each healing trail with a deploy stage — a container-app revision
+timestamped after the heal merged — so something in Azure has to move when a heal
+lands. That something is `mls-vuln-lab-demo-ca` (`infra/bicep/apps/main.bicep`,
+module `vulnLabWitnessApp`): a container app running a **pinned public placeholder
+image**, with ingress disabled and `minReplicas: 0`, whose environment carries the
+heal's merge commit. `.github/workflows/vuln-lab-witness.yml` re-stamps it on every
+push to `main` touching `apps/vuln-lab/**`.
+
+Nothing here is built into it, and the guarantees above hold unchanged:
+
+- **no Dockerfile** references this package;
+- the pins never reach a running container, so the L9 Trivy CRITICAL gate — the same
+  gauntlet every heal PR must pass — never sees them;
+- neither seed factory is ever called, so no server is started anywhere.
+
+The revision proves the merged commit reached Azure through the pipeline with no human
+hand. It does not claim the healed code runs somewhere; nothing can claim that about a
+package that is deliberately never deployed, and `docs/runbooks/layers/L10.md` says so
+in *The deployment witness*.
+
 ## Notes
 
 - Teardown for L10 means *re-arming*, not deleting (master plan §L10) — hence a

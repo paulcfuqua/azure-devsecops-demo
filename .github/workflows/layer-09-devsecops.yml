@@ -1,0 +1,682 @@
+name: layer-09-devsecops
+
+# =============================================================================
+# L9 — DevSecOps chain: GHAS state, the Trivy negative test, SPDX SBOMs on a
+#      release, the ZAP baseline, and the Defender `Containers` plan round-trip.
+# Playbook: docs/runbooks/layers/L09.md   Audit: verification/layer-09-audit.ps1
+#
+# The playbook's deploy step 2 is literally `gh workflow run
+# layer-09-devsecops.yml`, and this file did not exist: nothing ran
+# verification/layer-09-audit.ps1 and the DevSecOps layer had no deploy path at
+# all. Its four constituent workflows (codeql.yml, sbom.yml, zap.yml, the per-app
+# Trivy gates) were live but unorchestrated.
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS RUN PRODUCES FOR THE VERIFIER
+#
+# The audit used to require three hand-set demo variables — MLS_L9_RUN_ID,
+# MLS_L9_RELEASE_TAG, MLS_L9_ZAP_RUN_ID — which meant a human had to read a run
+# id off the Actions tab and type it into a repository variable before the layer
+# could be verified. All three are produced here instead:
+#
+#   MLS_L9_RUN_ID       -> `github.run_id`. V9.2 reads this run's own job list.
+#   MLS_L9_RELEASE_TAG  -> the `release` job's output. V9.3 reads that release's
+#                          assets.
+#   MLS_L9_ZAP_RUN_ID   -> `github.run_id` again, and this is not a shortcut: a
+#                          reusable workflow called with `uses:` runs INSIDE the
+#                          caller's run, so zap.yml's `zap-baseline-report`
+#                          artifact belongs to this run id. Calling zap.yml
+#                          rather than dispatching it is what makes that true.
+#
+# The environment variables survive as an override for a re-verification of an
+# older run; nothing needs them on the happy path any more.
+#
+# ---------------------------------------------------------------------------
+# THE TRIVY NEGATIVE TEST (V9.2) — WHY IT IS BUILT THIS WAY
+#
+# The criterion is "a seeded CRITICAL image fails CI then passes after pin", and
+# BOTH halves must be present: a gate that never fails is untested. The two jobs
+# are named `trivy-negative-fail` and `trivy-negative-pass` because
+# verification/layer-09-audit.ps1 selects jobs whose name starts with
+# `trivy-negative` and requires one of each. Those names are contract, not labels.
+#
+# The fixture pins minimist 1.2.5 — CVE-2021-44906, NVD CRITICAL 9.8, and one of
+# apps/vuln-lab's three seeded advisories — so the negative test exercises the
+# same finding the L10 showpiece heals rather than an unrelated CVE of the week.
+#
+# The image is a two-stage build ending in `FROM scratch`, and the scan runs with
+# `vuln-type: library`. That is deliberate: with no OS layer and no OS packages,
+# the ONLY thing either scan can report is the pin under test. A base image's
+# own CVE churn would otherwise make the `pass` half flaky — it would go red for
+# reasons that have nothing to do with the pin, and a flaky negative test teaches
+# the team to ignore it.
+#
+# ---------------------------------------------------------------------------
+# GATE G2 — the Defender round-trip
+#
+# V9.5 needs the paired Standard-then-Free writes in the Activity Log: a plan
+# that was never enabled proves nothing. Enabling raises the run rate by ~USD
+# 0.29/day prorated for the minutes the round-trip takes. The Orchestrator files
+# the gate before this workflow runs (L09.md Preconditions); this workflow states
+# the delta and — critically — disables in an `always()` step, so a failure
+# between enable and disable cannot leave the plan on. `defender_toggle: false`
+# skips the whole thing, at the cost of V9.5.
+#
+# Pre-G0 guard: all Azure-facing jobs are gated on the `demo` environment
+# variables. The GitHub-only jobs (GHAS report, Trivy negative test, SBOM
+# release) need no tenant and run regardless.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: >-
+          Tag for the release the SBOMs attach to. Empty creates `l9-<run number>` as a
+          prerelease, which is what a layer run wants; pass a real tag for a real release.
+        type: string
+        required: false
+        default: ''
+      zap_target_url:
+        description: Staging URL for the ZAP baseline. Empty falls back to vars.STAGING_URL.
+        type: string
+        required: false
+        default: ''
+      defender_toggle:
+        description: >-
+          Run the G2-gated Defender Containers enable -> assert -> disable round-trip.
+          Turning it off leaves V9.5 unprovable, which the audit reports as a FAIL.
+        type: boolean
+        required: false
+        default: true
+      dry_run:
+        description: Report only; create no release, attach no assets, toggle nothing.
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag for the release the SBOMs attach to (empty = l9-<run number>).
+        type: string
+        required: false
+        default: ''
+      zap_target_url:
+        description: Staging URL for the ZAP baseline (empty = vars.STAGING_URL).
+        type: string
+        required: false
+        default: ''
+      defender_toggle:
+        description: Run the G2-gated Defender Containers round-trip (V9.5 needs it).
+        type: boolean
+        required: false
+        default: true
+      dry_run:
+        description: Report only; create no release, attach no assets, toggle nothing.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+# Serial and never cancelled. Two overlapping L9 runs would interleave their
+# Microsoft.Security/pricings writes, and V9.5 counts those events: a cancelled
+# run could leave the plan enabled with no disable to follow it.
+concurrency:
+  group: layer-09-devsecops
+  cancel-in-progress: false
+
+env:
+  # The seeded advisory the negative test is built around: minimist 1.2.5,
+  # CVE-2021-44906 / GHSA-xvch-5gv4-984h, prototype pollution, NVD CRITICAL 9.8.
+  # First patched in 1.2.6; 1.2.8 is the current line.
+  SEEDED_CVE: CVE-2021-44906
+  SEEDED_VULNERABLE_PIN: 1.2.5
+  SEEDED_PATCHED_PIN: 1.2.8
+  DEFENDER_PLAN: Containers
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L9 DevSecOps chain
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L9 verification (mls-verifier)
+
+  # ---------------------------------------------------------------------------
+  # V9.1's deploy-side half: CONFIRM and REPORT, never configure. Every call here
+  # is a GET. Turning a GHAS feature on from a workflow would mean the layer
+  # proved its own criterion, and settings-as-code changes belong in a PR
+  # (L09 failure mode 1 does exactly that for the default-setup conflict).
+  # ---------------------------------------------------------------------------
+  ghas:
+    name: confirm GHAS feature state
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    env:
+      # security_and_analysis and the vulnerability-alerts endpoint are admin-scoped
+      # reads. The default GITHUB_TOKEN can come back with a null block, which is why
+      # the step distinguishes "feature off" from "token cannot see it".
+      GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Read the repository's security_and_analysis block
+        id: features
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}" --jq '.security_and_analysis // {}' > ghas.json
+          cat ghas.json
+
+          secret_scanning="$(jq -r '.secret_scanning.status // "unknown"' ghas.json)"
+          push_protection="$(jq -r '.secret_scanning_push_protection.status // "unknown"' ghas.json)"
+          {
+            echo "secret-scanning=${secret_scanning}"
+            echo "push-protection=${push_protection}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Read the Dependabot alert switch
+        id: dependabot
+        run: |
+          set -euo pipefail
+          # 204 = alerts enabled, 404 = disabled. -i keeps the status line; the endpoint
+          # has no body, so the status IS the answer.
+          status="$(gh api "repos/${REPO}/vulnerability-alerts" -i 2>/dev/null | head -n 1 || true)"
+          case "${status}" in
+            *204*) state=enabled ;;
+            *404*) state=disabled ;;
+            *) state=unknown ;;
+          esac
+          echo "state=${state}" >> "${GITHUB_OUTPUT}"
+          echo "vulnerability-alerts: ${status:-<no response>} -> ${state}"
+
+      - name: Read the completed CodeQL analyses
+        id: codeql
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/code-scanning/analyses" --paginate > analyses.json 2>/dev/null || echo '[]' > analyses.json
+          total="$(jq '[.[] | select(.tool.name == "CodeQL")] | length' analyses.json)"
+          echo "analyses=${total}" >> "${GITHUB_OUTPUT}"
+          jq -r '[.[] | select(.tool.name == "CodeQL") | (.category // .environment // "")] | unique | .[]' analyses.json || true
+
+      - name: Report the chain's state
+        env:
+          SECRET_SCANNING: ${{ steps.features.outputs.secret-scanning }}
+          PUSH_PROTECTION: ${{ steps.features.outputs.push-protection }}
+          DEPENDABOT: ${{ steps.dependabot.outputs.state }}
+          CODEQL_ANALYSES: ${{ steps.codeql.outputs.analyses }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### L9 — GHAS feature state (read-only)"
+            echo
+            echo "| Feature | State |"
+            echo "|---|---|"
+            echo "| Secret scanning | \`${SECRET_SCANNING}\` |"
+            echo "| Push protection | \`${PUSH_PROTECTION}\` |"
+            echo "| Dependabot alerts | \`${DEPENDABOT}\` |"
+            echo "| Completed CodeQL analyses | ${CODEQL_ANALYSES} |"
+            echo
+            echo "This job reports; it never configures. V9.1 in"
+            echo "\`verification/layer-09-audit.ps1\` is the gate."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          for pair in "secret scanning:${SECRET_SCANNING}" "push protection:${PUSH_PROTECTION}"; do
+            name="${pair%%:*}"
+            value="${pair#*:}"
+            if [ "${value}" != "enabled" ]; then
+              echo "::warning title=GHAS feature not enabled::${name} reads '${value}'. On a public repo it is free — turn it on in repository settings. V9.1 will FAIL until it reads 'enabled'."
+            fi
+          done
+          if [ "${DEPENDABOT}" != "enabled" ]; then
+            echo "::warning title=Dependabot alerts::The vulnerability-alerts endpoint did not answer 204 (read '${DEPENDABOT}'). Without alerts the L10 dependency track never starts (L09 failure mode 5)."
+          fi
+          if [ "${CODEQL_ANALYSES}" = "0" ]; then
+            echo "::warning title=No CodeQL analysis::code-scanning/analyses lists no completed CodeQL run. codeql.yml needs one workflow runtime (~10–20 min), and a repo-level default setup blocks the advanced workflow outright (L09 failure mode 1)."
+          fi
+
+      - name: Upload the GHAS evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-09-ghas-state
+          path: |
+            ghas.json
+            analyses.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # V9.2, half one. The job SUCCEEDS because its inner Trivy step FAILED on the
+  # seeded CRITICAL — that inversion is the test. `continue-on-error` on the scan
+  # step is what lets the job observe the failure instead of inheriting it.
+  # ---------------------------------------------------------------------------
+  trivy-negative-fail:
+    name: trivy-negative-fail
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the seeded CRITICAL image
+        env:
+          PIN: ${{ env.SEEDED_VULNERABLE_PIN }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cat > "${work}/package.json" <<EOF
+          {
+            "name": "mls-trivy-negative-fixture",
+            "version": "0.0.0",
+            "private": true,
+            "dependencies": { "minimist": "${PIN}" }
+          }
+          EOF
+          cat > "${work}/Dockerfile" <<'EOF'
+          FROM node:20-alpine AS deps
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+
+          # No OS layer, so the only thing Trivy can report is the pin under test.
+          FROM scratch
+          COPY --from=deps /app /app
+          EOF
+          docker build --tag mls-trivy-negative:seeded "${work}"
+
+      - name: Trivy must reject the seeded CRITICAL
+        id: scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: mls-trivy-negative:seeded
+          format: table
+          severity: CRITICAL
+          vuln-type: library
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Record what Trivy actually found
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: mls-trivy-negative:seeded
+          format: json
+          output: trivy-negative-fail.json
+          severity: CRITICAL
+          vuln-type: library
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Assert the gate fired, and fired on the seeded advisory
+        env:
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "${SCAN_OUTCOME}" != "failure" ]; then
+            echo "::error title=Trivy gate did not fire::The scan of the seeded ${SEEDED_CVE} image concluded '${SCAN_OUTCOME}'. A CRITICAL gate that lets a known CRITICAL through is not a gate, and V9.2 exists to catch exactly this."
+            exit 1
+          fi
+          found="$(jq -r --arg cve "${SEEDED_CVE}" \
+            '[.Results[]?.Vulnerabilities[]? | select(.VulnerabilityID == $cve)] | length' trivy-negative-fail.json)"
+          if [ "${found}" = "0" ]; then
+            echo "::error title=Wrong CVE::Trivy failed the image, but not on ${SEEDED_CVE}. The fixture must fail on the advisory it seeds, or the negative test is measuring something else."
+            jq -r '[.Results[]?.Vulnerabilities[]?.VulnerabilityID] | unique | join(", ")' trivy-negative-fail.json
+            exit 1
+          fi
+          {
+            echo "### V9.2 half 1 — \`trivy-negative-fail\`"
+            echo
+            echo "Trivy exited non-zero on the seeded image (\`minimist@${SEEDED_VULNERABLE_PIN}\`,"
+            echo "${SEEDED_CVE}) and this job asserts that failure, so it concludes **success**."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the negative-test evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-09-trivy-negative-fail
+          path: trivy-negative-fail.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # V9.2, half two: the same fixture with the pin fixed must pass the same gate.
+  # Without this half the "gate" could simply be failing everything.
+  # ---------------------------------------------------------------------------
+  trivy-negative-pass:
+    name: trivy-negative-pass
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the pinned rebuild
+        env:
+          PIN: ${{ env.SEEDED_PATCHED_PIN }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cat > "${work}/package.json" <<EOF
+          {
+            "name": "mls-trivy-negative-fixture",
+            "version": "0.0.0",
+            "private": true,
+            "dependencies": { "minimist": "${PIN}" }
+          }
+          EOF
+          cat > "${work}/Dockerfile" <<'EOF'
+          FROM node:20-alpine AS deps
+          WORKDIR /app
+          COPY package.json ./
+          RUN npm install --omit=dev --no-audit --no-fund
+
+          FROM scratch
+          COPY --from=deps /app /app
+          EOF
+          docker build --tag mls-trivy-negative:pinned "${work}"
+
+      - name: Trivy must accept the pinned rebuild
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: mls-trivy-negative:pinned
+          format: table
+          severity: CRITICAL
+          vuln-type: library
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Record the clean result
+        env:
+          PIN: ${{ env.SEEDED_PATCHED_PIN }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### V9.2 half 2 — \`trivy-negative-pass\`"
+            echo
+            echo "The same fixture at \`minimist@${PIN}\` passes the same CRITICAL gate."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # ---------------------------------------------------------------------------
+  # V9.3 needs release ASSETS, not run artifacts: the criterion's query is
+  # `gh release view <tag> --json assets`. So the release is created here and its
+  # tag is handed to sbom.yml, which attaches one *.spdx.json per app to it.
+  # ---------------------------------------------------------------------------
+  release:
+    name: create the SBOM release
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create (or reuse) the release
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-l9-${GITHUB_RUN_NUMBER}}"
+
+          # Idempotent on replay: a re-run of the layer must not fail because its
+          # own release already exists, and sbom.yml uploads with --clobber.
+          if gh release view "${tag}" --repo "${REPO}" --json tagName >/dev/null 2>&1; then
+            echo "Release ${tag} already exists — reusing it."
+          else
+            gh release create "${tag}" \
+              --repo "${REPO}" \
+              --target "${GITHUB_SHA}" \
+              --title "L9 DevSecOps chain — ${tag}" \
+              --prerelease \
+              --notes "SPDX SBOMs for the L9 DevSecOps chain, generated by sbom.yml from ${GITHUB_SHA}. Prerelease: this tag exists to carry the SBOM assets V9.3 validates, not to mark a product release."
+            echo "Created prerelease ${tag}."
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### L9 SBOM release"
+            echo
+            echo "Tag \`${tag}\` — the value passed to the audit as \`-ReleaseTag\`."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  sbom:
+    name: SPDX SBOMs
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/sbom.yml
+    with:
+      release_tag: ${{ needs.release.outputs.tag }}
+
+  # Called, not dispatched: a reusable workflow runs inside this run, so the
+  # `zap-baseline-report` artifact belongs to `github.run_id` and V9.4 can find
+  # it without anyone copying a run id into a repository variable.
+  zap:
+    name: ZAP baseline
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/zap.yml
+    with:
+      target_url: ${{ inputs.zap_target_url }}
+
+  # ---------------------------------------------------------------------------
+  # V9.5. The only billable action in the layer. See the header for the G2
+  # statement. The disable step is `always()` and deliberately unconditional on
+  # the enable's outcome: a half-applied enable still bills.
+  # ---------------------------------------------------------------------------
+  defender:
+    name: Defender Containers plan round-trip (G2)
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' && inputs.defender_toggle && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        id: login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: State the G2 delta
+        run: |
+          set -euo pipefail
+          {
+            echo "### L9 Defender round-trip (G2)"
+            echo
+            echo "- plan: **${DEFENDER_PLAN}** (subscription scope)"
+            echo "- stated delta: **~USD 0.29/day, prorated** while the plan reads \`Standard\`"
+            echo "- duration: minutes — enable, assert, disable"
+            echo "- the disable step runs unconditionally, even if the assert fails"
+            echo "- Foundational CSPM stays on and is free (spec F10); untouched here"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Enable the plan (G2 spend increase)
+        id: enable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/defender/toggle-containers-plan.ps1 -Enable `
+            -SubscriptionId $env:AZURE_SUBSCRIPTION_ID -PlanName $env:DEFENDER_PLAN -Confirm:$false
+
+      - name: Assert the plan reads Standard
+        run: |
+          set -euo pipefail
+          tier="$(az security pricing show --name "${DEFENDER_PLAN}" --query pricingTier --output tsv)"
+          echo "pricingTier=${tier}"
+          if [ "${tier}" != "Standard" ]; then
+            echo "::error title=Defender enable did not land::${DEFENDER_PLAN} reads '${tier}' after -Enable. The disable step still runs."
+            exit 1
+          fi
+
+      # always(): if the assert above failed, the plan may still be enabled, and an
+      # enabled plan bills. Gated only on the login having succeeded, because without
+      # it there is no session to disable through.
+      - name: Disable the plan (spend decrease, no gate)
+        if: ${{ always() && steps.login.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/defender/toggle-containers-plan.ps1 -Disable `
+            -SubscriptionId $env:AZURE_SUBSCRIPTION_ID -PlanName $env:DEFENDER_PLAN -Confirm:$false
+
+      - name: Assert the plan is left Off
+        if: ${{ always() && steps.login.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          tier="$(az security pricing show --name "${DEFENDER_PLAN}" --query pricingTier --output tsv)"
+          echo "pricingTier=${tier}"
+          {
+            echo "- closing state: \`${tier}\` (\`Free\` is the ARM representation of Off)"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [ "${tier}" != "Free" ]; then
+            echo "::error title=Defender left enabled::${DEFENDER_PLAN} reads '${tier}'. This is a cost leak (L09 failure mode 2). Disable immediately: pwsh scripts/defender/toggle-containers-plan.ps1 -Disable"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # The Verifier. Runs as mls-verifier (Reader), never as the deployer SP, and
+  # its exit code gates the layer.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: verify L9 (mls-verifier)
+    needs: [preflight, ghas, trivy-negative-fail, trivy-negative-pass, release, sbom, zap, defender]
+    # always() plus explicit result tests: `defender` is legitimately skipped when
+    # defender_toggle is false, and `zap` succeeds-but-skips when there is no staging
+    # URL. A cancelled run is excluded — there is nothing coherent to audit.
+    if: >-
+      ${{ always()
+          && needs.preflight.outputs.configured == 'true'
+          && !inputs.dry_run
+          && !contains(fromJSON('["cancelled"]'), needs.release.result)
+          && !contains(fromJSON('["cancelled"]'), needs.sbom.result) }}
+    runs-on: ubuntu-latest
+    environment: demo
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+      security-events: read
+      actions: read
+    env:
+      MLS_REPOSITORY: ${{ github.repository }}
+      # Secrets go through env, never through the audit's process arguments — those
+      # are visible on the runner (.github/actions/layer-audit/action.yml).
+      MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verifier identity not configured
+        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice title=L9 not independently verified::AZURE_VERIFIER_CLIENT_ID is not set on the demo environment, so verification/layer-09-audit.ps1 was skipped rather than run as the deployer SP."
+
+      - name: Azure login (OIDC, mls-verifier — Reader only)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Belt and braces for V9.4. The audit downloads the artifact itself with
+      # `gh run download <run id>`, which works for a finished job inside a run that
+      # is still going — but pre-staging it here means the criterion does not depend
+      # on that behaviour. Test-ZapReport globs *.json under <DownloadRoot>/zap-<id>,
+      # so this lands exactly where it looks.
+      - name: Pre-stage the ZAP report for the audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' && needs.zap.result == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: zap-baseline-report
+          path: ${{ runner.temp }}/mls-l9-audit/zap-${{ github.run_id }}
+
+      - name: Run verification/layer-09-audit.ps1
+        id: audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '09'
+          args: |
+            -Repository
+            ${{ github.repository }}
+            -SubscriptionId
+            ${{ vars.AZURE_SUBSCRIPTION_ID }}
+            -LayerRunId
+            ${{ github.run_id }}
+            -ReleaseTag
+            ${{ needs.release.outputs.tag }}
+            -ZapRunId
+            ${{ github.run_id }}
+            -ZapArtifactName
+            zap-baseline-report
+            -DefenderPlanName
+            ${{ env.DEFENDER_PLAN }}
+            -DownloadRoot
+            ${{ runner.temp }}/mls-l9-audit
+
+      - name: Restate what the run produced
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### L9 — the audit's inputs came from this run"
+            echo
+            echo "| Audit input | Value | Was |"
+            echo "|---|---|---|"
+            echo "| \`-LayerRunId\` | \`${GITHUB_RUN_ID}\` | \`MLS_L9_RUN_ID\`, hand-set |"
+            echo "| \`-ReleaseTag\` | \`${RELEASE_TAG}\` | \`MLS_L9_RELEASE_TAG\`, hand-set |"
+            echo "| \`-ZapRunId\` | \`${GITHUB_RUN_ID}\` | \`MLS_L9_ZAP_RUN_ID\`, hand-set |"
+            echo
+            echo "zap.yml and sbom.yml are **called**, not dispatched, so their jobs and"
+            echo "artifacts belong to this run id."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload audit report
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-09-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

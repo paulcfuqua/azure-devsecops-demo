@@ -38,6 +38,10 @@ param(
     [int]$ExpectedLaunchCount = 1200,
     [string]$ExpectedCountPath,
     [string]$SqlEndpoint,
+    # Entra token for https://database.windows.net. Omit it in CI and pass
+    # $env:MLS_SQL_ACCESS_TOKEN instead - process arguments are visible on the runner - or
+    # omit both and MlsAudit mints one from the mls-verifier login.
+    [string]$SqlAccessToken,
     [string]$ReportRoot,
     [switch]$NoRetry
 )
@@ -157,6 +161,7 @@ function Test-SeededRowCount {
         [Parameter(Mandatory)][int]$ExpectedLaunchCount,
         [AllowNull()]$ExpectedCount,
         [AllowEmptyString()][string]$SqlEndpoint,
+        [AllowEmptyString()][AllowNull()][string]$SqlAccessToken,
         [Parameter(Mandatory)][string]$LakehouseName
     )
     if ([string]::IsNullOrWhiteSpace($SqlEndpoint)) {
@@ -165,7 +170,7 @@ function Test-SeededRowCount {
             -Detail "V5.1's lakehouse metadata carries properties.sqlEndpointProperties.connectionString; supply it with -SqlEndpoint / `$env:MLS_SQL_ENDPOINT when the metadata omits it. Reads on a PAUSED capacity fail - run V5.1-V5.3 inside the resumed window." -Final
     }
     $query = (@($ExpectedTable | ForEach-Object { "SELECT '$_' AS t, COUNT(*) AS n FROM $_" }) -join ' UNION ALL ')
-    $rows = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName -Query $query)
+    $rows = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName -Query $query -AccessToken $SqlAccessToken)
     $observed = [ordered]@{}
     foreach ($row in $rows) {
         $observed["$(Get-MlsProperty -InputObject $row -Name 't')"] = [int](Get-MlsProperty -InputObject $row -Name 'n')
@@ -250,6 +255,7 @@ function Invoke-Main {
         [int]$ExpectedLaunchCount = 1200,
         [string]$ExpectedCountPath,
         [string]$SqlEndpoint,
+        [string]$SqlAccessToken,
         [string]$ReportRoot,
         [switch]$NoRetry
     )
@@ -299,13 +305,21 @@ function Invoke-Main {
         $endpoint = "$($context.Evidence['sqlEndpoint'])"
     }
 
+    # The Fabric SQL analytics endpoint is Entra-only, exactly like the L6 Azure SQL server,
+    # so V5.3 needs a bearer token. Explicit value, then the environment, then MlsAudit mints
+    # one from the mls-verifier login. The value is never written to the report.
+    $sqlToken = $SqlAccessToken
+    if ([string]::IsNullOrWhiteSpace($sqlToken)) { $sqlToken = [Environment]::GetEnvironmentVariable('MLS_SQL_ACCESS_TOKEN') }
+    Add-MlsPreflight -Context $context -Name 'SQL access token' `
+        -Value $(if ($sqlToken) { 'supplied (value never logged)' } else { 'minted from the current az login at query time' })
+
     Invoke-MlsCriterion -Context $context -Id 'V5.3' `
         -Description 'SQL analytics endpoint returns expected row counts (launches = 1,200 +/- 0)' `
         -Command "SELECT 'launches' AS t, COUNT(*) AS n FROM launches UNION ALL ... (one arm per table, all 10) -- against the lakehouse SQL analytics endpoint as mls-verifier" `
         -Expected "launches = $ExpectedLaunchCount exactly; the other nine equal to Track A's committed fixture" `
         -Test {
         Test-SeededRowCount -ExpectedTable $ExpectedTable -ExpectedLaunchCount $ExpectedLaunchCount `
-            -ExpectedCount $expectedCount -SqlEndpoint $endpoint -LakehouseName $LakehouseName
+            -ExpectedCount $expectedCount -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName
     } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V5.4' `
@@ -323,7 +337,7 @@ if (-not $env:MLS_SKIP_MAIN) {
         $auditContext = Invoke-Main -FabricCapacityId $FabricCapacityId -FabricToken $FabricToken `
             -WorkspaceName $WorkspaceName -LakehouseName $LakehouseName -ExpectedTable $ExpectedTable `
             -ExpectedLaunchCount $ExpectedLaunchCount -ExpectedCountPath $ExpectedCountPath `
-            -SqlEndpoint $SqlEndpoint -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -SqlEndpoint $SqlEndpoint -SqlAccessToken $SqlAccessToken -ReportRoot $ReportRoot -NoRetry:$NoRetry
     }
     catch {
         Write-MlsStatus -Message "layer-05-audit could not start: $($_.Exception.Message)" -Color Red

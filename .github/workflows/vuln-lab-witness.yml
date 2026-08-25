@@ -1,0 +1,242 @@
+name: vuln-lab-witness
+
+# =============================================================================
+# L10 deployment witness — the estate half of the self-healing trail.
+#
+# Playbook: docs/runbooks/layers/L10.md (V10.1 stage 6, V10.2 stage 5)
+# Audit:    verification/layer-10-audit.ps1
+# Template: infra/bicep/apps/main.bicep (module `vulnLabWitnessApp`)
+#
+# ---------------------------------------------------------------------------
+# WHAT PROBLEM THIS SOLVES
+#
+# Both healing trails end in a deploy stage: "new ACA revision" timestamped after
+# the heal merged. The audit reads it from
+# `az containerapp revision list -g mls-rg-apps -n mls-vuln-lab-demo-ca`.
+# Nothing created that app and nothing ever rolled it, so both criteria failed on
+# a resource that did not exist — a pipeline defect wearing an estate defect's
+# clothes. This workflow is the "and nothing ever rolled it" half.
+#
+# ---------------------------------------------------------------------------
+# WHY THE LAB ITSELF IS NOT WHAT SHIPS — read this before "fixing" it
+#
+# The obvious design is to containerise apps/vuln-lab and deploy that. It is
+# wrong three times over:
+#
+#   1. The lab pins three known-vulnerable packages, one CRITICAL (minimist
+#      1.2.5, CVE-2021-44906). An image built from it fails the L9 Trivy CRITICAL
+#      gate — the same gauntlet L10 requires every heal PR to pass green. The
+#      Autofix track does not touch the pins, so its heal PR would go red every
+#      single time. The only escapes are suppressing the gate (L10 failure mode 3
+#      forbids that outright: "Never suppress a check to make a heal pass") or
+#      shipping known-vulnerable containers into an estate that has Defender for
+#      Containers switched on at L9, where they would raise real findings.
+#   2. The two code seeds are HTTP server factories for a path traversal and a
+#      command injection. apps/vuln-lab/README.md's safety argument is precisely
+#      that "no server is ever started" — nothing calls either factory, so the lab
+#      holds a live alert without holding a live risk. Deploying them would trade
+#      that away for nothing.
+#   3. The repo-root package.json excludes apps/vuln-lab from `workspaces` so its
+#      pins can never resolve to patched versions, and the README guarantees it is
+#      "not in any Dockerfile". A build step would break both.
+#
+# So the witness runs a pinned PUBLIC placeholder image, holds no lab code and no
+# lab dependency, and carries the heal's identity as configuration instead. This
+# job re-stamps MLS_HEAL_COMMIT on every push to main that touches the lab, which
+# is what rolls a revision timestamped after the merge.
+#
+# WHAT THE REVISION THEREFORE PROVES, EXACTLY: that the merged commit reached
+# Azure through the pipeline, hands-off, with the estate's own deployer identity —
+# and the audit will not settle for "some revision appeared" (any unrelated
+# redeploy satisfies that). It requires the revision to carry THIS heal's merge
+# commit. What it does NOT prove is that the healed code runs somewhere; nothing
+# can prove that about a package that is deliberately never deployed, and the
+# audit's report says so rather than implying otherwise.
+#
+# Cost: $0. The witness has ingress disabled, no scale rule and minReplicas 0, so
+# it runs zero replicas; Container Apps bills active usage. It dies with
+# mls-rg-apps in down.ps1, exactly as L10.md's teardown section already says.
+#
+# Pre-G0 guard: no demo environment variables means no estate; the stamp job is
+# skipped and the run is green.
+# =============================================================================
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/vuln-lab/**
+      - .github/workflows/vuln-lab-witness.yml
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: >-
+          Commit to stamp onto the witness. Defaults to the commit this run checked out,
+          which on a push to main is the heal PR's merge commit — the same value
+          `gh pr view --json mergeCommit` reports and the audit compares against.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Serial, never cancelled: each heal merge must leave its own stamped revision
+# behind. Cancelling an in-flight stamp would silently cost a trail its deploy
+# stage, and the audit would then correctly report a heal that never shipped.
+concurrency:
+  group: vuln-lab-witness
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L10 vuln-lab deployment witness
+
+  stamp:
+    name: stamp the witness with this commit
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The lab's advisory count AFTER this commit. It is the one fact about the
+      # heal that is worth carrying into the estate: 3 means the lab is armed, 0
+      # means a dependency heal completed. Recorded as configuration on the
+      # revision, never used as a gate — arming the lab on purpose must not fail
+      # a workflow.
+      - name: Count the lab's advisories at this commit
+        id: lab
+        run: |
+          set -euo pipefail
+          # apps/vuln-lab is deliberately outside the npm workspace (root hoisting
+          # would resolve the pins to patched versions), so it installs on its own.
+          npm ci --prefix apps/vuln-lab
+          npm audit --prefix apps/vuln-lab --json > vuln-lab-audit.json || true
+          total="$(jq -r '.metadata.vulnerabilities.total // 0' vuln-lab-audit.json)"
+          echo "advisories=${total}" >> "${GITHUB_OUTPUT}"
+          echo "apps/vuln-lab reports ${total} advisory(ies) at this commit."
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Roll a witness revision carrying this commit
+        id: roll
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          WITNESS_APP: ${{ steps.names.outputs.ca-vuln-lab }}
+          COMMIT: ${{ inputs.commit || github.sha }}
+          ADVISORIES: ${{ steps.lab.outputs.advisories }}
+        run: |
+          set -euo pipefail
+
+          # No estate yet (or mls-rg-apps torn down between demos) is a normal
+          # state in this repo, not a failure: down.ps1 deletes the four RGs by
+          # design. Say so and stop — failing every push to main because the demo
+          # is currently torn down would be noise, and the L10 audit already
+          # reports a missing deploy stage as the FAIL it is.
+          if ! az containerapp show --name "${WITNESS_APP}" --resource-group "${RG_APPS}" --output none 2>/dev/null; then
+            echo "stamped=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice title=Witness not provisioned::${WITNESS_APP} does not exist in ${RG_APPS}, so no revision was rolled. It is created by infra/bicep/apps/main.bicep at L7; deploy the estate (layer-07-apps.yml) and re-run this workflow with workflow_dispatch to stamp commit ${COMMIT}."
+            exit 0
+          fi
+
+          az containerapp update \
+            --name "${WITNESS_APP}" \
+            --resource-group "${RG_APPS}" \
+            --set-env-vars \
+              "MLS_HEAL_COMMIT=${COMMIT}" \
+              "MLS_VULN_LAB_ADVISORIES=${ADVISORIES}" \
+              "MLS_WITNESS_STAMPED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --output none
+
+          # Confirm from ARM rather than from the update's exit code: what the
+          # audit reads is a revision whose MLS_HEAL_COMMIT equals this commit, so
+          # that is what this step asserts. Anything less would report success for
+          # a stamp that did not land.
+          az containerapp revision list \
+            --name "${WITNESS_APP}" \
+            --resource-group "${RG_APPS}" \
+            --output json > witness-revisions.json
+
+          matched="$(jq -r --arg c "${COMMIT}" '
+            [ .[]
+              | select(any(.properties.template.containers[]?.env[]?;
+                           .name == "MLS_HEAL_COMMIT" and .value == $c))
+            ] | length' witness-revisions.json)"
+
+          if [ "${matched}" = "0" ]; then
+            echo "stamped=false" >> "${GITHUB_OUTPUT}"
+            echo "::error title=Witness not stamped::az containerapp update returned success but no revision of ${WITNESS_APP} carries MLS_HEAL_COMMIT=${COMMIT}. V10.1 stage 6 / V10.2 stage 5 will report this heal as never shipped."
+            exit 1
+          fi
+
+          echo "stamped=true" >> "${GITHUB_OUTPUT}"
+          echo "${matched} revision(s) of ${WITNESS_APP} now carry MLS_HEAL_COMMIT=${COMMIT}."
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          WITNESS_APP: ${{ steps.names.outputs.ca-vuln-lab }}
+          COMMIT: ${{ inputs.commit || github.sha }}
+          ADVISORIES: ${{ steps.lab.outputs.advisories }}
+          STAMPED: ${{ steps.roll.outputs.stamped }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### L10 deployment witness"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| App | \`${WITNESS_APP}\` |"
+            echo "| Commit stamped | \`${COMMIT}\` |"
+            echo "| Lab advisories at this commit | ${ADVISORIES:-unknown} |"
+            echo "| Revision rolled | ${STAMPED:-false} |"
+            echo
+            echo "The witness carries a pinned public placeholder image. \`apps/vuln-lab\`"
+            echo "is never containerised — its CRITICAL pins would fail the L9 Trivy gate the"
+            echo "heal PR itself must pass, and its seeds are unstarted server factories. The"
+            echo "revision proves the merged commit reached Azure through the pipeline with no"
+            echo "human hand; it does not claim the healed code runs anywhere."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the witness revision record
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vuln-lab-witness-revisions
+          path: |
+            witness-revisions.json
+            vuln-lab-audit.json
+          if-no-files-found: warn
+          retention-days: 14
