@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Cost Management daily export -> lakehouse cost_daily (L6): a consumption-plan Azure Function, blob-triggered on the cost-export container, that parses the exported CSV, normalises it to the cost_daily shape and replaces the month's partition in OneLake. Managed identity only; no stored credential exists anywhere in the app.",
-  "//workspaces": "Deliberately NOT a member of the repo-root `workspaces` list, for the same reason apps/directline-token is not: it deploys as its own Azure Functions app with its own dependency closure, and hoisting @azure/functions and @azure/identity into the root tree would put server SDKs in the dependency graph of the browser apps. Install and test it from this directory.",
+  "//workspaces": "IS a member of the repo-root `workspaces` list, alongside apps/directline-token which deploys the same way. An earlier note here claimed the opposite on the grounds that hoisting server SDKs would pollute the browser apps' dependency graph; that reasoning does not hold — npm hoisting does not make a package importable from a workspace that has not declared it, and @azure/identity is hoisted by apps/data-api regardless. Being a member is what makes root `npm test` run this package's suite; the only package deliberately excluded is apps/vuln-lab, whose pinned CVEs hoisting would silently patch.",
   "type": "module",
   "main": "dist/functions/*.js",
   "engines": {

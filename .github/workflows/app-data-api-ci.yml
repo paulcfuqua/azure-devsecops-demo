@@ -1,0 +1,310 @@
+name: app-data-api-ci
+
+# =============================================================================
+# Path-filtered CI for apps/data-api (L7 serving layer).
+# Playbook: docs/runbooks/layers/L07.md
+# Plan: docs/superpowers/plans/2026-08-24-phase-q-turnkey.md (Track B, gap Q-4)
+#
+# build -> test (route/shape parity with BOTH frontends' ApiProvider, allowlist,
+#          row caps, error shapes, mocked cloud adapters)
+#       -> container build -> Trivy (fail on CRITICAL) -> GHCR push
+#       -> deploy to ACA via OIDC (guarded on the demo environment).
+#
+# This service answers what apps/launch-ops and apps/control-tower already
+# fetch. Its test suite re-derives the routes and row types from those two
+# packages' sources at run time, so the frontends are path-filter inputs here:
+# editing a provider must be able to fail this pipeline. That is the point of
+# including them below rather than only apps/data-api/**.
+#
+# It holds no stored secret. Azure SQL, the Fabric SQL analytics endpoint,
+# Defender and Log Analytics all authenticate with the container app's managed
+# identity; CI itself authenticates by OIDC and carries nothing but
+# GITHUB_TOKEN.
+#
+# ---------------------------------------------------------------------------
+# OPEN ITEM P-1 (shared with the other app pipelines) — target port. The image
+# serves on 8080 but infra/bicep may still default the container app's target
+# port to the placeholder 80. Set DATA_API_PORT=8080 in the `demo` GitHub
+# environment once the first real image publishes. Ingress is deliberately NOT
+# mutated here.
+#
+# OPEN ITEM — container app name. `.github/actions/naming` does not yet expose a
+# `ca-data-api` output, so the deploy job derives the name from that action's
+# `prefix` and `env` outputs using the CLAUDE.md convention
+# `<prefix>-<app>-<env>-ca`, overridable with the `DATA_API_APP_NAME` demo
+# variable. Nothing here hardcodes the company prefix.
+# ---------------------------------------------------------------------------
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/data-api/**
+      - apps/launch-ops/src/providers/**
+      - apps/control-tower/src/providers/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/app-data-api-ci.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - apps/data-api/**
+      - apps/launch-ops/src/providers/**
+      - apps/control-tower/src/providers/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/app-data-api-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-data-api-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: apps/data-api
+  APP_SLUG: data-api
+  WORKSPACE: apps/data-api
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: data-api deploy
+
+  build-test:
+    name: build and contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Generate the deterministic dataset the LOCAL backend serves
+        run: |
+          set -euo pipefail
+          cd data
+          python -m generators build
+
+      - name: Typecheck and build data-api
+        run: |
+          set -euo pipefail
+          npm run typecheck --workspace "${WORKSPACE}"
+          npm run build --workspace "${WORKSPACE}"
+
+      - name: Contract tests (parity with both ApiProviders, allowlists, caps, cloud mocks)
+        run: npm run test --workspace "${WORKSPACE}"
+
+      - name: Frontend tests still pass against the shared contract
+        run: |
+          set -euo pipefail
+          npm run build --workspace apps/shared/spec-renderer
+          npm run test --workspace apps/launch-ops
+          npm run test --workspace apps/control-tower
+
+  image:
+    name: container build, scan and push
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute the GHCR reference
+        id: tag
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          registry="ghcr.io/$(printf '%s' "${REPO}" | tr '[:upper:]' '[:lower:]')/${APP_SLUG}"
+          tag="sha-${GITHUB_SHA:0:7}"
+          {
+            echo "registry=${registry}"
+            echo "tag=${tag}"
+            echo "image=${registry}:${tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image (context = repo root for the workspace lockfile)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.APP_DIR }}/Dockerfile
+          load: true
+          push: false
+          tags: ${{ steps.tag.outputs.image }}
+          cache-from: type=gha,scope=data-api
+          cache-to: type=gha,mode=max,scope=data-api
+
+      - name: Trivy gate — fail the build on CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.tag.outputs.image }}
+          format: table
+          severity: CRITICAL
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Trivy SARIF for the Security tab (non-blocking)
+        if: ${{ always() && github.event_name != 'pull_request' }}
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.tag.outputs.image }}
+          format: sarif
+          output: trivy-data-api.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload the Trivy SARIF
+        if: ${{ always() && github.event_name != 'pull_request' && hashFiles('trivy-data-api.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-data-api.sarif
+          category: trivy-data-api
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the scanned image
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.APP_DIR }}/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.tag.outputs.image }}
+            ${{ steps.tag.outputs.registry }}:latest
+          cache-from: type=gha,scope=data-api
+          cache-to: type=gha,mode=max,scope=data-api
+
+  deploy:
+    name: deploy to Container Apps
+    needs: [preflight, image]
+    if: ${{ needs.preflight.outputs.configured == 'true' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Resolve the container app name
+        id: app
+        env:
+          PREFIX: ${{ steps.names.outputs.prefix }}
+          ENV_SEGMENT: ${{ steps.names.outputs.env }}
+          OVERRIDE: ${{ vars.DATA_API_APP_NAME }}
+        run: |
+          set -euo pipefail
+          # naming.bicep owns the prefix (CLAUDE.md); this only applies the
+          # documented <prefix>-<app>-<env>-<type> pattern to a new app.
+          name="${OVERRIDE:-${PREFIX}-${APP_SLUG}-${ENV_SEGMENT}-ca}"
+          echo "name=${name}" >> "${GITHUB_OUTPUT}"
+          echo "Container app: ${name}"
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Roll the new image onto the container app
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          APP_NAME: ${{ steps.app.outputs.name }}
+          IMAGE: ${{ needs.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          az containerapp update \
+            --resource-group "${RG_APPS}" \
+            --name "${APP_NAME}" \
+            --image "${IMAGE}" \
+            --min-replicas 0 \
+            --output none
+          echo "Deployed ${IMAGE} to ${APP_NAME}."
+
+      - name: Check the ingress target port (open item P-1)
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          APP_NAME: ${{ steps.app.outputs.name }}
+          CONFIGURED_PORT: ${{ vars.DATA_API_PORT }}
+        run: |
+          set -euo pipefail
+          current="$(az containerapp show -g "${RG_APPS}" -n "${APP_NAME}" \
+            --query properties.configuration.ingress.targetPort -o tsv)"
+          echo "Current ingress target port: ${current}"
+          if [ "${current}" = "80" ] && [ -z "${CONFIGURED_PORT}" ]; then
+            echo "::warning title=P-1 open — target port still 80::${APP_NAME} serves a real image on 8080 but ingress still targets the placeholder port 80. Set DATA_API_PORT=8080 in the demo environment and re-run layer-07-apps.yml. Ingress was deliberately NOT mutated here."
+          fi
+
+      - name: Confirm the backend mode the deployed revision will serve
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          APP_NAME: ${{ steps.app.outputs.name }}
+        run: |
+          set -euo pipefail
+          mode="$(az containerapp show -g "${RG_APPS}" -n "${APP_NAME}" \
+            --query "properties.template.containers[0].env[?name=='MLS_DATA_BACKENDS'].value | [0]" \
+            -o tsv)"
+          echo "MLS_DATA_BACKENDS on the container app: ${mode:-<unset>}"
+          if [ "${mode}" != "cloud" ]; then
+            echo "::warning title=data-api is not in cloud mode::MLS_DATA_BACKENDS is '${mode:-<unset>}'. LOCAL mode reads data/generated, which is NOT baked into the image, so every table route will answer 503. Set MLS_DATA_BACKENDS=cloud (plus the SQL/Fabric/Defender/Log Analytics settings) on the container app."
+          fi
+
+      - name: Deployment summary
+        env:
+          APP_NAME: ${{ steps.app.outputs.name }}
+          IMAGE: ${{ needs.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### data-api deployed"
+            echo
+            echo "- container app: \`${APP_NAME}\`"
+            echo "- image: \`${IMAGE}\`"
+            echo "- routes: \`GET /tables/:table\`, \`GET /feeds/:name\`, \`GET /healthz\`"
+            echo
+            echo "\`/healthz\` reports the live backend set, the allowlists and whether"
+            echo "tracing is exporting — check it before blaming the frontends for an"
+            echo "empty dashboard."
+          } >> "${GITHUB_STEP_SUMMARY}"

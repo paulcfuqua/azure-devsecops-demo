@@ -22,7 +22,17 @@ RUN npm run build --workspace apps/shared/spec-renderer \
     && npm run build --workspace apps/launch-ops
 
 FROM nginx:1.27-alpine
-COPY apps/launch-ops/nginx.conf /etc/nginx/conf.d/default.conf
+# Template, not a finished config: the nginx entrypoint runs envsubst over
+# /etc/nginx/templates/*.template into /etc/nginx/conf.d/ at container start.
+COPY apps/launch-ops/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /repo/apps/launch-ops/dist /usr/share/nginx/html
+
+# Deliberately an unreachable ADDRESS, not a hostname. nginx resolves names in
+# proxy_pass at startup and refuses to start if one does not resolve, so a
+# hostname default would turn "API not configured yet" into "the app is down".
+# With this, the SPA serves normally and only /api returns 502 until the L7
+# deploy sets DATA_API_ORIGIN to the data-api container app's URL.
+ENV DATA_API_ORIGIN=http://127.0.0.1:8081
+
 EXPOSE 8080
 # nginx:alpine's default entrypoint/cmd serve the static bundle.

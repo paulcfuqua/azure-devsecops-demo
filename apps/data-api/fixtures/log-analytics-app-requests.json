@@ -1,0 +1,43 @@
+{
+  "tables": [
+    {
+      "name": "PrimaryResult",
+      "columns": [
+        { "name": "TimeGenerated", "type": "datetime" },
+        { "name": "AppRoleName", "type": "string" },
+        { "name": "RequestCount", "type": "long" },
+        { "name": "FailedCount", "type": "long" }
+      ],
+      "rows": [
+        ["2026-08-08T00:00:00Z", "launch-ops", 1382, 7],
+        ["2026-08-08T00:00:00Z", "control-tower", 964, 3],
+        ["2026-08-09T00:00:00Z", "launch-ops", 1291, 4],
+        ["2026-08-09T00:00:00Z", "control-tower", 1012, 2],
+        ["2026-08-10T00:00:00Z", "launch-ops", 1544, 12],
+        ["2026-08-10T00:00:00Z", "control-tower", 1088, 5],
+        ["2026-08-11T00:00:00Z", "launch-ops", 1489, 6],
+        ["2026-08-11T00:00:00Z", "control-tower", 1123, 4],
+        ["2026-08-12T00:00:00Z", "launch-ops", 1512, 5],
+        ["2026-08-12T00:00:00Z", "control-tower", 1097, 3],
+        ["2026-08-13T00:00:00Z", "launch-ops", 1476, 41],
+        ["2026-08-13T00:00:00Z", "control-tower", 1054, 18],
+        ["2026-08-14T00:00:00Z", "launch-ops", 1538, 9],
+        ["2026-08-14T00:00:00Z", "control-tower", 1112, 4],
+        ["2026-08-15T00:00:00Z", "launch-ops", 1367, 5],
+        ["2026-08-15T00:00:00Z", "control-tower", 998, 2],
+        ["2026-08-16T00:00:00Z", "launch-ops", 1289, 3],
+        ["2026-08-16T00:00:00Z", "control-tower", 973, 2],
+        ["2026-08-17T00:00:00Z", "launch-ops", 1601, 8],
+        ["2026-08-17T00:00:00Z", "control-tower", 1145, 5],
+        ["2026-08-18T00:00:00Z", "launch-ops", 1573, 7],
+        ["2026-08-18T00:00:00Z", "control-tower", 1130, 4],
+        ["2026-08-19T00:00:00Z", "launch-ops", 1522, 6],
+        ["2026-08-19T00:00:00Z", "control-tower", 1101, 3],
+        ["2026-08-20T00:00:00Z", "launch-ops", 1495, 5],
+        ["2026-08-20T00:00:00Z", "control-tower", 1076, 3],
+        ["2026-08-21T00:00:00Z", "launch-ops", 1558, 6],
+        ["2026-08-21T00:00:00Z", "control-tower", 1119, 4]
+      ]
+    }
+  ]
+}

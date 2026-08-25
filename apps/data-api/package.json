@@ -1,0 +1,35 @@
+{
+  "name": "@mls/data-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Meridian Launch Systems serving layer (L7): the REST API both frontends' ApiProvider already expects — GET /tables/:table for the ten generator tables and GET /feeds/:name for the six control-tower feeds. LOCAL backends read data/generated + committed fixtures (test harness); CLOUD backends read Azure SQL, the Fabric lakehouse SQL analytics endpoint and the live GitHub / Defender / Log Analytics APIs via managed identity.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.13.2",
+    "@azure/monitor-opentelemetry-exporter": "1.0.0-beta.32",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/resources": "^2.10.0",
+    "@opentelemetry/sdk-trace-base": "^2.10.0",
+    "@opentelemetry/sdk-trace-node": "^2.10.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0",
+    "express": "^5.1.0",
+    "mssql": "^12.7.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/mssql": "^12.3.0",
+    "@types/node": "^24.13.3",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

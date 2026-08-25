@@ -1,0 +1,60 @@
+# Static serve for the launch-ops SPA on port 8080 (ACA ingress target).
+#
+# This is an nginx TEMPLATE, not a finished config. The nginx:alpine entrypoint
+# runs envsubst over /etc/nginx/templates/*.template and writes the result to
+# /etc/nginx/conf.d/, substituting only variables that are actually defined in
+# the environment — so nginx's own $uri / $host are left untouched.
+#
+# WHY THE PROXY EXISTS: both frontends' ApiProvider defaults to a same-origin
+# base URL of "/api". Without the rule below, /api/tables/launches falls through
+# to the SPA fallback and the app receives index.html where it expects JSON.
+# Proxying same-origin also means no CORS preflight on the data path.
+#
+# DATA_API_ORIGIN is set by the L7 deploy to the data-api container app's URL.
+# It defaults (in the Dockerfile) to an unreachable loopback port rather than a
+# hostname: an unresolvable NAME in proxy_pass stops nginx from starting at all,
+# whereas an unreachable ADDRESS lets the app serve normally and fail only the
+# API calls with a 502 you can actually diagnose from /healthz's routePrefix.
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # Liveness endpoint for ACA probes and V7.1. The L7 CI deploy step stamps
+    # the image content hash alongside this marker (see docs/runbooks/layers/L07.md).
+    location = /healthz {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Data API, same-origin. Trailing slash on proxy_pass strips the /api prefix,
+    # so /api/tables/launches reaches the service as /tables/launches.
+    location /api/ {
+        proxy_pass ${DATA_API_ORIGIN}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # W3C trace context, so a browser span and the server span join up.
+        proxy_set_header traceparent $http_traceparent;
+        proxy_set_header tracestate $http_tracestate;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 60s;
+    }
+
+    # Hashed build assets are immutable.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # SPA fallback.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

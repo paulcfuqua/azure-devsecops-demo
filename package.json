@@ -10,8 +10,10 @@
   "workspaces": [
     "apps/launch-ops",
     "apps/control-tower",
+    "apps/data-api",
     "apps/mcp-tools",
     "apps/directline-token",
+    "apps/cost-ingest",
     "apps/shared/*"
   ],
   "scripts": {
