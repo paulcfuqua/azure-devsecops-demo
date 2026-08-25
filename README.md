@@ -43,6 +43,7 @@ Decisions in force: monorepo, dual E5 trials, Fabric trial capacity first; the
 
 ## Key documents
 
+- [By the numbers](docs/BY-THE-NUMBERS.md) — what it took: files, lines, 1,428 tests
 - [Project brief (decision record)](docs/BRIEF.md)
 - [Design spec + pressure-test findings](docs/superpowers/specs/2026-08-22-azure-devsecops-demo-design.md)
 - [Copilot Studio amendment (in force)](docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md)
