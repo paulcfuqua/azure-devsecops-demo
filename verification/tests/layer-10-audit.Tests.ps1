@@ -1,0 +1,235 @@
+# Pester tests for verification/layer-10-audit.ps1 - every gh and az call mocked;
+# zero cloud calls.
+
+BeforeAll {
+    $env:MLS_SKIP_MAIN = '1'
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-10-audit.ps1')
+    Set-StrictMode -Off
+
+    $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l10-$([guid]::NewGuid().ToString('n'))"
+    $script:Repository = 'paulcfuqua/azure-devsecops'
+    $script:Automation = 'github-actions[bot]'
+    $script:EnvironmentVariable = @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'MLS_L10_CODEQL_ALERT',
+        'MLS_L10_AUTOFIX_PR', 'MLS_L10_DEPENDABOT_ALERTS', 'MLS_L10_RESEED_MERGED_AT')
+    $script:SavedEnvironment = @{}
+    foreach ($name in $script:EnvironmentVariable) { $script:SavedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
+
+    function Get-Row {
+        param($Context, [string]$Id)
+        return @($Context.Criterion | Where-Object { $_.Id -eq $Id })[0]
+    }
+
+    function Invoke-AuditForTest {
+        param(
+            [switch]$NoRetry,
+            [string]$CodeQlAlertNumber = '7',
+            [string]$AutofixPrNumber = '31',
+            [string[]]$DependabotAlertNumber = @('3', '4', '5'),
+            [string]$ReseedMergedUtc = ''
+        )
+        Invoke-Main -Repository $script:Repository -CodeQlAlertNumber $CodeQlAlertNumber -AutofixPrNumber $AutofixPrNumber `
+            -DependabotAlertNumber $DependabotAlertNumber -VulnLabAppName 'mls-vuln-lab-demo-ca' `
+            -ResourceGroupName 'mls-rg-apps' -AutomationLogin $script:Automation -ReseedMergedUtc $ReseedMergedUtc `
+            -ChainWindowHours 24 -DependencyPassBar 2 -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
+    }
+}
+
+AfterAll {
+    foreach ($name in $script:EnvironmentVariable) { [Environment]::SetEnvironmentVariable($name, $script:SavedEnvironment[$name]) }
+    Remove-Item Env:\MLS_SKIP_MAIN -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $script:ReportRoot) {
+        Remove-Item -LiteralPath $script:ReportRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Describe 'layer-10-audit' {
+    BeforeEach {
+        foreach ($name in $script:EnvironmentVariable) { [Environment]::SetEnvironmentVariable($name, $null) }
+        $env:GH_TOKEN = 'ghp-verifier-read-only'
+        Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
+        Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
+
+        $script:AutofixStatus = 'success'
+        $script:AutofixDescription = 'Escape the user-controlled value before interpolating it into the query.'
+        $script:CodeQlState = 'fixed'
+        $script:DependabotState = 'fixed'
+        $script:MergedBy = $script:Automation
+        $script:AutoMerge = [pscustomobject]@{ enabledBy = 'github-actions[bot]' }
+        $script:CheckConclusion = 'success'
+        $script:PrBody = "Autofix says: $($script:AutofixDescription)"
+        $script:Revision = @([pscustomobject]@{ name = 'mls-vuln-lab-demo-ca--rev7'; created = '2026-08-24T11:00:00Z' })
+        $script:DependabotPr = @(
+            [pscustomobject]@{ number = 41; title = 'Bump lodash from 4.17.20 to 4.17.21'; headRefName = 'dependabot/npm_and_yarn/lodash-4.17.21' }
+            [pscustomobject]@{ number = 42; title = 'Bump minimist from 1.2.5 to 1.2.8'; headRefName = 'dependabot/npm_and_yarn/minimist-1.2.8' }
+            [pscustomobject]@{ number = 43; title = 'Bump axios from 0.21.1 to 0.21.4'; headRefName = 'dependabot/npm_and_yarn/axios-0.21.4' }
+        )
+        $script:DependabotPackage = @{ '3' = 'lodash'; '4' = 'minimist'; '5' = 'axios' }
+
+        Mock Invoke-MlsGh {
+            $joined = $Argument -join ' '
+            if ($joined -like '*code-scanning/alerts/*/autofix*') {
+                return [pscustomobject]@{ status = $script:AutofixStatus; description = $script:AutofixDescription; started_at = '2026-08-24T10:05:00Z' }
+            }
+            if ($joined -like '*code-scanning/alerts/*') {
+                return [pscustomobject]@{ state = $script:CodeQlState; created_at = '2026-08-24T10:00:00Z'; rule = [pscustomobject]@{ id = 'js/sql-injection' } }
+            }
+            if ($joined -match 'dependabot/alerts/(?<n>\d+)') {
+                $number = $Matches['n']
+                return [pscustomobject]@{
+                    state      = $script:DependabotState
+                    created_at = '2026-08-24T10:00:00Z'
+                    dependency = [pscustomobject]@{ package = [pscustomobject]@{ name = $script:DependabotPackage[$number] } }
+                }
+            }
+            if ($joined -like 'pr list*') { return $script:DependabotPr }
+            if ($joined -like 'pr view*') {
+                return [pscustomobject]@{
+                    number           = 31
+                    headRefOid       = 'autofixsha'
+                    body             = $script:PrBody
+                    commits          = @([pscustomobject]@{ oid = 'autofixsha' })
+                    mergedAt         = '2026-08-24T10:30:00Z'
+                    mergedBy         = [pscustomobject]@{ login = $script:MergedBy }
+                    autoMergeRequest = $script:AutoMerge
+                    state            = 'MERGED'
+                    title            = 'Fix js/sql-injection'
+                }
+            }
+            if ($joined -like '*check-runs*') {
+                return [pscustomobject]@{ check_runs = @(
+                        [pscustomobject]@{ name = 'CodeQL'; conclusion = $script:CheckConclusion }
+                        [pscustomobject]@{ name = 'Trivy'; conclusion = 'success' }
+                        [pscustomobject]@{ name = 'ZAP'; conclusion = 'success' }
+                    )
+                }
+            }
+            throw "unexpected gh call: $joined"
+        }
+
+        Mock Invoke-MlsAz {
+            if (($Argument -join ' ') -like 'containerapp revision list*') { return $script:Revision }
+            throw "unexpected az call: $($Argument -join ' ')"
+        }
+    }
+
+    Context 'all criteria pass' {
+        It 'records V10.1 and V10.2 as PASS and exits 0' {
+            $context = Invoke-AuditForTest
+            @($context.Criterion).Id | Should -Be @('V10.1', 'V10.2')
+            @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
+            Get-MlsExitCode -Context $context | Should -Be 0
+        }
+
+        It 'walks all seven Autofix stages and records them in order' {
+            $context = Invoke-AuditForTest
+            $observed = (Get-Row -Context $context -Id 'V10.1').Observed
+            foreach ($stage in 1..7) { $observed | Should -BeLike "*$stage *" }
+            $observed | Should -BeLike '*autofix status=success*'
+            $observed | Should -BeLike '*alert state=fixed*'
+        }
+
+        It 'accepts 2 of 3 dependency trails as the pass line' {
+            $script:DependabotPr = @($script:DependabotPr | Select-Object -First 2)
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*2 of 3 trails complete*'
+        }
+    }
+
+    Context 'a criterion fails on a realistic wrong value' {
+        It 'fails V10.1 when a human merged the heal PR' {
+            $script:MergedBy = 'paulcfuqua'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike "*expected the automation identity*"
+            Get-MlsExitCode -Context $context | Should -Be 1
+        }
+
+        It "fails V10.1 when the PR body does not carry Autofix's own explanation" {
+            $script:PrBody = 'Automated fix generated by our workflow.'
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*does not carry*explanation*'
+        }
+
+        It 'fails V10.1 when autofix generation errored' {
+            $script:AutofixStatus = 'error'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike "*autofix status 'error'*"
+            $row.Detail | Should -BeLike '*not retried away*'
+        }
+
+        It 'fails V10.1 when the alert never closed' {
+            $script:CodeQlState = 'open'
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike "*alert state 'open', expected 'fixed'*"
+        }
+
+        It 'fails V10.1 when no new container app revision followed the merge' {
+            $script:Revision = @([pscustomobject]@{ name = 'old'; created = '2026-08-20T10:00:00Z' })
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*no new container app revision*'
+        }
+
+        It 'fails V10.2 when only one dependency trail completes' {
+            $script:DependabotPr = @($script:DependabotPr | Select-Object -First 1)
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*1 of 3 trails complete*'
+            $row.Detail | Should -BeLike '*Partial credit does not accumulate*'
+        }
+    }
+
+    Context 'the 24 h chain window' {
+        It 'records PENDING while the window from the re-seed merge is still open' {
+            $script:CodeQlState = 'open'
+            $script:DependabotState = 'open'
+            $context = Invoke-AuditForTest -ReseedMergedUtc ([datetime]::UtcNow.AddHours(-1).ToString('o'))
+            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'PENDING'
+            (Get-Row -Context $context -Id 'V10.1').RetryWindowMinutes | Should -Be 1440
+            (Get-Row -Context $context -Id 'V10.2').Status | Should -Be 'PENDING'
+            Get-MlsExitCode -Context $context | Should -Be 0
+        }
+
+        It 'records FAIL once the 24 h window has elapsed' {
+            $script:CodeQlState = 'open'
+            $context = Invoke-AuditForTest -ReseedMergedUtc ([datetime]::UtcNow.AddHours(-30).ToString('o'))
+            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
+        }
+
+        It 'never sleeps in-process for a 24 h window' {
+            $context = Invoke-AuditForTest -ReseedMergedUtc ([datetime]::UtcNow.AddHours(-1).ToString('o'))
+            @($context.Criterion | ForEach-Object { $_.SleptSeconds }) | Should -Be @(0, 0)
+            Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Exactly -Times 0
+        }
+    }
+
+    Context 'a check that throws' {
+        It 'records V10.1 as FAIL and still evaluates V10.2' {
+            Mock Invoke-MlsAz { throw 'az containerapp revision list failed: ResourceGroupNotFound.' }
+            $context = Invoke-AuditForTest -NoRetry
+            @($context.Criterion).Count | Should -Be 2
+            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
+            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*ResourceGroupNotFound*'
+        }
+    }
+
+    Context 'missing input' {
+        It 'refuses to run without the Verifier GitHub token' {
+            foreach ($name in @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')) { [Environment]::SetEnvironmentVariable($name, $null) }
+            { Invoke-AuditForTest } | Should -Throw '*GitHubToken*'
+        }
+
+        It 'fails V10.1 and V10.2 with actionable messages when no alert numbers were posted' {
+            $context = Invoke-AuditForTest -CodeQlAlertNumber '' -AutofixPrNumber '' -DependabotAlertNumber @() -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
+            (Get-Row -Context $context -Id 'V10.1').Detail | Should -BeLike '*MLS_L10_CODEQL_ALERT*'
+            (Get-Row -Context $context -Id 'V10.2').Status | Should -Be 'FAIL'
+            (Get-Row -Context $context -Id 'V10.2').Detail | Should -BeLike '*MLS_L10_DEPENDABOT_ALERTS*'
+        }
+    }
+}
