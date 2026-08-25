@@ -3,7 +3,7 @@
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     $script:Sub = '00000000-0000-0000-0000-000000000000'
-    . (Join-Path $PSScriptRoot '..' 'verify-g0.ps1') -SubscriptionId $script:Sub
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'verify-g0.ps1') -SubscriptionId $script:Sub
     Set-StrictMode -Off
 
     $script:RoleIds = @(

@@ -2,8 +2,8 @@
 
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
-    Import-Module (Join-Path $PSScriptRoot '..' 'fabric-api.psm1') -Force
-    . (Join-Path $PSScriptRoot '..' 'provision-workspace.ps1') -Token 'tok-dummy' -CapacityId 'cap-dummy'
+    Import-Module (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'fabric-api.psm1') -Force
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'provision-workspace.ps1') -Token 'tok-dummy' -CapacityId 'cap-dummy'
     Set-StrictMode -Off
 
     function Invoke-ProvisionForTest {

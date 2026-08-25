@@ -91,9 +91,9 @@
       "notes": "Executive control tower (apps/control-tower)"
     },
     {
-      "displayName": "mls-copilot-svc-demo-app",
+      "displayName": "mls-mcp-tools-demo-app",
       "signInAudience": "AzureADMyOrg",
-      "notes": "Copilot tool-calling service (apps/copilot-svc)"
+      "notes": "MCP tool server the Copilot Studio agent attaches to (apps/mcp-tools)"
     }
   ],
   "conditionalAccessPolicies": [

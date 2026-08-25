@@ -172,7 +172,7 @@ function Assert-SolutionSource {
         [Parameter(Mandatory)][string]$SolutionFolder,
         [Parameter(Mandatory)][string]$SolutionName
     )
-    $solutionXml = Join-Path $SolutionFolder 'Other' 'Solution.xml'
+    $solutionXml = Join-Path -Path $SolutionFolder -ChildPath 'Other' -AdditionalChildPath 'Solution.xml'
     if (Test-Path -LiteralPath $solutionXml) {
         Write-Status "Solution source: $SolutionFolder" -Color Green
         return $solutionXml

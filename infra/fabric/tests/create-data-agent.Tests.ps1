@@ -2,8 +2,8 @@
 
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
-    Import-Module (Join-Path $PSScriptRoot '..' 'fabric-api.psm1') -Force
-    . (Join-Path $PSScriptRoot '..' 'create-data-agent.ps1') -Token 'tok-dummy'
+    Import-Module (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'fabric-api.psm1') -Force
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'create-data-agent.ps1') -Token 'tok-dummy'
     Set-StrictMode -Off
 
     function Invoke-CreateForTest {

@@ -2,8 +2,8 @@
 
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
-    $script:ManifestPath = Join-Path $PSScriptRoot '..' 'manifest.json'
-    . (Join-Path $PSScriptRoot '..' 'apply-entra.ps1')
+    $script:ManifestPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'manifest.json'
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'apply-entra.ps1')
     Set-StrictMode -Off
 
     function Get-FreshManifest {
@@ -11,9 +11,12 @@ BeforeAll {
     }
 
     function Invoke-ApplyForTest {
-        param([switch]$WhatIf, [string]$Path = $script:ManifestPath)
+        # -AsWhatIf, not -WhatIf: a parameter literally named WhatIf on a function that
+        # never calls ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci fails
+        # on any warning. It is still forwarded to Invoke-Main as -WhatIf.
+        param([switch]$AsWhatIf, [string]$Path = $script:ManifestPath)
         Invoke-Main -ManifestPath $Path -Domain 'mls.example' `
-            -PropagationTimeoutSeconds 30 -PropagationIntervalSeconds 1 -WhatIf:$WhatIf
+            -PropagationTimeoutSeconds 30 -PropagationIntervalSeconds 1 -WhatIf:$AsWhatIf
     }
 
     # Expected totals straight from the manifest, so tests fail loudly if it changes.
@@ -264,7 +267,7 @@ Describe 'apply-entra idempotency + WhatIf' {
 
     Context '-WhatIf makes no mutating calls' {
         It 'on an empty tenant performs reads only and reports the skips' {
-            $summary = Invoke-ApplyForTest -WhatIf
+            $summary = Invoke-ApplyForTest -AsWhatIf
             Should -Invoke Invoke-GraphApi -Exactly -Times 0 -ParameterFilter { $Method -in @('POST', 'PATCH', 'DELETE') }
             $summary.SkippedInWhatIf | Should -Be ($script:UserCount + $script:GroupCount + $script:AppCount + $script:CaCount)
         }
@@ -272,7 +275,7 @@ Describe 'apply-entra idempotency + WhatIf' {
         It 'on a populated tenant with drift still performs reads only' {
             $script:TenantEmpty = $false
             $script:ExistingCaPolicies[0].state = 'disabled'
-            Invoke-ApplyForTest -WhatIf | Out-Null
+            Invoke-ApplyForTest -AsWhatIf | Out-Null
             Should -Invoke Invoke-GraphApi -Exactly -Times 0 -ParameterFilter { $Method -in @('POST', 'PATCH', 'DELETE') }
         }
     }

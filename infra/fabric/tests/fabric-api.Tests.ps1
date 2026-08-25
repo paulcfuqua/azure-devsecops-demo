@@ -1,7 +1,7 @@
 # Pester tests for infra/fabric/fabric-api.psm1 - Invoke-RestMethod mocked in-module; zero cloud calls.
 
 BeforeAll {
-    $script:ModulePath = Join-Path $PSScriptRoot '..' 'fabric-api.psm1'
+    $script:ModulePath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'fabric-api.psm1'
     Import-Module $script:ModulePath -Force
     $script:ModuleName = 'fabric-api'
 }

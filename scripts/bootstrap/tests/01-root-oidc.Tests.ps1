@@ -4,7 +4,7 @@ BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     $script:Sub = '00000000-0000-0000-0000-000000000000'
     $script:Tenant = '11111111-1111-1111-1111-111111111111'
-    . (Join-Path $PSScriptRoot '..' '01-root-oidc.ps1') -SubscriptionId $script:Sub
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '01-root-oidc.ps1') -SubscriptionId $script:Sub
     Set-StrictMode -Off
 
     $script:GraphRoleIds = @(
@@ -23,10 +23,13 @@ BeforeAll {
     }
 
     function Invoke-MainForTest {
-        param([switch]$WhatIf)
+        # -AsWhatIf, not -WhatIf: a parameter literally named WhatIf on a function that
+        # never calls ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci fails
+        # on any warning. It is still forwarded to Invoke-Main as -WhatIf.
+        param([switch]$AsWhatIf)
         Invoke-Main -SubscriptionId $script:Sub -Repository 'paulcfuqua/azure-devsecops' `
             -EnvironmentName 'demo' -DeployerAppName 'mls-github-deployer' -VerifierAppName 'mls-verifier' `
-            -WhatIf:$WhatIf
+            -WhatIf:$AsWhatIf
     }
 }
 
@@ -231,7 +234,7 @@ Describe '01-root-oidc' {
 
     Context '-WhatIf makes no mutating calls' {
         It 'on a fresh tenant performs reads only' {
-            $result = Invoke-MainForTest -WhatIf
+            $result = Invoke-MainForTest -AsWhatIf
             Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
                 ($Arguments -join ' ') -match '\b(create|update|delete)\b'
             }
@@ -244,7 +247,7 @@ Describe '01-root-oidc' {
                 'mls-github-deployer' = @([pscustomobject]@{ id = 'dep-obj'; appId = 'dep-app'; displayName = 'mls-github-deployer' })
                 'mls-verifier'        = @([pscustomobject]@{ id = 'ver-obj'; appId = 'ver-app'; displayName = 'mls-verifier' })
             }
-            Invoke-MainForTest -WhatIf | Out-Null
+            Invoke-MainForTest -AsWhatIf | Out-Null
             Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
                 ($Arguments -join ' ') -match '\b(create|update|delete)\b'
             }

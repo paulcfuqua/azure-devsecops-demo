@@ -4,10 +4,12 @@ BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     $script:Sub = '00000000-0000-0000-0000-000000000000'
     $script:Email = 'sponsor@example.com'
-    . (Join-Path $PSScriptRoot '..' '03-budget.ps1') -SubscriptionId $script:Sub -Email $script:Email
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '03-budget.ps1') -SubscriptionId $script:Sub -Email $script:Email
     Set-StrictMode -Off
 
     function New-MatchingBudget {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+            Justification = 'Pure builder: returns an in-memory pscustomobject used as a mocked az response, and changes no state anywhere.')]
         param([int]$Amount = 75, [string]$Email = 'sponsor@example.com')
         $notifications = [ordered]@{}
         foreach ($threshold in @(50, 80, 100)) {
@@ -31,8 +33,11 @@ BeforeAll {
     }
 
     function Invoke-BudgetForTest {
-        param([switch]$WhatIf)
-        Invoke-Main -SubscriptionId $script:Sub -Email $script:Email -BudgetName 'mls-monthly-budget' -Amount 75 -WhatIf:$WhatIf
+        # -AsWhatIf, not -WhatIf: a parameter literally named WhatIf on a function that
+        # never calls ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci fails
+        # on any warning. It is still forwarded to Invoke-Main as -WhatIf.
+        param([switch]$AsWhatIf)
+        Invoke-Main -SubscriptionId $script:Sub -Email $script:Email -BudgetName 'mls-monthly-budget' -Amount 75 -WhatIf:$AsWhatIf
     }
 }
 
@@ -129,7 +134,7 @@ Describe '03-budget' {
 
     Context '-WhatIf makes no mutating calls' {
         It 'budget absent: GET only' {
-            Invoke-BudgetForTest -WhatIf | Out-Null
+            Invoke-BudgetForTest -AsWhatIf | Out-Null
             Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
                 ($Arguments -join ' ') -match 'rest --method (put|post|patch|delete)'
             }
@@ -140,7 +145,7 @@ Describe '03-budget' {
 
         It 'budget drifted: still no PUT under -WhatIf' {
             $script:ExistingBudget = New-MatchingBudget -Amount 10
-            Invoke-BudgetForTest -WhatIf | Out-Null
+            Invoke-BudgetForTest -AsWhatIf | Out-Null
             Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
                 ($Arguments -join ' ') -match 'rest --method (put|post|patch|delete)'
             }

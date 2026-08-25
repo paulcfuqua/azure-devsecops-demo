@@ -11,6 +11,10 @@ BeforeAll {
         throw "stub Get-Label called without a mock (Identity: $Identity)"
     }
     function New-Label {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+            Justification = 'Stand-in for the ExchangeOnlineManagement cmdlet of the same name, which labels.ps1 calls by that exact name. The stub must keep the real name and signature so Pester can Mock it, and it changes no state at all - the body is deliberately empty.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+            Justification = 'The parameters exist to mirror the real S&C cmdlet signature so that labels.ps1 binds against it and Should -Invoke -ParameterFilter can inspect $Name/$DisplayName/$Tooltip. An empty body that uses nothing is the point of the stub.')]
         [CmdletBinding()]
         param(
             [Parameter(Mandatory)][string]$Name,
@@ -19,6 +23,10 @@ BeforeAll {
         )
     }
     function Set-Label {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+            Justification = 'Stand-in for the ExchangeOnlineManagement cmdlet of the same name, which labels.ps1 calls by that exact name. The stub must keep the real name and signature so Pester can Mock it, and it changes no state at all - the body is deliberately empty.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+            Justification = 'The parameters exist to mirror the real S&C cmdlet signature so that labels.ps1 binds against it and Should -Invoke -ParameterFilter can inspect $Identity/$DisplayName/$Tooltip. An empty body that uses nothing is the point of the stub.')]
         [CmdletBinding()]
         param(
             [Parameter(Mandatory)][string]$Identity,
@@ -27,7 +35,7 @@ BeforeAll {
         )
     }
 
-    . (Join-Path $PSScriptRoot '..' 'labels.ps1')
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'labels.ps1')
     Set-StrictMode -Off
 
     $script:ExpectedNames = @('Public', 'Internal', 'Confidential', 'Export-Controlled')

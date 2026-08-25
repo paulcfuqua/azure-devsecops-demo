@@ -268,8 +268,6 @@ function Wait-FabricOperation {
 }
 
 function New-FabricDataAgentDefinition {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
-        Justification = 'Pure builder: returns an in-memory object and changes no state anywhere.')]
     <#
     .SYNOPSIS
         Build the InlineBase64 `definition.parts` payload that binds a data agent to a
@@ -294,6 +292,10 @@ function New-FabricDataAgentDefinition {
         flat list of `lakehouse_tables.table` elements instead - kept as an escape
         hatch because the lakehouse-shaped example is not published verbatim.
     #>
+    # NOTE: this attribute must stay BELOW the comment-help block. Placed above it,
+    # PSScriptAnalyzer stops recognising the help and raises PSProvideCommentHelp.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure builder: returns an in-memory object and changes no state anywhere.')]
     param(
         [Parameter(Mandatory)][string]$WorkspaceId,
         [Parameter(Mandatory)][string]$LakehouseId,

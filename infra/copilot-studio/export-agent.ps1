@@ -223,7 +223,7 @@ function Invoke-Main {
     $solutionFolder = Join-Path $SolutionRoot $SolutionName
     $zipPath = Join-Path $ArtifactPath "$SolutionName.zip"
     $settingsPath = Join-Path $SolutionRoot "$SolutionName.settings.json"
-    $solutionXml = Join-Path $solutionFolder 'Other' 'Solution.xml'
+    $solutionXml = Join-Path -Path $solutionFolder -ChildPath 'Other' -AdditionalChildPath 'Solution.xml'
     $versionBefore = Get-SolutionVersion -SolutionXmlPath $solutionXml
 
     if ($WhatIfPreference) {

@@ -3,14 +3,17 @@
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     $script:Sub = '00000000-0000-0000-0000-000000000000'
-    . (Join-Path $PSScriptRoot '..' '02-fabric-capacity.ps1')
+    . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '02-fabric-capacity.ps1')
     Set-StrictMode -Off
 
     function Invoke-F2ForTest {
-        param([switch]$WhatIf)
+        # -AsWhatIf, not -WhatIf: a parameter literally named WhatIf on a function that
+        # never calls ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci fails
+        # on any warning. It is still forwarded to Invoke-Main as -WhatIf.
+        param([switch]$AsWhatIf)
         Invoke-Main -Mode 'F2' -SubscriptionId $script:Sub -ResourceGroup 'mls-rg-platform' `
             -CapacityName 'mlsfabricdemo' -Location 'eastus2' -AdminUpn @('admin@contoso.example') `
-            -DeployerAppName 'mls-github-deployer' -WhatIf:$WhatIf
+            -DeployerAppName 'mls-github-deployer' -WhatIf:$AsWhatIf
     }
 }
 
@@ -106,7 +109,7 @@ Describe '02-fabric-capacity' {
 
     Context '-WhatIf makes no mutating calls' {
         It 'F2 mode with capacity absent performs the GET only' {
-            Invoke-F2ForTest -WhatIf | Out-Null
+            Invoke-F2ForTest -AsWhatIf | Out-Null
             Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
                 ($Arguments -join ' ') -match 'rest --method (put|post|patch|delete)'
             }
@@ -120,7 +123,7 @@ Describe '02-fabric-capacity' {
                 name       = 'mlsfabricdemo'
                 properties = [pscustomobject]@{ state = 'Active' }
             }
-            Invoke-F2ForTest -WhatIf | Out-Null
+            Invoke-F2ForTest -AsWhatIf | Out-Null
             Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
                 ($Arguments -join ' ') -match 'rest --method (put|post|patch|delete)'
             }
