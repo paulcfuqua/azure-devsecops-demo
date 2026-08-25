@@ -157,22 +157,29 @@ jobs:
 
       - name: Load the 10 Delta tables
         if: ${{ !inputs.dry_run }}
+        shell: pwsh
         run: |
-          set -euo pipefail
-          # data/seed/ loaders are the L5 lead's deliverable (Track A hands over the
-          # generated CSV/JSON; the loaders write them into the lakehouse). Until
-          # they exist this step is a NOTICE, not a failure: the workspace and
-          # lakehouse are provisioned, the tables are simply not seeded yet, and
-          # verification/layer-05-audit.ps1 is the thing that will say so.
-          if [ -d data/seed ] && compgen -G 'data/seed/*' >/dev/null; then
-            for loader in data/seed/*.ps1; do
-              [ -f "${loader}" ] || continue
-              echo "Running ${loader}"
-              pwsh -NoProfile -NonInteractive -File "${loader}"
-            done
-          else
-            echo "::notice title=Lakehouse seed loaders not authored yet::data/seed/ is empty; the lakehouse was provisioned but no Delta tables were loaded."
-          fi
+          $ErrorActionPreference = 'Stop'
+
+          # data/seed/seed.ps1 needs TWO tokens with DIFFERENT audiences: the
+          # Fabric control plane (item + Load Table APIs) and OneLake's data
+          # plane, which is storage-scoped. Passing one where the other is
+          # expected returns an opaque 401, so both are minted explicitly here.
+          $fabricToken = az account get-access-token `
+            --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+          $oneLakeToken = az account get-access-token `
+            --resource https://storage.azure.com --query accessToken -o tsv
+
+          if (-not $fabricToken -or -not $oneLakeToken) {
+            Write-Host '::error title=Token acquisition failed::Could not mint the Fabric and/or OneLake tokens; the seed cannot run.'
+            exit 1
+          }
+
+          ./data/seed/seed.ps1 `
+            -Target lakehouse `
+            -Token $fabricToken `
+            -OneLakeToken $oneLakeToken `
+            -Confirm:$false
 
       - name: Pause the Fabric capacity
         if: ${{ always() }}

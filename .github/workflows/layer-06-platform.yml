@@ -173,6 +173,47 @@ jobs:
             --output none
           echo "Cost Management daily export ${export_name} configured."
 
+      - name: Apply the SQL schema and seed the operational tables
+        if: ${{ !inputs.dry_run }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # SqlServer 22+ is required for Invoke-Sqlcmd -AccessToken, which is how
+          # the loader authenticates: Entra-only auth is enforced on the server, so
+          # no SQL password exists anywhere to fall back on (CLAUDE.md hard rule 5).
+          Install-Module SqlServer -Force -Scope CurrentUser -MinimumVersion 22.0.0 -AllowClobber
+
+          $outputs = Get-Content l6-manifest.json -Raw | ConvertFrom-Json
+          $sqlFqdn = $outputs.sqlServerFqdn.value
+          $sqlDb = $outputs.sqlDatabaseName.value
+
+          if (-not $sqlFqdn -or -not $sqlDb) {
+            Write-Host '::error title=SQL outputs missing::The L6 deployment manifest did not carry sqlServerFqdn / sqlDatabaseName, so the schema cannot be applied.'
+            exit 1
+          }
+
+          $sqlToken = az account get-access-token `
+            --resource https://database.windows.net --query accessToken -o tsv
+          if (-not $sqlToken) {
+            Write-Host '::error title=Token acquisition failed::Could not mint an Azure SQL access token.'
+            exit 1
+          }
+
+          # Generators must run first: the loader reads data/generated/*.csv.
+          Push-Location data
+          python -m pip install --upgrade pip
+          python -m pip install -r generators/requirements.txt
+          python -m generators build
+          Pop-Location
+
+          ./data/seed/seed.ps1 `
+            -Target sql `
+            -SqlServerInstance $sqlFqdn `
+            -SqlDatabase $sqlDb `
+            -SqlAccessToken $sqlToken `
+            -Confirm:$false
+
       - name: Upload L6 artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

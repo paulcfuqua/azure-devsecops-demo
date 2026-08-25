@@ -5,8 +5,9 @@ name: lint-ci
 # without a tenant, in one workflow.
 #
 #   actionlint       every workflow + both composite actions
-#   PSScriptAnalyzer every PowerShell file under scripts/, infra/ and verification/
-#   Pester           the mocked bootstrap / Entra / Purview / Fabric suites
+#   PSScriptAnalyzer every PowerShell file under scripts/, infra/, verification/ and data/
+#   Pester           the mocked bootstrap / Entra / Purview / Fabric / seed /
+#                    fuse-script / Verifier suites
 #   pytest           data/generators (determinism, row counts, distributions)
 #   vitest           the npm workspace (spec-renderer + the three apps)
 #
@@ -87,7 +88,10 @@ jobs:
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
           Install-Module Pester -Force -Scope CurrentUser -MinimumVersion 5.5.0
-          Get-Module -ListAvailable PSScriptAnalyzer, Pester |
+          # SqlServer 22+ is required for Invoke-Sqlcmd -AccessToken, which the
+          # data/seed SQL loader uses (managed identity, no stored password).
+          Install-Module SqlServer -Force -Scope CurrentUser -MinimumVersion 22.0.0 -AllowClobber
+          Get-Module -ListAvailable PSScriptAnalyzer, Pester, SqlServer |
             Select-Object Name, Version | Format-Table
 
       - name: Analyse scripts/, infra/ and verification/
@@ -101,7 +105,9 @@ jobs:
             exit 1
           }
 
-          $paths = @('scripts', 'infra', 'verification', '.github') |
+          # 'data' carries the seed loaders (data/seed/*.ps1); omitting it left
+          # 10 PowerShell files and 171 tests outside CI entirely.
+          $paths = @('scripts', 'infra', 'verification', 'data', '.github') |
             Where-Object { Test-Path $_ }
           $files = Get-ChildItem -Path $paths -Recurse -Include *.ps1, *.psm1 -File
           Write-Host "Analysing $($files.Count) PowerShell file(s)."
@@ -132,7 +138,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module Pester -MinimumVersion 5.5.0
           $config = New-PesterConfiguration
-          $config.Run.Path = @('scripts', 'infra') | Where-Object { Test-Path $_ }
+          $config.Run.Path = @('scripts', 'infra', 'data', 'verification') |
+            Where-Object { Test-Path $_ }
           $config.Run.Exit = $true
           $config.Output.Verbosity = 'Detailed'
           $config.TestResult.Enabled = $true

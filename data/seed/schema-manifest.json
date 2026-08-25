@@ -1,0 +1,250 @@
+{
+  "$comment": [
+    "AUTHORITATIVE SEED CONTRACT for the Meridian Launch Systems demo data plane.",
+    "",
+    "One file, three consumers:",
+    "  1. data/seed/sql/*.sql        - the T-SQL DDL is written to match this exactly.",
+    "  2. data/seed/seed.ps1         - load order, row-count assertions, column order.",
+    "  3. data/seed/tests/*.Tests.ps1 - parity tests compare this to BOTH the DDL and the",
+    "                                   generator source (data/generators/build.py, pools.py).",
+    "",
+    "Column names and their ORDER are the same order data/generators/writers.py emits",
+    "(dict insertion order == CSV header order == JSON key order). Do not reorder.",
+    "",
+    "planes:",
+    "  operational       - Azure SQL is the system of record; launch-ops (L7) does CRUD here.",
+    "  reference         - seeded once, read-mostly, FK targets for the operational tables.",
+    "  analytical-mirror - the LAKEHOUSE is the system of record (master plan L5/L6: the",
+    "                      Cost Management Function writes cost_daily into mls_operations);",
+    "                      the Azure SQL copy exists so L7 app views can join without",
+    "                      crossing planes, and is refreshed by re-seeding, never by app writes.",
+    "",
+    "sql_type is the Azure SQL column type. Rule: FLOAT for every non-currency real number",
+    "(IEEE double - round-trips a Python float exactly and cannot overflow), DECIMAL(18,2)",
+    "for currency, INT for counters/years, DATE for ISO YYYY-MM-DD, BIT for booleans,",
+    "NVARCHAR sized at roughly 2-4x the widest value the seed actually produces.",
+    "",
+    "spark_type is NOT used by the default lakehouse loader (the Load Table REST API cannot",
+    "accept a schema - see data/seed/lakehouse/README.md). It is carried so the documented",
+    "notebook upgrade path is mechanical rather than a re-derivation."
+  ],
+  "generator_seed": 20260822,
+  "schema_version": 1,
+  "load_order": [
+    "vehicles",
+    "pads",
+    "suppliers",
+    "parts",
+    "launches",
+    "scrubs",
+    "telemetry_summary",
+    "work_orders",
+    "cost_daily",
+    "findings_history"
+  ],
+  "tables": {
+    "launches": {
+      "plane": "operational",
+      "ddl_file": "050_launches.sql",
+      "expected_rows": 1200,
+      "primary_key": ["launch_id"],
+      "foreign_keys": [
+        { "columns": ["vehicle_id"], "references": "vehicles", "referenced_columns": ["vehicle_id"] },
+        { "columns": ["pad_id"], "references": "pads", "referenced_columns": ["pad_id"] }
+      ],
+      "columns": [
+        { "name": "launch_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "mission_name", "sql_type": "NVARCHAR(32)", "spark_type": "string", "nullable": false },
+        { "name": "vehicle_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "pad_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "customer", "sql_type": "NVARCHAR(128)", "spark_type": "string", "nullable": false },
+        { "name": "orbit", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "planned_date", "sql_type": "DATE", "spark_type": "date", "nullable": false },
+        { "name": "actual_date", "sql_type": "DATE", "spark_type": "date", "nullable": false },
+        { "name": "outcome", "sql_type": "NVARCHAR(32)", "spark_type": "string", "nullable": false },
+        { "name": "payload_mass_kg", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "weather_delay_min", "sql_type": "INT", "spark_type": "int", "nullable": true },
+        { "name": "scrub_count", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "booster_recovery", "sql_type": "NVARCHAR(32)", "spark_type": "string", "nullable": false },
+        { "name": "insurance_value_musd", "sql_type": "DECIMAL(18,2)", "spark_type": "decimal(18,2)", "nullable": true }
+      ]
+    },
+    "scrubs": {
+      "plane": "operational",
+      "ddl_file": "060_scrubs.sql",
+      "expected_rows": 475,
+      "primary_key": ["scrub_id"],
+      "foreign_keys": [
+        { "columns": ["launch_id"], "references": "launches", "referenced_columns": ["launch_id"] }
+      ],
+      "columns": [
+        { "name": "scrub_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "launch_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "scrub_date", "sql_type": "DATE", "spark_type": "date", "nullable": false },
+        { "name": "category", "sql_type": "NVARCHAR(32)", "spark_type": "string", "nullable": false },
+        { "name": "reason", "sql_type": "NVARCHAR(160)", "spark_type": "string", "nullable": false },
+        { "name": "called_at_t_minus_s", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "recycle_hours", "sql_type": "FLOAT", "spark_type": "double", "nullable": true }
+      ]
+    },
+    "vehicles": {
+      "plane": "reference",
+      "ddl_file": "010_vehicles.sql",
+      "expected_rows": 12,
+      "primary_key": ["vehicle_id"],
+      "foreign_keys": [],
+      "columns": [
+        { "name": "vehicle_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "name", "sql_type": "NVARCHAR(64)", "spark_type": "string", "nullable": false },
+        { "name": "vehicle_class", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "fleet_group", "sql_type": "NVARCHAR(64)", "spark_type": "string", "nullable": false },
+        { "name": "stages", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "reusable", "sql_type": "BIT", "spark_type": "boolean", "nullable": false },
+        { "name": "leo_capacity_kg", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "gto_capacity_kg", "sql_type": "INT", "spark_type": "int", "nullable": true },
+        { "name": "height_m", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "first_flight_year", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "last_flight_year", "sql_type": "INT", "spark_type": "int", "nullable": true },
+        { "name": "status", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false }
+      ]
+    },
+    "pads": {
+      "plane": "reference",
+      "ddl_file": "020_pads.sql",
+      "expected_rows": 11,
+      "primary_key": ["pad_id"],
+      "foreign_keys": [],
+      "columns": [
+        { "name": "pad_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "name", "sql_type": "NVARCHAR(32)", "spark_type": "string", "nullable": false },
+        { "name": "site", "sql_type": "NVARCHAR(128)", "spark_type": "string", "nullable": false },
+        { "name": "country", "sql_type": "NVARCHAR(64)", "spark_type": "string", "nullable": false },
+        { "name": "latitude", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "longitude", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "first_used_year", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "status", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false }
+      ]
+    },
+    "telemetry_summary": {
+      "plane": "analytical-mirror",
+      "ddl_file": "070_telemetry_summary.sql",
+      "expected_rows": 1200,
+      "primary_key": ["telemetry_id"],
+      "unique": [["launch_id"]],
+      "foreign_keys": [
+        { "columns": ["launch_id"], "references": "launches", "referenced_columns": ["launch_id"] }
+      ],
+      "columns": [
+        { "name": "telemetry_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "launch_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "max_q_kpa", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "max_accel_g", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "meco_time_s", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "peak_thrust_kn", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "max_altitude_km", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "anomaly_count", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "telemetry_coverage_pct", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "data_dropout_s", "sql_type": "FLOAT", "spark_type": "double", "nullable": true }
+      ]
+    },
+    "parts": {
+      "plane": "reference",
+      "ddl_file": "040_parts.sql",
+      "expected_rows": 300,
+      "primary_key": ["part_id"],
+      "foreign_keys": [
+        { "columns": ["supplier_id"], "references": "suppliers", "referenced_columns": ["supplier_id"] }
+      ],
+      "columns": [
+        { "name": "part_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "part_number", "sql_type": "NVARCHAR(32)", "spark_type": "string", "nullable": false },
+        { "name": "name", "sql_type": "NVARCHAR(96)", "spark_type": "string", "nullable": false },
+        { "name": "category", "sql_type": "NVARCHAR(32)", "spark_type": "string", "nullable": false },
+        { "name": "supplier_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "unit_cost_usd", "sql_type": "DECIMAL(18,2)", "spark_type": "decimal(18,2)", "nullable": false },
+        { "name": "lead_time_days", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "qty_on_hand", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "min_stock", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "criticality", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "material", "sql_type": "NVARCHAR(64)", "spark_type": "string", "nullable": true }
+      ]
+    },
+    "suppliers": {
+      "plane": "reference",
+      "ddl_file": "030_suppliers.sql",
+      "expected_rows": 24,
+      "primary_key": ["supplier_id"],
+      "foreign_keys": [],
+      "columns": [
+        { "name": "supplier_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "name", "sql_type": "NVARCHAR(96)", "spark_type": "string", "nullable": false },
+        { "name": "country", "sql_type": "NVARCHAR(64)", "spark_type": "string", "nullable": false },
+        { "name": "certification", "sql_type": "NVARCHAR(48)", "spark_type": "string", "nullable": false },
+        { "name": "avg_lead_time_days", "sql_type": "INT", "spark_type": "int", "nullable": false },
+        { "name": "on_time_pct", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "quality_rating", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "active", "sql_type": "BIT", "spark_type": "boolean", "nullable": false }
+      ]
+    },
+    "work_orders": {
+      "plane": "operational",
+      "ddl_file": "080_work_orders.sql",
+      "expected_rows": 800,
+      "primary_key": ["work_order_id"],
+      "foreign_keys": [
+        { "columns": ["part_id"], "references": "parts", "referenced_columns": ["part_id"] },
+        { "columns": ["vehicle_id"], "references": "vehicles", "referenced_columns": ["vehicle_id"] },
+        { "columns": ["launch_id"], "references": "launches", "referenced_columns": ["launch_id"] }
+      ],
+      "columns": [
+        { "name": "work_order_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "part_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "vehicle_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "launch_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": true },
+        { "name": "opened_date", "sql_type": "DATE", "spark_type": "date", "nullable": false },
+        { "name": "closed_date", "sql_type": "DATE", "spark_type": "date", "nullable": true },
+        { "name": "status", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "disposition", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": true },
+        { "name": "priority", "sql_type": "NVARCHAR(4)", "spark_type": "string", "nullable": false },
+        { "name": "labor_hours", "sql_type": "FLOAT", "spark_type": "double", "nullable": false },
+        { "name": "technician", "sql_type": "NVARCHAR(96)", "spark_type": "string", "nullable": false }
+      ]
+    },
+    "cost_daily": {
+      "plane": "analytical-mirror",
+      "ddl_file": "090_cost_daily.sql",
+      "expected_rows": 4515,
+      "primary_key": ["cost_id"],
+      "unique": [["date", "cost_center"]],
+      "foreign_keys": [],
+      "columns": [
+        { "name": "cost_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "date", "sql_type": "DATE", "spark_type": "date", "nullable": false },
+        { "name": "cost_center", "sql_type": "NVARCHAR(64)", "spark_type": "string", "nullable": false },
+        { "name": "amount_usd", "sql_type": "DECIMAL(18,2)", "spark_type": "decimal(18,2)", "nullable": false },
+        { "name": "budget_usd", "sql_type": "DECIMAL(18,2)", "spark_type": "decimal(18,2)", "nullable": false },
+        { "name": "currency", "sql_type": "NVARCHAR(8)", "spark_type": "string", "nullable": false }
+      ]
+    },
+    "findings_history": {
+      "plane": "analytical-mirror",
+      "ddl_file": "100_findings_history.sql",
+      "expected_rows": 420,
+      "primary_key": ["finding_id"],
+      "foreign_keys": [],
+      "columns": [
+        { "name": "finding_id", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "source", "sql_type": "NVARCHAR(32)", "spark_type": "string", "nullable": false },
+        { "name": "severity", "sql_type": "NVARCHAR(16)", "spark_type": "string", "nullable": false },
+        { "name": "title", "sql_type": "NVARCHAR(160)", "spark_type": "string", "nullable": false },
+        { "name": "component", "sql_type": "NVARCHAR(128)", "spark_type": "string", "nullable": false },
+        { "name": "cve_id", "sql_type": "NVARCHAR(24)", "spark_type": "string", "nullable": true },
+        { "name": "opened_date", "sql_type": "DATE", "spark_type": "date", "nullable": false },
+        { "name": "closed_date", "sql_type": "DATE", "spark_type": "date", "nullable": true },
+        { "name": "status", "sql_type": "NVARCHAR(24)", "spark_type": "string", "nullable": false },
+        { "name": "assignee", "sql_type": "NVARCHAR(64)", "spark_type": "string", "nullable": false },
+        { "name": "sla_days", "sql_type": "INT", "spark_type": "int", "nullable": false }
+      ]
+    }
+  }
+}
