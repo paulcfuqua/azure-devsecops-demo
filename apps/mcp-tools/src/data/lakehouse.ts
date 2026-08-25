@@ -13,6 +13,15 @@ import { createRequire } from "node:module";
 import type { Database, SqlJsStatic } from "sql.js";
 import { parseCsvTable } from "./csv.js";
 import { generatedDataDir } from "../config.js";
+import { assertReadOnlySingleStatement, MAX_RESULT_ROWS } from "../tools/sql-dialect.js";
+
+/**
+ * Row cap on tool results — unbounded SELECTs are an L8 latency failure mode.
+ * Defined once in src/tools/sql-dialect.ts so the local and Fabric adapters
+ * cannot drift apart on it, and re-exported here because this is where callers
+ * have always imported it from.
+ */
+export { MAX_RESULT_ROWS };
 
 const require = createRequire(import.meta.url);
 
@@ -37,9 +46,6 @@ export interface LakehouseQueryResult {
   /** True when the result was cut at MAX_RESULT_ROWS (L8 playbook: cap tool result sizes). */
   truncated: boolean;
 }
-
-/** Row cap on tool results — unbounded SELECTs are an L8 latency failure mode. */
-export const MAX_RESULT_ROWS = 500;
 
 type ColumnType = "INTEGER" | "REAL" | "TEXT";
 
@@ -136,22 +142,21 @@ async function buildDb(): Promise<Database> {
   return db;
 }
 
-const READ_ONLY_RE = /^\s*(select|with)\b/i;
-
 /**
  * Execute a single read-only SQL statement and return capped columns+rows.
- * Non-SELECT statements are refused — the copilot's lakehouse access is
- * read-only by contract.
+ *
+ * The gate is `assertReadOnlySingleStatement` in SQLite mode — the SAME function
+ * the Fabric adapter runs in T-SQL mode, so "single statement, SELECT/WITH only,
+ * DDL/DML refused" means exactly one thing in this service rather than two
+ * things that happen to agree today. It is strictly stronger than the regex it
+ * replaced: sql.js quietly executes only the first statement of a multi-statement
+ * string, which hid the difference locally, while a TDS batch would have run
+ * them all.
  */
 export async function queryLakehouse(sql: string): Promise<LakehouseQueryResult> {
-  if (typeof sql !== "string" || sql.trim().length === 0) {
-    throw new Error("query_lakehouse_sql requires a non-empty 'sql' string");
-  }
-  if (!READ_ONLY_RE.test(sql)) {
-    throw new Error("Only read-only SELECT/WITH statements are allowed");
-  }
+  const statement = assertReadOnlySingleStatement(sql, "sqlite");
   const db = await getLakehouseDb();
-  const stmt = db.prepare(sql);
+  const stmt = db.prepare(statement);
   try {
     const columns = stmt.getColumnNames();
     const rows: unknown[][] = [];

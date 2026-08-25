@@ -10,6 +10,11 @@
  * the hand-written JSON Schemas in src/tools/index.ts verbatim, so what the
  * agent's orchestrator sees is exactly what is written there, with no
  * zod-to-JSON-Schema translation in between.
+ *
+ * This is also the ONE funnel every tool call passes through, which makes it the
+ * right and only place to open the OpenTelemetry span. One span per tool call,
+ * carrying tool name, backend mode, SQL dialect, row count and duration —
+ * and never the SQL text, the KQL text or any argument value.
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -17,7 +22,9 @@ import {
   ListToolsRequestSchema,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { isAllowedTool, toolDefinitions, ToolRegistry } from "../tools/index.js";
+import type { BackendMode } from "../config.js";
+import { withToolSpan } from "../telemetry.js";
+import { countRows, isAllowedTool, ToolRegistry } from "../tools/index.js";
 
 export const SERVER_NAME = "mls-mcp-tools";
 export const SERVER_VERSION = "0.1.0";
@@ -43,6 +50,11 @@ function errorResult(message: string): CallToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
+export interface McpServerOptions {
+  /** Recorded on every tool span so traces can be filtered by adapter set. */
+  backendMode?: BackendMode;
+}
+
 /**
  * Build an MCP server bound to a tool registry.
  *
@@ -50,33 +62,57 @@ function errorResult(message: string): CallToolResult {
  * server + transport per request), so this is cheap by design — the expensive
  * state (the loaded lakehouse) lives in the shared backends, not here.
  */
-export function createMcpServer(registry: ToolRegistry): Server {
+export function createMcpServer(
+  registry: ToolRegistry,
+  options: McpServerOptions = {},
+): Server {
+  const backendMode: BackendMode = options.backendMode ?? "local";
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: toolDefinitions }));
+  // The definitions come from the REGISTRY, not from the module constant: the
+  // SQL dialect they advertise depends on the backend the registry is bound to.
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: registry.definitions }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     const { name, arguments: args } = request.params;
 
-    // Allowlist gate (audit V8.2): refused BEFORE any adapter runs.
+    // Allowlist gate (audit V8.2): refused BEFORE any adapter runs, and before
+    // a span is opened — an unknown name is not a tool call to measure.
     if (!isAllowedTool(name)) {
       return errorResult(
         `Tool "${name}" is not on the allowlist. This server exposes exactly five tools: ` +
-          `${toolDefinitions.map((t) => t.name).join(", ")}.`,
+          `${registry.definitions.map((t) => t.name).join(", ")}.`,
       );
     }
 
-    try {
-      return dataResult(await registry.execute(name, args ?? {}));
-    } catch (err) {
-      // Adapter failures come back as an is_error tool result, not a protocol
-      // error: the agent should see the message and correct itself (a bad SQL
-      // statement is the common case) rather than have the turn blow up.
-      return errorResult(`${name} failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    return withToolSpan(
+      { toolName: name, backendMode, sqlDialect: registry.dialect },
+      async () => {
+        try {
+          const payload = await registry.execute(name, args ?? {});
+          const rowCount = countRows(name, payload);
+          const truncated = (payload as { truncated?: boolean } | null)?.truncated;
+          return {
+            value: dataResult(payload),
+            ...(rowCount === undefined ? {} : { rowCount }),
+            ...(typeof truncated === "boolean" ? { truncated } : {}),
+          };
+        } catch (err) {
+          // Adapter failures come back as an is_error tool result, not a protocol
+          // error: the agent should see the message and correct itself (a bad SQL
+          // statement is the common case) rather than have the turn blow up.
+          //
+          // The span records the error KIND only. The message can carry upstream
+          // text, and upstream text is not something to ship to App Insights.
+          const message = err instanceof Error ? err.message : String(err);
+          const kind = (err as { kind?: string })?.kind ?? "adapter";
+          return { value: errorResult(`${name} failed: ${message}`), errorKind: kind };
+        }
+      },
+    );
   });
 
   return server;

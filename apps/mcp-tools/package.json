@@ -15,9 +15,14 @@
     "eval": "tsx evals/run.ts",
     "eval:agent": "tsx evals/run-agent.ts"
   },
+  "//dependencies": "Cloud-path packages (@azure/identity, @azure/monitor-opentelemetry, mssql) are declared here but imported LAZILY: nothing loads them on the local backend, so `MLS_TOOL_BACKENDS=local` pays no start-up cost for them and a laptop with no tenant still boots. @opentelemetry/api is the one static import — it is dependency-free and no-ops until a provider is registered.",
   "dependencies": {
+    "@azure/identity": "^4.13.2",
+    "@azure/monitor-opentelemetry": "^1.19.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@opentelemetry/api": "^1.9.1",
     "express": "^5.1.0",
+    "mssql": "^12.7.0",
     "sql.js": "^1.13.0"
   },
   "devDependencies": {

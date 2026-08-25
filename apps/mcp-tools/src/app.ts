@@ -5,7 +5,8 @@
  *                 the Copilot Studio agent attaches to. SSE is NOT offered:
  *                 Copilot Studio dropped SSE support after August 2025 and
  *                 Streamable HTTP is the required transport.
- *   GET  /healthz liveness for Container Apps probes: mode + tool count.
+ *   GET  /healthz liveness for Container Apps probes, and the one place the
+ *                 backend selection is observable from outside the process.
  *
  * GET/DELETE on /mcp are answered 405: this server runs STATELESS (no session
  * id, no server-initiated stream), so there is no long-lived stream to resume
@@ -16,13 +17,19 @@ import express, { type Express } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { loadConfig, type McpToolsConfig } from "./config.js";
 import { createMcpServer } from "./mcp/server.js";
+import { telemetryStatus } from "./telemetry.js";
 import { createLocalBackends, type Backends } from "./tools/backends.js";
-import { toolDefinitions, ToolRegistry } from "./tools/index.js";
+import { ToolRegistry } from "./tools/index.js";
 
 export const MCP_PATH = "/mcp";
 
 export interface AppDeps {
   config?: McpToolsConfig;
+  /**
+   * Pre-built backend set. Cloud backends are built asynchronously (a managed
+   * identity has to be constructed first), so the entry point resolves them and
+   * hands them in; `createApp` stays synchronous and test-friendly.
+   */
   backends?: Backends;
 }
 
@@ -45,9 +52,31 @@ export function createApp(deps: AppDeps = {}): Express {
     res.json({
       ok: true,
       mode: config.backendMode,
-      tools: toolDefinitions.length,
+      tools: registry.definitions.length,
       transport: "streamable-http",
       endpoint: MCP_PATH,
+      // Which SQL dialect the agent is currently being told to write. This is
+      // the single most useful field on this route: a `cloud` server still
+      // advertising `sqlite` would mean the descriptions and the engine had
+      // come apart, and every date question would fail.
+      sqlDialect: registry.dialect,
+      // Per-tool adapter selection, by implementation class. Makes a partial
+      // or mis-wired switchover visible at a glance instead of one tool call
+      // at a time.
+      adapters: {
+        query_lakehouse_sql: backends.lakehouseSql.constructor.name,
+        query_log_analytics: backends.logAnalytics.constructor.name,
+        get_github_security: backends.githubSecurity.constructor.name,
+        get_defender_posture: backends.defenderPosture.constructor.name,
+        get_cost_series: backends.costSeries.constructor.name,
+      },
+      // Whether spans are actually leaving the process. `reason` is deliberately
+      // NOT exposed here — /healthz is unauthenticated at the ingress and the
+      // reason string can name an Application Insights resource.
+      telemetry: {
+        enabled: telemetryStatus().enabled,
+        exporter: telemetryStatus().exporter,
+      },
     });
   });
 
@@ -55,7 +84,7 @@ export function createApp(deps: AppDeps = {}): Express {
     // Stateless: a fresh server + transport per request, torn down when the
     // response closes. The expensive state (the loaded lakehouse) lives in the
     // shared backends, so this costs almost nothing.
-    const server = createMcpServer(registry);
+    const server = createMcpServer(registry, { backendMode: config.backendMode });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();

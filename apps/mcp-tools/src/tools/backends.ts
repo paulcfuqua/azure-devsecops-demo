@@ -1,23 +1,33 @@
 /**
- * Backend adapters — one interface per tool, with:
- *   - LOCAL adapters (Phase P): real SQL over sql.js for the lakehouse,
- *     cost_daily-backed cost series, and committed fixtures (shaped like the
- *     real APIs) for Log Analytics / GitHub Security / Defender.
- *   - Cloud adapters: typed stubs, implemented at L8 when the tenant exists
- *     (Fabric SQL analytics endpoint, Azure Monitor Log Analytics, GitHub
- *     Security REST API, Microsoft Defender for Cloud, Azure Cost Management).
+ * Backend adapters — one interface per tool, with two complete implementations:
  *
- * Fixture/result shapes are documented per interface so the L8 wiring swaps
- * adapters without touching the MCP tool surface — the agent sees the same
- * tool names, schemas and result shapes either way.
+ *   - LOCAL (Phase P): real SQL over sql.js for the lakehouse, cost_daily-backed
+ *     cost series, and committed fixtures (shaped like the real APIs) for Log
+ *     Analytics / GitHub Security / Defender.
+ *   - CLOUD (L5-L8): the Fabric lakehouse SQL analytics endpoint, Azure Monitor
+ *     Log Analytics, the GitHub Security REST API, Defender for Cloud via ARM,
+ *     and Azure Cost Management. Implementations live in ./cloud/ and are
+ *     re-exported here so the import path callers use never changed.
+ *
+ * ── The contract that binds them ─────────────────────────────────────────────
+ * **A cloud adapter returns byte-identical response SHAPES to its local
+ * counterpart.** The agent's orchestrator reasons over those shapes, the tool
+ * descriptions document them field by field, and the eval's fact walker walks
+ * them — so a shape change is a breaking change to the agent, not a refactor.
+ * `tests/shape-parity.test.ts` asserts this from one shared shape function, so
+ * drift in either direction fails a test rather than a demo.
+ *
+ * The ONE thing that legitimately differs between the two sets is the SQL
+ * dialect `query_lakehouse_sql` speaks (SQLite vs T-SQL), and it differs
+ * visibly: each backend declares its `dialect` and the tool description is
+ * generated from it. See src/tools/sql-dialect.ts for why that is a property of
+ * the backend rather than a translation layer.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fixturesDir } from "../config.js";
-import {
-  queryLakehouse,
-  type LakehouseQueryResult,
-} from "../data/lakehouse.js";
+import { queryLakehouse, type LakehouseQueryResult } from "../data/lakehouse.js";
+import type { SqlDialect } from "./sql-dialect.js";
 
 function readFixture(name: string): unknown {
   const p = path.join(fixturesDir, name);
@@ -29,29 +39,21 @@ function readFixture(name: string): unknown {
 /* ------------------------------------------------------------------ */
 
 export interface LakehouseSqlBackend {
+  /**
+   * Which SQL dialect this backend accepts. Read by the tool registry to build
+   * the agent-facing description, so the idioms advertised always match the
+   * engine that will run the query.
+   */
+  readonly dialect: SqlDialect;
   /** Execute one read-only SQL statement; returns columns + capped rows. */
   query(sql: string): Promise<LakehouseQueryResult>;
 }
 
 /** LOCAL: sql.js (SQLite wasm) over data/generated/*.csv — real SQL execution. */
 export class LocalLakehouseSqlBackend implements LakehouseSqlBackend {
+  readonly dialect: SqlDialect = "sqlite";
   query(sql: string): Promise<LakehouseQueryResult> {
     return queryLakehouse(sql);
-  }
-}
-
-/** L8: Fabric lakehouse SQL analytics endpoint (TDS). Implemented at L8. */
-export class FabricLakehouseSqlBackend implements LakehouseSqlBackend {
-  constructor(
-    /** e.g. mls-fab-demo workspace SQL endpoint FQDN */
-    readonly sqlEndpoint: string,
-    /** lakehouse database name */
-    readonly database: string,
-  ) {}
-  query(_sql: string): Promise<LakehouseQueryResult> {
-    return Promise.reject(
-      new Error("FabricLakehouseSqlBackend is implemented at L8 (needs the tenant)"),
-    );
   }
 }
 
@@ -80,16 +82,6 @@ export interface LogAnalyticsBackend {
 export class FixtureLogAnalyticsBackend implements LogAnalyticsBackend {
   async query(_kql: string, _timespan?: string): Promise<LogAnalyticsResult> {
     return readFixture("log-analytics.json") as LogAnalyticsResult;
-  }
-}
-
-/** L8: Azure Monitor Log Analytics workspace (mls LAW). Implemented at L8. */
-export class AzureLogAnalyticsBackend implements LogAnalyticsBackend {
-  constructor(readonly workspaceId: string) {}
-  query(_kql: string, _timespan?: string): Promise<LogAnalyticsResult> {
-    return Promise.reject(
-      new Error("AzureLogAnalyticsBackend is implemented at L8 (needs the tenant)"),
-    );
   }
 }
 
@@ -124,16 +116,6 @@ export class FixtureGithubSecurityBackend implements GithubSecurityBackend {
   }
 }
 
-/** L9 wiring: live GitHub Security REST API for paulcfuqua/azure-devsecops. Implemented at L8/L9. */
-export class LiveGithubSecurityBackend implements GithubSecurityBackend {
-  constructor(readonly repo: string) {}
-  getAlerts(): Promise<GithubSecurityResult> {
-    return Promise.reject(
-      new Error("LiveGithubSecurityBackend is implemented at L8/L9 (needs repo token wiring)"),
-    );
-  }
-}
-
 /* ------------------------------------------------------------------ */
 /* get_defender_posture                                                */
 /* ------------------------------------------------------------------ */
@@ -156,16 +138,6 @@ export interface DefenderPostureBackend {
 export class FixtureDefenderPostureBackend implements DefenderPostureBackend {
   async getPosture(): Promise<DefenderPostureResult> {
     return readFixture("defender-posture.json") as DefenderPostureResult;
-  }
-}
-
-/** L8/L9: Microsoft Defender for Cloud ARM API. Implemented at L8. */
-export class AzureDefenderPostureBackend implements DefenderPostureBackend {
-  constructor(readonly subscriptionId: string) {}
-  getPosture(): Promise<DefenderPostureResult> {
-    return Promise.reject(
-      new Error("AzureDefenderPostureBackend is implemented at L8 (needs the tenant)"),
-    );
   }
 }
 
@@ -231,15 +203,23 @@ export class LocalCostSeriesBackend implements CostSeriesBackend {
   }
 }
 
-/** L8: Azure Cost Management query API over the demo subscription. Implemented at L8. */
-export class AzureCostSeriesBackend implements CostSeriesBackend {
-  constructor(readonly scope: string) {}
-  getSeries(_params: CostSeriesParams): Promise<CostSeriesResult> {
-    return Promise.reject(
-      new Error("AzureCostSeriesBackend is implemented at L8 (needs the tenant)"),
-    );
-  }
-}
+/* ------------------------------------------------------------------ */
+/* Cloud adapters — implementations live in ./cloud/                   */
+/* ------------------------------------------------------------------ */
+
+export {
+  FabricLakehouseSqlBackend,
+  type TdsExecutor,
+  type TdsQueryResult,
+} from "./cloud/fabric-sql.js";
+export { AzureLogAnalyticsBackend } from "./cloud/log-analytics.js";
+export { LiveGithubSecurityBackend } from "./cloud/github-security.js";
+export { AzureDefenderPostureBackend } from "./cloud/defender-posture.js";
+export { AzureCostSeriesBackend } from "./cloud/cost-series.js";
+
+/* ------------------------------------------------------------------ */
+/* Backend sets                                                        */
+/* ------------------------------------------------------------------ */
 
 /** The full backend set the MCP tool registry runs against. */
 export interface Backends {

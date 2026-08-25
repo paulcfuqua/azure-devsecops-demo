@@ -9,9 +9,21 @@
  * tool to call and with what arguments. Editing a description changes agent
  * behaviour as surely as editing code — treat it as a behavioural change and
  * re-run `npm run eval`.
+ *
+ * ── Why `query_lakehouse_sql`'s description is BUILT, not written ────────────
+ * Its SQL idioms depend on which engine is actually behind it. On the local
+ * backend that is SQLite; on the cloud backend it is the Fabric SQL analytics
+ * endpoint, which speaks T-SQL and has no `strftime` at all. A single hardcoded
+ * description is therefore wrong in one of the two modes — and it *was*: the
+ * committed text instructed the agent to use `strftime('%w', actual_date)`,
+ * which would have failed every date question the moment the tenant came up.
+ * So the description is generated from the active backend's declared dialect and
+ * `tools/list` always advertises the idioms of the engine the query will hit.
+ * See src/tools/sql-dialect.ts for the full reasoning.
  */
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Backends, CostSeriesParams } from "./backends.js";
+import { DIALECTS, MAX_RESULT_ROWS, type DialectProfile, type SqlDialect } from "./sql-dialect.js";
 
 export const ALLOWED_TOOL_NAMES = [
   "query_lakehouse_sql",
@@ -27,57 +39,68 @@ export function isAllowedTool(name: string): name is AllowedToolName {
   return (ALLOWED_TOOL_NAMES as readonly string[]).includes(name);
 }
 
-/** MCP tool definitions returned by tools/list. */
-export const toolDefinitions: Tool[] = [
-  {
+/**
+ * The ten Track A tables, column by column. Identical in both dialects — the
+ * lakehouse schema is the same data whether it is read from CSVs or from Delta
+ * tables behind the SQL analytics endpoint.
+ */
+const LAKEHOUSE_SCHEMA =
+  "launches(launch_id, mission_name, vehicle_id, pad_id, customer, orbit, planned_date, " +
+  "actual_date, outcome IN ('success','failure','partial_failure'), payload_mass_kg, " +
+  "weather_delay_min, scrub_count, booster_recovery, insurance_value_musd); " +
+  "scrubs(scrub_id, launch_id, scrub_date, category IN ('weather','technical','range','payload'), " +
+  "reason, called_at_t_minus_s, recycle_hours); " +
+  "vehicles(vehicle_id, name, vehicle_class, fleet_group, stages, reusable, leo_capacity_kg, " +
+  "gto_capacity_kg, height_m, first_flight_year, last_flight_year, status); " +
+  "pads(pad_id, name, site, country, latitude, longitude, first_used_year, status); " +
+  "telemetry_summary(telemetry_id, launch_id, max_q_kpa, max_accel_g, meco_time_s, " +
+  "peak_thrust_kn, max_altitude_km, anomaly_count, telemetry_coverage_pct, data_dropout_s); " +
+  "parts(part_id, part_number, name, category, supplier_id, unit_cost_usd, lead_time_days, " +
+  "qty_on_hand, min_stock, criticality, material); " +
+  "suppliers(supplier_id, name, country, certification, avg_lead_time_days, on_time_pct, " +
+  "quality_rating, active); " +
+  "work_orders(work_order_id, part_id, vehicle_id, launch_id, opened_date, closed_date, " +
+  "status IN ('open','in_progress','closed'), disposition, priority, labor_hours, technician); " +
+  "cost_daily(cost_id, date, cost_center, amount_usd, budget_usd, currency); " +
+  "findings_history(finding_id, source, severity IN ('critical','high','medium','low'), title, " +
+  "component, cve_id, opened_date, closed_date, status IN ('open','resolved','risk_accepted'), " +
+  "assignee, sla_days).";
+
+function lakehouseSqlTool(profile: DialectProfile): Tool {
+  return {
     name: "query_lakehouse_sql",
     title: "Query the operations lakehouse (SQL)",
     description:
-      "Run one read-only SQL query (SQLite dialect) against the Meridian Launch Systems " +
+      `Run one read-only SQL query (${profile.displayName}) against the Meridian Launch Systems ` +
       "operations lakehouse and return columns and rows. Use this for any question about " +
       "launch history, scrubs, the vehicle fleet, pads, telemetry, parts, suppliers, work " +
       "orders, daily cloud spend or security-finding history — counts, rates, rankings, " +
       "trends and joins across those tables. Schema: " +
-      "launches(launch_id, mission_name, vehicle_id, pad_id, customer, orbit, planned_date, " +
-      "actual_date, outcome IN ('success','failure','partial_failure'), payload_mass_kg, " +
-      "weather_delay_min, scrub_count, booster_recovery, insurance_value_musd); " +
-      "scrubs(scrub_id, launch_id, scrub_date, category IN ('weather','technical','range','payload'), " +
-      "reason, called_at_t_minus_s, recycle_hours); " +
-      "vehicles(vehicle_id, name, vehicle_class, fleet_group, stages, reusable, leo_capacity_kg, " +
-      "gto_capacity_kg, height_m, first_flight_year, last_flight_year, status); " +
-      "pads(pad_id, name, site, country, latitude, longitude, first_used_year, status); " +
-      "telemetry_summary(telemetry_id, launch_id, max_q_kpa, max_accel_g, meco_time_s, " +
-      "peak_thrust_kn, max_altitude_km, anomaly_count, telemetry_coverage_pct, data_dropout_s); " +
-      "parts(part_id, part_number, name, category, supplier_id, unit_cost_usd, lead_time_days, " +
-      "qty_on_hand, min_stock, criticality, material); " +
-      "suppliers(supplier_id, name, country, certification, avg_lead_time_days, on_time_pct, " +
-      "quality_rating, active); " +
-      "work_orders(work_order_id, part_id, vehicle_id, launch_id, opened_date, closed_date, " +
-      "status IN ('open','in_progress','closed'), disposition, priority, labor_hours, technician); " +
-      "cost_daily(cost_id, date, cost_center, amount_usd, budget_usd, currency); " +
-      "findings_history(finding_id, source, severity IN ('critical','high','medium','low'), title, " +
-      "component, cve_id, opened_date, closed_date, status IN ('open','resolved','risk_accepted'), " +
-      "assignee, sla_days). " +
-      "Dates are ISO 'YYYY-MM-DD' text: use strftime('%w', actual_date) for day of week " +
-      "(0=Sunday .. 6=Saturday) and strftime('%Y-%m', date) to bucket by month. Exactly one " +
-      "SELECT or WITH statement is accepted; INSERT, UPDATE, DELETE and DDL are refused. " +
-      "Results are capped at 500 rows, so aggregate in SQL (COUNT, SUM, AVG, GROUP BY) rather " +
-      "than fetching raw rows.",
+      LAKEHOUSE_SCHEMA +
+      " " +
+      profile.idioms +
+      " Exactly one SELECT or WITH statement is accepted; INSERT, UPDATE, DELETE and DDL are " +
+      `refused. Results are capped at ${MAX_RESULT_ROWS} rows, so aggregate in SQL (COUNT, SUM, ` +
+      "AVG, GROUP BY) rather than fetching raw rows.",
     inputSchema: {
       type: "object",
       properties: {
         sql: {
           type: "string",
           description:
-            "A single read-only SELECT or WITH statement in SQLite dialect, e.g. " +
-            "\"SELECT COUNT(*) AS n FROM launches WHERE outcome = 'success'\".",
+            `A single read-only SELECT or WITH statement in ${profile.displayName}, e.g. ` +
+            `"${profile.example}".`,
         },
       },
       required: ["sql"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-  },
+  };
+}
+
+/** The four tools whose description does not vary with the SQL dialect. */
+const STATIC_TOOLS: Tool[] = [
   {
     name: "query_log_analytics",
     title: "Query ops telemetry (KQL)",
@@ -174,8 +197,8 @@ export const toolDefinitions: Tool[] = [
       "are 'Propulsion', 'Avionics', 'Range Operations', 'Facilities' and 'Cloud & IT'. " +
       "Returns { id, name, type, properties: { columns, rows } } where each row is " +
       "[date (ISO YYYY-MM-DD), cost_center, amount_usd, budget_usd], one row per date per cost " +
-      "center, ordered by date ascending — sum across rows for a total. At most 500 rows come " +
-      "back, so narrow the date range or filter by cost center for long windows; for " +
+      `center, ordered by date ascending — sum across rows for a total. At most ${MAX_RESULT_ROWS} ` +
+      "rows come back, so narrow the date range or filter by cost center for long windows; for " +
       "whole-history aggregates query the cost_daily table with query_lakehouse_sql instead. " +
       "Omit every argument for the unfiltered series from its earliest date.",
     inputSchema: {
@@ -202,22 +225,79 @@ export const toolDefinitions: Tool[] = [
   },
 ];
 
-// Load-time guard: the definitions and the allowlist must agree.
-const _definitionNames: AllowedToolName[] = toolDefinitions.map(
-  (t) => t.name as AllowedToolName,
-);
-if (
-  _definitionNames.length !== ALLOWED_TOOL_NAMES.length ||
-  _definitionNames.some((n) => !isAllowedTool(n))
-) {
-  throw new Error("tool definitions out of sync with ALLOWED_TOOL_NAMES");
+/**
+ * The five MCP tool definitions for a given SQL dialect. Order is stable and
+ * `query_lakehouse_sql` is first — `tools/list` order is what an orchestrator
+ * sees first, and the lakehouse tool answers most questions.
+ */
+export function buildToolDefinitions(dialect: SqlDialect): Tool[] {
+  const profile = DIALECTS[dialect];
+  if (!profile) throw new Error(`unknown SQL dialect: ${dialect}`);
+  return [lakehouseSqlTool(profile), ...STATIC_TOOLS];
+}
+
+/**
+ * The default (local / SQLite) definition set. Kept as a module constant because
+ * the tool COUNT is dialect-independent and several callers only want that; the
+ * live set an agent sees comes from `ToolRegistry.definitions`.
+ */
+export const toolDefinitions: Tool[] = buildToolDefinitions("sqlite");
+
+// Load-time guard: the definitions and the allowlist must agree, in every dialect.
+for (const dialect of Object.keys(DIALECTS) as SqlDialect[]) {
+  const names = buildToolDefinitions(dialect).map((t) => t.name);
+  if (names.length !== ALLOWED_TOOL_NAMES.length || names.some((n) => !isAllowedTool(n))) {
+    throw new Error(`tool definitions out of sync with ALLOWED_TOOL_NAMES (dialect: ${dialect})`);
+  }
+}
+
+/**
+ * How many rows a tool result carries, for the `mls.tool.row_count` span
+ * attribute. Shape-aware because the five tools return four different envelopes;
+ * returns undefined where "rows" is not a meaningful concept.
+ *
+ * SAFETY: this reads only array LENGTHS. No cell value, no column name and no
+ * argument ever reaches telemetry through here.
+ */
+export function countRows(name: string, payload: unknown): number | undefined {
+  const p = payload as any;
+  switch (name) {
+    case "query_lakehouse_sql":
+      return Array.isArray(p?.rows) ? p.rows.length : undefined;
+    case "query_log_analytics":
+      return Array.isArray(p?.tables)
+        ? p.tables.reduce(
+            (sum: number, t: any) => sum + (Array.isArray(t?.rows) ? t.rows.length : 0),
+            0,
+          )
+        : undefined;
+    case "get_github_security":
+      return (
+        (Array.isArray(p?.dependabot_alerts) ? p.dependabot_alerts.length : 0) +
+        (Array.isArray(p?.code_scanning_alerts) ? p.code_scanning_alerts.length : 0)
+      );
+    case "get_defender_posture":
+      return Array.isArray(p?.controls?.value) ? p.controls.value.length : undefined;
+    case "get_cost_series":
+      return Array.isArray(p?.properties?.rows) ? p.properties.rows.length : undefined;
+    default:
+      return undefined;
+  }
 }
 
 export class ToolRegistry {
-  constructor(private readonly backends: Backends) {}
+  /** The dialect the active lakehouse backend speaks — drives the descriptions. */
+  readonly dialect: SqlDialect;
+  private readonly cachedDefinitions: Tool[];
 
+  constructor(private readonly backends: Backends) {
+    this.dialect = backends.lakehouseSql.dialect;
+    this.cachedDefinitions = buildToolDefinitions(this.dialect);
+  }
+
+  /** What `tools/list` returns: five tools, described for the ACTIVE backend. */
   get definitions(): Tool[] {
-    return toolDefinitions;
+    return this.cachedDefinitions;
   }
 
   /**

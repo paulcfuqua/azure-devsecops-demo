@@ -2,21 +2,49 @@
 import { createApp, MCP_PATH } from "./app.js";
 import { loadConfig } from "./config.js";
 import { getLakehouseDb } from "./data/lakehouse.js";
-import { toolDefinitions } from "./tools/index.js";
+import { initTelemetry } from "./telemetry.js";
+import { createLocalBackends, type Backends } from "./tools/backends.js";
+import { createCloudBackends } from "./tools/cloud/index.js";
 
-const config = loadConfig();
-const app = createApp({ config });
+async function main(): Promise<void> {
+  const config = loadConfig();
 
-// Warm the lakehouse at boot so the first tool call doesn't pay CSV-load
-// latency. Failure is non-fatal here: the tool call surfaces the actionable
-// error, and the four non-SQL tools stay available.
-getLakehouseDb().catch((err) => {
-  console.warn(`[mcp-tools] lakehouse warm-up failed: ${(err as Error).message}`);
-});
+  // Telemetry first: the Azure Monitor distro patches the runtime, so it has to
+  // be registered before anything it should observe starts. No connection
+  // string => a clean no-op, and the reason is reported on /healthz.
+  const telemetry = await initTelemetry();
 
-app.listen(config.port, () => {
-  console.log(
-    `[mcp-tools] MCP server on :${config.port}${MCP_PATH} (streamable-http, stateless) — ` +
-      `${toolDefinitions.length} tools, backends=${config.backendMode}`,
-  );
+  let backends: Backends;
+  if (config.backendMode === "cloud") {
+    // loadConfig has already validated every required setting, so a failure here
+    // is a real environment problem (no managed identity, missing package) and
+    // is worth dying on rather than serving five broken tools.
+    backends = await createCloudBackends(config.cloud!);
+  } else {
+    backends = createLocalBackends();
+    // Warm the lakehouse at boot so the first tool call doesn't pay CSV-load
+    // latency. Failure is non-fatal here: the tool call surfaces the actionable
+    // error, and the four non-SQL tools stay available.
+    getLakehouseDb().catch((err) => {
+      console.warn(`[mcp-tools] lakehouse warm-up failed: ${(err as Error).message}`);
+    });
+  }
+
+  const app = createApp({ config, backends });
+
+  app.listen(config.port, () => {
+    console.log(
+      `[mcp-tools] MCP server on :${config.port}${MCP_PATH} (streamable-http, stateless) — ` +
+        `5 tools, backends=${config.backendMode}, ` +
+        `sql=${backends.lakehouseSql.dialect}, ` +
+        `otel=${telemetry.enabled ? telemetry.exporter : `off (${telemetry.reason})`}`,
+    );
+  });
+}
+
+main().catch((err) => {
+  // Fail fast and loudly: a misconfigured cloud switchover must not present as
+  // a healthy server that answers every question with an error.
+  console.error(`[mcp-tools] failed to start: ${(err as Error).message}`);
+  process.exit(1);
 });

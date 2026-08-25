@@ -45,15 +45,27 @@ afterAll(async () => {
 });
 
 describe("MCP over Streamable HTTP", () => {
-  it("GET /healthz reports mode, tool count and the MCP endpoint", async () => {
+  it("GET /healthz reports mode, dialect, per-tool adapters, telemetry and the MCP endpoint", async () => {
     const res = await fetch(`${baseUrl}/healthz`);
     expect(res.status).toBe(200);
+    // Exact shape, not a subset: /healthz is the operator's view of which
+    // adapter set is live, and a field silently disappearing from it is the
+    // kind of regression that only shows up during a switchover.
     expect(await res.json()).toEqual({
       ok: true,
       mode: "local",
       tools: 5,
       transport: "streamable-http",
       endpoint: "/mcp",
+      sqlDialect: "sqlite",
+      adapters: {
+        query_lakehouse_sql: "LocalLakehouseSqlBackend",
+        query_log_analytics: "FixtureLogAnalyticsBackend",
+        get_github_security: "FixtureGithubSecurityBackend",
+        get_defender_posture: "FixtureDefenderPostureBackend",
+        get_cost_series: "LocalCostSeriesBackend",
+      },
+      telemetry: { enabled: false, exporter: "disabled" },
     });
   });
 
