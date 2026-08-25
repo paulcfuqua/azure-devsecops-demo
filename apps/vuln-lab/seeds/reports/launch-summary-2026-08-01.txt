@@ -1,0 +1,9 @@
+Meridian Launch Systems — daily launch summary
+Date: 2026-08-01
+Synthetic sample content. Exists so seeds/report-viewer.js reads a real
+directory rather than an imaginary one; carries no data of any kind.
+
+  launches attempted   3
+  launches successful  3
+  scrubs               1 (weather, LC-39A)
+  pads active          4

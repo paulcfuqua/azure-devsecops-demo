@@ -1,0 +1,31 @@
+{
+  "//": [
+    "Node 22+/24 runs these .ts files directly by erasing types, which is why the",
+    "test script needs no build step. Two settings keep the compiler honest about",
+    "that: `erasableSyntaxOnly` rejects enums / parameter properties / namespaces,",
+    "which type stripping cannot handle, and `rewriteRelativeImportExtensions`",
+    "lets the source carry the real `./x.ts` specifiers Node requires while the",
+    "emitted JavaScript still imports `./x.js`."
+  ],
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

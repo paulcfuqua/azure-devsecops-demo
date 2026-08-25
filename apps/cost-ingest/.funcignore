@@ -1,0 +1,7 @@
+*.md
+.git*
+.vscode
+local.settings.json
+tests
+tsconfig*.json
+src/**/*.ts

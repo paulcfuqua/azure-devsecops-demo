@@ -13,14 +13,26 @@ name: infra-up
 #     └─ L2 landing zone  ~1-2m   (idempotent no-op on a standard rebuild)
 #          └─ L3 Entra    ~1-2m   (create-if-absent, no-ops in seconds)
 #               └─ L4 labels ~1m  (create-if-absent, GUIDs preserved)
-#                    ├─ L5 Fabric + seed  ~20-25m ─┐  (parallel)
-#                    └─ L6 platform Bicep ~12-18m ─┤
-#                                                  └─ L7 apps ~10-15m
-#                                                        └─ summary
+#                    ├─ L5 Fabric + seed  ~20-25m ─┬───────────┐  (parallel)
+#                    └─ L6 platform Bicep ~12-18m ─┴─ L7 apps ─┴─ L8 copilot ~10-14m
+#                                                    ~10-15m        └─ summary
 #
 # L7 depends on L6 only (it needs the ACA environment, not the lakehouse), so a
-# slow L5 leg never serializes the app deploy. L8's copilot eval is the leg that
-# needs L5 — it rides the per-app CI + eval path, not this workflow.
+# slow L5 leg never serializes the app deploy.
+#
+# L8 is the one leg that needs BOTH: the ACA environment L7 deploys onto (the MCP
+# tool server, and the agent repoint that follows the environment's new domain
+# suffix) and the lakehouse L5 seeds (the golden-question eval). That is exactly
+# kill-rebuild.md § 4 leg 6 — "legs 5–6 need 4b (ACA env), and leg 6's eval needs
+# 4a (lakehouse)" — so it hangs off layer-05 AND layer-07 rather than riding a
+# per-app CI path. Skipped upstreams are tolerated (see the `if:` conditions), so
+# a selective replay of `l8` alone still runs.
+#
+# WHERE THE FINOPS LEG LIVES. `apps/cost-ingest` (Cost Management daily export →
+# storage → consumption Function → lakehouse `cost_daily`) is an L6 resource and
+# deploys inside layer-06-platform.yml alongside the export wiring it consumes.
+# It gets no job of its own here: it has no independent dependency and giving it
+# one would put a Function deploy on the critical path for no benefit.
 #
 # ---------------------------------------------------------------------------
 # PRE-G0 GUARD
@@ -43,7 +55,7 @@ on:
           - oidc-smoke
         default: full
       layers:
-        description: "Layers to run: 'all', 'none', or a comma list of l2..l7 (e.g. l5,l6)"
+        description: "Layers to run: 'all', 'none', or a comma list of l2..l8 (e.g. l5,l6)"
         type: string
         default: all
       location:
@@ -58,6 +70,14 @@ on:
         description: 'GHCR tag for the L7 apps deployment (empty keeps the placeholder image)'
         type: string
         default: ''
+      enable_fabric_data_agent:
+        description: >-
+          L8 only: also create the Fabric connected agent. OFF by default — it needs a
+          PAID F2+ capacity (the trial capacity does not support Fabric AI experiences)
+          and moving to paid F2 is a G2-gated spend increase. Tools-only via MCP is the
+          trial-phase default and needs nothing here.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -98,6 +118,7 @@ jobs:
       l5: ${{ steps.select.outputs.l5 }}
       l6: ${{ steps.select.outputs.l6 }}
       l7: ${{ steps.select.outputs.l7 }}
+      l8: ${{ steps.select.outputs.l8 }}
     steps:
       - name: Resolve which layers this run replays
         id: select
@@ -112,7 +133,7 @@ jobs:
             selection="none"
           fi
           [ -n "${selection}" ] || selection="all"
-          for layer in l2 l3 l4 l5 l6 l7; do
+          for layer in l2 l3 l4 l5 l6 l7 l8; do
             case "${selection}" in
               none) enabled=false ;;
               all) enabled=true ;;
@@ -247,9 +268,32 @@ jobs:
       image_tag: ${{ inputs.image_tag }}
     secrets: inherit
 
+  layer-08:
+    # The only leg that needs BOTH parallel branches: L7's ACA environment (the MCP
+    # tool server the agent attaches to, and the repoint that follows the
+    # environment's regenerated domain suffix) and L5's seeded lakehouse (the
+    # golden-question eval). kill-rebuild.md § 4 leg 6.
+    #
+    # `always()` plus the explicit failure/cancelled tests, rather than a plain
+    # `needs:`, so that a SKIPPED upstream is tolerated: `layers: l8` on its own is a
+    # legitimate selective replay (repoint the surviving agent after someone rebuilt
+    # only the apps), and it must not be blocked by L5/L7 having been deselected.
+    name: L8 Copilot Studio
+    needs: [preflight, plan, layer-05, layer-07]
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l8 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-05.result) && !contains(fromJSON('["failure","cancelled"]'), needs.layer-07.result) }}
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/layer-08-copilot-studio.yml
+    with:
+      location: ${{ inputs.location }}
+      dry_run: ${{ inputs.dry_run }}
+      enable_fabric_data_agent: ${{ inputs.enable_fabric_data_agent }}
+    secrets: inherit
+
   summary:
     name: run summary
-    needs: [preflight, plan, oidc-login, layer-02, layer-03, layer-04, layer-05, layer-06, layer-07]
+    needs: [preflight, plan, oidc-login, layer-02, layer-03, layer-04, layer-05, layer-06, layer-07, layer-08]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -264,6 +308,7 @@ jobs:
           R_L5: ${{ needs.layer-05.result }}
           R_L6: ${{ needs.layer-06.result }}
           R_L7: ${{ needs.layer-07.result }}
+          R_L8: ${{ needs.layer-08.result }}
         run: |
           set -euo pipefail
           {
@@ -284,16 +329,20 @@ jobs:
             echo "| L3 Entra | ${R_L3} |"
             echo "| L4 Purview labels | ${R_L4} |"
             echo "| L5 Fabric + seed | ${R_L5} |"
-            echo "| L6 platform | ${R_L6} |"
+            echo "| L6 platform (+ cost-ingest FinOps leg) | ${R_L6} |"
             echo "| L7 apps | ${R_L7} |"
+            echo "| L8 Copilot Studio | ${R_L8} |"
             echo
-            echo "Verifier follow-up: \`verification/layer-01-audit.ps1\` … \`layer-07-audit.ps1\`,"
+            echo "Verifier follow-up: \`verification/layer-01-audit.ps1\` … \`layer-08-audit.ps1\`,"
             echo "run as \`mls-verifier\`, reports committed to \`verification/reports/\`."
+            echo
+            echo "L10 is deliberately NOT in this path: \`apps/vuln-lab/reseed.ps1\` is"
+            echo "demo-prep, run from the pre-demo checklist (kill-rebuild.md § 4)."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Fail the run if any selected layer failed
         env:
-          RESULTS: ${{ needs.oidc-login.result }} ${{ needs.layer-02.result }} ${{ needs.layer-03.result }} ${{ needs.layer-04.result }} ${{ needs.layer-05.result }} ${{ needs.layer-06.result }} ${{ needs.layer-07.result }}
+          RESULTS: ${{ needs.oidc-login.result }} ${{ needs.layer-02.result }} ${{ needs.layer-03.result }} ${{ needs.layer-04.result }} ${{ needs.layer-05.result }} ${{ needs.layer-06.result }} ${{ needs.layer-07.result }} ${{ needs.layer-08.result }}
         run: |
           set -euo pipefail
           case " ${RESULTS} " in

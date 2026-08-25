@@ -28,6 +28,16 @@ name: infra-down
 # billable RG is worse than a noisy one — the stage that failed still fails the
 # run, so nothing is hidden.
 #
+# Stage 1 is `infra/fabric/teardown-items.ps1`, which deletes every ITEM in the
+# workspace — the lakehouse, its Delta tables, and (since 2026-08-24) the Fabric
+# data agent, which is a workspace item too. It is called through a Test-Path
+# guard on purpose: see the note on that step.
+#
+# The `cost-export` stage removes the subscription-scope daily export that feeds
+# `apps/cost-ingest`. Both the export definition and the Function die here — the
+# Function with `mls-rg-platform`, the definition by name — so nothing is left
+# pointing at deleted storage, and `infra-up` recreates both on replay.
+#
 # PRE-G0 GUARD: same as infra-up — before the `demo` environment variables exist
 # every job skips and the run is green.
 # ---------------------------------------------------------------------------
@@ -38,6 +48,13 @@ on:
     inputs:
       skip_fabric:
         description: 'Skip the Fabric item delete + capacity pause (RG deletes only)'
+        type: boolean
+        default: false
+      hard_delete:
+        description: >-
+          Purge Fabric workspace items instead of tombstoning them. Needs the workspace
+          ADMIN role, so it is off by default — a teardown must not fail on a permission
+          it does not strictly need. Use it if a rebuild ever hits the workspace item cap.
         type: boolean
         default: false
 
@@ -89,20 +106,31 @@ jobs:
 
       - name: Delete workspace items (workspace shell and roles survive)
         shell: pwsh
+        env:
+          HARD_DELETE: ${{ inputs.hard_delete }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # infra/fabric/teardown-items.ps1 is the L5 lead's deliverable (named in
-          # kill-rebuild.md § 2 step 1). Until it exists this is a NOTICE: the
-          # lakehouse items stay, which costs OneLake storage pennies and is
-          # visible to verification/layer-11-audit.ps1's down-state check.
+          # kill-rebuild.md § 2 step 1. The Test-Path guard stays even though the
+          # script now exists: this workflow must stay green on a partial checkout
+          # or a branch where the file has not merged yet, and a teardown that
+          # cannot delete items is a NOTICE (OneLake storage pennies, visible to
+          # verification/layer-11-audit.ps1's down-state check) rather than a
+          # reason to strand four billable resource groups.
           $script = 'infra/fabric/teardown-items.ps1'
           if (-not (Test-Path $script)) {
-            Write-Host "::notice title=Fabric item teardown not authored yet::$script does not exist; workspace items were NOT deleted. Handoff to the L5 lead."
+            Write-Host "::notice title=Fabric item teardown unavailable::$script does not exist on this ref; workspace items were NOT deleted. The RG deletes below still run."
             exit 0
           }
           $token = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
           if ([string]::IsNullOrWhiteSpace($token)) { throw 'Could not obtain a Fabric API token.' }
-          & $script -Token $token -Confirm:$false
+
+          # -Confirm:$false because the whole cycle is gate-free by design.
+          # -HardDelete is opt-in: purging needs the workspace ADMIN role, and a
+          # teardown that fails on a permission it does not strictly need is worse
+          # than one that leaves a recoverable tombstone.
+          $teardownArgs = @{ Token = $token }
+          if ($env:HARD_DELETE -eq 'true') { $teardownArgs['HardDelete'] = $true }
+          & $script @teardownArgs -Confirm:$false
 
       - name: Pause the Fabric capacity
         if: ${{ always() }}
