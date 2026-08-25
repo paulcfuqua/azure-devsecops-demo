@@ -1,0 +1,19 @@
+{
+  "name": "@mls/directline-token",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Direct Line token endpoint (L8): exchanges the Copilot Studio Direct Line secret for a short-lived, conversation-scoped token so the control tower's Ask tab never holds a credential. Azure Functions, Node v4 programming model.",
+  "//workspaces": "Deliberately NOT a member of the repo-root `workspaces` list, for the same reason apps/vuln-lab is not: it deploys as its own Azure Functions app with its own dependency closure, and hoisting @azure/functions into the root tree would put a server SDK in the dependency graph of the browser apps. Install and test it from this directory.",
+  "type": "module",
+  "main": "src/functions/*.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "func start",
+    "test": "node --test \"tests/**/*.test.mjs\""
+  },
+  "dependencies": {
+    "@azure/functions": "^4.16.2"
+  }
+}

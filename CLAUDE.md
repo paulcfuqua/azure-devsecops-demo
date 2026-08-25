@@ -41,7 +41,7 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
 
 ## Naming and tagging
 
-- Resource names: `mls-<app|role>-<env>-<type>` (e.g. `mls-copilot-demo-ca`,
+- Resource names: `mls-<app|role>-<env>-<type>` (e.g. `mls-mcp-demo-ca`,
   `mls-ops-demo-sql`). Company name and prefix are set once in
   `infra/bicep/naming.bicep` — do not hardcode `mls` elsewhere.
 - Required tags on every RG (policy-enforced): `env`, `app`, `costCenter`, `owner`,

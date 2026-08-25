@@ -11,6 +11,7 @@
     "apps/launch-ops",
     "apps/control-tower",
     "apps/mcp-tools",
+    "apps/directline-token",
     "apps/shared/*"
   ],
   "scripts": {
@@ -19,6 +20,7 @@
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "dev:launch-ops": "npm run dev --workspace apps/launch-ops",
-    "dev:control-tower": "npm run dev --workspace apps/control-tower"
+    "dev:control-tower": "npm run dev --workspace apps/control-tower",
+    "dev:mcp-tools": "npm run dev --workspace apps/mcp-tools"
   }
 }

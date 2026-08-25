@@ -1,0 +1,25 @@
+# Placeholder.
+#
+# The exported Power Platform solution for the Meridian Launch Copilot lands here,
+# written by infra/copilot-studio/export-agent.ps1 (or the export job) as UNPACKED
+# solution source:
+#
+#     solution/MeridianLaunchCopilot/Other/Solution.xml
+#     solution/MeridianLaunchCopilot/bots/
+#     solution/MeridianLaunchCopilot/botcomponents/
+#     solution/MeridianLaunchCopilot/Connectors/
+#     solution/MeridianLaunchCopilot/environmentvariabledefinitions/
+#
+# COMMITTED:     the unpacked directory tree above (diffable, reviewable in a PR).
+# NOT COMMITTED: the .zip. It is a build artifact - produced during export, uploaded
+#                to the workflow run, and repacked on import from this source. An
+#                opaque blob in git defeats review, bloats history and merges badly.
+#                Keep `infra/copilot-studio/solution/*.zip` in .gitignore.
+#
+# Format is unpacked XML (`--packagetype Unmanaged`), matching microsoft/copilot-alm-starter.
+# The repo holds the UNMANAGED source because a managed solution cannot be exported;
+# the import job packs a managed build from it.
+#
+# See ../README.md section 4.
+#
+# Delete this file once the first export lands.

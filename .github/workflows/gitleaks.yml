@@ -10,11 +10,14 @@ name: gitleaks
 # repo settings (V1.2), gitleaks is the in-repo check that also runs on forks and
 # on full history.
 #
-# The only real secret in this system is ANTHROPIC_API_KEY (CLAUDE.md hard rule
-# 5). Everything Azure authenticates via OIDC, and tenant/subscription IDs live
-# in GitHub environment variables — so a hit here is either that key or a test
-# fixture that pattern-matches a credential (rewrite the fixture; never use the
-# push-protection bypass for convenience).
+# Since the 2026-08-24 amendment CI holds no secret at all: everything Azure
+# authenticates via OIDC, runtime LLM work is a Copilot Studio agent, and
+# tenant/subscription IDs live in GitHub environment variables. The system's one
+# stored secret is the Direct Line secret, which lives in Key Vault and is
+# exchanged server-side — it must never appear in this repo or in a browser
+# bundle. So a hit here is either that secret leaking where it must not go, or a
+# test fixture that pattern-matches a credential (rewrite the fixture; never use
+# the push-protection bypass for convenience).
 #
 # gitleaks-action v2 is free for public repositories; GITLEAKS_LICENSE is only
 # required for organization-owned private repos.
@@ -66,7 +69,9 @@ jobs:
             echo "Treat this as an incident, in this order:"
             echo
             echo "1. **Rotate** whatever leaked. The only live credential in this"
-            echo "   system is \`ANTHROPIC_API_KEY\`; everything Azure is OIDC."
+            echo "   system is the **Direct Line secret** (Key Vault; rotate it in the"
+            echo "   agent's channel settings). Everything Azure is OIDC, so there is"
+            echo "   no cloud credential to rotate."
             echo "2. If it is a **test fixture** that merely pattern-matches a"
             echo "   credential, rewrite the fixture so it stops matching."
             echo "3. Only then consider history rewriting — and only with sponsor"

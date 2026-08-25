@@ -51,11 +51,11 @@ var requiredTagNames = [
 ]
 
 @export()
-@description('[derived] Short app keys used in resource names. copilot-svc shortens to "copilot" per the CLAUDE.md example name mls-copilot-demo-ca.')
+@description('[derived] Short app keys used in resource names. mcp-tools shortens to "mcp", giving mls-mcp-demo-ca — the Copilot Studio amendment (2026-08-24) replaced the copilot-svc LLM service (mls-copilot-demo-ca, the CLAUDE.md worked example) with an MCP tool server.')
 var appKeys = {
   launchOps: 'launch-ops'
   controlTower: 'control-tower'
-  copilotSvc: 'copilot'
+  mcpTools: 'mcp'
 }
 
 @export()
@@ -67,9 +67,12 @@ var rgPurposes = {
   ops: 'ops'
 }
 
-@export()
-@description('[derived] Key Vault secret name holding the Anthropic API key (value written at G0/L6 by the deploy workflow, never by Bicep).')
-var anthropicApiKeySecretName = 'anthropic-api-key'
+// NOTE (Copilot Studio amendment, 2026-08-24): `anthropicApiKeySecretName` was
+// removed from this file. No Anthropic API key exists anywhere in the system, so
+// there is no secret name to publish and no Bicep template consumes one. The
+// Key Vault itself survives at L6 as the estate's secret store; it currently has
+// zero secret consumers in Bicep. See infra/bicep/README.md and
+// docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md.
 
 // ------------------------------------------------------------------ tag builder
 

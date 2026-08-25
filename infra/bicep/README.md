@@ -21,8 +21,14 @@ infra/bicep/
     ├── main.bicep
     ├── demo.bicepparam
     └── modules/
-        └── key-vault-secrets-user-role.bicep
+        └── key-vault-secrets-user-role.bicep   # retained, currently UNREFERENCED
 ```
+
+> **Copilot Studio amendment (2026-08-24).** The `copilot-svc` container app is now the
+> **MCP tool server** `mls-mcp-demo-ca`; the Key Vault `anthropic-api-key` secret
+> reference and the role grant that fed it are gone, because no Anthropic key exists
+> anywhere in the system. Details in the L7 section below. The amendment is
+> `docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md`.
 
 ## What deploys at which layer
 
@@ -73,13 +79,22 @@ creation), then:
 | Log Analytics workspace | `mls-rg-platform` | PerGB2018, 30-day retention, 1 GB/day cap |
 | Application Insights (workspace-based) | `mls-rg-platform` | bills only via LAW ingestion |
 | Container Apps environment (wired to LAW) | `mls-rg-platform` | consumption-only; env itself bills $0 |
-| Key Vault (RBAC mode, soft-delete on) | `mls-rg-platform` | ~$0 at demo secret volume |
+| Key Vault (RBAC mode, soft-delete on) — **currently empty** | `mls-rg-platform` | ~$0 |
 | SQL server + serverless DB | `mls-rg-data` | auto-pause 60 min, 0.5–2 vCore; storage only when paused |
 | Cost-export storage account | `mls-rg-ops` | Standard_LRS, pennies |
 | *(empty, for L7)* | `mls-rg-apps` | — |
 
 Nothing here bills while idle beyond SQL storage + LAW retention, which is exactly the
 master plan's built-but-parked envelope (< $15/month).
+
+**Key Vault after the amendment.** The vault is still created, but it now has **zero
+secret consumers**: `anthropic-api-key` was its only intended tenant, and the app that
+read it is now an MCP server authenticating with a managed identity. Bicep never held the
+value, so nothing is deleted here — only the comments and the `keyVaultUri` output
+description changed. The vault is kept deliberately: it costs ~$0 empty, the Direct Line
+channel key (a new G0 item) is the obvious next occupant, and destroying/recreating a
+soft-deleted vault name is precisely the rebuild hazard `KEY_VAULT_CREATE_MODE=recover`
+exists to absorb. Whether the Direct Line key is vaulted at all is a sponsor decision.
 
 ### L7 — apps (`apps/main.bicep`)
 
@@ -89,13 +104,49 @@ Three container apps, all `minReplicas: 0`:
 |---|---|---|
 | launch-ops | `mls-launch-ops-demo-ca` | external |
 | control-tower | `mls-control-tower-demo-ca` | external |
-| copilot-svc | `mls-copilot-demo-ca` | **internal**, flipped by `copilotExternalIngress` |
+| mcp-tools | `mls-mcp-demo-ca` | **external, HTTPS only, not parameterised** |
 
-`copilot-svc` gets a user-assigned identity granted **Key Vault Secrets User** on the L6
-vault, and an `ANTHROPIC_API_KEY` environment variable backed by a Key Vault secret
-reference. **This template wires the reference only** — the secret *value* arrives at G0
-(human bootstrap, item C5) and is written into the vault by the layer-06 workflow from
-the GitHub secret. No secret value exists in this repo (CLAUDE.md hard rule 5).
+`mcp-tools` replaced `copilot-svc` at the Copilot Studio amendment. It hosts the same
+five Ops/Sec/Cost tool implementations as an MCP server (Streamable HTTP); the LLM loop
+moved into a Copilot Studio agent (`infra/copilot-studio/`).
+
+**Ingress is external by requirement, not by configuration.** Copilot Studio is a SaaS
+caller outside the Container Apps environment — it must resolve and reach the public
+FQDN. The old `copilotExternalIngress` parameter was therefore *removed* rather than
+defaulted to `true`: an internal-only MCP server is not a supported state of this design,
+so it should not be expressible. `ingressAllowInsecure` stays `false`, so only the
+TLS-terminated `https://` listener exists.
+
+**No secret reference.** The `anthropic-api-key` Key Vault secret, the app's
+`ANTHROPIC_API_KEY` environment variable, and the **Key Vault Secrets User** grant that
+made the reference resolvable are all deleted. The amendment turns "no stored secrets in
+CI" from a documented exception into an absolute, and there is nothing left to read.
+
+**The user-assigned identity is kept** (`mls-mcp-demo-id`), on a new justification —
+the old one ("the grant must exist before the app provisions, because the app resolves a
+secret reference at creation") died with the secret:
+
+1. `mcp-tools` is the only app that calls Azure data planes on its own behalf: the
+   lakehouse SQL analytics endpoint, the **Entra-only** SQL database (no password exists
+   to fall back on), Cost Management, and Defender read APIs. Something must
+   authenticate, and hard rule 5 forbids a stored credential — so a managed identity is
+   mandatory.
+2. **User-assigned, not system-assigned,** because the grants those tools need are issued
+   by *other* layers' scripts (`CREATE USER … FROM EXTERNAL PROVIDER`, a Fabric workspace
+   role assignment, Cost Management Reader). A user-assigned identity has a deterministic
+   name from `naming.bicep` and exports its `principalId`, so those grants can be made
+   before or after the app exists. A system-assigned identity exists only once the app
+   does, re-imposing an ordering dependency on every future grant.
+3. Its `clientId` is injected as `AZURE_CLIENT_ID`, binding `DefaultAzureCredential`
+   inside the container to this identity rather than to an ambient one.
+
+New outputs: `mcpToolsEndpoint` (the `https://<fqdn>/mcp` URL the Copilot Studio MCP
+connector consumes), `mcpToolsIdentityClientId` and `mcpToolsIdentityPrincipalId`.
+
+> **Assumption flagged.** The `/mcp` path and Streamable HTTP transport are assumed from
+> the amendment, not read from `apps/mcp-tools/` (a concurrent workstream). The path is
+> the `mcpEndpointPath` parameter — reconciling it is one variable, and it provisions
+> nothing.
 
 ## AVM modules used
 
@@ -124,11 +175,18 @@ Only three, each because **no AVM module covers the case**:
    management-group AVM module creates the group but does not move subscriptions into
    it, and no separate AVM module exists for the association.
 2. **`Microsoft.Authorization/roleAssignments` scoped to an existing Key Vault**
-   (`apps/modules/key-vault-secrets-user-role.bicep`) — AVM embeds `roleAssignments`
-   *inside* each resource module, which cannot work here: the vault is deployed at L6,
-   long before the copilot identity exists at L7. `avm/ptn/authorization/role-assignment`
-   targets MG/subscription/RG scope, not a single resource. A thin local module is the
-   correct shape.
+   (`apps/modules/key-vault-secrets-user-role.bicep`) — **currently unreferenced.** It
+   existed solely to let the copilot app read `anthropic-api-key`, and went with the
+   secret at the 2026-08-24 amendment. The file is kept rather than deleted because the
+   amendment introduces a **Direct Line channel key** as a new G0 item for the embedded
+   control-tower surface; that is the next credential this estate will hold, Key Vault is
+   where it belongs, and this module is exactly the shape needed to grant access to it.
+   If the sponsor decides the Direct Line key will not be vaulted, delete the file and
+   this entry together. The original rationale still holds whenever it returns: AVM
+   embeds `roleAssignments` *inside* each resource module, which cannot work here — the
+   vault is deployed at L6, long before the L7 identity exists, and
+   `avm/ptn/authorization/role-assignment` targets MG/subscription/RG scope, not a single
+   resource.
 3. **`Microsoft.Insights/components` (`existing`)** (`apps/main.bicep`) — an
    `existing` reference to read the L6 App Insights connection string, not a deployment.
    AVM modules deploy resources; they cannot express an `existing` lookup.
@@ -152,11 +210,15 @@ reversible by changing one parameter or one line of `naming.bicep`.
 
 - **[derived] Role segments** for shared resources, filling the `<app|role>` slot of the
   CLAUDE.md convention: `obs` (LAW + App Insights), `platform` (Container Apps
-  environment), `sec` (Key Vault), `cost` (cost-export storage). `ops` (SQL) and
-  `copilot` are pinned by CLAUDE.md's own examples (`mls-ops-demo-sql`,
-  `mls-copilot-demo-ca`).
-- **[derived] `copilot-svc` shortens to `copilot`** in resource names, so the container
-  app is `mls-copilot-demo-ca` exactly as CLAUDE.md specifies.
+  environment), `sec` (Key Vault), `cost` (cost-export storage). `ops` (SQL) is pinned by
+  CLAUDE.md's own example (`mls-ops-demo-sql`).
+- **[derived] `mcp-tools` shortens to `mcp`**, giving `mls-mcp-demo-ca`. This is a
+  deliberate departure from CLAUDE.md's other worked example, `mls-copilot-demo-ca`: the
+  service it named no longer exists, and naming an MCP tool server "copilot" after the
+  copilot moved to Copilot Studio would be actively misleading. The convention
+  `mls-<app|role>-<env>-<type>` is unchanged — only the role segment is. **CLAUDE.md's
+  example should be updated to match; that file is outside this change's write scope, so
+  it is listed as a reconciliation item.**
 - **[derived] Storage account names strip hyphens** (`mlscostdemost`) — storage requires
   3–24 lowercase alphanumerics, so the hyphenated convention cannot apply.
 - **[derived] `mls-rg-apps` is created by the L6 template**, not the L7 one, so a single
@@ -204,10 +266,12 @@ reversible by changing one parameter or one line of `naming.bicep`.
   requires an infrastructure subnet (a VNet), which this consumption-only design does not
   have.
 - **[derived] `ingressAllowInsecure: false`** on all three apps (AVM defaults to `true`).
-- **[derived] A user-assigned identity for copilot-svc** rather than system-assigned: the
-  Key Vault role grant must exist *before* the app provisions, because the app resolves
-  the secret reference at creation. A system-assigned identity would require the app to
-  exist first — a deadlock.
+- **Not derived — required: `mcp-tools` ingress is external.** Copilot Studio reaches it
+  from outside Azure. There is no parameter for this (see the L7 section).
+- **[derived] A user-assigned identity for `mcp-tools`** rather than system-assigned —
+  full reasoning in the L7 section. Short version: downstream grants are issued by other
+  layers and need a principal that is nameable and grantable independently of the app's
+  lifecycle.
 - **[derived] NIST initiative assignment carries a system-assigned identity with
   Contributor.** The built-in initiative contains `deployIfNotExists`/`modify` members,
   and ARM rejects the assignment without an identity even in `DoNotEnforce` mode.

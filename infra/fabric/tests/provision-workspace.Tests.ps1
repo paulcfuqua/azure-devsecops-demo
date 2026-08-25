@@ -7,9 +7,12 @@ BeforeAll {
     Set-StrictMode -Off
 
     function Invoke-ProvisionForTest {
-        param([switch]$WhatIf)
+        # -AsWhatIf, not -WhatIf: a parameter literally named WhatIf on a function that
+        # never calls ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci fails
+        # on any warning.
+        param([switch]$AsWhatIf)
         Invoke-Main -Token 'tok-1' -CapacityId 'cap-1' -WorkspaceName 'mls-operations' `
-            -LakehouseName 'mls_operations' -WhatIf:$WhatIf
+            -LakehouseName 'mls_operations' -WhatIf:$AsWhatIf
     }
 }
 
@@ -90,7 +93,7 @@ Describe 'provision-workspace' {
         }
 
         It 'performs GETs only and stops cleanly after the gated workspace create' {
-            $result = Invoke-ProvisionForTest -WhatIf
+            $result = Invoke-ProvisionForTest -AsWhatIf
             Should -Invoke Invoke-FabricApi -ModuleName 'fabric-api' -Exactly -Times 0 -ParameterFilter {
                 $Method -in @('POST', 'PATCH', 'DELETE')
             }
@@ -105,7 +108,7 @@ Describe 'provision-workspace' {
                 }
                 return @{ value = @() }
             } -ModuleName 'fabric-api'
-            $result = Invoke-ProvisionForTest -WhatIf
+            $result = Invoke-ProvisionForTest -AsWhatIf
             Should -Invoke Invoke-FabricApi -ModuleName 'fabric-api' -Exactly -Times 0 -ParameterFilter {
                 $Method -in @('POST', 'PATCH', 'DELETE')
             }

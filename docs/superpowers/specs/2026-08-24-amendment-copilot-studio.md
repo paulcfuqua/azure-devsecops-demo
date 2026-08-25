@@ -36,9 +36,18 @@ pre-framed binary cannot silently become a locked decision.
 
 ## 2. The decision now in force
 
-All runtime LLM work moves inside the Microsoft/Azure landscape. **No Anthropic API key
-exists anywhere in the system** — the "no stored secrets in CI" principle becomes
-absolute rather than a documented exception (F4's exception is void).
+All runtime LLM work moves inside the Microsoft/Azure landscape. **No LLM API key exists
+anywhere in the system**, and **CI holds no secret at all** — every pipeline
+authenticates by OIDC / workload identity federation, so F4's stored-secret exception is
+void.
+
+**Precision, added 2026-08-24 after the Direct Line design landed:** "no stored secrets"
+is absolute *for CI*, not for the whole system. Embedding the agent in the control tower
+requires a **Direct Line secret**, which lives in Key Vault, is read only by the
+token-exchange function, is exchanged server-side for a ~30-minute token, and must never
+reach a browser bundle. That is one stored secret, in the right place, with the right
+blast radius — down from the previous design's key-in-CI, but not zero. Any document
+claiming zero stored secrets system-wide is wrong.
 
 ### Showpiece #1 — copilot (L8), rebuilt as a custom Copilot Studio agent
 

@@ -8,9 +8,11 @@ name: layer-06-platform
 # Subscription-scope deployment. The template creates all four demo resource
 # groups, so this is the layer that makes `infra-down.yml`'s RG deletes meaningful.
 #
-# The ANTHROPIC_API_KEY *value* is never in Bicep and never in this repo
-# (CLAUDE.md hard rule 5). This workflow copies it from the GitHub secret into
-# the L6 Key Vault, which is the only place the apps read it from.
+# No LLM API key exists anywhere in this system (2026-08-24 amendment): runtime
+# LLM work is a Copilot Studio agent, so CI holds no secret at all and this
+# workflow writes nothing into Key Vault. The vault is provisioned empty here;
+# the system's only stored secret — the Direct Line secret backing the control
+# tower's Ask tab — is written at L8, when the agent's channel exists.
 #
 # Pre-G0 guard: all jobs gated on the `demo` environment variables.
 # =============================================================================
@@ -128,26 +130,18 @@ jobs:
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Write ANTHROPIC_API_KEY into Key Vault
+      - name: Confirm the vault is provisioned and holds no LLM secret
         if: ${{ !inputs.dry_run }}
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           KEY_VAULT_NAME: ${{ steps.names.outputs.key-vault }}
-          SECRET_NAME: ${{ steps.names.outputs.anthropic-secret-name }}
         run: |
           set -euo pipefail
-          # The value arrives at G0 (item C5) as a GitHub secret and is copied here.
-          # It is never printed: `az keyvault secret set` output is discarded.
-          if [ -z "${ANTHROPIC_API_KEY}" ]; then
-            echo "::notice title=ANTHROPIC_API_KEY not set::Key Vault secret ${SECRET_NAME} was not written; copilot-svc will start in mock mode."
-            exit 0
-          fi
-          az keyvault secret set \
-            --vault-name "${KEY_VAULT_NAME}" \
-            --name "${SECRET_NAME}" \
-            --value "${ANTHROPIC_API_KEY}" \
-            --output none
-          echo "Key Vault secret ${SECRET_NAME} updated in ${KEY_VAULT_NAME}."
+          # Deliberately no secret write. Since the 2026-08-24 amendment there is
+          # no LLM API key in this system, so L6 leaves the vault empty. The only
+          # stored secret (the Direct Line secret) is written at L8 by
+          # layer-08-copilot-studio.yml, once the agent's channel exists.
+          az keyvault show --name "${KEY_VAULT_NAME}" --output none
+          echo "Key Vault ${KEY_VAULT_NAME} provisioned; no secrets written at L6 by design."
 
       - name: Wire the Cost Management daily export
         if: ${{ !inputs.dry_run }}

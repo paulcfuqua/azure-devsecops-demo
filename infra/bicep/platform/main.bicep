@@ -19,10 +19,27 @@
 //
 // Everything is scale-to-zero / auto-pause / consumption. Anything that bills
 // while idle is a design error (master plan: built-but-parked < $15/month).
-// The ANTHROPIC_API_KEY secret VALUE is written into Key Vault by the layer-06
-// workflow from the GitHub secret (G0 item C5) — never by Bicep, never in repo.
+//
+// KEY VAULT, after the Copilot Studio amendment (2026-08-24): the vault is still
+// created here, but it now has **zero secret consumers**. The only secret it was
+// ever going to hold — anthropic-api-key — no longer exists anywhere in the
+// system, and the L7 app that read it has been rebuilt as an MCP tool server
+// that authenticates with a managed identity instead. Nothing in this template
+// ever created a secret (Bicep never held the value), so removing the wiring is
+// a documentation change here and a real deletion in apps/main.bicep.
+//
+// The vault is deliberately NOT deleted. Reasons, in order: (1) it costs ~$0
+// empty and is inside the agreed idle envelope; (2) the amendment introduces a
+// Direct Line channel key as a new G0 item for the embedded control-tower
+// surface — that is the next credential this estate will have to hold, and Key
+// Vault is where it belongs rather than a GitHub Actions secret; (3) deleting
+// and recreating a soft-deleted vault name is exactly the failure mode
+// KEY_VAULT_CREATE_MODE=recover exists to absorb, so churning it is a
+// self-inflicted rebuild risk. Whether the Direct Line key is stored at all is a
+// sponsor decision, not this template's to make.
+//
 // The Cost Management export definition + ingestion Function are wired by the
-// same workflow (subscription-scope config, not resources of this template).
+// layer-06 workflow (subscription-scope config, not resources of this template).
 // =============================================================================
 targetScope = 'subscription'
 
@@ -315,7 +332,7 @@ output containerAppsEnvironmentResourceId string = containerAppsEnvironment.outp
 @description('Default domain of the Container Apps environment.')
 output containerAppsEnvironmentDefaultDomain string = containerAppsEnvironment.outputs.defaultDomain
 
-@description('Key Vault URI holding the anthropic-api-key secret reference.')
+@description('Key Vault URI. The vault is currently empty — no template or app consumes a secret from it (Copilot Studio amendment, 2026-08-24).')
 output keyVaultUri string = keyVault.outputs.uri
 
 @description('Key Vault resource ID.')

@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { createAgentProvider } from "./agent";
 import { App } from "./App";
 import { createDataProvider } from "./providers";
 
@@ -8,6 +9,6 @@ if (!root) throw new Error("Missing #root element");
 
 createRoot(root).render(
   <StrictMode>
-    <App provider={createDataProvider()} />
+    <App provider={createDataProvider()} agent={createAgentProvider()} />
   </StrictMode>,
 );

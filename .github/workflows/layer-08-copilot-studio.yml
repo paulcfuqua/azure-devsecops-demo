@@ -1,0 +1,434 @@
+name: layer-08-copilot-studio
+
+# =============================================================================
+# L8 — showpiece #1: the Meridian Launch Copilot (Copilot Studio agent).
+#
+# Amendment: docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md
+# Specification: infra/copilot-studio/agent-definition.md
+# Pipeline notes: infra/copilot-studio/README.md
+#
+# Follows Microsoft's copilot-alm-starter pattern:
+#   azure/login@v2 (OIDC, no secret)
+#     -> powerplatform-actions/actions-install@v1
+#     -> pac auth create --managedIdentity      (pac reads the AZURE_* env azure/login set)
+#     -> pac solution pack + import             (via infra/copilot-studio/import-agent.ps1)
+# No client secret exists in this path — the amendment makes "no stored secrets in CI"
+# absolute, and this workflow is the layer that most obviously could have broken it.
+#
+# ---------------------------------------------------------------------------
+# THE TWO JOBS ARE DELIBERATELY INDEPENDENT
+#
+#   deploy-agent      imports the Copilot Studio solution into the demo environment
+#   deploy-data-agent creates/publishes the Fabric data agent (a CONNECTED AGENT in
+#                     Copilot Studio's terminology — not a "knowledge source")
+#
+# `deploy-agent` does NOT `needs:` `deploy-data-agent`, and the data agent job is
+# OPT-IN (`enable_fabric_data_agent`, default false). Two verified reasons:
+#
+#   1. Fabric data agents require a PAID F2+ capacity. The Fabric 60-day TRIAL
+#      capacity explicitly does not support AI experiences, data agents included. So
+#      on the demo's trial-first capacity this job cannot succeed, and defaulting it
+#      on would make every L8 run red for a reason that is not a defect.
+#   2. The Fabric → Copilot Studio integration is in PREVIEW and is documented as
+#      "only validated for Microsoft Teams" — while this demo's surface is a custom
+#      website over Direct Line.
+#
+# TOOLS-ONLY VIA MCP IS THE DEFAULT during the trial phase: the agent keeps its
+# prompt, cards, channel and pipeline and answers lakehouse questions through the MCP
+# tool server against the SQL analytics endpoint. The Fabric connected agent is the
+# paid-F2 upgrade, and moving to paid F2 is a spend-profile increase (G2).
+# ---------------------------------------------------------------------------
+#
+# Pre-G0 guard: POWERPLATFORM_ENVIRONMENT_URL joins the three identity variables, so
+# the whole layer no-ops cleanly and greenly until the human completes G0 and the
+# Power Platform environments exist.
+#
+# Pre-first-export guard: before anyone has authored and exported the agent,
+# infra/copilot-studio/solution/ holds only .gitkeep. The import step detects that and
+# emits a NOTICE instead of failing — the repo must be green from the first push.
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      location:
+        description: Unused by L8 (Power Platform and Fabric are tenant-scoped); accepted for uniform layer calls.
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run the import/provision scripts with -WhatIf and make no writes.
+        type: boolean
+        required: false
+        default: false
+      solution_name:
+        description: Power Platform solution unique name.
+        type: string
+        required: false
+        default: MeridianLaunchCopilot
+      deploy_as_managed:
+        description: Import a managed build (recommended). Unmanaged is for troubleshooting only.
+        type: boolean
+        required: false
+        default: true
+      enable_fabric_data_agent:
+        description: >-
+          Create the Fabric data agent (connected agent). OFF by default: it needs a
+          PAID F2+ capacity, which the Fabric trial capacity is not, and moving to
+          paid F2 is a G2-gated spend increase. Tools-only via MCP is the trial-phase
+          default.
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      location:
+        description: Unused by L8 (Power Platform and Fabric are tenant-scoped).
+        type: string
+        required: false
+        default: eastus2
+      dry_run:
+        description: Run the import/provision scripts with -WhatIf and make no writes.
+        type: boolean
+        required: false
+        default: false
+      solution_name:
+        description: Power Platform solution unique name.
+        type: string
+        required: false
+        default: MeridianLaunchCopilot
+      deploy_as_managed:
+        description: Import a managed build (recommended). Unmanaged is for troubleshooting only.
+        type: boolean
+        required: false
+        default: true
+      enable_fabric_data_agent:
+        description: >-
+          Create the Fabric data agent (connected agent). OFF by default: it needs a
+          PAID F2+ capacity, which the Fabric trial capacity is not, and moving to
+          paid F2 is a G2-gated spend increase. Tools-only via MCP is the trial-phase
+          default.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+      fabric: ${{ steps.fabric.outputs.configured }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+      solution: ${{ steps.source.outputs.present }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Required: identity + the Power Platform DEMO environment URL. Without these
+      # there is nowhere to import, so every downstream job is skipped.
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            POWERPLATFORM_ENVIRONMENT_URL=${{ vars.POWERPLATFORM_ENVIRONMENT_URL }}
+          layer: L8 Copilot Studio
+
+      # Optional: Fabric. Gates ONLY the data agent job, never the agent import —
+      # see the header note. Needs enable_fabric_data_agent as well, so the trial-phase
+      # default (tools-only via MCP) never trips over a capacity that cannot host it.
+      - id: fabric
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            FABRIC_CAPACITY_ID=${{ vars.FABRIC_CAPACITY_ID }}
+          layer: L8 Fabric connected agent (opt-in, preview, paid F2+ only)
+
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L8 verification (mls-verifier)
+
+      # Has anyone exported the agent yet? Before the first export the tree holds only
+      # .gitkeep, and that is a normal, green state — not a failure.
+      - name: Check for committed solution source
+        id: source
+        env:
+          SOLUTION_NAME: ${{ inputs.solution_name }}
+        run: |
+          set -euo pipefail
+          manifest="infra/copilot-studio/solution/${SOLUTION_NAME}/Other/Solution.xml"
+          if [ -f "${manifest}" ]; then
+            echo "present=true" >> "${GITHUB_OUTPUT}"
+            echo "::notice title=Solution source found::${manifest} is committed; L8 will pack and import it."
+          else
+            echo "present=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice title=Agent not exported yet::${manifest} does not exist. The Copilot Studio agent has not been authored and exported into this repo yet, so there is nothing to deploy. Run infra/copilot-studio/export-agent.ps1 against the authoring environment and commit the result (infra/copilot-studio/README.md section 5)."
+            {
+              echo "## L8 — nothing to import yet"
+              echo
+              echo "\`${manifest}\` is not committed, so the agent has never been exported."
+              echo "This is the expected state until someone authors the agent in the"
+              echo "**authoring** Power Platform environment and runs the export."
+              echo
+              echo "The run is green on purpose: the repo must build before the tenant exists."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+  deploy-agent:
+    name: import the Copilot Studio solution
+    needs: preflight
+    if: ${{ needs.preflight.outputs.configured == 'true' && needs.preflight.outputs.solution == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      POWERPLATFORM_ENVIRONMENT_URL: ${{ vars.POWERPLATFORM_ENVIRONMENT_URL }}
+      SOLUTION_NAME: ${{ inputs.solution_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC federated login. `pac auth create --managedIdentity` below resolves its
+      # credential through DefaultAzureCredential, which reads the AZURE_* environment
+      # this step sets — the copilot-alm-starter pattern, and the reason no client
+      # secret is needed anywhere in this workflow.
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install the Power Platform CLI
+        uses: microsoft/powerplatform-actions/actions-install@v1
+
+      - name: Create the pac auth profile
+        run: |
+          set -euo pipefail
+          # import-agent.ps1 deliberately never authenticates by itself; creating the
+          # profile is the caller's job so the script can be run identically in CI and
+          # on a laptop.
+          pac auth create \
+            --environment "${POWERPLATFORM_ENVIRONMENT_URL}" \
+            --name "mls-l8-${GITHUB_RUN_ID}" \
+            --managedIdentity
+
+      - name: Confirm the target environment
+        run: |
+          set -euo pipefail
+          # Fails loudly here rather than midway through an import if the deployer is
+          # not an application user with a security role in this environment.
+          pac env who --environment "${POWERPLATFORM_ENVIRONMENT_URL}"
+
+      - name: Pack and import the agent solution
+        shell: pwsh
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          DEPLOY_AS_MANAGED: ${{ inputs.deploy_as_managed }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $importArgs = @{
+            EnvironmentUrl = $env:POWERPLATFORM_ENVIRONMENT_URL
+            SolutionName   = $env:SOLUTION_NAME
+          }
+          if ($env:DEPLOY_AS_MANAGED -ne 'true') {
+            Write-Host '::warning title=Unmanaged import::deploy_as_managed is false. Microsoft ALM guidance is to deploy managed except in development environments.'
+            $importArgs['Unmanaged'] = $true
+          }
+          if ($env:DRY_RUN -eq 'true') {
+            ./infra/copilot-studio/import-agent.ps1 @importArgs -WhatIf *>&1 |
+              Tee-Object -FilePath copilot-studio-plan.txt
+          }
+          else {
+            ./infra/copilot-studio/import-agent.ps1 @importArgs -Confirm:$false *>&1 |
+              Tee-Object -FilePath copilot-studio-apply.txt
+          }
+
+      # The import moves bits. It does NOT finish the job: manual authentication
+      # settings, Direct Line / web channel security, deployed channels, sharing,
+      # App Insights settings and knowledge are all documented as not solution-aware,
+      # connections do not travel between environments, and an imported agent must be
+      # published before it can be shared. Restating that in the run summary is the
+      # difference between a demo that works and one that fails on stage.
+      - name: Restate the post-import checklist
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## L8 — imported, NOT yet live"
+            echo
+            echo "The solution imported. These steps are manual because the settings are"
+            echo "documented as **not solution-aware**:"
+            echo
+            echo "1. **Publish** the agent in Copilot Studio."
+            echo "2. Reconfigure authentication (Authenticate manually → Entra ID V2), then publish again."
+            echo "3. Paid-F2 path only: re-create the Fabric connection and re-attach the data"
+            echo "   agent under **Agents** (a connected agent, not a knowledge source)."
+            echo "4. Create the MCP connection; confirm the tool list populates."
+            echo "5. Re-enable generative orchestration — both Fabric and MCP need it."
+            echo "6. Configure the Custom website channel + Web channel security; capture the Token Endpoint."
+            echo "7. Re-apply sharing and Fabric read access for the demo users."
+            echo
+            echo "Detail: \`infra/copilot-studio/README.md\` section 6."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload L8 agent artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-08-copilot-studio
+          path: |
+            copilot-studio-plan.txt
+            copilot-studio-apply.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  deploy-data-agent:
+    name: create the Fabric connected agent (opt-in, paid F2+, preview)
+    needs: preflight
+    if: >-
+      ${{ inputs.enable_fabric_data_agent
+          && needs.preflight.outputs.configured == 'true'
+          && needs.preflight.outputs.fabric == 'true' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Capacity posture. Two separate concerns:
+      #   * SKU  — a TRIAL capacity cannot host a data agent at all. create-data-agent.ps1
+      #            fails fast on it; this step says so up front so the run summary
+      #            carries the reason without anyone reading a stack trace.
+      #   * STATE — L8 does not resume capacities. L5 owns capacity state and states the
+      #            G2 cost delta when it resumes a paid one; duplicating that here would
+      #            mean two workflows racing to pause the same resource.
+      - name: Capacity posture notice
+        run: |
+          set -euo pipefail
+          case "${FABRIC_CAPACITY_ID}" in
+            /subscriptions/*)
+              echo "::notice title=Paid capacity::L8 does not resume capacities. If this F2 is suspended the data agent step will fail — run layer-05-fabric.yml (which states the G2 delta and pauses afterwards) or resume under G2 first."
+              ;;
+            *)
+              echo "::warning title=Trial capacity — data agent unsupported::FABRIC_CAPACITY_ID is not an ARM resource id, so this is the Fabric trial capacity. Trial capacities do not support Fabric AI experiences, data agents included, and create-data-agent.ps1 will stop before creating anything. The trial-phase default is tools-only via the MCP server; moving to a paid F2+ capacity is a G2-gated spend increase."
+              ;;
+          esac
+
+      - name: Create and publish the Fabric data agent
+        shell: pwsh
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Could not obtain a Fabric API token.' }
+          # -CapacityId lets the script recognise a trial capacity offline, before any
+          # REST call and before it prints a -WhatIf plan that could never execute.
+          $agentArgs = @{
+            Token      = $token
+            CapacityId = $env:FABRIC_CAPACITY_ID
+          }
+          if ($env:DRY_RUN -eq 'true') {
+            ./infra/fabric/create-data-agent.ps1 @agentArgs -WhatIf *>&1 |
+              Tee-Object -FilePath data-agent-plan.txt
+          }
+          else {
+            ./infra/fabric/create-data-agent.ps1 @agentArgs -Confirm:$false *>&1 |
+              Tee-Object -FilePath data-agent-apply.txt
+          }
+
+      # A failure here is survivable by design — say so, loudly, instead of leaving
+      # someone to discover the fallback during a demo.
+      - name: Fallback notice on failure
+        if: ${{ failure() }}
+        run: |
+          set -euo pipefail
+          echo "::warning title=Fabric connected agent unavailable — fall back to tools-only::The Fabric data agent could not be created or published. It requires a PAID F2+/P1+ capacity (the trial capacity does not support Fabric AI experiences), the Copilot Studio integration is in PREVIEW, and it is only validated for Microsoft Teams. Fallback: keep the Copilot Studio agent exactly as imported, drop the connected Fabric agent, and serve NL->SQL from the MCP tool server against the lakehouse SQL analytics endpoint. The agent, its prompt, its cards, its channel and this pipeline are unchanged."
+          {
+            echo "## L8 — Fabric connected agent FAILED (survivable, and the default anyway)"
+            echo
+            echo "The Copilot Studio agent import is unaffected: these jobs are independent."
+            echo
+            echo "**Fallback — and the trial-phase default:** drop the connected Fabric agent"
+            echo "and serve NL→SQL from the MCP tool server instead. See"
+            echo "\`infra/fabric/create-data-agent.ps1\` header and"
+            echo "\`infra/copilot-studio/agent-definition.md\` section 3.4."
+            echo
+            echo "Most likely cause: the capacity is the Fabric **trial** capacity, which does"
+            echo "not support Fabric AI experiences. Upgrading to paid F2+ is **G2-gated**."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload L8 data agent artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-08-fabric-data-agent
+          path: |
+            data-agent-plan.txt
+            data-agent-apply.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  verify:
+    name: verify L8 (mls-verifier)
+    needs: [preflight, deploy-agent]
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC, mls-verifier — Reader only)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Defensive: verification/layer-08-audit.ps1 is the Verifier's deliverable and
+      # does not exist yet. The composite action skips with a NOTICE rather than
+      # failing, exactly as every other layer does.
+      - name: Run verification/layer-08-audit.ps1
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '08'
+
+      - name: Upload audit report
+        if: ${{ steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-08-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

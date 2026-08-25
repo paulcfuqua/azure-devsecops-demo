@@ -18,11 +18,11 @@ name: layer-07-apps
 # matches the `containerapps-helloworld` placeholder image, NOT the real apps.
 # The real images listen on **8080** (see the EXPOSE lines in
 # apps/launch-ops/Dockerfile, apps/control-tower/Dockerfile and
-# apps/copilot-svc/Dockerfile — nginx and Node both bind 8080).
+# apps/mcp-tools/Dockerfile — nginx and Node both bind 8080).
 #
 # When the first real images publish to GHCR, set these in the `demo` GitHub
 # environment and the whole estate repoints with no code change:
-#     LAUNCH_OPS_PORT=8080  CONTROL_TOWER_PORT=8080  COPILOT_SVC_PORT=8080
+#     LAUNCH_OPS_PORT=8080  CONTROL_TOWER_PORT=8080  MCP_TOOLS_PORT=8080
 # Until then the fallback below stays 80 so the placeholder image keeps working.
 # This is open item P-1 out of Phase P; it closes at L7 image wiring.
 # ---------------------------------------------------------------------------
@@ -107,8 +107,9 @@ jobs:
       # P-1: flip these to 8080 by setting the demo environment variables.
       LAUNCH_OPS_PORT: ${{ vars.LAUNCH_OPS_PORT || '80' }}
       CONTROL_TOWER_PORT: ${{ vars.CONTROL_TOWER_PORT || '80' }}
-      COPILOT_SVC_PORT: ${{ vars.COPILOT_SVC_PORT || '80' }}
-      COPILOT_EXTERNAL_INGRESS: ${{ vars.COPILOT_EXTERNAL_INGRESS || 'false' }}
+      # mcp-tools ingress is external unconditionally (Copilot Studio connects
+      # server-to-server from Microsoft's cloud), so there is no ingress toggle.
+      MCP_TOOLS_PORT: ${{ vars.MCP_TOOLS_PORT || '80' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -132,7 +133,7 @@ jobs:
           {
             echo "LAUNCH_OPS_IMAGE=${registry}/launch-ops:${IMAGE_TAG}"
             echo "CONTROL_TOWER_IMAGE=${registry}/control-tower:${IMAGE_TAG}"
-            echo "COPILOT_SVC_IMAGE=${registry}/copilot-svc:${IMAGE_TAG}"
+            echo "MCP_TOOLS_IMAGE=${registry}/mcp-tools:${IMAGE_TAG}"
           } >> "${GITHUB_ENV}"
           echo "resolved=true" >> "${GITHUB_OUTPUT}"
 
@@ -174,10 +175,10 @@ jobs:
             cat l7-manifest.json
             echo '```'
             echo
-            echo "Target ports in effect — launch-ops: ${LAUNCH_OPS_PORT}, control-tower: ${CONTROL_TOWER_PORT}, copilot-svc: ${COPILOT_SVC_PORT}."
+            echo "Target ports in effect — launch-ops: ${LAUNCH_OPS_PORT}, control-tower: ${CONTROL_TOWER_PORT}, mcp-tools: ${MCP_TOOLS_PORT}."
             if [ "${LAUNCH_OPS_PORT}" = "80" ]; then
               echo
-              echo "> **P-1 open:** ports are still on the placeholder 80. Set LAUNCH_OPS_PORT / CONTROL_TOWER_PORT / COPILOT_SVC_PORT to 8080 in the demo environment once real images are published."
+              echo "> **P-1 open:** ports are still on the placeholder 80. Set LAUNCH_OPS_PORT / CONTROL_TOWER_PORT / MCP_TOOLS_PORT to 8080 in the demo environment once real images are published."
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 

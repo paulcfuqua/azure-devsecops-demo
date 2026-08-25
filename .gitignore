@@ -27,3 +27,8 @@ Thumbs.db
 
 # Generated data (seed scripts are source; generated CSVs are artifacts)
 data/generated/
+
+# Power Platform solution packages — the repo holds UNPACKED solution source
+# (reviewable, diffable); the .zip is a build artifact of export/import.
+infra/copilot-studio/solution/*.zip
+

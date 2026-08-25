@@ -11,6 +11,9 @@ import {
   type SelectTabEvent,
 } from "@fluentui/react-components";
 import { useMemo, useState } from "react";
+import type { AgentProvider } from "./agent/types";
+import { AskPanel } from "./AskPanel";
+import { OfflineAgentProvider } from "./agent/providers";
 import { SpecPanel } from "./SpecPanel";
 import type { DataProvider } from "./providers/types";
 
@@ -35,15 +38,28 @@ const useStyles = makeStyles({
   },
 });
 
+/**
+ * Three Well-Architected posture pillars, plus the Copilot Studio agent.
+ * "ask" is not a pillar — it is showpiece #1's answer surface, embedded here
+ * per the sponsor's 2026-08-24 decision — so it rides a separate provider and
+ * renders its own panel rather than a `@mls/spec-renderer` spec.
+ */
 type PillarId = "dev" | "sec" | "ops";
+type TabId = PillarId | "ask";
 
 export interface AppProps {
   provider: DataProvider;
+  /**
+   * Optional so every existing caller (and every existing test) keeps working.
+   * Omitted means the Ask tab is offline, which is exactly right for a host
+   * that never configured Direct Line.
+   */
+  agent?: AgentProvider;
 }
 
-export function App({ provider }: AppProps): JSX.Element {
+export function App({ provider, agent }: AppProps): JSX.Element {
   const styles = useStyles();
-  const [pillar, setPillar] = useState<PillarId>("dev");
+  const [tab, setTab] = useState<TabId>("dev");
 
   // Bind loaders once per provider so SpecPanel effects don't re-fire on render.
   const loaders = useMemo(
@@ -55,8 +71,19 @@ export function App({ provider }: AppProps): JSX.Element {
     [provider],
   );
 
+  // A stable fallback: constructing it once keeps AskPanel's connect effect
+  // from re-firing, and it does no I/O.
+  const agentProvider = useMemo(
+    () =>
+      agent ??
+      new OfflineAgentProvider(
+        "No agent provider was supplied to the control tower shell.",
+      ),
+    [agent],
+  );
+
   const onTabSelect = (_: SelectTabEvent, data: SelectTabData): void => {
-    setPillar(data.value as PillarId);
+    setTab(data.value as TabId);
   };
 
   return (
@@ -65,16 +92,22 @@ export function App({ provider }: AppProps): JSX.Element {
         <header className={styles.header}>
           <Title2>Meridian Launch Systems — Control Tower</Title2>
           <Text>
-            Dev / Sec / Ops posture on Well-Architected pillars.
+            Dev / Sec / Ops posture on Well-Architected pillars, and Ask — the
+            Copilot Studio agent.
           </Text>
         </header>
-        <TabList selectedValue={pillar} onTabSelect={onTabSelect} style={{ padding: "0 1rem" }}>
+        <TabList selectedValue={tab} onTabSelect={onTabSelect} style={{ padding: "0 1rem" }}>
           <Tab value="dev">Dev</Tab>
           <Tab value="sec">Sec</Tab>
           <Tab value="ops">Ops</Tab>
+          <Tab value="ask">Ask</Tab>
         </TabList>
         <main className={styles.content}>
-          <SpecPanel key={pillar} load={loaders[pillar]} />
+          {tab === "ask" ? (
+            <AskPanel provider={agentProvider} />
+          ) : (
+            <SpecPanel key={tab} load={loaders[tab]} />
+          )}
         </main>
         <footer className={styles.footer}>
           <Text size={200}>

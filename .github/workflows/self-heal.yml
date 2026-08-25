@@ -3,9 +3,77 @@ name: self-heal
 # =============================================================================
 # Showpiece #3 — the self-healing pipeline (L10).
 # Playbook: docs/runbooks/layers/L10.md
+# Governing amendment: docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md
 #
-#   security alert -> Claude triage (explanation comment) -> patch PR
-#                  -> CI gauntlet -> auto-merge on green -> deploy -> alert closed
+#   security finding -> GitHub-generated fix -> PR -> CI gauntlet
+#                    -> auto-merge on green -> deploy -> alert closed
+#
+# The authored Claude triage step is gone (amendment §2: "GitHub Copilot Autofix
+# (GHAS code scanning) generates the fix for CodeQL and dependency findings").
+# No LLM API key of any kind is read anywhere in this file — the amendment makes
+# "no stored secrets in CI" absolute — and .github/scripts/ is gone with it.
+#
+# ---------------------------------------------------------------------------
+# WHAT COPILOT AUTOFIX ACTUALLY DOES, AND WHAT THIS WORKFLOW HAS TO DO ITSELF
+#
+# Verified against docs.github.com on 2026-08-24. The amendment's phrase
+# "generates the fix for CodeQL *and dependency* findings" is only half right,
+# and the difference is load-bearing, so it is spelled out rather than papered
+# over:
+#
+#   CODE SCANNING (CodeQL) alerts — Autofix applies.
+#     * Autofix "Generates a single suggested fix for an alert, which you review
+#       and apply yourself." It produces a DIFF. It does not commit, and it does
+#       not open a pull request.
+#       https://docs.github.com/en/code-security/concepts/code-scanning/copilot-autofix-for-code-scanning
+#     * It runs AUTOMATICALLY for CodeQL alerts found ON PULL REQUESTS. For
+#       alerts already sitting on the default branch — which is what a scheduled
+#       heal is looking at — a fix must be requested: the "Generate fix" button,
+#       or POST .../autofix.
+#     * GA and free on all public repositories; no Copilot subscription, no AI
+#       credits, and enabled by default alongside CodeQL.
+#     * It is NOT guaranteed to produce anything. GitHub documents Autofix as
+#       non-deterministic and capable of producing incomplete or partial fixes,
+#       so "no suggestion" is a normal outcome this workflow must survive rather
+#       than a failure it should report.
+#       https://docs.github.com/en/code-security/code-scanning/managing-code-scanning-alerts/responsible-use-autofix-code-scanning
+#     * The three REST endpoints this workflow drives:
+#         POST   /repos/{o}/{r}/code-scanning/alerts/{n}/autofix          (202/200)
+#         GET    /repos/{o}/{r}/code-scanning/alerts/{n}/autofix          (status)
+#         POST   /repos/{o}/{r}/code-scanning/alerts/{n}/autofix/commits  (201)
+#       The commits endpoint takes `target_ref` + `message` and states plainly:
+#       "Branch needs to already exist." It commits to a branch. It does NOT
+#       create the branch and it does NOT open the PR.
+#       https://docs.github.com/en/rest/code-scanning/code-scanning
+#     * So the honest division of labour is:
+#         Autofix generates      -> the patch
+#         this workflow does     -> request it, wait for it, create the branch,
+#                                   commit it, open the PR, arm auto-merge
+#
+#   DEPENDABOT (dependency) alerts — Autofix does NOT apply.
+#     * There is no autofix endpoint under /repos/{o}/{r}/dependabot/alerts.
+#       Copilot Autofix's suggested-diff feature is a code-scanning feature.
+#       https://docs.github.com/en/rest/dependabot/alerts
+#     * There is also no API to trigger a Dependabot security-update PR on
+#       demand. The Dependabot alerts API can list, read and triage alerts —
+#       nothing more.
+#     * Dependabot opens the PR itself when "Dependabot security updates" is
+#       enabled: "Dependabot will automatically try to open pull requests to
+#       resolve every open Dependabot alert that has an available patch."
+#       https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-security-updates
+#     * This matters for the demo because all three seeded apps/vuln-lab CVEs
+#       (json5 2.2.0, minimist 1.2.5, semver 7.5.1) are DEPENDENCY findings.
+#       Autofix will never touch them, and until the lab also seeds a
+#       CodeQL-detectable code flaw the `autofix` job below has nothing to act
+#       on. So the `dependency` job does the only honest thing available: it
+#       finds Dependabot's own security PR and puts it through the same gauntlet
+#       with the same auto-merge-on-green.
+#       (`open-pull-requests-limit: 0` in dependabot.yml does not block this —
+#       that setting caps *version* updates; security updates are exempt.)
+#     * The newer "assign a Dependabot alert to an AI coding agent" path (GA
+#       2026-04-07) does open a draft PR from an alert, but it requires a Copilot
+#       plan with coding-agent access and consumes AI credits. That is a paid
+#       dependency this demo does not have, so it is not wired here.
 #
 # ---------------------------------------------------------------------------
 # WHY AUTO-MERGE-ON-GREEN IS DELIBERATE HERE, AND ONLY HERE
@@ -18,7 +86,7 @@ name: self-heal
 #     explicitly FAILS the audit if `mergedBy.login` is a human. A
 #     hand-assisted chain is a failed chain.
 #   * The human still sees everything. Per the brief they see the PR trail —
-#     the triage comment, the check runs, the merge — just not an approval
+#     the generated diff, the check runs, the merge — just not an approval
 #     prompt. Nothing is hidden; the review is post-hoc and fully auditable.
 #   * The blast radius is a public demo repo full of synthetic data. There is
 #     no customer, no production traffic and no real secret in the diff path.
@@ -28,12 +96,38 @@ name: self-heal
 #     CRITICAL gate, and ZAP. `--auto` only fires when every required check is
 #     green, and a heal that breaks the build simply never merges (L10 failure
 #     mode 4: "the pipeline honestly refusing a bad heal").
-#   * Scope is narrow: this workflow only ever bumps a dependency version named
-#     by a GitHub security advisory, on its own `self-heal/*` branch.
+#   * Scope is narrow: this workflow only ever lands a fix GitHub itself
+#     generated for a named security advisory, on its own branch.
 #
 # DO NOT copy this pattern into a repository that ships to real users without
 # replacing auto-merge with a required human review.
+#
 # ---------------------------------------------------------------------------
+# THE TOKEN PROBLEM, STATED UP FRONT (L10 failure mode 2's real cause)
+#
+# Two documented behaviours can silently stall the chain, and both are about
+# WHICH token opens the PR:
+#
+#   1. "When you use the repository's GITHUB_TOKEN to perform tasks, events
+#      triggered by the GITHUB_TOKEN will not create a new workflow run, with
+#      the following exceptions: pull_request events with the opened,
+#      synchronize, or reopened activity types: when a workflow using
+#      GITHUB_TOKEN creates or updates a pull request, the resulting
+#      pull_request event creates workflow runs in an APPROVAL-REQUIRED state."
+#      https://docs.github.com/en/actions/concepts/security/github_token
+#      A gauntlet waiting on a human to click "Approve workflows to run" is a
+#      gauntlet that never goes green, and auto-merge never fires.
+#
+#   2. The autofix REST endpoints document classic-PAT scopes (`security_events`
+#      for generate/read, the broader `repo` for commits). GitHub does not
+#      publish whether the Actions GITHUB_TOKEN satisfies them. Unverified is
+#      unverified, so every autofix call here degrades to a NOTICE on 403
+#      rather than failing the run.
+#
+# Both are answered by the optional `SELF_HEAL_TOKEN` secret — a PAT or GitHub
+# App token. With it, PRs are authored by a non-GITHUB_TOKEN identity and their
+# checks run without an approval gate. Without it the workflow still runs end to
+# end and says, in the job summary, exactly which half is stalled and why.
 #
 # ---------------------------------------------------------------------------
 # TRIGGER DEVIATION (important — this is not what the playbook assumed)
@@ -41,7 +135,9 @@ name: self-heal
 # L10's deploy procedure names `dependabot_alert` / `code_scanning_alert` as the
 # triggers, flagged `[derived trigger detail]`. Neither is a valid GitHub Actions
 # workflow event — they exist as webhook events only, and actionlint rejects them
-# outright ("unknown Webhook event"). Verified against actionlint 1.7.12.
+# outright ("unknown Webhook event"). Verified against actionlint 1.7.12 and
+# against docs.github.com's list of events that trigger workflows, where neither
+# name appears.
 #
 # The closest honest equivalents, all wired below:
 #   * `schedule` — poll open alerts and heal the next un-healed one. This is the
@@ -77,7 +173,7 @@ on:
         type: string
         default: ''
       dry_run:
-        description: 'Open the PR but do not enable auto-merge'
+        description: 'Open/locate the PR but do not enable auto-merge'
         type: boolean
         default: false
 
@@ -180,182 +276,202 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
           echo "Healing ${kind} alert #${number}."
 
-  triage:
-    name: triage the finding with Claude
+  autofix:
+    name: Copilot Autofix -> patch PR (code scanning)
     needs: select
-    if: ${{ needs.select.outputs.found == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: read
-    outputs:
-      action: ${{ steps.triage.outputs.action }}
-      package: ${{ steps.triage.outputs.package }}
-      ecosystem: ${{ steps.triage.outputs.ecosystem }}
-      patched_version: ${{ steps.triage.outputs.patched_version }}
-      manifest_directory: ${{ steps.triage.outputs.manifest_directory }}
-      severity: ${{ steps.triage.outputs.severity }}
-      mode: ${{ steps.triage.outputs.mode }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Fetch the alert payload
-        env:
-          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          KIND: ${{ needs.select.outputs.kind }}
-          NUMBER: ${{ needs.select.outputs.number }}
-        run: |
-          set -euo pipefail
-          if [ "${KIND}" = "dependabot" ]; then
-            gh api "repos/${REPO}/dependabot/alerts/${NUMBER}" > alert.json
-          else
-            gh api "repos/${REPO}/code-scanning/alerts/${NUMBER}" > alert.json
-          fi
-          jq -r '.state // "unknown"' alert.json
-
-      - name: Install the Anthropic SDK for the triage script
-        run: |
-          set -euo pipefail
-          # @anthropic-ai/sdk is a dependency of the apps/copilot-svc workspace,
-          # so it does not land in the root node_modules that an ESM script in
-          # .github/scripts resolves against. Install it here, unsaved.
-          npm install --no-save --no-audit --no-fund --workspaces=false '@anthropic-ai/sdk@^0.120.0'
-
-      - name: Run the triage script
-        id: triage
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ALERT_FILE: alert.json
-          ALERT_KIND: ${{ needs.select.outputs.kind }}
-          OUTPUT_DIR: self-heal
-        run: node .github/scripts/self-heal-triage.mjs
-
-      - name: Upload the triage artefacts
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: self-heal-triage-${{ needs.select.outputs.kind }}-${{ needs.select.outputs.number }}
-          path: |
-            alert.json
-            self-heal/triage.json
-            self-heal/triage.md
-          if-no-files-found: warn
-          retention-days: 30
-
-  patch:
-    name: open the patch PR and arm auto-merge
-    needs: [select, triage]
-    if: ${{ needs.select.outputs.found == 'true' && needs.triage.outputs.action == 'bump-dependency' }}
+    if: ${{ needs.select.outputs.found == 'true' && needs.select.outputs.kind == 'code-scanning' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+      security-events: write
     steps:
+      # Nothing here builds the repo — the checkout exists so `gh pr create`,
+      # `gh pr merge` and friends have a git remote to resolve the repository
+      # from. The patch itself is committed by GitHub through the autofix API,
+      # never from this working tree.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: self-heal-triage-${{ needs.select.outputs.kind }}-${{ needs.select.outputs.number }}
-
-      - name: Apply the version bump
-        id: apply
+      - name: Request a fix from Copilot Autofix
+        id: request
         env:
-          PACKAGE: ${{ needs.triage.outputs.package }}
-          ECOSYSTEM: ${{ needs.triage.outputs.ecosystem }}
-          VERSION: ${{ needs.triage.outputs.patched_version }}
-          MANIFEST_DIR: ${{ needs.triage.outputs.manifest_directory }}
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ needs.select.outputs.number }}
         run: |
           set -euo pipefail
-          dir="${MANIFEST_DIR:-.}"
-          case "${ECOSYSTEM}" in
-            npm)
-              # --package-lock-only: update package.json + the lockfile without
-              # materialising node_modules. The CI gauntlet does the real install.
-              if [ "${dir}" = "apps/vuln-lab" ]; then
-                # Deliberately outside the root workspaces list (open item P-6).
-                npm install --prefix apps/vuln-lab --package-lock-only "${PACKAGE}@${VERSION}"
-              elif [ "${dir}" = "." ]; then
-                npm install --package-lock-only "${PACKAGE}@${VERSION}"
-              else
-                npm install --package-lock-only --workspace "${dir}" "${PACKAGE}@${VERSION}"
-              fi
-              ;;
-            pip)
-              file=data/generators/requirements.txt
-              sed -i -E "s|^${PACKAGE}([<>=!~].*)?\$|${PACKAGE}>=${VERSION}|" "${file}"
-              ;;
-            *)
-              echo "::warning title=Unsupported ecosystem::No automated patch path for '${ECOSYSTEM}'. The triage explanation is still published as a run artefact."
-              echo "changed=false" >> "${GITHUB_OUTPUT}"
-              exit 0
-              ;;
-          esac
-          if git diff --quiet; then
-            echo "::notice title=No change produced::The manifest already satisfies ${PACKAGE}@${VERSION}."
-            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          # Autofix generates automatically for CodeQL alerts raised ON A PULL
+          # REQUEST. This alert is on the default branch, so the suggestion has
+          # to be asked for. 202 = generating, 200 = one already exists.
+          if ! gh api --method POST \
+              "repos/${REPO}/code-scanning/alerts/${NUMBER}/autofix" \
+              > autofix-request.json 2>autofix-request.err; then
+            echo "::notice title=Autofix could not be requested::$(head -c 400 autofix-request.err) — Copilot Autofix needs code scanning enabled on this repository, and the calling token needs security_events write. GitHub does not document whether the default GITHUB_TOKEN qualifies, so set SELF_HEAL_TOKEN if this is a 403."
+            echo "requested=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "requested=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for the suggestion
+        id: wait
+        if: ${{ steps.request.outputs.requested == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ needs.select.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Documented statuses: pending | error | success | outdated.
+          # Budget: 15 s intervals, 5 minutes total. `outdated` means the
+          # suggestion no longer matches the code, so ask for it again — once,
+          # then keep waiting inside the same budget.
+          status="pending"
+          regenerated="false"
+
+          for _ in $(seq 1 20); do
+            if ! gh api "repos/${REPO}/code-scanning/alerts/${NUMBER}/autofix" \
+                > autofix.json 2>/dev/null; then
+              status="unreadable"
+              break
+            fi
+            status="$(jq -r '.status // "unknown"' autofix.json)"
+
+            if [ "${status}" = "outdated" ] && [ "${regenerated}" = "false" ]; then
+              echo "::notice title=Autofix outdated::The stored suggestion no longer matches the code; requesting a fresh one."
+              regenerated="true"
+              gh api --method POST \
+                "repos/${REPO}/code-scanning/alerts/${NUMBER}/autofix" >/dev/null 2>&1 || true
+              status="pending"
+            fi
+
+            [ "${status}" = "pending" ] || break
+            sleep 15
+          done
+
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          if [ "${status}" != "success" ]; then
+            echo "::notice title=No autofix suggestion::Copilot Autofix returned status '${status}' for code scanning alert #${NUMBER}. This is an expected outcome, not a workflow failure: Autofix covers a subset of the CodeQL default and security-extended query suites, and GitHub documents it as non-deterministic and capable of producing incomplete fixes. This alert needs a human."
+            exit 0
+          fi
+          jq -r '.description // ""' autofix.json > autofix-description.md
+
+      - name: Create the branch the autofix commit needs
+        id: branch
+        if: ${{ steps.wait.outputs.status == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ needs.select.outputs.number }}
+        run: |
+          set -euo pipefail
+          # POST .../autofix/commits requires an existing branch: "Branch needs
+          # to already exist." Nothing creates it for us.
+          base="$(gh api "repos/${REPO}" --jq '.default_branch')"
+          base_sha="$(gh api "repos/${REPO}/git/ref/heads/${base}" --jq '.object.sha')"
+          branch="self-heal/code-scanning-${NUMBER}-autofix"
+
+          if gh api "repos/${REPO}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+            echo "::notice title=Branch already exists::${branch} is already present; reusing it."
           else
-            echo "changed=true" >> "${GITHUB_OUTPUT}"
-            git --no-pager diff --stat
+            gh api --method POST "repos/${REPO}/git/refs" \
+              -f "ref=refs/heads/${branch}" \
+              -f "sha=${base_sha}" > /dev/null
           fi
 
-      - name: Commit on a self-heal branch and open the PR
-        id: pr
-        if: ${{ steps.apply.outputs.changed == 'true' }}
+          {
+            echo "base=${base}"
+            echo "branch=${branch}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Commit the generated fix onto the branch
+        id: commit
+        if: ${{ steps.branch.outputs.branch != '' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KIND: ${{ needs.select.outputs.kind }}
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           NUMBER: ${{ needs.select.outputs.number }}
-          PACKAGE: ${{ needs.triage.outputs.package }}
-          VERSION: ${{ needs.triage.outputs.patched_version }}
-          SEVERITY: ${{ needs.triage.outputs.severity }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
           set -euo pipefail
-          branch="self-heal/${KIND}-${NUMBER}-${PACKAGE}"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout -b "${branch}"
-          git add -A
-          git commit \
-            -m "fix(security): bump ${PACKAGE} to ${VERSION}" \
-            -m "Automated remediation for ${KIND} alert #${NUMBER} (${SEVERITY}). The triage explanation is posted as a comment on this pull request."
-          git push --force-with-lease origin "${branch}"
+          message="fix(security): apply Copilot Autofix for code scanning alert #${NUMBER}"
+          if ! gh api --method POST \
+              "repos/${REPO}/code-scanning/alerts/${NUMBER}/autofix/commits" \
+              -f "target_ref=refs/heads/${BRANCH}" \
+              -f "message=${message}" \
+              > autofix-commit.json 2>autofix-commit.err; then
+            echo "::notice title=Autofix commit refused::$(head -c 400 autofix-commit.err) — this endpoint needs write access to repository contents as well as code scanning alerts."
+            echo "committed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          sha="$(jq -r '.sha // ""' autofix-commit.json)"
+          echo "committed=true" >> "${GITHUB_OUTPUT}"
+          echo "Committed ${sha} to ${BRANCH}."
+
+      - name: Open the patch PR
+        id: pr
+        if: ${{ steps.commit.outputs.committed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          AUTHORED_BY_PAT: ${{ secrets.SELF_HEAL_TOKEN != '' }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ needs.select.outputs.number }}
+          BASE: ${{ steps.branch.outputs.base }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/code-scanning/alerts/${NUMBER}" > alert.json
+          rule="$(jq -r '.rule.id // "unknown"' alert.json)"
+          severity="$(jq -r '.rule.security_severity_level // .rule.severity // "unknown"' alert.json)"
+          summary="$(jq -r '.rule.description // ""' alert.json)"
+
+          {
+            echo "## self-heal: Copilot Autofix"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Alert | [#${NUMBER}](https://github.com/${REPO}/security/code-scanning/${NUMBER}) |"
+            echo "| Rule | \`${rule}\` |"
+            echo "| Severity | ${severity} |"
+            echo
+            echo "${summary}"
+            echo
+            echo "### What generated this diff"
+            echo
+            echo "GitHub Copilot Autofix produced the change on this branch. It was"
+            echo "requested through \`POST /code-scanning/alerts/${NUMBER}/autofix\` and"
+            echo "committed through \`.../autofix/commits\` — Autofix generates the patch,"
+            echo "this workflow only moves it onto a branch and opens this PR."
+            echo
+            if [ -s autofix-description.md ]; then
+              cat autofix-description.md
+              echo
+            fi
+            echo "### What happens next"
+            echo
+            echo "This PR runs the same gauntlet as any other change — lint-ci, both test"
+            echo "suites, CodeQL, gitleaks, the Trivy CRITICAL gate and ZAP — and merges"
+            echo "itself only if all of it is green. Review it like any other patch: an"
+            echo "Autofix suggestion is a suggestion, and the gauntlet is what decides."
+          } > pr-body.md
 
           url="$(gh pr create \
-            --base main \
-            --head "${branch}" \
-            --title "fix(security): bump ${PACKAGE} to ${VERSION} (alert #${NUMBER})" \
-            --body-file self-heal/triage.md \
+            --base "${BASE}" \
+            --head "${BRANCH}" \
+            --title "fix(security): Copilot Autofix for ${rule} (alert #${NUMBER})" \
+            --body-file pr-body.md \
             --label security \
             --label self-heal)"
           echo "url=${url}" >> "${GITHUB_OUTPUT}"
-          echo "branch=${branch}" >> "${GITHUB_OUTPUT}"
           echo "Opened ${url}"
 
-      - name: Post the triage explanation as a PR comment
-        if: ${{ steps.pr.outputs.url != '' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ steps.pr.outputs.url }}
-        run: |
-          set -euo pipefail
-          # L10 V10.1 stage 2 looks for a comment containing "self-heal triage".
-          gh pr comment "${PR_URL}" --body-file self-heal/triage.md
+          if [ "${AUTHORED_BY_PAT}" != "true" ]; then
+            echo "::warning title=Checks will need manual approval::This PR was authored with the default GITHUB_TOKEN, so its pull_request workflow runs start in an approval-required state and auto-merge cannot fire until someone clicks 'Approve workflows to run'. Set the SELF_HEAL_TOKEN secret to close the loop without a human in it."
+          fi
 
       - name: Enable auto-merge (see the header for why this is intentional)
         if: ${{ steps.pr.outputs.url != '' && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
@@ -365,55 +481,151 @@ jobs:
           if gh pr merge "${PR_URL}" --auto --squash --delete-branch; then
             echo "Auto-merge armed."
           else
-            echo "::warning title=Auto-merge not armed::Enable 'Allow auto-merge' in repository settings, and make sure branch protection's required checks match the gauntlet's job names exactly (L10 failure mode 2)."
+            echo "::warning title=Auto-merge not armed::Enable 'Allow auto-merge' in repository settings, make sure main carries a branch protection rule with at least one requirement, and make sure its required checks match the gauntlet's job names exactly (L10 failure mode 2)."
           fi
 
       - name: Summary
         if: ${{ always() }}
         env:
-          PR_URL: ${{ steps.pr.outputs.url }}
-          PACKAGE: ${{ needs.triage.outputs.package }}
-          VERSION: ${{ needs.triage.outputs.patched_version }}
-          MODE: ${{ needs.triage.outputs.mode }}
           NUMBER: ${{ needs.select.outputs.number }}
+          STATUS: ${{ steps.wait.outputs.status }}
+          PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
           {
-            echo "## self-heal"
+            echo "## self-heal — code scanning alert #${NUMBER}"
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Alert | #${NUMBER} |"
-            echo "| Patch | \`${PACKAGE}\` → \`${VERSION}\` |"
-            echo "| Triage mode | ${MODE} |"
+            echo "| Fix generated by | GitHub Copilot Autofix |"
+            echo "| Autofix status | ${STATUS:-not requested} |"
             echo "| Pull request | ${PR_URL:-none opened} |"
             echo
-            echo "The PR now runs the same gauntlet as any other change and merges"
-            echo "itself only if all of it is green."
+            echo "Autofix produces a suggested diff and nothing else — no branch, no"
+            echo "commit, no PR. Everything after the diff on this run was orchestrated"
+            echo "by this workflow."
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  no-patch:
-    name: record a finding that needs a human
-    needs: [select, triage]
-    if: ${{ needs.select.outputs.found == 'true' && needs.triage.outputs.action != 'bump-dependency' }}
+  dependency:
+    name: Dependabot security update -> gauntlet
+    needs: select
+    if: ${{ needs.select.outputs.found == 'true' && needs.select.outputs.kind == 'dependabot' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: write
+      security-events: read
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: self-heal-triage-${{ needs.select.outputs.kind }}-${{ needs.select.outputs.number }}
-
-      - name: Publish the triage explanation
+      - name: Read the alert
+        id: alert
         env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           NUMBER: ${{ needs.select.outputs.number }}
-          ACTION: ${{ needs.triage.outputs.action }}
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/${REPO}/dependabot/alerts/${NUMBER}" > alert.json 2>alert.err; then
+            echo "::notice title=Could not read the alert::$(head -c 400 alert.err)"
+            echo "package=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          {
+            echo "package=$(jq -r '.dependency.package.name // ""' alert.json)"
+            echo "ghsa=$(jq -r '.security_advisory.ghsa_id // ""' alert.json)"
+            echo "severity=$(jq -r '.security_advisory.severity // "unknown"' alert.json)"
+            echo "patched=$(jq -r '.security_vulnerability.first_patched_version.identifier // ""' alert.json)"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Find Dependabot's security-update PR for this package
+        id: find
+        if: ${{ steps.alert.outputs.package != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PACKAGE: ${{ steps.alert.outputs.package }}
+        run: |
+          set -euo pipefail
+          # Autofix has no dependency-alert equivalent and there is no API to ask
+          # for a security-update PR, so Dependabot's own PR *is* the generated
+          # fix for this path. All this job does is put it through the gauntlet.
+          gh pr list --repo "${REPO}" --state open --author 'app/dependabot' \
+            --json number,url,headRefName,title > dependabot-prs.json
+
+          url="$(jq -r --arg pkg "${PACKAGE}" \
+            'map(select(.headRefName | contains($pkg))) | .[0].url // ""' \
+            dependabot-prs.json)"
+
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+          if [ -z "${url}" ]; then
+            echo "::notice title=No Dependabot PR to gauntlet::No open Dependabot pull request mentions '${PACKAGE}'. Copilot Autofix does not cover dependency alerts, and no API can request a security-update PR — so this path needs 'Dependabot security updates' switched ON in repository settings. Until then this alert has no automated fix path."
+          else
+            echo "Found ${url}"
+          fi
+
+      - name: Explain the chain on the Dependabot PR
+        if: ${{ steps.find.outputs.url != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ steps.find.outputs.url }}
+          NUMBER: ${{ needs.select.outputs.number }}
+          GHSA: ${{ steps.alert.outputs.ghsa }}
+          SEVERITY: ${{ steps.alert.outputs.severity }}
+          PATCHED: ${{ steps.alert.outputs.patched }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           {
-            echo "## self-heal: no automated patch for alert #${NUMBER}"
+            echo "## self-heal: adopted for the gauntlet"
             echo
-            echo "Triage verdict: \`${ACTION}\` — this finding needs a human."
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Dependabot alert | [#${NUMBER}](https://github.com/${REPO}/security/dependabot/${NUMBER}) |"
+            echo "| Advisory | ${GHSA:-unknown} (${SEVERITY}) |"
+            echo "| First patched version | ${PATCHED:-unknown} |"
             echo
-            cat self-heal/triage.md
+            echo "Copilot Autofix does not generate fixes for dependency alerts — its"
+            echo "suggested-diff feature is a code-scanning feature, and there is no"
+            echo "autofix endpoint under \`/dependabot/alerts\`. Dependabot's own security"
+            echo "update is therefore the generated fix on this path, and \`self-heal.yml\`"
+            echo "has armed auto-merge so it clears exactly the same gauntlet as a"
+            echo "Copilot Autofix PR: lint-ci, both test suites, CodeQL, gitleaks, the"
+            echo "Trivy CRITICAL gate and ZAP."
+            echo
+            echo "Note that workflow runs on a Dependabot pull request get a read-only"
+            echo "\`GITHUB_TOKEN\` and no repository secrets, so any gauntlet leg that needs"
+            echo "a secret will skip on this PR rather than pass."
+          } > adopt.md
+          gh pr comment "${PR_URL}" --body-file adopt.md
+
+      - name: Enable auto-merge on the Dependabot PR
+        if: ${{ steps.find.outputs.url != '' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ steps.find.outputs.url }}
+        run: |
+          set -euo pipefail
+          if gh pr merge "${PR_URL}" --auto --squash; then
+            echo "Auto-merge armed."
+          else
+            echo "::warning title=Auto-merge not armed::Enable 'Allow auto-merge' in repository settings, make sure main carries a branch protection rule with at least one requirement, and make sure its required checks match the gauntlet's job names exactly (L10 failure mode 2)."
+          fi
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          NUMBER: ${{ needs.select.outputs.number }}
+          PACKAGE: ${{ steps.alert.outputs.package }}
+          PATCHED: ${{ steps.alert.outputs.patched }}
+          PR_URL: ${{ steps.find.outputs.url }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## self-heal — Dependabot alert #${NUMBER}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Package | \`${PACKAGE:-unknown}\` |"
+            echo "| First patched version | ${PATCHED:-unknown} |"
+            echo "| Fix generated by | Dependabot security updates (Copilot Autofix does not cover dependency alerts) |"
+            echo "| Pull request | ${PR_URL:-none found} |"
           } >> "${GITHUB_STEP_SUMMARY}"

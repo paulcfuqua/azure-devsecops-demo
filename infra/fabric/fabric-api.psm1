@@ -13,6 +13,11 @@
 
     Capacity IDs are always parameters - never hardcoded (trial capacity today, paid
     F2 later is one variable change + gate G2).
+
+    2026-08-24 (Copilot Studio amendment): data agent wrappers added for L8. The
+    Fabric *data agent* item is generally available; its *configuration management*
+    APIs (including staging/publish) and its Copilot Studio consumption are in
+    PREVIEW. See infra/fabric/create-data-agent.ps1 for the documented fallback.
 #>
 
 Set-StrictMode -Version Latest
@@ -27,21 +32,76 @@ function Invoke-FabricApi {
         Bearer access token for https://api.fabric.microsoft.com.
     .PARAMETER Path
         Path relative to /v1, e.g. 'workspaces' or 'workspaces/<id>/lakehouses'.
+    .PARAMETER IncludeResponse
+        Return an envelope { Content; Headers; StatusCode } instead of the bare body.
+        Needed only by callers that must inspect a 202 Accepted long-running-operation
+        response (Location / x-ms-operation-id / Retry-After headers).
+        Ref: https://learn.microsoft.com/en-us/rest/api/fabric/articles/long-running-operation
     #>
     param(
         [Parameter(Mandatory)][string]$Token,
         [ValidateSet('GET', 'POST', 'PATCH', 'DELETE')]
         [string]$Method = 'GET',
         [Parameter(Mandatory)][string]$Path,
-        $Body = $null
+        $Body = $null,
+        [switch]$IncludeResponse
     )
     $uri = "$($script:FabricApiBaseUrl)/$Path"
     $headers = @{ Authorization = "Bearer $Token" }
-    if ($null -ne $Body) {
-        return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers `
-            -Body ($Body | ConvertTo-Json -Depth 10) -ContentType 'application/json'
+    $restArgs = @{
+        Method  = $Method
+        Uri     = $uri
+        Headers = $headers
     }
-    return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers
+    if ($null -ne $Body) {
+        $restArgs['Body'] = ($Body | ConvertTo-Json -Depth 10)
+        $restArgs['ContentType'] = 'application/json'
+    }
+    if (-not $IncludeResponse) {
+        return Invoke-RestMethod @restArgs
+    }
+    # Pre-initialised so Set-StrictMode is satisfied when the transport is mocked
+    # and never assigns them.
+    $responseHeaders = $null
+    $statusCode = $null
+    $content = Invoke-RestMethod @restArgs `
+        -ResponseHeadersVariable responseHeaders -StatusCodeVariable statusCode
+    return [pscustomobject]@{
+        Content    = $content
+        Headers    = $responseHeaders
+        StatusCode = $statusCode
+    }
+}
+
+function Get-PropertyValue {
+    <# Strict-mode-safe property read from either a hashtable or a PSObject. #>
+    param($InputObject, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($Name)) { return $InputObject[$Name] }
+        return $null
+    }
+    $prop = $InputObject.PSObject.Properties[$Name]
+    if ($prop) { return $prop.Value }
+    return $null
+}
+
+function Get-FabricHeaderValue {
+    <#
+    .SYNOPSIS
+        First value of a response header. Invoke-RestMethod returns headers as
+        string[] per key, and header names are case-insensitive on the wire.
+    #>
+    param($Headers, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Headers) { return $null }
+    foreach ($key in $Headers.Keys) {
+        if ($key -ieq $Name) {
+            $value = $Headers[$key]
+            if ($value -is [array]) { return $value[0] }
+            return $value
+        }
+    }
+    return $null
 }
 
 function Get-CollectionValue {
@@ -150,11 +210,272 @@ function Get-FabricTable {
     return @(Get-CollectionValue -Response $response)
 }
 
+function Get-FabricCapacity {
+    <#
+    .SYNOPSIS
+        Capacity by id from GET /v1/capacities, or $null when it is not visible to the
+        caller.
+    .DESCRIPTION
+        The interesting field is `sku`. Fabric TRIAL capacities do not support AI
+        experiences - the data agent among them - so L8 has to be able to tell a trial
+        capacity from a paid F2+ one before it tries to create anything.
+        Ref: https://learn.microsoft.com/en-us/fabric/fundamentals/fabric-trial
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$CapacityId
+    )
+    $response = Invoke-FabricApi -Token $Token -Method GET -Path 'capacities'
+    $found = @(Get-CollectionValue -Response $response | Where-Object { $_ -and $_.id -eq $CapacityId })
+    if ($found.Count -ge 1) { return $found[0] }
+    return $null
+}
+
+function Wait-FabricOperation {
+    <#
+    .SYNOPSIS
+        Poll a Fabric long-running operation to completion and return its result.
+    .DESCRIPTION
+        Fabric answers a write that cannot complete inline with 202 Accepted, an empty
+        body, and the headers Location / x-ms-operation-id / Retry-After. The caller
+        polls GET /v1/operations/{id} until status is Succeeded or Failed, then reads
+        GET /v1/operations/{id}/result.
+        Ref: https://learn.microsoft.com/en-us/rest/api/fabric/articles/long-running-operation
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$OperationId,
+        [int]$PollIntervalSeconds = 5,
+        [int]$TimeoutSeconds = 600
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ($true) {
+        $operation = Invoke-FabricApi -Token $Token -Method GET -Path "operations/$OperationId"
+        $status = Get-PropertyValue -InputObject $operation -Name 'status'
+        if ($status -eq 'Succeeded') {
+            return Invoke-FabricApi -Token $Token -Method GET -Path "operations/$OperationId/result"
+        }
+        if ($status -eq 'Failed') {
+            $failure = Get-PropertyValue -InputObject $operation -Name 'error'
+            $detail = if ($null -ne $failure) { ($failure | ConvertTo-Json -Depth 5 -Compress) } else { '(no error detail returned)' }
+            throw "Fabric operation $OperationId failed: $detail"
+        }
+        if ((Get-Date) -gt $deadline) {
+            throw "Fabric operation $OperationId did not complete within $TimeoutSeconds seconds (last status: '$status')."
+        }
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+}
+
+function New-FabricDataAgentDefinition {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure builder: returns an in-memory object and changes no state anywhere.')]
+    <#
+    .SYNOPSIS
+        Build the InlineBase64 `definition.parts` payload that binds a data agent to a
+        lakehouse. Pure function - no REST, no side effects, fully unit-testable.
+    .DESCRIPTION
+        Part layout and JSON schemas per
+        https://learn.microsoft.com/en-us/rest/api/fabric/articles/item-management/definitions/data-agent-definition
+
+            Files/Config/data_agent.json                                  { "$schema": "2.1.0" }
+            Files/Config/draft/stage_config.json                          { "$schema": "1.0.0", aiInstructions }
+            Files/Config/draft/lakehouse-<name>/datasource.json           the binding below
+
+        datasource.json `type` is taken from the documented enum
+        (unknown | lakehouse_tables | lakehouse | data_warehouse | kusto |
+         semantic_model | graph | mirrored_database | mirrored_azure_databricks).
+        `lakehouse_tables` is correct here: the agent reads Delta TABLES through the
+        SQL analytics endpoint. Lakehouse *files* are not supported by data agents.
+    .PARAMETER SchemaName
+        Wrap the selected tables in a `lakehouse_tables.schema` element of this name.
+        Microsoft's published example uses that nesting (shown for a warehouse:
+        `warehouse_tables.schema` with table children). Pass an empty string to emit a
+        flat list of `lakehouse_tables.table` elements instead - kept as an escape
+        hatch because the lakehouse-shaped example is not published verbatim.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$WorkspaceId,
+        [Parameter(Mandatory)][string]$LakehouseId,
+        [Parameter(Mandatory)][string]$LakehouseName,
+        [string[]]$TableName = @(),
+        [string]$AiInstructions = '',
+        [string]$DataSourceInstructions = '',
+        [string]$UserDescription = '',
+        [string]$SchemaName = 'dbo'
+    )
+    $tableElements = @(
+        foreach ($table in $TableName) {
+            [ordered]@{
+                display_name = $table
+                type         = 'lakehouse_tables.table'
+                is_selected  = $true
+            }
+        }
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SchemaName)) {
+        $elements = $tableElements
+    }
+    else {
+        $elements = @(
+            [ordered]@{
+                display_name = $SchemaName
+                type         = 'lakehouse_tables.schema'
+                is_selected  = $true
+                children     = $tableElements
+            }
+        )
+    }
+
+    $dataSource = [ordered]@{
+        '$schema'              = '1.0.0'
+        artifactId             = $LakehouseId
+        workspaceId            = $WorkspaceId
+        displayName            = $LakehouseName
+        type                   = 'lakehouse_tables'
+        userDescription        = $UserDescription
+        dataSourceInstructions = $DataSourceInstructions
+        elements               = $elements
+    }
+
+    $parts = @(
+        (New-FabricDefinitionPart -Path 'Files/Config/data_agent.json' -Object ([ordered]@{ '$schema' = '2.1.0' }))
+        (New-FabricDefinitionPart -Path 'Files/Config/draft/stage_config.json' -Object ([ordered]@{
+                    '$schema'      = '1.0.0'
+                    aiInstructions = $AiInstructions
+                }))
+        (New-FabricDefinitionPart -Path "Files/Config/draft/lakehouse-$LakehouseName/datasource.json" -Object $dataSource)
+    )
+
+    return [ordered]@{ parts = $parts }
+}
+
+function New-FabricDefinitionPart {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure builder: returns an in-memory object and changes no state anywhere.')]
+    <# Encode one definition part as InlineBase64 (UTF-8, no BOM). #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Object
+    )
+    $json = $Object | ConvertTo-Json -Depth 20
+    return [ordered]@{
+        path        = $Path
+        payload     = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+        payloadType = 'InlineBase64'
+    }
+}
+
+function Get-FabricDataAgent {
+    <#
+    .SYNOPSIS
+        Data agent by display name within a workspace, or $null when absent.
+        GET /v1/workspaces/{workspaceId}/dataAgents
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$WorkspaceId,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $response = Invoke-FabricApi -Token $Token -Method GET -Path "workspaces/$WorkspaceId/dataAgents"
+    $found = @(Get-CollectionValue -Response $response | Where-Object { $_ -and $_.displayName -eq $Name })
+    if ($found.Count -ge 1) { return $found[0] }
+    return $null
+}
+
+function New-FabricDataAgent {
+    <#
+    .SYNOPSIS
+        Create a data agent in a workspace.
+        POST /v1/workspaces/{workspaceId}/dataAgents
+    .DESCRIPTION
+        Caller needs the workspace CONTRIBUTOR role and the Item.ReadWrite.All scope;
+        service principals and managed identities are supported for this operation.
+        Creating with a definition can answer 202 Accepted, so the response is
+        inspected and any long-running operation is awaited here rather than by the
+        caller. Ref: https://learn.microsoft.com/en-us/rest/api/fabric/dataagent/items
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$WorkspaceId,
+        [Parameter(Mandatory)][string]$Name,
+        [string]$Description = '',
+        $Definition = $null,
+        [int]$TimeoutSeconds = 600
+    )
+    if (-not $PSCmdlet.ShouldProcess($Name, "Create Fabric data agent in workspace $WorkspaceId")) {
+        return $null
+    }
+
+    $body = [ordered]@{ displayName = $Name }
+    if ($Description) { $body['description'] = $Description }
+    if ($null -ne $Definition) { $body['definition'] = $Definition }
+
+    $response = Invoke-FabricApi -Token $Token -Method POST `
+        -Path "workspaces/$WorkspaceId/dataAgents" -Body $body -IncludeResponse
+
+    $content = Get-PropertyValue -InputObject $response -Name 'Content'
+    if ($null -ne (Get-PropertyValue -InputObject $content -Name 'id')) {
+        return $content
+    }
+
+    # 202 Accepted: no body, poll the operation named in the response headers.
+    $headers = Get-PropertyValue -InputObject $response -Name 'Headers'
+    $operationId = Get-FabricHeaderValue -Headers $headers -Name 'x-ms-operation-id'
+    if ([string]::IsNullOrWhiteSpace($operationId)) {
+        throw "Fabric accepted the data agent create for '$Name' but returned neither an item id nor an x-ms-operation-id header."
+    }
+
+    $retryAfter = Get-FabricHeaderValue -Headers $headers -Name 'Retry-After'
+    $pollInterval = 5
+    if ($retryAfter -and ([int]::TryParse("$retryAfter", [ref]$null))) { $pollInterval = [int]$retryAfter }
+
+    return Wait-FabricOperation -Token $Token -OperationId $operationId `
+        -PollIntervalSeconds $pollInterval -TimeoutSeconds $TimeoutSeconds
+}
+
+function Publish-FabricDataAgent {
+    <#
+    .SYNOPSIS
+        Promote a data agent's draft (staging) configuration to published.
+        POST /v1/workspaces/{workspaceId}/dataAgents/{dataAgentId}/staging/publish
+    .DESCRIPTION
+        PREVIEW: "Data Agent configuration management is currently in Preview."
+        Returns 200 with { publishedDescription } - this is NOT a long-running
+        operation. Publishing is mandatory: an unpublished data agent cannot be
+        consumed by Copilot Studio or by the Fabric data agent MCP endpoint, and the
+        published description becomes the tool description the orchestrator reads.
+        Scope: Item.ReadWrite.All or DataAgent.ReadWrite.All.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$WorkspaceId,
+        [Parameter(Mandatory)][string]$DataAgentId,
+        [string]$Description = ''
+    )
+    if (-not $PSCmdlet.ShouldProcess($DataAgentId, "Publish staging configuration of data agent in workspace $WorkspaceId")) {
+        return $null
+    }
+    $body = [ordered]@{}
+    if ($Description) { $body['description'] = $Description }
+    return Invoke-FabricApi -Token $Token -Method POST `
+        -Path "workspaces/$WorkspaceId/dataAgents/$DataAgentId/staging/publish" -Body $body
+}
+
 Export-ModuleMember -Function @(
     'Invoke-FabricApi',
     'Get-FabricWorkspace',
     'New-FabricWorkspace',
     'Get-FabricLakehouse',
     'New-FabricLakehouse',
-    'Get-FabricTable'
+    'Get-FabricTable',
+    'Get-FabricCapacity',
+    'Wait-FabricOperation',
+    'New-FabricDataAgentDefinition',
+    'Get-FabricDataAgent',
+    'New-FabricDataAgent',
+    'Publish-FabricDataAgent'
 )
