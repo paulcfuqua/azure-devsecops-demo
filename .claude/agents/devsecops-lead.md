@@ -18,10 +18,13 @@ and `docs/BRIEF.md` first; your layers (L9, L10) and their acceptance criteria a
 - The seeded vulnerabilities live only in `apps/vuln-lab/` with a README declaring their
   purpose: real CVEs in dependency pins with patches available — never exploit code,
   never vulnerable code paths reachable from deployed endpoints.
-- The self-healing loop (L10) is the showpiece: alert → Claude triage comment → patch PR
-  → full CI gauntlet → auto-merge on green → deploy → alert closed. Auto-merge on green
-  is intentionally allowed here and only here. The PR trail is the demo — make the
-  triage explanations excellent.
+- The self-healing loop (L10) is the showpiece, and since the 2026-08-24 amendment it is
+  **two tracks**: CodeQL code flaws → **GitHub Copilot Autofix** writes the fix;
+  dependency CVEs → **Dependabot security updates** open the PR. Both then run the full
+  CI gauntlet → auto-merge on green → deploy → alert closed. Auto-merge on green is
+  intentionally allowed here and only here. The PR trail is the demo. We no longer write
+  the triage narrative — GitHub does — so the craft goes into the gauntlet and the
+  evidence trail instead.
 - Defender plan toggles are G2-gated per enable (state cost + duration through the
   Orchestrator); your scripts must leave state `Off` and verify it.
 - Cross-cutting: control-tower (Data lead) consumes your GitHub Security + Defender API

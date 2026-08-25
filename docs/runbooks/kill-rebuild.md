@@ -14,9 +14,10 @@ day-to-day operation.
 | Dies every cycle (gate-free) | Persists every cycle (G3 to touch) |
 |---|---|
 | RGs `mls-rg-platform`, `mls-rg-apps`, `mls-rg-data`, `mls-rg-ops` — and everything in them (ACA env + apps, SQL, LAW/App Insights, storage, Key Vault, registry/images) | Entra users (5), groups (4), CA policies (report-only), app registrations (3) |
-| Fabric workspace **items** in `mls-operations` (lakehouse `mls_operations` + its 10 Delta tables) | Purview labels (Public/Internal/Confidential/Export-Controlled) + their GUIDs |
+| Fabric workspace **items** in `mls-operations` (lakehouse `mls_operations` + its 10 Delta tables) — **and, since 2026-08-24, the Fabric data agent, which is a workspace item too** | Purview labels (Public/Internal/Confidential/Export-Controlled) + their GUIDs |
 | Subscription-scope cost-export definition [derived — removed so it doesn't point at deleted storage] | Fabric workspace shell `mls-operations` + role assignments; the capacity itself |
 | | OIDC federation on `mls-github-deployer`; `mls-verifier`; MG `mls` + policy/NIST assignments; the $75 budget; the GitHub repo and all its config |
+| | **The Power Platform environment, its pay-as-you-go billing plan, and the Copilot Studio agent + its solution** (2026-08-24) — not RG-scoped, and re-import + republish + Direct Line reconfiguration does not fit inside the hour |
 
 Why the line sits here: tenant-level objects propagate in 15–45 minutes — churning
 them makes a <60-minute rebuild impossible (spec F6). Money is disposable; identity
@@ -60,6 +61,7 @@ Verifier — or any operator, read-only — runs the down-state half of
 | Capacity | ARM state (paid F2) / trial equivalent | `Paused` / `Active (trial, $0)` |
 | Tenant objects intact | re-run `verification/layer-03-audit.ps1` + `layer-04-audit.ps1` | both PASS, label GUIDs unchanged |
 | No orphan spend | `az resource list --query "[?starts_with(name,'mls')]"` at subscription scope | only the plumbing set (OneLake storage, LAW-linked retained artifacts, budget) |
+| Copilot Studio idle | Cost analysis → the Power Platform account resource (a *hidden type* — tick "View hidden types" in the portal) | $0 accruing; the agent survives the cycle but consumes nothing when nobody talks to it |
 | Idle run-rate | Cost analysis, next-day data | < $5/month pro-rated (≈ $0.17/day) |
 
 A tenant-object regression here is stop-the-line: `down.ps1` crossed the § 1
@@ -83,7 +85,7 @@ on a *standard* rebuild (tenant objects present):
 | 4a | L5 Fabric + seed | **real work**: resume capacity (G2 stated per resume; trial $0), recreate lakehouse `mls_operations`, `python -m generators build` (seed `20260822`), load 10 tables, re-pause | ~20–25 min |
 | 4b | L6 platform Bicep | **real work**: full redeploy into `mls-rg-platform` (+ data/ops RG contents per the Bicep tree); Key Vault recovers from soft-delete; cost export recreated | ~12–18 min |
 | 5 | L7 app CI × 2 | container build + Trivy + deploy (`launch-ops`, `control-tower`) | ~10–15 min |
-| 6 | L8 copilot CI + eval | build/deploy + golden-question eval (needs capacity resumed — scheduled inside leg 4a's window or its own stated resume) | ~8–12 min |
+| 6 | L8 MCP tools CI + agent repoint + eval | **real work**: rebuild/deploy `apps/mcp-tools` to ACA; **repoint the surviving Copilot Studio agent at the new MCP FQDN** (the ACA environment's domain suffix changes when the RG is recreated) and, on the paid-F2 path, recreate + republish the Fabric data agent and reattach it; then the golden-question eval over Direct Line (needs capacity resumed — scheduled inside leg 4a's window or its own stated resume) | ~10–14 min |
 | 7 | L9 chain re-verify | config-as-code already in repo; re-assert states (Defender `Free`) | ~2–3 min |
 | — | L10 re-arm | **not in the timed path** — `apps/vuln-lab/reseed.ps1` is demo-prep, run from the pre-demo checklist [derived, per L11 playbook] | — |
 | 8 | Verifier audits L1–L10 | full independent re-audit | ~8–10 min |
@@ -102,9 +104,9 @@ timestamps) into `verification/reports/rebuild-proof.md` (L11).
 **Critical path** (the thing to watch when the clock runs hot):
 
 ```
-up.ps1 → [L2–L4 no-ops ~4m] → L6 platform ~15m → L7 apps ~12m → L8 copilot+eval ~10m → audits ~9m
+up.ps1 → [L2–L4 no-ops ~4m] → L6 platform ~15m → L7 apps ~12m → L8 mcp+repoint+eval ~12m → audits ~9m
                              ↘ L5 fabric+seed ~22m (parallel; must finish before L8's eval)
-≈ 50 minutes nominal, ~10 minutes of margin
+≈ 52 minutes nominal, ~8 minutes of margin
 ```
 
 What eats the margin, in observed-likelihood order:
@@ -115,7 +117,13 @@ What eats the margin, in observed-likelihood order:
    from scratch — keep Dockerfiles lean, use build cache actions).
 3. **Key Vault soft-delete recovery** hiccups in L6 (recover-mode template handles
    it; a purge-protection conflict does not).
-4. **Serialized legs that should be parallel** (a workflow-dependency regression —
+4. **The agent-repoint step in leg 6** (new, 2026-08-24). The Copilot Studio agent
+   outlives the RGs, so every rebuild leaves it pointing at an MCP server that no longer
+   exists, and — on the paid-F2 path — at a deleted Fabric data agent. Both are scripted;
+   both are new failure surface that did not exist when the copilot was just another
+   container in `mls-rg-apps`. If the agent answers but every tool call fails after a
+   rebuild, this is why (L08 failure mode 5).
+5. **Serialized legs that should be parallel** (a workflow-dependency regression —
    compare the Actions graph against the table above).
 
 **Excluded from the clock** (async by definition, tracked to closure in the proof
@@ -153,6 +161,13 @@ Teardown order (reverse-dependency):
    to the pool.
 3. Fabric workspace shell `mls-operations` delete (REST) — and, if fully exiting,
    the capacity itself.
+3b. **Copilot Studio: delete the agent's solution, then the environment, then unlink or
+   delete the pay-as-you-go billing plan** (2026-08-24). Consequence: the Direct Line
+   secret and token endpoint are invalidated, so the Key Vault entries must be re-seeded
+   by a human on rebuild (G0 item C7); the environment ID recorded in the deploy workflow
+   is invalidated too. Note that deleting the billing plan does not delete its Power
+   Platform account resource in Azure — remove that separately or it lingers, untagged,
+   in the resource group.
 4. `infra/policy/teardown.ps1` — NIST + policy assignments removed, subscription
    moved to tenant root, MG `mls` deleted.
 5. OIDC federation + `mls-github-deployer` / `mls-verifier` app registrations

@@ -19,9 +19,11 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
    itself is the problem.
 4. **Synthetic data only.** Public facts (vehicle names, launch sites) are fine. Nothing
    proprietary from any employer. No real person's PII — demo users are fictional.
-5. **No secrets in the repo.** Tenant/subscription IDs live in GitHub environment
-   variables. The only stored secret is the LLM API key (GitHub Actions secret / Key
-   Vault). Everything Azure authenticates via OIDC.
+5. **No secrets in the repo, and none in CI.** Tenant/subscription IDs live in GitHub
+   environment variables. Everything Azure authenticates via OIDC / workload identity
+   federation. Since the 2026-08-24 amendment there is **no LLM API key anywhere** — the
+   only stored secret in the system is the **Direct Line secret in Key Vault**, which is
+   exchanged server-side for a short-lived token and must never reach a browser.
 
 ## How we work
 

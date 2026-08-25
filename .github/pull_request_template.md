@@ -26,7 +26,7 @@ wrong in this repo, not to perform process.
 ## Checks
 
 - [ ] `lint-ci` is green (actionlint, PSScriptAnalyzer + Pester, pytest, vitest).
-- [ ] No IDs, keys, or tenant values committed — tenant/subscription/client IDs live in the `demo` GitHub environment, and the only stored secret is `ANTHROPIC_API_KEY` (CLAUDE.md hard rule 5).
+- [ ] No IDs, keys, or tenant values committed — tenant/subscription/client IDs live in the `demo` GitHub environment. CI holds **no secret at all** (OIDC / workload identity federation only); the sole stored secret in the system is the Direct Line secret in Key Vault, which must never reach a browser (CLAUDE.md hard rule 5).
 - [ ] Synthetic data only; no real person's PII, nothing proprietary (hard rule 4).
 - [ ] Resource names come from `infra/bicep/naming.bicep`; no new hardcoded company prefix.
 - [ ] Required tags unchanged or still complete: `env`, `app`, `costCenter`, `owner`, `dataClassification`, `managedBy=iac`.

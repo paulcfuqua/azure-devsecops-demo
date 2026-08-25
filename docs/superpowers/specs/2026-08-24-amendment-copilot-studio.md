@@ -45,7 +45,7 @@ absolute rather than a documented exception (F4's exception is void).
 | Layer | Technology |
 |---|---|
 | Agent | **Custom Copilot Studio agent**, authored as a Power Platform solution, exported to this repo and deployed by pipeline (Microsoft's `copilot-alm-starter` GitHub Actions pattern) — repo stays source of truth |
-| NL → SQL over the lakehouse | **Fabric data agent** over `mls_operations`, attached to the Copilot Studio agent as a knowledge source (native NL2SQL for Lakehouse/Warehouse) |
+| NL → SQL over the lakehouse | **Fabric data agent** over `mls_operations`, attached as a **connected agent** (Copilot Studio's own term — *not* a "knowledge source"; corrected 2026-08-24 after verification). Native NL2SQL for Lakehouse/Warehouse. **Requires paid F2+ capacity — the Fabric trial capacity explicitly does not support AI experiences including Data agent**, so this path is a G2 upgrade and the tools-only MCP fallback is the default during the trial phase |
 | Ops / Sec / Cost tools | The existing five tool implementations, re-hosted as an **MCP server** (Streamable HTTP; SSE is unsupported) on the Container Apps environment and attached to the agent as tools |
 | Answer surface | **Embedded in the control-tower app via Direct Line** (sponsor decision, 2026-08-24), rendering **Adaptive Cards** — Microsoft's declarative JSON UI |
 | Auth | Entra ID / managed identity throughout |
@@ -57,10 +57,23 @@ force for the apps' own dashboards.
 
 ### Showpiece #3 — self-healing (L10), rebuilt on GitHub Copilot Autofix
 
-**GitHub Copilot Autofix** (GHAS code scanning) generates the fix for CodeQL and
-dependency findings; the CI gauntlet, auto-merge-on-green, deploy, and alert-closure
-chain are unchanged. Free on public repos. The authored Claude triage script
+**Corrected 2026-08-24 after verification — this is two tracks, not one.** Copilot
+Autofix covers **CodeQL code-scanning alerts only**; it does **not** act on Dependabot
+alerts, which this amendment originally implied. So:
+
+- **Code flaws** → Copilot Autofix generates the fix → PR. GA, free on all public repos,
+  no Copilot subscription, on by default with CodeQL. Non-deterministic and may be
+  incomplete, so the workflow must not assume a fix always arrives.
+- **Dependency CVEs** (the seeded `vuln-lab` pins) → **Dependabot security updates**
+  open the PR; the alert closes on merge.
+
+Both feed the same CI gauntlet, auto-merge-on-green, deploy and alert-closure chain,
+which is unchanged. The authored Claude triage script
 (`.github/scripts/self-heal-triage.mjs`) is retired.
+
+Consequence: `vuln-lab` seeds only dependency CVEs today, so Autofix would have nothing
+to act on. A **CodeQL-detectable code flaw** must be seeded as well for the Autofix
+track to be demoable.
 
 Accepted trade: less control over triage narrative text than a custom prompt gave. The
 PR trail remains the demo.

@@ -25,7 +25,7 @@ nothing else. No Anthropic SDK, no API key, no prompt, no `/ask`.
 | URL | `https://<container-app-fqdn>/mcp` (local: `http://localhost:8080/mcp`) |
 | Session | **Stateless.** No `Mcp-Session-Id` is issued or required; every POST is self-contained, so the container app can scale to zero and back mid-conversation. `GET`/`DELETE /mcp` answer `405` — there is no server-initiated stream and no session to delete. |
 | Auth | **None inside the app.** The container app is the security boundary: Entra ID / managed identity at the ingress, per the amendment ("Entra ID / managed identity throughout"). The service holds no secret of any kind and issues no token. If the connector needs a header, terminate it at ingress, not here. |
-| Tools | Exactly five (below). `tools/list` returning anything other than five is an audit failure (V8.2). |
+| Tools | Exactly five (below). `tools/list` returning anything other than five is an audit failure (V8.3). |
 | Result shape | Data only — each result is one `text` block containing the adapter's JSON, plus the same payload as `structuredContent.result`. No prose, no UI, no component specs: the agent renders the Adaptive Card. |
 | Errors | A bad query or a failing adapter comes back as an `isError` tool result with the message, not a protocol error, so the agent can correct itself and retry. |
 

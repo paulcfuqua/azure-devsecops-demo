@@ -9,7 +9,11 @@
 so that tenant activation is followed by configuration-and-deploy, not development.
 
 **Approved:** sponsor, 2026-08-22 (G1 amendment). Decisions in force: monorepo,
-Anthropic API, dual E5 trials, Fabric trial capacity first.
+dual E5 trials, Fabric trial capacity first. **The LLM-provider decision was voided on
+2026-08-24** by `docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md`: showpiece
+#1 becomes a Copilot Studio agent, showpiece #3 runs on GitHub Copilot Autofix, and no
+LLM API key exists in the system. Track F's copilot half is reworked accordingly (see
+open item P-8).
 
 **Spec:** `docs/superpowers/specs/2026-08-22-azure-devsecops-demo-design.md`
 **Master plan:** `2026-08-22-g1-master-plan.md` (layer criteria are unchanged; Phase P
@@ -68,11 +72,15 @@ validation:** `what-if`/deploy at L2/L6.
 
 ### Track F — Apps in local mode (maps to L7/L8) — author + run locally
 `launch-ops` and `control-tower` with a `LOCAL_DATA=1` mode reading Track A's generated
-JSON — browsable on localhost pre-tenant; `copilot-svc` with the 5-tool interface,
-mocked tool tests, and the golden-question eval harness (live LLM runs the moment
-`ANTHROPIC_API_KEY` exists — before tenant activation if the sponsor provides it);
-`apps/vuln-lab` with its 3 seeded CVE pins + README. **Validate:** unit tests green;
-local browse of both apps against generated data; eval harness runs in mock mode.
+JSON — browsable on localhost pre-tenant, control tower now including the **Ask** tab
+shipped dark; `apps/mcp-tools` (replacing `copilot-svc`) serving the same 5 tools as an
+**MCP server over Streamable HTTP**, with mocked tool tests and the golden-question eval
+harness pointed at the local MCP endpoint; the Adaptive Card builders validated against
+the pinned schema; `apps/vuln-lab` with its 3 seeded CVE pins **and** one seeded
+CodeQL-detectable code flaw + README. **Validate:** unit tests green; local browse of
+both apps against generated data; a real local MCP handshake
+(`initialize`/`tools/list`/`tools/call`); eval harness green against the local tools.
+**Deferred validation:** the Copilot Studio agent itself — cloud-only, see P-8.
 
 ### Track G — GitHub + CI (maps to L1, L9) — live on GitHub, no Azure
 Create public monorepo `paulcfuqua/azure-devsecops`, push, branch protection, secret
@@ -104,10 +112,13 @@ Wave 3 (needs everything lintable): G.
 | ~~P-5~~ | ~~Spec validation is implemented twice: `@mls/spec-renderer`'s `validateSpec` cannot load in a plain Node process, so `copilot-svc` re-implements it against the same `spec.schema.json`.~~ **CLOSED 2026-08-24:** added the UI-free `@mls/spec-renderer/validate` subpath export (import graph proven to reach only `ajv` + the schema — asserted by a test with a control group, plus a bundle grep and a real-Node-process load); `copilot-svc/src/validation.ts` now re-exports it and the duplicate is deleted. Unused direct `ajv` dep and a root-path type import cleaned up. Re-verified: 121 tests green, subpath loads with 0 DOM globals, eval 10/10. | Track F2 | ✅ closed |
 | ~~P-6~~ | ~~Root workspace hoisting defeated the vuln-lab CVE seed (`json5` resolved to patched 2.2.3 over the pinned 2.2.0; only 2 of 3 advisories surfaced), plus an extraneous `qs@6.5.2`.~~ **CLOSED 2026-08-24:** `workspaces` narrowed to an explicit list excluding `apps/vuln-lab`; root lockfile regenerated. Re-verified: `npm ls` clean, `npm audit` in vuln-lab reports exactly 3 (json5 high, minimist critical, semver high). | Orchestrator verification | ✅ closed |
 | P-7 | **CI must set the Docker build context to the repo root**, not the app directory — both app Dockerfiles need the workspace lockfile and `@mls/spec-renderer` in context. Images were never built locally (no Docker on this host), so the Dockerfiles are unproven until CI runs them. | Track F1 | Track G (CI) |
+| P-8 | **Pre-tenant local demoability of showpiece #1 is lost** (2026-08-24 amendment). Before the amendment, `copilot-svc` ran on a laptop with no tenant and no cloud credentials, so the copilot could be proven — and demoed — before a dollar was spent; that was a deliberate property of the sponsor's scaffold-before-spend posture. Microsoft Copilot Studio is cloud-only: there is no local runtime, no emulator, and a Copilot Studio *trial* licence [cannot publish an agent](https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-licensing-subscriptions), so even a free trial does not restore it. The agent now requires the tenant, a production-or-sandbox Power Platform environment on the pay-as-you-go meter, and (for the Fabric knowledge source) a paid F2 capacity. **Consequence for the evals:** the golden-question suite splits — it runs **locally against `apps/mcp-tools`**, proving the five tools, the SQL, and the golden answers themselves against Track A's generated data before any spend; and it runs **against the agent only once deployed**, over Direct Line, at L8. So the *answers* stay provable pre-tenant; the *agent* does not. No mitigation is proposed because none exists — this is recorded as an accepted cost of the amendment, not a defect to fix. | Amendment 2026-08-24 | L8 audit (V8.2) |
 
 ## What Phase P cannot cover (waits for tenant)
 
 Real Graph/Fabric/ARM calls, OIDC federation, policy/NIST state, CA/label creation,
-sign-in data, cost exports, Defender, ZAP against a live staging URL, the self-healing
-loop end-to-end, and all Verifier layer audits L1–L11. Each is named in its layer
+sign-in data, cost exports, Defender, ZAP against a live staging URL, the tail of the
+self-healing loop (its alert and Autofix-generation stages *are* exercisable pre-tenant
+on the public repo — see `L10.md` § Deferred validation), **the entire Copilot Studio
+agent** (P-8), and all Verifier layer audits L1–L11. Each is named in its layer
 playbook's Deferred validation section.

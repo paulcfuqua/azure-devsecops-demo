@@ -42,15 +42,15 @@ outputs:
   ca-control-tower:
     description: 'containerAppName(prefix, "control-tower", env).'
     value: ${{ steps.resolve.outputs.ca-control-tower }}
-  ca-copilot:
-    description: 'containerAppName(prefix, "copilot", env) — copilot-svc shortens to "copilot".'
-    value: ${{ steps.resolve.outputs.ca-copilot }}
+  ca-mcp:
+    description: >-
+      containerAppName(prefix, "mcp", env) — the MCP tools server the Copilot Studio
+      agent attaches to. Replaced ca-copilot when the 2026-08-24 amendment moved LLM
+      orchestration to Copilot Studio.
+    value: ${{ steps.resolve.outputs.ca-mcp }}
   key-vault:
     description: 'keyVaultName(prefix, env).'
     value: ${{ steps.resolve.outputs.key-vault }}
-  anthropic-secret-name:
-    description: 'naming.bicep anthropicApiKeySecretName.'
-    value: ${{ steps.resolve.outputs.anthropic-secret-name }}
 
 runs:
   using: composite
@@ -74,7 +74,6 @@ runs:
 
         prefix="$(read_var defaultCompanyPrefix)"
         envseg="$(read_var defaultEnv)"
-        secret="$(read_var anthropicApiKeySecretName)"
 
         if [ -z "${prefix}" ] || [ -z "${envseg}" ]; then
           echo "::error title=naming.bicep unreadable::Could not parse defaultCompanyPrefix / defaultEnv from ${NAMING_FILE}."
@@ -92,7 +91,6 @@ runs:
           echo "rg-list=${prefix}-rg-platform ${prefix}-rg-apps ${prefix}-rg-data ${prefix}-rg-ops"
           echo "ca-launch-ops=${prefix}-launch-ops-${envseg}-ca"
           echo "ca-control-tower=${prefix}-control-tower-${envseg}-ca"
-          echo "ca-copilot=${prefix}-copilot-${envseg}-ca"
+          echo "ca-mcp=${prefix}-mcp-${envseg}-ca"
           echo "key-vault=${prefix}-sec-${envseg}-kv"
-          echo "anthropic-secret-name=${secret:-anthropic-api-key}"
         } >> "${GITHUB_OUTPUT}"

@@ -1,60 +1,62 @@
-name: app-copilot-svc-ci
+name: app-mcp-tools-ci
 
 # =============================================================================
-# Path-filtered CI for apps/copilot-svc (L8).
+# Path-filtered CI for apps/mcp-tools (L8).
 # Playbook: docs/runbooks/layers/L08.md
-# build -> test (tool mocks + schema-validation guard) -> mock eval
+# Amendment in force: docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md
+#
+# build -> test (MCP client handshake + tool allowlist) -> tool eval
 #       -> container build -> Trivy (fail on CRITICAL) -> GHCR push
 #       -> deploy to ACA via OIDC (guarded on the demo environment).
 #
+# This package is the MCP tool server the Copilot Studio agent attaches to. It
+# runs NO model in-process, holds no key, and issues no token: the container app
+# ingress is the security boundary. There is deliberately no LLM secret here to
+# guard, which is what makes the amendment's "no stored secrets" absolute.
+#
 # ---------------------------------------------------------------------------
-# OPEN ITEM P-7 — the Docker build context is the REPO ROOT. copilot-svc depends
-# on the sibling package apps/shared/spec-renderer through a relative `file:`
-# specifier, and its Dockerfile copies `apps/shared/spec-renderer/dist` straight
-# out of the context. That dist/ is gitignored build output, so the image job
-# MUST run `npm run build:renderer` before `docker build` — an app-directory
-# context (or a build without that step) cannot work.
+# OPEN ITEM P-7 — CLOSED by the amendment. This package no longer depends on the
+# sibling @mls/spec-renderer (nothing here emits a component spec; the Copilot
+# Studio agent renders Adaptive Cards), so no `npm run build:renderer` step is
+# needed before the image build. The build context is still the repo root so the
+# workspace lockfile is present for `npm ci`.
 #
 # OPEN ITEM P-1 — target port. The image serves on 8080 (Node, PORT=8080 in the
-# Dockerfile) but infra/bicep/apps/demo.bicepparam still defaults the container
-# app's target port to the placeholder 80. Set COPILOT_SVC_PORT=8080 in the
-# `demo` GitHub environment once the first real image publishes.
+# Dockerfile) but infra/bicep/apps/demo.bicepparam may still default the
+# container app's target port to the placeholder 80. Set MCP_TOOLS_PORT=8080 in
+# the `demo` GitHub environment once the first real image publishes. Ingress is
+# deliberately NOT mutated here — closing P-1 is an explicit config change.
 # ---------------------------------------------------------------------------
-#
-# ANTHROPIC_API_KEY never appears here: the service resolves it at runtime from
-# the L6 Key Vault reference, and with no key present it runs in mock mode.
 # =============================================================================
 
 on:
   push:
     branches: [main]
     paths:
-      - apps/copilot-svc/**
-      - apps/shared/**
+      - apps/mcp-tools/**
       - package.json
       - package-lock.json
-      - .github/workflows/app-copilot-svc-ci.yml
+      - .github/workflows/app-mcp-tools-ci.yml
   pull_request:
     branches: [main]
     paths:
-      - apps/copilot-svc/**
-      - apps/shared/**
+      - apps/mcp-tools/**
       - package.json
       - package-lock.json
-      - .github/workflows/app-copilot-svc-ci.yml
+      - .github/workflows/app-mcp-tools-ci.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: app-copilot-svc-${{ github.ref }}
+  group: app-mcp-tools-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  APP_DIR: apps/copilot-svc
-  APP_SLUG: copilot-svc
-  WORKSPACE: apps/copilot-svc
+  APP_DIR: apps/mcp-tools
+  APP_SLUG: mcp-tools
+  WORKSPACE: apps/mcp-tools
 
 jobs:
   preflight:
@@ -71,10 +73,10 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          layer: copilot-svc deploy
+          layer: mcp-tools deploy
 
   build-test:
-    name: build, test and mock eval
+    name: build, test and tool eval
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,27 +89,30 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
-      - name: Build @mls/spec-renderer (output contract, spec.schema.json)
-        run: npm run build:renderer
+      - name: Generate the deterministic dataset the tools read
+        run: |
+          set -euo pipefail
+          cd data
+          python -m generators build
 
-      - name: Typecheck and build copilot-svc
+      - name: Typecheck and build mcp-tools
         run: |
           set -euo pipefail
           npm run typecheck --workspace "${WORKSPACE}"
           npm run build --workspace "${WORKSPACE}"
 
-      - name: Unit tests (tool allowlist + validation gate)
+      - name: Unit tests (tool allowlist + live MCP client handshake)
         run: npm run test --workspace "${WORKSPACE}"
 
-      - name: Golden-question eval (mock mode — no API key, no spend)
+      - name: Golden-question eval against the local MCP endpoint
         run: npm run eval --workspace "${WORKSPACE}"
 
       - name: Upload eval results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: copilot-eval-results
-          path: apps/copilot-svc/evals/eval-results.json
+          name: mcp-tools-eval-results
+          path: apps/mcp-tools/evals/eval-results.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -125,18 +130,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-
-      - name: Build the renderer into the build context (P-7)
-        run: |
-          set -euo pipefail
-          npm ci
-          npm run build:renderer
-          test -d apps/shared/spec-renderer/dist
-
       - name: Compute the GHCR reference
         id: tag
         env:
@@ -153,7 +146,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build the image (context = repo root, open item P-7)
+      - name: Build the image (context = repo root for the workspace lockfile)
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -161,8 +154,8 @@ jobs:
           load: true
           push: false
           tags: ${{ steps.tag.outputs.image }}
-          cache-from: type=gha,scope=copilot-svc
-          cache-to: type=gha,mode=max,scope=copilot-svc
+          cache-from: type=gha,scope=mcp-tools
+          cache-to: type=gha,mode=max,scope=mcp-tools
 
       - name: Trivy gate — fail the build on CRITICAL
         uses: aquasecurity/trivy-action@0.28.0
@@ -180,17 +173,17 @@ jobs:
         with:
           image-ref: ${{ steps.tag.outputs.image }}
           format: sarif
-          output: trivy-copilot-svc.sarif
+          output: trivy-mcp-tools.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '0'
 
       - name: Upload the Trivy SARIF
-        if: ${{ always() && github.event_name != 'pull_request' && hashFiles('trivy-copilot-svc.sarif') != '' }}
+        if: ${{ always() && github.event_name != 'pull_request' && hashFiles('trivy-mcp-tools.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: trivy-copilot-svc.sarif
-          category: trivy-copilot-svc
+          sarif_file: trivy-mcp-tools.sarif
+          category: trivy-mcp-tools
 
       - name: Log in to GHCR
         if: ${{ github.event_name != 'pull_request' }}
@@ -210,8 +203,8 @@ jobs:
           tags: |
             ${{ steps.tag.outputs.image }}
             ${{ steps.tag.outputs.registry }}:latest
-          cache-from: type=gha,scope=copilot-svc
-          cache-to: type=gha,mode=max,scope=copilot-svc
+          cache-from: type=gha,scope=mcp-tools
+          cache-to: type=gha,mode=max,scope=mcp-tools
 
   deploy:
     name: deploy to Container Apps
@@ -238,12 +231,10 @@ jobs:
       - name: Roll the new image onto the container app
         env:
           RG_APPS: ${{ steps.names.outputs.rg-apps }}
-          APP_NAME: ${{ steps.names.outputs.ca-copilot }}
+          APP_NAME: ${{ steps.names.outputs.ca-mcp }}
           IMAGE: ${{ needs.image.outputs.image }}
         run: |
           set -euo pipefail
-          # The ANTHROPIC_API_KEY env var on this app is a Key Vault reference
-          # wired by infra/bicep/apps/main.bicep — never set here, never logged.
           az containerapp update \
             --resource-group "${RG_APPS}" \
             --name "${APP_NAME}" \
@@ -255,29 +246,31 @@ jobs:
       - name: Check the ingress target port (open item P-1)
         env:
           RG_APPS: ${{ steps.names.outputs.rg-apps }}
-          APP_NAME: ${{ steps.names.outputs.ca-copilot }}
-          CONFIGURED_PORT: ${{ vars.COPILOT_SVC_PORT }}
+          APP_NAME: ${{ steps.names.outputs.ca-mcp }}
+          CONFIGURED_PORT: ${{ vars.MCP_TOOLS_PORT }}
         run: |
           set -euo pipefail
           current="$(az containerapp show -g "${RG_APPS}" -n "${APP_NAME}" \
             --query properties.configuration.ingress.targetPort -o tsv)"
           echo "Current ingress target port: ${current}"
           if [ "${current}" = "80" ] && [ -z "${CONFIGURED_PORT}" ]; then
-            echo "::warning title=P-1 open — target port still 80::${APP_NAME} serves a real image on 8080 but ingress still targets the placeholder port 80. Set COPILOT_SVC_PORT=8080 in the demo environment and re-run layer-07-apps.yml. Ingress was deliberately NOT mutated here."
+            echo "::warning title=P-1 open — target port still 80::${APP_NAME} serves a real image on 8080 but ingress still targets the placeholder port 80. Set MCP_TOOLS_PORT=8080 in the demo environment and re-run layer-07-apps.yml. Ingress was deliberately NOT mutated here."
           fi
 
       - name: Deployment summary
         env:
-          APP_NAME: ${{ steps.names.outputs.ca-copilot }}
+          APP_NAME: ${{ steps.names.outputs.ca-mcp }}
           IMAGE: ${{ needs.image.outputs.image }}
         run: |
           set -euo pipefail
           {
-            echo "### copilot-svc deployed"
+            echo "### mcp-tools deployed"
             echo
-            echo "- container app: \`${APP_NAME}\` (internal ingress by default)"
+            echo "- container app: \`${APP_NAME}\` (external HTTPS ingress — Copilot Studio must reach it)"
             echo "- image: \`${IMAGE}\`"
+            echo "- MCP endpoint: \`POST https://<fqdn>/mcp\` (Streamable HTTP, stateless)"
             echo
-            echo "The live golden-question eval against the deployed service is L8's"
-            echo "own step; this pipeline runs the mock-mode eval only (no spend)."
+            echo "This pipeline runs the eval against the LOCAL tool surface. The live"
+            echo "golden-question run against the deployed Copilot Studio agent over"
+            echo "Direct Line is L8's own step (\`npm run eval:agent\`)."
           } >> "${GITHUB_STEP_SUMMARY}"
