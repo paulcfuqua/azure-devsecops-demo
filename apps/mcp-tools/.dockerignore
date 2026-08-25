@@ -1,4 +1,5 @@
 node_modules
 dist
 evals/eval-results.json
+evals/agent-eval-results.json
 *.log

@@ -10,7 +10,7 @@
   "workspaces": [
     "apps/launch-ops",
     "apps/control-tower",
-    "apps/copilot-svc",
+    "apps/mcp-tools",
     "apps/shared/*"
   ],
   "scripts": {

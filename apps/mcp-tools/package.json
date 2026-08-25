@@ -1,8 +1,8 @@
 {
-  "name": "@mls/copilot-svc",
+  "name": "@mls/mcp-tools",
   "version": "0.1.0",
   "private": true,
-  "description": "Meridian Launch Systems copilot service (L8): Anthropic tool-use loop over 5 allowlisted tools, returning renderer JSON component specs (never UI code), validated against @mls/spec-renderer before return.",
+  "description": "Meridian Launch Systems MCP tool server (L8): the five ops/sec/cost tools exposed over Streamable HTTP for the custom Microsoft Copilot Studio agent to attach as tools. No LLM lives here.",
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
@@ -13,11 +13,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "eval": "tsx evals/run.ts",
-    "eval:live": "tsx evals/run.ts --live"
+    "eval:agent": "tsx evals/run-agent.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.120.0",
-    "@mls/spec-renderer": "file:../shared/spec-renderer",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^5.1.0",
     "sql.js": "^1.13.0"
   },
@@ -25,8 +24,6 @@
     "@types/express": "^5.0.3",
     "@types/node": "^24.13.3",
     "@types/sql.js": "^1.4.9",
-    "@types/supertest": "^6.0.3",
-    "supertest": "^7.1.4",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"

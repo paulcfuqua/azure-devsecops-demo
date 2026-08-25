@@ -8,7 +8,8 @@
  *     Security REST API, Microsoft Defender for Cloud, Azure Cost Management).
  *
  * Fixture/result shapes are documented per interface so the L8 wiring swaps
- * adapters without touching the tool loop.
+ * adapters without touching the MCP tool surface — the agent sees the same
+ * tool names, schemas and result shapes either way.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -240,7 +241,7 @@ export class AzureCostSeriesBackend implements CostSeriesBackend {
   }
 }
 
-/** The full backend set the tool registry runs against. */
+/** The full backend set the MCP tool registry runs against. */
 export interface Backends {
   lakehouseSql: LakehouseSqlBackend;
   logAnalytics: LogAnalyticsBackend;
