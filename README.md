@@ -8,13 +8,21 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 
 ## Status
 
-**Phase P complete (2026-08-24)**, now being reworked under a same-day amendment —
-[completion report](verification/reports/phase-p-completion.md).
+**Turn-key. Phase Q complete (2026-08-25)** —
+[completion report](verification/reports/phase-q-completion.md), preceded by
+[Phase P](verification/reports/phase-p-completion.md).
 
-The scaffold is authored and locally validated: data generators, renderer library, both
-frontends, the Bicep tree, all bootstrap/governance scripts, 11 layer playbooks, and 17
-CI workflows. **Nothing has been written to Azure**, and the public repo has not been
-published — both await sponsor go-ahead.
+Everything that does not require a live tenant is authored, tested and wired: data
+generators and seeding, the SQL schema, the Fabric lakehouse loaders, the renderer
+library, both frontends, the data API, the MCP tool server with real cloud adapters,
+the Copilot Studio agent definition and ALM, OpenTelemetry throughout, the full
+DevSecOps chain, **all 11 Verifier audit scripts wired into their layer workflows**, and
+the `up.ps1` / `down.ps1` fuse. Gates: 597 Pester, 30 pytest, 7 green npm packages,
+PowerShell analyzer at zero across every severity, actionlint clean on 22 workflows,
+every Bicep layer building clean.
+
+**Nothing has been written to Azure** — no `az login` has ever existed on this machine —
+and the public repo has not been published. Both await sponsor go-ahead.
 
 **Architecture amendment, 2026-08-24 (sponsor-directed):** all runtime LLM work moves
 inside the Microsoft landscape.
