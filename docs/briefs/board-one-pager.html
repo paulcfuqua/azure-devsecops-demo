@@ -1,0 +1,348 @@
+<title>Proof by Rebuild</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@400;600;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --paper:        #F4F7F8;
+    --surface:      #FFFFFF;
+    --surface-sunk: #EAEFF1;
+    --ink:          #0E1519;
+    --ink-soft:     #3D4C54;
+    --slate:        #6A7A83;
+    --rule:         #D2DBDF;
+    --rule-strong:  #B4C2C8;
+    --accent:       #0B6B7B;
+    --accent-wash:  #E3EFF1;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:        #0C1116;
+      --surface:      #131B21;
+      --surface-sunk: #0F161C;
+      --ink:          #E7EEF1;
+      --ink-soft:     #B4C3CB;
+      --slate:        #8598A2;
+      --rule:         #24313A;
+      --rule-strong:  #35454F;
+      --accent:       #4FB6C6;
+      --accent-wash:  #12303A;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:        #0C1116;
+    --surface:      #131B21;
+    --surface-sunk: #0F161C;
+    --ink:          #E7EEF1;
+    --ink-soft:     #B4C3CB;
+    --slate:        #8598A2;
+    --rule:         #24313A;
+    --rule-strong:  #35454F;
+    --accent:       #4FB6C6;
+    --accent-wash:  #12303A;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 58rem;
+    margin: 0 auto;
+    padding: 2.75rem 1.5rem 3.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.9rem;
+  }
+
+  /* ---------- masthead ---------- */
+  header {
+    display: flex;
+    flex-direction: column;
+    gap: .85rem;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 1.35rem;
+  }
+
+  .rule-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .7rem;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+  }
+
+  .rule-row .left  { color: var(--accent); font-weight: 500; }
+  .rule-row .right { color: var(--slate); }
+
+  h1 {
+    font-family: Chivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 800;
+    font-size: clamp(2rem, 4.6vw, 2.95rem);
+    line-height: 1.05;
+    letter-spacing: -.022em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .thesis {
+    margin: 0;
+    font-size: clamp(1rem, 1.9vw, 1.16rem);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    max-width: 58ch;
+  }
+
+  /* ---------- outcomes ---------- */
+  .outcomes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
+  .outcome {
+    background: var(--surface);
+    padding: 1.15rem 1.15rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+  }
+
+  .outcome h2 {
+    font-family: Chivo, Arial, sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.3;
+    letter-spacing: -.008em;
+    margin: 0;
+  }
+
+  .outcome p {
+    margin: 0;
+    font-size: .93rem;
+    color: var(--ink-soft);
+  }
+
+  /* ---------- numbers ---------- */
+  .numbers {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    gap: 1.5rem 1rem;
+    padding: 1.35rem 1.25rem;
+    background: var(--accent-wash);
+    border: 1px solid var(--rule);
+  }
+
+  .num {
+    display: flex;
+    flex-direction: column;
+    gap: .22rem;
+  }
+
+  .num b {
+    font-family: Chivo, Arial, sans-serif;
+    font-size: clamp(1.5rem, 3vw, 1.95rem);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  .num span {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .67rem;
+    letter-spacing: .085em;
+    text-transform: uppercase;
+    color: var(--slate);
+    line-height: 1.4;
+  }
+
+  /* ---------- risk ---------- */
+  .risk-head {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .7rem;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 .85rem;
+  }
+
+  .risks {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: .85rem;
+  }
+
+  .risks li {
+    display: grid;
+    grid-template-columns: minmax(0, 14rem) minmax(0, 1fr);
+    gap: .2rem 1.75rem;
+    align-items: baseline;
+    padding-bottom: .85rem;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .risks li:last-child { border-bottom: 0; padding-bottom: 0; }
+
+  .risks strong {
+    font-family: Chivo, Arial, sans-serif;
+    font-size: .95rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .risks p { margin: 0; font-size: .93rem; color: var(--ink-soft); }
+
+  @media (max-width: 44rem) {
+    .risks li { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- close ----------
+     A single emphasised line rather than a card: on a one-page sheet the card's
+     border and padding cost more vertical space than the sentence is worth. */
+  .close-line {
+    margin: 0;
+    padding-left: .95rem;
+    border-left: 3px solid var(--accent);
+    font-size: 1rem;
+    color: var(--ink);
+    max-width: 74ch;
+  }
+
+  footer {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .69rem;
+    letter-spacing: .04em;
+    color: var(--slate);
+    line-height: 1.65;
+    border-top: 1px solid var(--rule-strong);
+    padding-top: .9rem;
+  }
+
+  /* ---------- print: one sheet ----------
+     Page geometry lives here and nowhere else, so printing from a browser and
+     exporting to PDF produce the same sheet. The PDF export is run with
+     preferCSSPageSize, which defers to this rule rather than adding margins of
+     its own on top of it. */
+  @page { size: A4; margin: 12mm; }
+
+  @media print {
+    :root {
+      --paper: #FFFFFF; --surface: #FFFFFF; --surface-sunk: #F2F5F6;
+      --ink: #000000; --ink-soft: #233036;
+      --slate: #55646C; --rule: #C4CED3; --rule-strong: #98A6AD;
+      --accent: #0A5D6C; --accent-wash: #EDF4F5;
+    }
+    body { font-size: 10pt; line-height: 1.36; background: #FFFFFF; }
+    .sheet { max-width: none; padding: 0; gap: .8rem; }
+    header { padding-bottom: .85rem; gap: .55rem; }
+    h1 { font-size: 20pt; }
+    .thesis { font-size: 10.5pt; }
+    .outcome { padding: .8rem .9rem .85rem; gap: .3rem; }
+    .numbers { padding: .9rem 1rem; gap: .9rem 1rem; }
+    .num b { font-size: 14pt; }
+    .risk-head { margin-bottom: .6rem; }
+    .risks { gap: .55rem; }
+    .risks li { padding-bottom: .55rem; }
+    /* `ch` is a narrow unit in this face; on the printed sheet the sign-off was
+       measuring ~40% of the column while the text above it ran full width. */
+    .close-line { font-size: 9.6pt; max-width: none; }
+    /* Keep the sign-off whole: a closing line split across sheets is the one
+       break a reader actually notices on a single-page handout. */
+    .close-line, footer { break-inside: avoid; }
+    footer { padding-top: .65rem; }
+    h1 { font-size: 22pt; }
+    .thesis { font-size: 11pt; }
+    .num b { font-size: 15pt; }
+    .outcome, .numbers, .close { break-inside: avoid; }
+    .risks li { break-inside: avoid; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="sheet">
+
+  <header>
+    <div class="rule-row">
+      <span class="left">Board summary</span>
+      <span class="right">Meridian Launch Systems · fictional · synthetic data</span>
+    </div>
+    <h1>Proof by rebuild</h1>
+    <p class="thesis">Our entire cloud environment is defined in one repository, deployed by pipeline, checked by an independent auditor, and destroyed and rebuilt on demand. We do not assert that our controls work. We rebuild the environment and demonstrate it.</p>
+  </header>
+
+  <div class="outcomes">
+    <div class="outcome">
+      <h2>Audit evidence is produced continuously</h2>
+      <p>Every deployment records what was checked, what was expected, and what was found. Preparing for an audit becomes retrieval rather than a project.</p>
+    </div>
+    <div class="outcome">
+      <h2>Recovery is exercised, not documented</h2>
+      <p>The environment is destroyed and rebuilt as routine practice rather than an annual tabletop. Recovery time is measured, not estimated.</p>
+    </div>
+    <div class="outcome">
+      <h2>Cloud spend is attributable by construction</h2>
+      <p>Resources cannot be created without the tags that assign an owner and a cost centre. There is no unattributed spend to reconcile later.</p>
+    </div>
+    <div class="outcome">
+      <h2>Security fixes ship without added headcount</h2>
+      <p>Vulnerabilities are found, patched, tested and deployed unattended. Leadership reviews the record instead of approving each step.</p>
+    </div>
+  </div>
+
+  <div class="numbers">
+    <div class="num"><b>&lt; 1 hr</b><span>Rebuild from nothing</span></div>
+    <div class="num"><b>&lt; $5</b><span>Monthly cost at rest</span></div>
+    <div class="num"><b>43</b><span>Independently verified controls</span></div>
+    <div class="num"><b>1,428</b><span>Automated tests</span></div>
+    <div class="num"><b>0</b><span>Stored cloud credentials</span></div>
+  </div>
+
+  <div>
+    <p class="risk-head">What it removes from the risk register</p>
+    <ul class="risks">
+      <li>
+        <strong>No credential to steal</strong>
+        <p>Pipelines and services authenticate with short-lived federated identity. No cloud key is stored anywhere, and the database has no password in existence to leak or rotate.</p>
+      </li>
+      <li>
+        <strong>Drift cannot accumulate</strong>
+        <p>Nothing is changed by hand. Anything that diverges from the repository fails verification and surfaces immediately, rather than being discovered during an incident.</p>
+      </li>
+      <li>
+        <strong>Separation of duties is structural</strong>
+        <p>The identity that deploys cannot verify, and the identity that verifies cannot write. The boundary is enforced by the system, not by policy alone.</p>
+      </li>
+      <li>
+        <strong>Classified work has a governed home</strong>
+        <p>Sensitivity labelling, including export-controlled handling, is provisioned as code and persists across rebuilds — a property of the environment rather than a habit of its users.</p>
+      </li>
+    </ul>
+  </div>
+
+  <p class="close-line">A working environment, not an architecture diagram — demonstrable end to end from an empty subscription, inside a single meeting.</p>
+
+</div>

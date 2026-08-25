@@ -1,0 +1,712 @@
+<title>Meridian Readiness Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@400;600;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  /* ---- Light palette: the complete token set lives here, unconditionally ---- */
+  :root {
+    --paper:        #F4F7F8;   /* cool-cast off-white, not cream */
+    --surface:      #FFFFFF;
+    --surface-sunk: #EAEFF1;
+    --ink:          #0E1519;   /* near-black with a blue-slate bias */
+    --ink-soft:     #3D4C54;
+    --slate:        #6A7A83;   /* chosen neutral, biased toward the accent */
+    --rule:         #D2DBDF;
+    --rule-strong:  #B4C2C8;
+
+    --accent:       #0B6B7B;   /* deep instrument petrol */
+    --accent-deep:  #084E5A;
+    --accent-wash:  #E3EFF1;
+
+    --nominal:      #1F6B45;
+    --caution:      #9A5B0B;
+    --critical:     #A3312A;
+
+    --shadow: 0 1px 2px rgba(14, 21, 25, .06), 0 8px 24px -16px rgba(14, 21, 25, .28);
+  }
+
+  /* ---- System-dark (no stamp on <html>): redefine tokens only ---- */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:        #0C1116;
+      --surface:      #131B21;
+      --surface-sunk: #0F161C;
+      --ink:          #E7EEF1;
+      --ink-soft:     #B4C3CB;
+      --slate:        #8598A2;
+      --rule:         #24313A;
+      --rule-strong:  #35454F;
+
+      --accent:       #4FB6C6;
+      --accent-deep:  #8AD4DE;
+      --accent-wash:  #12303A;
+
+      --nominal:      #59BE8C;
+      --caution:      #E0A94A;
+      --critical:     #E4736B;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .8);
+    }
+  }
+
+  /* ---- Explicit dark choice: same token overrides, so the toggle wins ---- */
+  :root[data-theme="dark"] {
+    --paper:        #0C1116;
+    --surface:      #131B21;
+    --surface-sunk: #0F161C;
+    --ink:          #E7EEF1;
+    --ink-soft:     #B4C3CB;
+    --slate:        #8598A2;
+    --rule:         #24313A;
+    --rule-strong:  #35454F;
+
+    --accent:       #4FB6C6;
+    --accent-deep:  #8AD4DE;
+    --accent-wash:  #12303A;
+
+    --nominal:      #59BE8C;
+    --caution:      #E0A94A;
+    --critical:     #E4736B;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .8);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 62rem;
+    margin: 0 auto;
+    padding: 0 1.5rem 6rem;
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: 3.5rem 0 1.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: .74rem;
+    font-weight: 500;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  h1 {
+    font-family: Chivo, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 800;
+    font-size: clamp(2.3rem, 5.5vw, 3.6rem);
+    line-height: 1.04;
+    letter-spacing: -.022em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .thesis {
+    font-size: clamp(1.08rem, 2vw, 1.28rem);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    max-width: 44ch;
+    margin: 0;
+  }
+
+  .masthead-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 1.75rem;
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .78rem;
+    color: var(--slate);
+    letter-spacing: .02em;
+  }
+
+  /* ---------- at a glance ---------- */
+  .glance {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 2.5rem 0 0;
+  }
+
+  .stat {
+    background: var(--surface);
+    padding: 1.15rem 1.1rem 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: .3rem;
+  }
+
+  .stat b {
+    font-family: Chivo, Arial, sans-serif;
+    font-size: 1.85rem;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat span {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .7rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--slate);
+    line-height: 1.35;
+  }
+
+  /* ---------- sections ---------- */
+  section { margin-top: 4.25rem; }
+
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    border-bottom: 1px solid var(--rule-strong);
+    padding-bottom: .7rem;
+    margin-bottom: 1.75rem;
+  }
+
+  .sec-head h2 {
+    font-family: Chivo, Arial, sans-serif;
+    font-weight: 800;
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    letter-spacing: -.018em;
+    line-height: 1.12;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .lens {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .72rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .lede {
+    font-size: 1.05rem;
+    color: var(--ink-soft);
+    max-width: 66ch;
+    margin: 0 0 1.75rem;
+  }
+
+  p { max-width: 68ch; }
+
+  /* ---------- claim list ---------- */
+  .claims {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 1.4rem;
+  }
+
+  .claims > li {
+    display: grid;
+    grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+    gap: .35rem 2rem;
+    align-items: start;
+  }
+
+  .claims h3 {
+    font-family: Chivo, Arial, sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.35;
+    letter-spacing: -.005em;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  .claims p {
+    margin: 0;
+    font-size: .97rem;
+    color: var(--ink-soft);
+  }
+
+  @media (max-width: 46rem) {
+    .claims > li { grid-template-columns: 1fr; gap: .3rem; }
+  }
+
+  /* ---------- tables ---------- */
+  .table-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .92rem;
+    min-width: 40rem;
+  }
+
+  thead th {
+    background: var(--surface-sunk);
+    text-align: left;
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-weight: 600;
+    font-size: .68rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--slate);
+    padding: .7rem .9rem;
+    border-bottom: 1px solid var(--rule-strong);
+    white-space: nowrap;
+  }
+
+  tbody td {
+    padding: .78rem .9rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+
+  tbody tr:last-child td { border-bottom: 0; }
+
+  td.svc {
+    font-family: Chivo, Arial, sans-serif;
+    font-weight: 600;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+  /* ---------- gates ---------- */
+  .gates {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
+  .gates li {
+    background: var(--surface);
+    padding: .95rem 1.1rem;
+    display: grid;
+    grid-template-columns: 3.4rem minmax(0, 12rem) minmax(0, 1fr);
+    gap: .25rem 1.25rem;
+    align-items: baseline;
+  }
+
+  .gate-id {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-weight: 600;
+    font-size: .92rem;
+    color: var(--accent);
+    letter-spacing: .04em;
+  }
+
+  .gate-name {
+    font-family: Chivo, Arial, sans-serif;
+    font-weight: 600;
+    font-size: .95rem;
+    color: var(--ink);
+  }
+
+  .gates p { margin: 0; font-size: .92rem; color: var(--ink-soft); max-width: none; }
+
+  @media (max-width: 46rem) {
+    .gates li { grid-template-columns: 3.4rem minmax(0, 1fr); }
+    .gates p { grid-column: 2; }
+  }
+
+  /* ---------- showpieces ---------- */
+  .pieces {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 1.1rem;
+  }
+
+  .piece {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--accent);
+    padding: 1.3rem 1.25rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+    box-shadow: var(--shadow);
+  }
+
+  .piece h3 {
+    font-family: Chivo, Arial, sans-serif;
+    font-size: 1.06rem;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    margin: 0;
+  }
+
+  .piece p { margin: 0; font-size: .94rem; color: var(--ink-soft); max-width: none; }
+
+  .piece .kicker {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .68rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+
+  /* ---------- economics ---------- */
+  .econ {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
+  .econ div {
+    background: var(--surface);
+    padding: 1.1rem 1.1rem 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: .35rem;
+  }
+
+  .econ b {
+    font-family: Chivo, Arial, sans-serif;
+    font-size: 1.35rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.015em;
+  }
+
+  .econ span {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .69rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+
+  /* ---------- callout ---------- */
+  .callout {
+    background: var(--accent-wash);
+    border-left: 3px solid var(--accent);
+    padding: 1.15rem 1.3rem;
+    margin-top: 1.75rem;
+  }
+
+  .callout p { margin: 0; color: var(--ink); font-size: .98rem; max-width: 70ch; }
+
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .86em;
+    background: var(--surface-sunk);
+    padding: .1em .35em;
+    border-radius: 2px;
+  }
+
+  strong { font-weight: 600; color: var(--ink); }
+
+  footer {
+    margin-top: 4.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--rule-strong);
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: .74rem;
+    color: var(--slate);
+    line-height: 1.7;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, li:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  /* ---------- print: force the light palette and keep blocks whole ----------
+     Page geometry lives here and nowhere else, so printing from a browser and
+     exporting to PDF produce the same sheets. The PDF export is run with
+     preferCSSPageSize, which defers to this rule rather than adding margins of
+     its own on top of it. */
+  @page { size: A4; margin: 13mm; }
+
+  @media print {
+    :root {
+      --paper: #FFFFFF; --surface: #FFFFFF; --surface-sunk: #F2F5F6;
+      --ink: #000000; --ink-soft: #233036; --slate: #55646C;
+      --rule: #C4CED3; --rule-strong: #98A6AD;
+      --accent: #0A5D6C; --accent-deep: #084E5A; --accent-wash: #EDF4F5;
+      --shadow: none;
+    }
+
+    body { font-size: 10pt; line-height: 1.42; background: #FFFFFF; }
+    .wrap { max-width: none; padding: 0; }
+
+    .masthead { padding-top: 0; }
+    h1 { font-size: 24pt; }
+    .thesis { font-size: 11pt; max-width: 62ch; }
+    .sec-head h2 { font-size: 15pt; }
+    .stat b { font-size: 15pt; }
+    .econ b { font-size: 13pt; }
+    .piece { box-shadow: none; }
+
+    /* A section heading stranded at the foot of a page reads as an error. */
+    section { break-inside: auto; }
+    .sec-head { break-after: avoid; }
+    .lede { break-after: avoid; }
+
+    /* Never split an atomic unit across a page boundary. */
+    .stat, .piece, .econ div, .callout,
+    .gates li, .claims > li, tbody tr { break-inside: avoid; }
+
+    /* Repeat column headers when the service table runs past one page. */
+    thead { display: table-header-group; }
+    .table-scroll { overflow: visible; }
+    table { min-width: 0; font-size: 8.6pt; }
+    thead th, tbody td { padding: .42rem .55rem; }
+
+    footer { break-inside: avoid; }
+    a { color: var(--ink); text-decoration: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Executive brief · Reference environment</p>
+    <h1>An enterprise Azure estate you can delete on purpose</h1>
+    <p class="thesis">Meridian Launch Systems is a fictional launch provider whose entire Azure environment is defined, deployed, verified and destroyed from one repository. The repository is the product. The cloud estate is a build artifact.</p>
+    <div class="masthead-meta">
+      <span>Audience: engineering, security &amp; operations leadership</span>
+      <span>Synthetic data throughout</span>
+    </div>
+  </header>
+
+  <div class="glance">
+    <div class="stat"><b>11</b><span>Layers, each independently audited</span></div>
+    <div class="stat"><b>43</b><span>Verification criteria</span></div>
+    <div class="stat"><b>1,428</b><span>Automated tests</span></div>
+    <div class="stat"><b>&lt; 1 hr</b><span>Destroy &amp; rebuild</span></div>
+    <div class="stat"><b>&lt; $5</b><span>Monthly idle cost</span></div>
+    <div class="stat"><b>1</b><span>Manual step remaining</span></div>
+  </div>
+
+  <section>
+    <div class="sec-head">
+      <span class="lens">Lens 01</span>
+      <h2>Process — how the environment is governed</h2>
+    </div>
+    <p class="lede">The engineering practices are the point. Every one of them is a control an auditor, a finance partner, or a security officer can inspect without taking anyone's word for it.</p>
+
+    <ul class="claims">
+      <li>
+        <h3>The repository is the source of truth</h3>
+        <p>Nothing is configured by hand in a portal. Anything that exists in the estate can be recreated by replaying pipelines — which means configuration drift becomes visible instead of accumulating quietly. Exactly one manual step survives, and it is documented as an exception rather than glossed over.</p>
+      </li>
+      <li>
+        <h3>Verification is independent, and it is code</h3>
+        <p>Each layer ships an audit script that queries Azure, Entra, Fabric and GitHub directly under a <em>separate read-only identity</em> — never the identity that performed the deployment. A layer is complete when an independent auditor confirms the deployed state matches intent, not when a deployment exits successfully. The audits are read-only by construction: their transport wrappers refuse any mutating verb.</p>
+      </li>
+      <li>
+        <h3>Human approval sits only where it earns its cost</h3>
+        <p>Five gates, placed where money, credentials, or irreversibility are involved. Everywhere else, independent verification substitutes for routine review — so approval means something instead of becoming a reflex.</p>
+      </li>
+      <li>
+        <h3>Reproducibility is treated as a control, not a convenience</h3>
+        <p>The environment is destroyed and rebuilt deliberately. A rebuild that succeeds proves the repository is complete; a rebuild that fails names precisely what was missing. This is disaster recovery, onboarding, and audit evidence produced by the same mechanism.</p>
+      </li>
+      <li>
+        <h3>Deployment is layered and propagation-aware</h3>
+        <p>Identity objects, policy assignments and label replication settle on their own schedules. The build order respects that, with bounded retry windows per criterion, so the estate is never declared ready while it is still converging.</p>
+      </li>
+      <li>
+        <h3>Cost discipline is enforced, not encouraged</h3>
+        <p>A tag taxonomy is enforced by Azure Policy — untagged resource groups are refused at creation. Daily cost exports land in the analytics plane, and spend per application over time is a first-class operational view rather than a monthly spreadsheet.</p>
+      </li>
+    </ul>
+
+    <ul class="gates" style="margin-top:2rem">
+      <li><span class="gate-id">G0</span><span class="gate-name">Bootstrap</span><p>Tenant, subscription, root federation, capacity. Human-only, one time.</p></li>
+      <li><span class="gate-id">G1</span><span class="gate-name">Plan approval</span><p>The full build plan approved once. No per-layer sign-off thereafter.</p></li>
+      <li><span class="gate-id">G2</span><span class="gate-name">Spend profile</span><p>Anything that raises the run rate, with the projected delta stated before approval.</p></li>
+      <li><span class="gate-id">G3</span><span class="gate-name">Tenant-level deletion</span><p>Identity objects, labels, workspaces. Resource-group teardown is deliberately gate-free.</p></li>
+      <li><span class="gate-id">G4</span><span class="gate-name">Exception</span><p>Repeated verification failure, cost anomaly, or credential failure. Otherwise silence.</p></li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="lens">Lens 02</span>
+      <h2>Technology — what the engineering demonstrates</h2>
+    </div>
+    <p class="lede">Microsoft-native and standards-based throughout, with the security properties designed in rather than bolted on.</p>
+
+    <ul class="claims">
+      <li>
+        <h3>No stored cloud credentials, anywhere</h3>
+        <p>Every pipeline authenticates to Azure by workload identity federation; every service authenticates to Azure data planes by managed identity. The Azure SQL server enforces Entra-only authentication, so no database password exists to leak. Continuous integration holds no secret at all — a property that is asserted, not assumed.</p>
+      </li>
+      <li>
+        <h3>Infrastructure on Azure Verified Modules</h3>
+        <p>Microsoft-maintained, version-pinned Bicep modules rather than hand-rolled templates. Where no verified module fits, the raw resource is used deliberately and the reason recorded alongside it.</p>
+      </li>
+      <li>
+        <h3>Governance expressed as policy</h3>
+        <p>Management groups, tag enforcement, permitted regions, and the NIST SP 800-53 initiative assigned as code. Compliance posture is queryable, versioned, and rebuilt with everything else.</p>
+      </li>
+      <li>
+        <h3>The AI agent is version-controlled infrastructure</h3>
+        <p>The Copilot Studio agent is a Power Platform solution exported into the repository and deployed by pipeline — not a thing someone built in a browser. Editing it in a portal causes the layer audit to fail, which is the intended behaviour.</p>
+      </li>
+      <li>
+        <h3>The agent cannot generate its own interface</h3>
+        <p>It answers with declarative component specifications — validated against a schema before they are returned — which a fixed renderer draws. That is a governance property: the surface an executive sees cannot be produced by a language model at runtime.</p>
+      </li>
+      <li>
+        <h3>Tools are exposed over an open protocol</h3>
+        <p>Operational, security and cost tools are published through Model Context Protocol, so the same tool surface serves the agent and the dashboards. Each tool is read-only and allow-listed; anything outside the list is refused before execution, not after.</p>
+      </li>
+      <li>
+        <h3>Software supply chain covered end to end</h3>
+        <p>SPDX software bills of materials, static analysis, dependency scanning, container image scanning, dynamic application testing, secret scanning with push protection, and full-history secret sweeps — each with a negative test proving the gate actually blocks.</p>
+      </li>
+      <li>
+        <h3>Remediation runs without a human in the path</h3>
+        <p>A vulnerability finding produces a fix, a pull request, a full test-and-scan gauntlet, an automatic merge on green, a deployment, and a closed finding. Leadership reviews the trail rather than approving each step.</p>
+      </li>
+      <li>
+        <h3>Observability by open standard</h3>
+        <p>OpenTelemetry traces and metrics from every service into Azure Monitor, with span attributes restricted by allow-list so query text and parameters can never reach telemetry.</p>
+      </li>
+      <li>
+        <h3>Deterministic synthetic data</h3>
+        <p>Launch, supply-chain and telemetry data generated from a fixed seed, so expected results are exact and verifiable. Nothing proprietary is used, which is what makes the environment safe to share.</p>
+      </li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="lens">Lens 03</span>
+      <h2>Azure services in the estate</h2>
+    </div>
+    <p class="lede">Every service below is provisioned from code, verified by an independent audit, and removed by the teardown path.</p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th scope="col">Service</th><th scope="col">Role in the environment</th><th scope="col">What it demonstrates</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="svc">Management Groups</td><td>Subscription placed under a governed hierarchy</td><td>Governance scaffolding that survives rebuilds</td></tr>
+          <tr><td class="svc">Azure Policy</td><td>Tag enforcement, permitted regions, NIST SP 800-53 initiative</td><td>Compliance and cost discipline as enforced code</td></tr>
+          <tr><td class="svc">Microsoft Entra ID</td><td>Users, groups, Conditional Access, app registrations, managed identities, federated credentials</td><td>The identity estate as code, with no stored secrets</td></tr>
+          <tr><td class="svc">Microsoft Purview</td><td>Sensitivity labels, including Export-Controlled</td><td>Data classification for regulated engineering work</td></tr>
+          <tr><td class="svc">Microsoft Fabric</td><td>OneLake lakehouse, Delta tables, SQL analytics endpoint, data agent</td><td>A single cross-domain analytical plane</td></tr>
+          <tr><td class="svc">Azure Container Apps</td><td>Five applications, every one scaling to zero</td><td>Idle cost near zero without losing the platform</td></tr>
+          <tr><td class="svc">Azure SQL Database</td><td>Serverless with auto-pause; Entra-only authentication</td><td>An operational store with no password in existence</td></tr>
+          <tr><td class="svc">Azure Functions</td><td>Cost-export ingestion and token exchange</td><td>Event-driven glue on consumption pricing</td></tr>
+          <tr><td class="svc">Azure Key Vault</td><td>Custodian of the system's single stored secret</td><td>A deliberately minimal secret footprint</td></tr>
+          <tr><td class="svc">Azure Monitor</td><td>Log Analytics and Application Insights as the telemetry sink</td><td>Operational evidence the dashboards query live</td></tr>
+          <tr><td class="svc">Microsoft Defender for Cloud</td><td>Secure score, control breakdown, container plan toggled on demand</td><td>Security posture measured continuously and costed explicitly</td></tr>
+          <tr><td class="svc">Azure Cost Management</td><td>Daily exports into the lakehouse, budgets with alert thresholds</td><td>FinOps evidence rather than FinOps intention</td></tr>
+          <tr><td class="svc">Microsoft Copilot Studio</td><td>The custom agent, with Fabric and the tool server attached</td><td>Enterprise AI governed like any other deployed system</td></tr>
+          <tr><td class="svc">Azure Storage</td><td>Cost export landing zone</td><td>The first hop of the FinOps data path</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="lens">Demonstrations</span>
+      <h2>Three things worth watching</h2>
+    </div>
+
+    <div class="pieces">
+      <div class="piece">
+        <span class="kicker">Ask anything</span>
+        <h3>Cross-domain copilot</h3>
+        <p>A natural-language question — <em>which day of the week sees the most launches, and which day sees the most scrubs?</em> — is answered by generating and executing real SQL against the lakehouse, then returning a validated component specification the interface draws. It reaches operations, security and cost data through the same governed tool surface.</p>
+      </div>
+      <div class="piece">
+        <span class="kicker">Posture at a glance</span>
+        <h3>Control tower</h3>
+        <p>Development, security and operations views framed on the Well-Architected pillars, fed by live Azure, Defender and source-control APIs plus cost exports. Vulnerabilities, secure score, compliance posture, service health and spend per application, in one place.</p>
+      </div>
+      <div class="piece">
+        <span class="kicker">Hands off</span>
+        <h3>Self-healing pipeline</h3>
+        <p>A vulnerability is found, a fix is generated, a pull request opens, the full gauntlet runs, the change merges on green and deploys, and the finding closes — unattended. The audit proves the merged commit actually reached Azure, rather than that a pull request merely existed.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="lens">Economics</span>
+      <h2>What it costs to keep</h2>
+    </div>
+    <p class="lede">The financial argument is the operational one. An environment that costs almost nothing at rest is an environment nobody is tempted to leave running, half-configured, for a quarter.</p>
+
+    <div class="econ">
+      <div><b>&lt; $5</b><span>per month, torn down</span></div>
+      <div><b>~$1</b><span>per hour, live demo</span></div>
+      <div><b>~$1–2</b><span>per rebuild cycle</span></div>
+      <div><b>$0</b><span>idle AI cost</span></div>
+    </div>
+
+    <div class="callout">
+      <p>Every compute surface scales to zero, the database auto-pauses, analytics capacity is paused when idle, and AI usage is billed per interaction. The teardown path is deliberately frictionless — deleting the estate requires no approval, because making destruction easy is what keeps the rebuild honest.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <span class="lens">Why it matters</span>
+      <h2>What a launch organization gets from this</h2>
+    </div>
+
+    <ul class="claims">
+      <li>
+        <h3>Audit evidence as a by-product</h3>
+        <p>Every layer produces a committed verification report naming the query run, the expected value, and the observed one. Demonstrating control effectiveness stops being a project and becomes an artifact of normal operation.</p>
+      </li>
+      <li>
+        <h3>Export-controlled work has a place to live</h3>
+        <p>Sensitivity labels are provisioned as code and persist across rebuilds, so classification is a property of the environment rather than a habit of its users.</p>
+      </li>
+      <li>
+        <h3>Cloud spend attributable by construction</h3>
+        <p>Resources cannot be created without the tags that make spend attributable, so cost allocation is accurate by default instead of reconstructed after the fact.</p>
+      </li>
+      <li>
+        <h3>Velocity without loss of control</h3>
+        <p>Automated remediation ships fixes without a human in the path, while independent verification and a small number of well-placed gates keep the boundary explicit. Speed and control are usually traded against each other; here they are separated.</p>
+      </li>
+    </ul>
+  </section>
+
+  <footer>
+    Meridian Launch Systems is fictional. All data is synthetic and generated from a fixed seed; public facts such as vehicle names and launch sites are used freely, and nothing proprietary to any organization appears anywhere in the environment.
+  </footer>
+
+</div>
