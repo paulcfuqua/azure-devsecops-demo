@@ -6,7 +6,7 @@
   "description": "Print-ready PDF export for the two presentation briefs. Not part of the root npm workspace: it is documentation tooling, and nothing in apps/ should carry a browser driver in its dependency graph.",
   "scripts": {
     "pdf": "node make-pdfs.mjs",
-    "pages": "node -e \"import('pdf-lib').then(async ({PDFDocument})=>{const fs=await import('node:fs');for (const f of ['Meridian-Board-One-Pager.pdf','Meridian-Readiness-Brief.pdf']) {const d=await PDFDocument.load(fs.readFileSync(f));console.log(f+': '+d.getPageCount()+' page(s)')}})\""
+    "pages": "node -e \"import('pdf-lib').then(async ({PDFDocument})=>{const fs=await import('node:fs');for (const f of fs.readdirSync('.').filter(n=>n.endsWith('.pdf')).sort()) {const d=await PDFDocument.load(fs.readFileSync(f));console.log(f+': '+d.getPageCount()+' page(s)')}})\""
   },
   "devDependencies": {
     "pdf-lib": "^1.17.1",

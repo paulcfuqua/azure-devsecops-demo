@@ -11,6 +11,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const jobs = [
   { src: "readiness-brief.html", out: "Meridian-Readiness-Brief.pdf" },
   { src: "board-one-pager.html", out: "Meridian-Board-One-Pager.pdf" },
+  { src: "kickoff-prompt.html", out: "Meridian-Kickoff-Prompt.pdf" },
 ];
 
 const browser = await chromium.launch({ channel: "chrome" });

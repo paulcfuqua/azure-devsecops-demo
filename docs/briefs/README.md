@@ -7,6 +7,13 @@ exports them to print-ready PDF.
 |---|---|---|
 | `readiness-brief.html` → `Meridian-Readiness-Brief.pdf` | Engineering, security and operations leadership | 7 pages |
 | `board-one-pager.html` → `Meridian-Board-One-Pager.pdf` | Board / executive committee | **1 page** |
+| `kickoff-prompt.html` → `Meridian-Kickoff-Prompt.pdf` | Document of record | 5 pages |
+
+`kickoff-prompt.html` reproduces the founding prompt as issued on 2026-08-22. It is
+the fuller record: `docs/BRIEF.md` carries the same brief sections but omits the
+opening session instruction and the closing first task. Neither file is edited when
+a decision changes — the LLM-provider line still reads as originally written, and
+its supersession lives in `docs/superpowers/specs/` instead.
 
 Both are self-contained HTML — no build step, no framework. Open either file in a
 browser to read it, or use the PDFs.
