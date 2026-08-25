@@ -127,6 +127,11 @@ jobs:
     outputs:
       image: ${{ steps.tag.outputs.image }}
       tag: ${{ steps.tag.outputs.tag }}
+      # The digest of what was actually pushed. L7's V7.1 binds the live
+      # endpoint to the audited build by comparing the health payload's
+      # content-hash marker with this, so it has to travel from the only
+      # step that knows it to the deploy step that stamps it on the app.
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -194,6 +199,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push the scanned image
+        id: push
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@v6
         with:
@@ -233,15 +239,22 @@ jobs:
           RG_APPS: ${{ steps.names.outputs.rg-apps }}
           APP_NAME: ${{ steps.names.outputs.ca-mcp }}
           IMAGE: ${{ needs.image.outputs.image }}
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
         run: |
           set -euo pipefail
+          # MLS_IMAGE_DIGEST records which build this revision serves, the same
+          # way the two frontends do it for L7's V7.1. --set-env-vars, not
+          # --replace-env-vars: AZURE_CLIENT_ID (which binds
+          # DefaultAzureCredential to the mcp-tools user-assigned identity) and
+          # the App Insights connection string came from the L7 template.
           az containerapp update \
             --resource-group "${RG_APPS}" \
             --name "${APP_NAME}" \
             --image "${IMAGE}" \
+            --set-env-vars "MLS_IMAGE_DIGEST=${IMAGE_DIGEST:-unset}" \
             --min-replicas 0 \
             --output none
-          echo "Deployed ${IMAGE} to ${APP_NAME}."
+          echo "Deployed ${IMAGE} (digest ${IMAGE_DIGEST:-unset}) to ${APP_NAME}."
 
       - name: Check the ingress target port (open item P-1)
         env:

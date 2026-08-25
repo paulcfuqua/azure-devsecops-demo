@@ -20,8 +20,29 @@
     window is still open, and L6 sign-off may proceed on that. It must be closed PASS
     before L7 sign-off - re-run with -EnforceCostExport once the window has elapsed.
 
+    V6.4 is asynchronous in the same sense and gets the same treatment, but only when the
+    caller says when the database was last touched. L06.md schedules the query "75 minutes
+    after the last deployment touch of the DB", and kill-rebuild.md section 5 lists
+    "V6.4 SQL auto-pause (+75 min)" among the criteria EXCLUDED from the <60-minute rebuild
+    clock. So a pipeline that runs this audit immediately after the layer deploys must be
+    able to record V6.4 without either waiting out the window (which would put 75 minutes
+    of sleep on the critical path the clock measures) or failing a database that simply has
+    not been idle long enough yet. -SqlLastTouchedUtc plus -SqlPauseWaitMinutes 0 gives
+    PENDING; the re-check run, later and without a last-touched time, evaluates once and
+    decides. With no -SqlLastTouchedUtc the behaviour is unchanged: still Online is a FAIL.
+
 .EXAMPLE
     ./layer-06-audit.ps1 -SubscriptionId <sub>
+
+.EXAMPLE
+    # Inline, straight after the layer deployed: V6.3 and V6.4 both record PENDING with
+    # their deadlines, everything else gates the layer, and nothing sleeps.
+    ./layer-06-audit.ps1 -SubscriptionId <sub> -LayerCompletedUtc <iso> `
+        -SqlLastTouchedUtc <iso> -SqlPauseWaitMinutes 0
+
+.EXAMPLE
+    # The async re-check, >= 75 minutes later: single evaluation, no grace.
+    ./layer-06-audit.ps1 -SubscriptionId <sub> -EnforceCostExport -SqlPauseWaitMinutes 0
 #>
 [CmdletBinding()]
 param(
@@ -37,6 +58,7 @@ param(
     [string]$LayerCompletedUtc,
     [string]$SqlLastTouchedUtc,
     [double]$SqlIdleWindowMinutes = 75,
+    [double]$SqlPauseWaitMinutes = -1,
     [switch]$EnforceCostExport,
     [string]$ReportRoot,
     [switch]$NoRetry
@@ -220,6 +242,7 @@ function Invoke-Main {
         [string]$LayerCompletedUtc,
         [string]$SqlLastTouchedUtc,
         [double]$SqlIdleWindowMinutes = 75,
+        [double]$SqlPauseWaitMinutes = -1,
         [switch]$EnforceCostExport,
         [string]$ReportRoot,
         [switch]$NoRetry
@@ -280,16 +303,29 @@ function Invoke-Main {
         -RetryWindowMinutes 1440 -InProcessWaitMinutes 0 -WindowStartUtc $costWindowStart -PendingWhenUnexpired:$pendingAllowed `
         -Test { Test-CostExportLanded -AccountName $accountName -ContainerName $CostExportContainerName } | Out-Null
 
+    # The idle window opens at the last deployment touch of the database (the seed), which
+    # only the caller knows. Supplied: the deadline is computable, so "not paused yet" is
+    # PENDING while the window is open and FAIL once it has elapsed - V6.3's treatment.
+    # Not supplied: unchanged historical behaviour, an Online database is a FAIL.
     $sqlWindowStart = [datetime]::UtcNow
-    if (-not [string]::IsNullOrWhiteSpace($SqlLastTouchedUtc)) { $sqlWindowStart = [datetime]::Parse($SqlLastTouchedUtc).ToUniversalTime() }
+    $sqlWindowKnown = -not [string]::IsNullOrWhiteSpace($SqlLastTouchedUtc)
+    if ($sqlWindowKnown) { $sqlWindowStart = [datetime]::Parse($SqlLastTouchedUtc).ToUniversalTime() }
     $sqlBudget = $SqlIdleWindowMinutes - ([datetime]::UtcNow - $sqlWindowStart).TotalMinutes
     if ($sqlBudget -lt 0) { $sqlBudget = 0 }
+    # A ceiling on how long THIS run may sleep, independent of the declared window.
+    # 0 turns the criterion into a single evaluation, which is what a pipeline running
+    # inline needs and what a scheduled re-check wants for the opposite reason.
+    if ($SqlPauseWaitMinutes -ge 0 -and $SqlPauseWaitMinutes -lt $sqlBudget) { $sqlBudget = $SqlPauseWaitMinutes }
+    if (-not $sqlWindowKnown) {
+        Add-MlsNote -Context $context -Message 'V6.4: no last-touched timestamp supplied (-SqlLastTouchedUtc / the L6 deploy''s post-seed time), so the 75-minute idle deadline could not be computed and a database that is still Online is recorded FAIL rather than PENDING. That is correct for a re-check run made after the window; for an inline run straight after the deploy, pass the timestamp.'
+    }
 
     Invoke-MlsCriterion -Context $context -Id 'V6.4' `
         -Description 'SQL auto-pauses (checked after 75 min idle)' `
         -Command 'az sql db show --ids <dbId> --query "status"' `
         -Expected '"Paused" at the 75-minute mark (60-minute auto-pause delay + 15 minutes of margin)' `
         -RetryWindowMinutes $SqlIdleWindowMinutes -InProcessWaitMinutes $sqlBudget `
+        -WindowStartUtc $sqlWindowStart -PendingWhenUnexpired:$sqlWindowKnown `
         -Test { Test-SqlAutoPause -SqlDatabaseId $databaseId } | Out-Null
 
     return $context
@@ -303,6 +339,7 @@ if (-not $env:MLS_SKIP_MAIN) {
             -CostExportContainerName $CostExportContainerName -ExpectedAutoPauseDelay $ExpectedAutoPauseDelay `
             -ExpectedMinCapacity $ExpectedMinCapacity -LayerCompletedUtc $LayerCompletedUtc `
             -SqlLastTouchedUtc $SqlLastTouchedUtc -SqlIdleWindowMinutes $SqlIdleWindowMinutes `
+            -SqlPauseWaitMinutes $SqlPauseWaitMinutes `
             -EnforceCostExport:$EnforceCostExport -ReportRoot $ReportRoot -NoRetry:$NoRetry
     }
     catch {

@@ -181,11 +181,25 @@ jobs:
     if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: demo
+    timeout-minutes: 60
     permissions:
       id-token: write
       contents: read
+    env:
+      # V2.3 waits out the NIST assignment's 30-minute compliance-scan window, so
+      # this job is allowed to be slow; nothing else in the estate waits on it.
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Verifier identity not configured
+        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice title=L2 not independently verified::AZURE_VERIFIER_CLIENT_ID is not set on the demo environment, so there is no read-only identity to run verification/layer-02-audit.ps1 as. CLAUDE.md forbids running audits as the deployer SP, so the audit was skipped rather than run under the wrong credential."
 
       - name: Azure login (OIDC, mls-verifier — Reader only)
         if: ${{ needs.preflight.outputs.verifier == 'true' }}
@@ -195,14 +209,28 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # Every value is passed explicitly rather than left to the script's
+      # defaults: those defaults hardcode the company prefix (`mls`, `mls-rg-
+      # canary-untagged`), and CLAUDE.md puts the prefix in naming.bicep alone.
+      # The canary RG name here is character-for-character the one the deploy
+      # job's negative test attempted, which is what V2.2 looks for in the
+      # Activity Log.
       - name: Run verification/layer-02-audit.ps1
         id: audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
         uses: ./.github/actions/layer-audit
         with:
           layer: '02'
+          args: |
+            -SubscriptionId
+            ${{ vars.AZURE_SUBSCRIPTION_ID }}
+            -ManagementGroupName
+            ${{ steps.names.outputs.management-group }}
+            -CanaryResourceGroupName
+            ${{ steps.names.outputs.prefix }}-rg-canary-untagged
 
       - name: Upload audit report
-        if: ${{ steps.audit.outputs.ran == 'true' }}
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: layer-02-audit-report

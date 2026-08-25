@@ -22,11 +22,20 @@
          per-leg result table is printed - the same legs as the workflow's own
          summary, so the console and the Actions page agree.
 
-      3. REPORT THE WALL CLOCK. L11's proof is "<60 minutes" and it is measured on
-         exactly this path (kill-rebuild.md section 5: clock starts at up.ps1
-         invocation). The elapsed time is reported from TWO independent sources -
-         this script's own timestamps and GitHub's run timestamps - because that is
-         what the proof record requires.
+      3. REPORT THE WALL CLOCK, AND HAND IT OVER. L11's proof is "<60 minutes" and it
+         is measured on exactly this path (kill-rebuild.md section 5: clock starts at
+         up.ps1 invocation, stops at the last synchronous layer audit green). The
+         elapsed time is reported from TWO independent sources - this script's own
+         timestamps and GitHub's run timestamps - because that is what the proof
+         record requires.
+
+         Printing it is not enough. verification/layer-11-audit.ps1's V11.4 needs
+         those two instants as -UpStartUtc / -UpCompletedUtc (or MLS_L11_UP_START /
+         MLS_L11_UP_COMPLETED) and, given neither, records a FAIL rather than
+         inventing a start time - which is the right refusal and a broken handoff.
+         So the clock is written DURABLY to verification/reports/up-clock.json, and
+         to $GITHUB_ENV when this runs inside Actions, and the exact re-run command
+         is printed with the timestamps already substituted.
 
     Never writes to Azure itself and never calls the Azure APIs. The only credential
     involved is the operator's own `gh` login; the deployment authenticates by OIDC
@@ -57,6 +66,11 @@
 
 .PARAMETER TimeoutMinutes
     How long to watch before giving up on the run (the run itself keeps going).
+
+.PARAMETER ReportRoot
+    Where the clock record is written. Defaults to verification/reports/ - the
+    directory the Verifier's own reports live in, so the wall-clock evidence sits
+    next to the audit that cites it.
 
 .EXAMPLE
     pwsh scripts/up.ps1
@@ -96,7 +110,9 @@ param(
     [int]$TimeoutMinutes = 90,
 
     [ValidateRange(2, 120)]
-    [int]$PollSeconds = 15
+    [int]$PollSeconds = 15,
+
+    [string]$ReportRoot
 )
 
 Set-StrictMode -Version Latest
@@ -471,6 +487,124 @@ function Format-Duration {
     return ('{0}m {1:00}s' -f [int]$Duration.TotalMinutes, $Duration.Seconds)
 }
 
+function Format-UtcStamp {
+    <#
+    .SYNOPSIS
+        Normalise any timestamp-shaped value to yyyy-MM-ddTHH:mm:ssZ, or $null.
+    .DESCRIPTION
+        gh's JSON timestamps come back from ConvertFrom-Json as [datetime] objects,
+        which stringify in the host's culture ("08/24/2026 10:00:00"). The clock
+        record is read by a PowerShell audit and by humans in two time zones, so
+        every instant in it is written in one unambiguous UTC format.
+    #>
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace("$Value")) { return $null }
+    $slot = [datetime]::MinValue
+    $styles = [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal
+    if ([datetime]::TryParse("$Value", [cultureinfo]::InvariantCulture, $styles, [ref]$slot)) {
+        return $slot.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    }
+    return "$Value"
+}
+
+function Get-DefaultReportRoot {
+    <# verification/reports/ - the Verifier's own report directory. #>
+    return (Join-Path -Path (Split-Path -Path $PSScriptRoot -Parent) -ChildPath 'verification' -AdditionalChildPath 'reports')
+}
+
+function Write-UpClock {
+    <#
+    .SYNOPSIS
+        Persist the two instants V11.4 measures, and hand them to whatever runs next.
+    .DESCRIPTION
+        kill-rebuild.md section 5 defines the clock as "starts at up.ps1 invocation,
+        stops at the last synchronous layer audit green", and the layer workflows now
+        run their audits inline - so the run finishing IS that second instant. The two
+        explicitly-async criteria (V6.3 cost export, V6.4 SQL auto-pause) are recorded
+        PENDING by the L6 audit rather than waited out, which is what keeps them out of
+        this number, exactly as section 5 says they must be.
+
+        Three sinks, because there are three consumers:
+          * verification/reports/up-clock.json - the durable record the rebuild proof
+            cites, and what a Verifier reads on a workstation an hour later;
+          * $GITHUB_ENV - so a later step in the same Actions run inherits
+            MLS_L11_UP_START / MLS_L11_UP_COMPLETED with no copy-paste;
+          * the console - the ready-to-paste layer-11-audit.ps1 command.
+
+        Returns the JSON path, or $null when nothing could be written. A clock that
+        cannot be recorded must not take the rebuild down with it, so every failure
+        here is a warning.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Writes the run''s own evidence record under verification/reports/; it touches no estate, and gating it behind ShouldProcess would mean a -WhatIf rehearsal silently produced no proof file.')]
+    param(
+        [Parameter(Mandatory)][datetime]$StartedAt,
+        [AllowNull()][Nullable[datetime]]$CompletedAt,
+        [Parameter(Mandatory)][string]$Repository,
+        [AllowNull()][object]$RunId,
+        [AllowEmptyString()][string]$Conclusion = '',
+        [AllowNull()][object]$RunCreatedAt,
+        [AllowNull()][object]$RunUpdatedAt,
+        [AllowEmptyString()][string]$ReportRoot = '',
+        [double]$BudgetMinutes = 60
+    )
+
+    $root = if ([string]::IsNullOrWhiteSpace($ReportRoot)) { Get-DefaultReportRoot } else { $ReportRoot }
+
+    $startUtc = $StartedAt.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $completedUtc = $null
+    $elapsedMinutes = $null
+    if ($null -ne $CompletedAt) {
+        $completedUtc = ([datetime]$CompletedAt).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $elapsedMinutes = [math]::Round((([datetime]$CompletedAt) - $StartedAt).TotalMinutes, 2)
+    }
+
+    $document = [ordered]@{
+        # These two key names are the contract: they are exactly the environment
+        # variables verification/layer-11-audit.ps1 falls back to.
+        MLS_L11_UP_START     = $startUtc
+        MLS_L11_UP_COMPLETED = $completedUtc
+        repository           = $Repository
+        runId                = $RunId
+        runUrl               = if ($RunId) { "https://github.com/$Repository/actions/runs/$RunId" } else { $null }
+        conclusion           = $Conclusion
+        elapsedMinutes       = $elapsedMinutes
+        budgetMinutes        = $BudgetMinutes
+        withinBudget         = if ($null -eq $elapsedMinutes) { $null } else { [bool]($elapsedMinutes -lt $BudgetMinutes) }
+        githubRunCreatedAt   = Format-UtcStamp -Value $RunCreatedAt
+        githubRunUpdatedAt   = Format-UtcStamp -Value $RunUpdatedAt
+        clockDefinition      = 'kill-rebuild.md section 5: starts at up.ps1 invocation, stops at the last synchronous layer audit green. Excluded by definition and closed on their own clocks: V6.3 first cost export (<= 24 h), V6.4 SQL auto-pause (+75 min), V11.5 idle run-rate (next-day consumption).'
+        recordedBy           = 'scripts/up.ps1'
+    }
+
+    $jsonPath = $null
+    try {
+        if (-not (Test-Path -LiteralPath $root)) {
+            New-Item -ItemType Directory -Path $root -Force | Out-Null
+        }
+        $jsonPath = Join-Path -Path $root -ChildPath 'up-clock.json'
+        Set-Content -LiteralPath $jsonPath -Value ($document | ConvertTo-Json -Depth 5) -Encoding utf8
+    }
+    catch {
+        Write-Warning "Could not write the up-clock record to '$root': $($_.Exception.Message)"
+        $jsonPath = $null
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) {
+        try {
+            Add-Content -LiteralPath $env:GITHUB_ENV -Value "MLS_L11_UP_START=$startUtc"
+            if ($completedUtc) {
+                Add-Content -LiteralPath $env:GITHUB_ENV -Value "MLS_L11_UP_COMPLETED=$completedUtc"
+            }
+        }
+        catch {
+            Write-Warning "Could not append the up-clock to `$GITHUB_ENV: $($_.Exception.Message)"
+        }
+    }
+
+    return $jsonPath
+}
+
 function Get-RunDuration {
     <#
     .SYNOPSIS
@@ -504,7 +638,8 @@ function Invoke-Main {
         [switch]$DryRun,
         [switch]$NoWatch,
         [int]$TimeoutMinutes = 90,
-        [int]$PollSeconds = 15
+        [int]$PollSeconds = 15,
+        [AllowEmptyString()][string]$ReportRoot = ''
     )
 
     $startedAt = Get-Date
@@ -553,6 +688,7 @@ function Invoke-Main {
             Legs       = @()
             Elapsed    = (Get-Date) - $startedAt
             RunElapsed = $null
+            ClockPath  = $null
             WhatIfOnly = $true
         }
     }
@@ -562,7 +698,14 @@ function Invoke-Main {
     Write-Status 'Dispatched.' -Color Green
 
     if ($NoWatch) {
+        # The clock still STARTED, and V11.4 needs that instant whoever stops it.
+        # Recorded with no completion time rather than not at all.
+        $clockPath = Write-UpClock -StartedAt $startedAt -CompletedAt $null -Repository $repo `
+            -RunId $null -Conclusion 'dispatched' -RunCreatedAt $null -RunUpdatedAt $null -ReportRoot $ReportRoot
         Write-Status "Not watching (-NoWatch). Follow it with: gh run watch --repo $repo" -Color Yellow
+        if ($clockPath) {
+            Write-Status "Clock start recorded in $clockPath (MLS_L11_UP_START only - nothing stopped the clock)." -Color Yellow
+        }
         return [pscustomobject]@{
             Repository = $repo
             RunId      = $null
@@ -570,6 +713,7 @@ function Invoke-Main {
             Legs       = @()
             Elapsed    = (Get-Date) - $startedAt
             RunElapsed = $null
+            ClockPath  = $clockPath
             WhatIfOnly = $false
         }
     }
@@ -584,8 +728,15 @@ function Invoke-Main {
     $legs = @()
     if ($snapshot) { $legs = Format-RunResult -Snapshot $snapshot }
 
-    $elapsed = (Get-Date) - $startedAt
+    $completedAt = Get-Date
+    $elapsed = $completedAt - $startedAt
     $runElapsed = if ($snapshot) { Get-RunDuration -Snapshot $snapshot } else { $null }
+
+    $clockPath = Write-UpClock -StartedAt $startedAt -CompletedAt $completedAt -Repository $repo `
+        -RunId $runId -Conclusion $(if ($snapshot) { $snapshot.Conclusion } else { '' }) `
+        -RunCreatedAt $(if ($snapshot) { $snapshot.CreatedAt } else { $null }) `
+        -RunUpdatedAt $(if ($snapshot) { $snapshot.UpdatedAt } else { $null }) `
+        -ReportRoot $ReportRoot
 
     Write-Status ''
     Write-Status 'Layer results' -Color Cyan
@@ -615,6 +766,24 @@ function Invoke-Main {
         Write-Status '  Usual suspects, in observed-likelihood order: kill-rebuild.md section 5.' -Color Yellow
     }
 
+    # ---- hand the clock over (kill-rebuild.md section 5 / L11 V11.4) -------------
+    $startUtc = $startedAt.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $completedUtc = $completedAt.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    Write-Status ''
+    Write-Status 'Handover to V11.4' -Color Cyan
+    if ($clockPath) {
+        Write-Status "  recorded: $clockPath"
+    }
+    else {
+        Write-Status '  recorded: (could not be written - copy the values below)' -Color Yellow
+    }
+    Write-Status "  MLS_L11_UP_START     $startUtc"
+    Write-Status "  MLS_L11_UP_COMPLETED $completedUtc"
+    Write-Status '  Verifier closes the cycle with:' -Color DarkGray
+    Write-Status "    pwsh verification/layer-11-audit.ps1 -Phase Up -UpStartUtc $startUtc -UpCompletedUtc $completedUtc" -Color DarkGray
+    Write-Status '  Then close the two async criteria the clock excludes:' -Color DarkGray
+    Write-Status '    gh workflow run layer-06-platform.yml -f verify_only=true   # V6.3 cost export, V6.4 SQL auto-pause' -Color DarkGray
+
     $conclusion = if ($snapshot) { $snapshot.Conclusion } else { '' }
     Write-Status ''
     if ($conclusion -eq 'success') {
@@ -635,6 +804,7 @@ function Invoke-Main {
         Legs       = $legs
         Elapsed    = $elapsed
         RunElapsed = $runElapsed
+        ClockPath  = $clockPath
         WhatIfOnly = $false
     }
 }
@@ -642,7 +812,7 @@ function Invoke-Main {
 if (-not $env:MLS_SKIP_MAIN) {
     $outcome = Invoke-Main -Repository $Repository -Mode $Mode -Layers $Layers `
         -Location $Location -ImageTag $ImageTag -DryRun:$DryRun -NoWatch:$NoWatch `
-        -TimeoutMinutes $TimeoutMinutes -PollSeconds $PollSeconds
+        -TimeoutMinutes $TimeoutMinutes -PollSeconds $PollSeconds -ReportRoot $ReportRoot
     if ($outcome.Conclusion -notin @('success', 'whatif', 'dispatched')) { exit 1 }
     exit 0
 }

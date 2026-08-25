@@ -29,6 +29,14 @@ param mcpToolsImage = readEnvironmentVariable(
   readEnvironmentVariable('COPILOT_SVC_IMAGE', 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest')
 )
 
+// data-api (Phase Q gap Q-4): the serving layer both frontends' ApiProvider
+// fetches through their /api same-origin proxy. Provisioned here so
+// DATA_API_ORIGIN has something real to point at.
+param dataApiImage = readEnvironmentVariable(
+  'DATA_API_IMAGE',
+  'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+)
+
 // Ports: 80 matches the placeholder hello-world image. The real apps listen on
 // 8080; CI overrides these once the GHCR images are in play (open item P-1).
 param launchOpsTargetPort = int(readEnvironmentVariable('LAUNCH_OPS_PORT', '80'))
@@ -36,6 +44,23 @@ param controlTowerTargetPort = int(readEnvironmentVariable('CONTROL_TOWER_PORT',
 param mcpToolsTargetPort = int(
   readEnvironmentVariable('MCP_TOOLS_PORT', readEnvironmentVariable('COPILOT_SVC_PORT', '80'))
 )
+param dataApiTargetPort = int(readEnvironmentVariable('DATA_API_PORT', '80'))
+
+// Image content digests, resolved by layer-07-apps.yml from the registry (or
+// read back from the running app) and stamped onto each container as
+// MLS_IMAGE_DIGEST. 'unset' is honest: V7.1 then FAILs saying the health payload
+// does not carry the deployed digest, instead of passing on liveness alone.
+param launchOpsImageDigest = readEnvironmentVariable('LAUNCH_OPS_IMAGE_DIGEST', 'unset')
+param controlTowerImageDigest = readEnvironmentVariable('CONTROL_TOWER_IMAGE_DIGEST', 'unset')
+param mcpToolsImageDigest = readEnvironmentVariable('MCP_TOOLS_IMAGE_DIGEST', 'unset')
+param dataApiImageDigest = readEnvironmentVariable('DATA_API_IMAGE_DIGEST', 'unset')
+
+// data-api backend selection. Empty = decide from whether L5 handed us a Fabric
+// SQL analytics endpoint; MLS_DATA_BACKENDS forces it either way.
+param dataApiBackendMode = readEnvironmentVariable('MLS_DATA_BACKENDS', '')
+param fabricSqlEndpoint = readEnvironmentVariable('MLS_FABRIC_SQL_ENDPOINT', '')
+param fabricDatabase = readEnvironmentVariable('MLS_FABRIC_DATABASE', 'mls_operations')
+param githubRepository = readEnvironmentVariable('MLS_GITHUB_REPO', 'paulcfuqua/azure-devsecops')
 
 // ASSUMPTION (see infra/copilot-studio/README.md): the MCP server serves
 // Streamable HTTP at /mcp on the container app's external FQDN. This parameter

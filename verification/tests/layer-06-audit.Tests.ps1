@@ -18,8 +18,15 @@ BeforeAll {
     }
 
     function Invoke-AuditForTest {
-        param([switch]$NoRetry, [string]$SubscriptionId = $script:Subscription, [string]$LayerCompletedUtc = '')
+        param(
+            [switch]$NoRetry,
+            [string]$SubscriptionId = $script:Subscription,
+            [string]$LayerCompletedUtc = '',
+            [string]$SqlLastTouchedUtc = '',
+            [double]$SqlPauseWaitMinutes = -1
+        )
         Invoke-Main -SubscriptionId $SubscriptionId -DeploymentName 'layer-06' -LayerCompletedUtc $LayerCompletedUtc `
+            -SqlLastTouchedUtc $SqlLastTouchedUtc -SqlPauseWaitMinutes $SqlPauseWaitMinutes `
             -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
 }
@@ -130,6 +137,45 @@ Describe 'layer-06-audit' {
             $script:Blobs = @()
             $context = Invoke-AuditForTest -LayerCompletedUtc ([datetime]::UtcNow.AddHours(-30).ToString('o'))
             (Get-Row -Context $context -Id 'V6.3').Status | Should -Be 'FAIL'
+        }
+    }
+
+    Context 'the async SQL auto-pause criterion' {
+        # L06.md schedules V6.4 "75 minutes after the last deployment touch of the DB", and
+        # kill-rebuild.md section 5 excludes it from the <60-minute rebuild clock. The layer
+        # workflow therefore runs the audit inline with the seed timestamp and a zero wait
+        # budget, and closes the criterion on a later re-check run.
+        It 'records V6.4 as PENDING, without sleeping, while the 75-minute window is still open' {
+            $script:SqlStatus = 'Online'
+            $context = Invoke-AuditForTest -SqlLastTouchedUtc ([datetime]::UtcNow.AddMinutes(-3).ToString('o')) -SqlPauseWaitMinutes 0
+            $row = Get-Row -Context $context -Id 'V6.4'
+            $row.Status | Should -Be 'PENDING'
+            $row.SleptSeconds | Should -Be 0
+            $row.Attempt | Should -Be 1
+            $row.Detail | Should -BeLike '*declared window has not elapsed*'
+            Get-MlsExitCode -Context $context | Should -Be 0
+            Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Exactly -Times 0
+        }
+
+        It 'records V6.4 as FAIL once the 75-minute window has elapsed, even with a last-touched time' {
+            $script:SqlStatus = 'Online'
+            $context = Invoke-AuditForTest -SqlLastTouchedUtc ([datetime]::UtcNow.AddHours(-3).ToString('o')) -SqlPauseWaitMinutes 0
+            $row = Get-Row -Context $context -Id 'V6.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike "*status = 'Online'*"
+            Get-MlsExitCode -Context $context | Should -Be 1
+        }
+
+        It 'still PASSes V6.4 inside the window when the database is already Paused' {
+            $context = Invoke-AuditForTest -SqlLastTouchedUtc ([datetime]::UtcNow.AddMinutes(-3).ToString('o')) -SqlPauseWaitMinutes 0
+            (Get-Row -Context $context -Id 'V6.4').Status | Should -Be 'PASS'
+        }
+
+        It 'notes that a missing last-touched time is why an Online database FAILs rather than PENDs' {
+            $script:SqlStatus = 'Online'
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V6.4').Status | Should -Be 'FAIL'
+            ($context.Note -join ' ') | Should -BeLike '*V6.4: no last-touched timestamp supplied*'
         }
     }
 

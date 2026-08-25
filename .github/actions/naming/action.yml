@@ -48,9 +48,24 @@ outputs:
       agent attaches to. Replaced ca-copilot when the 2026-08-24 amendment moved LLM
       orchestration to Copilot Studio.
     value: ${{ steps.resolve.outputs.ca-mcp }}
+  ca-data-api:
+    description: >-
+      containerAppName(prefix, "data-api", env) — the serving layer both frontends
+      proxy /api to. naming.bicep gained the `dataApi` app key with the same value,
+      so this and the Bicep agree by construction.
+    value: ${{ steps.resolve.outputs.ca-data-api }}
   key-vault:
     description: 'keyVaultName(prefix, env).'
     value: ${{ steps.resolve.outputs.key-vault }}
+  law:
+    description: >-
+      logAnalyticsWorkspaceName(prefix, env). Needed by the L7 verify job, which
+      resolves the workspace CUSTOMER id from ARM for V7.3 rather than carrying the
+      L6 deployment outputs across workflow boundaries.
+    value: ${{ steps.resolve.outputs.law }}
+  app-insights:
+    description: 'appInsightsName(prefix, env).'
+    value: ${{ steps.resolve.outputs.app-insights }}
 
 runs:
   using: composite
@@ -92,5 +107,8 @@ runs:
           echo "ca-launch-ops=${prefix}-launch-ops-${envseg}-ca"
           echo "ca-control-tower=${prefix}-control-tower-${envseg}-ca"
           echo "ca-mcp=${prefix}-mcp-${envseg}-ca"
+          echo "ca-data-api=${prefix}-data-api-${envseg}-ca"
           echo "key-vault=${prefix}-sec-${envseg}-kv"
+          echo "law=${prefix}-obs-${envseg}-law"
+          echo "app-insights=${prefix}-obs-${envseg}-appi"
         } >> "${GITHUB_OUTPUT}"

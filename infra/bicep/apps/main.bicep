@@ -1,5 +1,5 @@
 // =============================================================================
-// apps/main.bicep — L7: the three container apps.
+// apps/main.bicep — L7: the four container apps.
 //
 // Deployed at RESOURCE GROUP scope into mls-rg-apps (created at L6):
 //
@@ -9,12 +9,45 @@
 //     --parameters infra/bicep/apps/demo.bicepparam
 //
 // Apps (spec architecture summary, as amended 2026-08-24):
+//   data-api       external ingress   minReplicas=0
 //   launch-ops     external ingress   minReplicas=0
 //   control-tower  external ingress   minReplicas=0
 //   mcp-tools      external ingress   minReplicas=0
 //
 // minReplicas=0 everywhere: idle cost is $0 by design; a nonzero floor is an
 // un-gated spend change and an audit failure (V6.1/V7.5).
+//
+// ---------------------------------------------------------------------------
+// data-api AND DATA_API_ORIGIN (added 2026-08-24, Phase Q gap Q-4 close-out)
+//
+// This template was authored before apps/data-api existed, so it provisioned
+// three apps and neither frontend had anywhere to send /api. Both frontends'
+// `ApiProvider` defaults to the same-origin base URL "/api", and both nginx
+// images now proxy `location /api/` to `${DATA_API_ORIGIN}` — a variable whose
+// image default is a deliberately unreachable loopback address. Without the
+// wiring below, every /api call answers 502 and both dashboards render empty.
+//
+// So two things happen here that did not before:
+//   1. the data-api container app is provisioned (with its own user-assigned
+//      identity: it reads Azure SQL, the Fabric SQL analytics endpoint, Defender
+//      and Log Analytics with no stored credential), and
+//   2. DATA_API_ORIGIN is injected into launch-ops and control-tower, pointing
+//      at that app's HTTPS FQDN. The dependency is one-directional and Bicep
+//      infers it, so data-api provisions first.
+//
+// It is EXTERNAL ingress. Internal-only would be tighter, but the service is the
+// browser's data path through a same-origin proxy, /healthz is the first thing
+// anyone checks when a dashboard is blank, and apps/data-api/README.md already
+// treats the service as internet-reachable ("This API is reachable from the
+// internet and answers with tenant data") when it refuses a wildcard CORS
+// origin. It is read-only, allowlisted, row-capped and serves synthetic data.
+//
+// MLS_IMAGE_DIGEST is injected into every app for L7 V7.1: the criterion binds
+// "endpoint is up" to "endpoint serves the audited build" by comparing the
+// health payload's content-hash marker with the digest the deploy run recorded.
+// The frontends' nginx templates interpolate it into /healthz; data-api reads it
+// as its `build` marker (apps/data-api/src/config.ts).
+// ---------------------------------------------------------------------------
 //
 // ---------------------------------------------------------------------------
 // COPILOT STUDIO AMENDMENT (2026-08-24) — what changed in this template
@@ -108,10 +141,36 @@ param controlTowerImage string = 'mcr.microsoft.com/azuredocs/containerapps-hell
 @description('mcp-tools container image (GHCR public path at deploy time).')
 param mcpToolsImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+@description('data-api container image (GHCR public path at deploy time).')
+param dataApiImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
 @description('Container port each app listens on. 80 matches the hello-world placeholder; the real apps override via parameters.')
 param launchOpsTargetPort int = 80
 param controlTowerTargetPort int = 80
 param mcpToolsTargetPort int = 80
+param dataApiTargetPort int = 80
+
+@description('Image content digest per app, stamped onto the running container as MLS_IMAGE_DIGEST so L7 V7.1 can bind the live endpoint to the audited build. "unset" is the honest placeholder: V7.1 then reports that the health payload does not carry the deployed digest rather than passing on liveness alone.')
+param launchOpsImageDigest string = 'unset'
+param controlTowerImageDigest string = 'unset'
+param mcpToolsImageDigest string = 'unset'
+param dataApiImageDigest string = 'unset'
+
+@description('Backend set data-api serves. Empty resolves to "cloud" when a Fabric SQL analytics endpoint is supplied and "local" otherwise — local mode reads data/generated, which is NOT baked into the image, so it answers 503 on every table route and exists only as a test harness.')
+@allowed(['', 'local', 'cloud'])
+param dataApiBackendMode string = ''
+
+@description('Fabric lakehouse SQL analytics endpoint FQDN (the L5 lakehouse metadata\'s sqlEndpointProperties.connectionString). Not derivable from ARM: Fabric is not an ARM resource here, so this arrives from the L5 outputs at deploy time.')
+param fabricSqlEndpoint string = ''
+
+@description('Lakehouse name exposed as a database on that endpoint.')
+param fabricDatabase string = 'mls_operations'
+
+@description('owner/repo the data-api Dev/Sec feeds read through the GitHub API.')
+param githubRepository string = 'paulcfuqua/azure-devsecops'
+
+@description('[derived] Timespan for data-api\'s app-requests Log Analytics query, ISO-8601.')
+param logAnalyticsTimespan string = 'P14D'
 
 @description('[derived] HTTP path the MCP Streamable HTTP endpoint is served on. ASSUMPTION pending reconciliation with apps/mcp-tools/ — see infra/copilot-studio/README.md. Used only to compose the mcpToolsEndpoint output that the Copilot Studio connector consumes; changing it deploys nothing.')
 param mcpEndpointPath string = '/mcp'
@@ -148,16 +207,64 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = {
   name: appiName
 }
 
+// L6 resources data-api reads in cloud mode. Referenced as `existing` rather
+// than passed as parameters for the same reason the ACA environment is derived:
+// naming.bicep is the single source of truth, so this layer can find L6's estate
+// by name. The Log Analytics CUSTOMER id (a GUID) is what the query API takes —
+// apps/data-api/src/config.ts rejects an ARM resource id outright.
+var lawName = naming.logAnalyticsWorkspaceName(companyPrefix, env)
+var sqlServerResourceName = naming.sqlServerName(companyPrefix, env)
+var dataRgName = naming.resourceGroupName(companyPrefix, naming.rgPurposes.data)
+
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' existing = {
+  scope: az.resourceGroup(platformRgName)
+  name: lawName
+}
+
+resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' existing = {
+  scope: az.resourceGroup(dataRgName)
+  name: sqlServerResourceName
+}
+
 // ------------------------------------------------------------------ names + tags
 
 var launchOpsName = naming.containerAppName(companyPrefix, naming.appKeys.launchOps, env)
 var controlTowerName = naming.containerAppName(companyPrefix, naming.appKeys.controlTower, env)
 var mcpToolsName = naming.containerAppName(companyPrefix, naming.appKeys.mcpTools, env)
+var dataApiName = naming.containerAppName(companyPrefix, naming.appKeys.dataApi, env)
 var mcpToolsIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.mcpTools, env)
+var dataApiIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.dataApi, env)
 
 var tagsLaunchOps = naming.requiredTags(env, naming.appKeys.launchOps, costCenter, owner, dataClassification)
 var tagsControlTower = naming.requiredTags(env, naming.appKeys.controlTower, costCenter, owner, dataClassification)
 var tagsMcpTools = naming.requiredTags(env, naming.appKeys.mcpTools, costCenter, owner, dataClassification)
+var tagsDataApi = naming.requiredTags(env, naming.appKeys.dataApi, costCenter, owner, dataClassification)
+
+// Empty means "decide from what L5 handed us": cloud when there is a Fabric SQL
+// analytics endpoint to read the three analytical tables from, local otherwise.
+// Never silently cloud without the endpoint — apps/data-api/src/config.ts fails
+// at BOOT naming the missing variable, which crash-loops the revision instead of
+// 502-ing one route, and that is the correct behaviour to preserve.
+var dataApiMode = empty(dataApiBackendMode) ? (empty(fabricSqlEndpoint) ? 'local' : 'cloud') : dataApiBackendMode
+
+// Cloud-mode settings, all of them configuration and none of them secret. The
+// one credential-shaped input data-api accepts (MLS_GITHUB_TOKEN, a Key Vault
+// secret reference) is deliberately NOT set here: without it the three GitHub
+// feeds fail closed with a typed error and /healthz says so, which is a better
+// default than a half-wired secret path (apps/data-api/README.md).
+var dataApiCloudEnv = dataApiMode != 'cloud'
+  ? []
+  : [
+      { name: 'MLS_SQL_SERVER', value: sqlServer.properties.fullyQualifiedDomainName }
+      { name: 'MLS_SQL_DATABASE', value: naming.sqlDatabaseName(companyPrefix, naming.appKeys.launchOps, env) }
+      { name: 'MLS_FABRIC_SQL_ENDPOINT', value: fabricSqlEndpoint }
+      { name: 'MLS_FABRIC_DATABASE', value: fabricDatabase }
+      { name: 'MLS_GITHUB_REPO', value: githubRepository }
+      { name: 'MLS_DEFENDER_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+      { name: 'MLS_LOG_ANALYTICS_WORKSPACE_ID', value: logAnalytics.properties.customerId }
+      { name: 'MLS_LOG_ANALYTICS_TIMESPAN', value: logAnalyticsTimespan }
+      { name: 'MLS_MANAGED_IDENTITY_CLIENT_ID', value: dataApiIdentity.outputs.clientId }
+    ]
 
 // Scale-to-zero settings shared by all three apps.
 var scaleToZero = {
@@ -181,7 +288,77 @@ module mcpToolsIdentity 'br/public:avm/res/managed-identity/user-assigned-identi
   }
 }
 
+// ------------------------------------------------------------------ data-api workload identity
+
+// Same reasoning as mcp-tools, for the same reason: data-api is the browser's
+// data path and reads Entra-only Azure SQL (no password exists to fall back on),
+// the Fabric SQL analytics endpoint, Defender for Cloud and the Log Analytics
+// query API. User-assigned so the SQL contained-database user and the Fabric
+// workspace role assignment can be granted against a deterministic principal
+// before or after the app exists.
+module dataApiIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0' = {
+  name: 'l7-data-api-uami'
+  params: {
+    name: dataApiIdentityName
+    location: location
+    tags: tagsDataApi
+  }
+}
+
 // ------------------------------------------------------------------ container apps
+
+// data-api first: both frontends take DATA_API_ORIGIN from its FQDN, so Bicep
+// orders it ahead of them on that reference alone.
+module dataApiApp 'br/public:avm/res/app/container-app:0.23.0' = {
+  name: 'l7-ca-data-api'
+  params: {
+    name: dataApiName
+    location: location
+    tags: tagsDataApi
+    environmentResourceId: caeResourceId
+    ingressExternal: true
+    ingressTargetPort: dataApiTargetPort
+    ingressAllowInsecure: false
+    scaleSettings: scaleToZero
+    managedIdentities: {
+      userAssignedResourceIds: [dataApiIdentity.outputs.resourceId]
+    }
+    containers: [
+      {
+        name: naming.appKeys.dataApi
+        image: dataApiImage
+        resources: {
+          cpu: json(containerCpu)
+          memory: containerMemory
+        }
+        env: concat(
+          [
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsights.properties.ConnectionString
+            }
+            {
+              // Binds DefaultAzureCredential to this app's own identity.
+              name: 'AZURE_CLIENT_ID'
+              value: dataApiIdentity.outputs.clientId
+            }
+            {
+              name: 'MLS_DATA_BACKENDS'
+              value: dataApiMode
+            }
+            {
+              // /healthz build marker (V7.1). config.ts reads MLS_IMAGE_DIGEST
+              // first, then CONTAINER_APP_REVISION, then "unknown".
+              name: 'MLS_IMAGE_DIGEST'
+              value: dataApiImageDigest
+            }
+          ],
+          dataApiCloudEnv
+        )
+      }
+    ]
+  }
+}
 
 module launchOpsApp 'br/public:avm/res/app/container-app:0.23.0' = {
   name: 'l7-ca-launch-ops'
@@ -206,6 +383,19 @@ module launchOpsApp 'br/public:avm/res/app/container-app:0.23.0' = {
           {
             name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
             value: appInsights.properties.ConnectionString
+          }
+          {
+            // nginx envsubst target. Without it /api/tables/launches falls
+            // through to the SPA fallback (or 502s against the image's
+            // loopback default) and every view renders empty.
+            name: 'DATA_API_ORIGIN'
+            value: 'https://${dataApiApp.outputs.fqdn}'
+          }
+          {
+            // Interpolated into the /healthz body by the nginx template, so
+            // V7.1 can compare it with the deploy manifest's imageDigest.
+            name: 'MLS_IMAGE_DIGEST'
+            value: launchOpsImageDigest
           }
         ]
       }
@@ -236,6 +426,17 @@ module controlTowerApp 'br/public:avm/res/app/container-app:0.23.0' = {
           {
             name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
             value: appInsights.properties.ConnectionString
+          }
+          {
+            // Same-origin proxy target for the Dev/Sec/Ops feeds. The Ask tab's
+            // Direct Line token endpoint is a separate service reached by
+            // absolute URL and does not go through this proxy.
+            name: 'DATA_API_ORIGIN'
+            value: 'https://${dataApiApp.outputs.fqdn}'
+          }
+          {
+            name: 'MLS_IMAGE_DIGEST'
+            value: controlTowerImageDigest
           }
         ]
       }
@@ -284,6 +485,10 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
             name: 'AZURE_CLIENT_ID'
             value: mcpToolsIdentity.outputs.clientId
           }
+          {
+            name: 'MLS_IMAGE_DIGEST'
+            value: mcpToolsImageDigest
+          }
         ]
       }
     ]
@@ -301,6 +506,37 @@ output controlTowerFqdn string = controlTowerApp.outputs.fqdn
 @description('Public FQDN of the MCP tool server (always external — Copilot Studio must reach it).')
 output mcpToolsFqdn string = mcpToolsApp.outputs.fqdn
 
+@description('Public FQDN of the data-api serving layer.')
+output dataApiFqdn string = dataApiApp.outputs.fqdn
+
+@description('Origin injected into both frontends as DATA_API_ORIGIN. Their nginx proxies /api/ here, so /api/tables/launches arrives as /tables/launches (trailing slash on proxy_pass strips the prefix).')
+output dataApiOrigin string = 'https://${dataApiApp.outputs.fqdn}'
+
+@description('Backend set data-api will actually serve. "local" means the Fabric SQL analytics endpoint was not supplied, and every table route will answer 503 because data/generated is not in the image.')
+output dataApiBackendModeResolved string = dataApiMode
+
+@description('Client ID of the data-api user-assigned identity — the principal that needs the SQL contained-database user, the Fabric workspace Viewer role, Log Analytics Reader and Security Reader.')
+output dataApiIdentityClientId string = dataApiIdentity.outputs.clientId
+
+@description('Principal (object) ID of the data-api user-assigned identity, for role assignments made outside this template.')
+output dataApiIdentityPrincipalId string = dataApiIdentity.outputs.principalId
+
+@description('Container app NAME per app key. verification/layer-07-audit.ps1 addresses apps by name (-AppName), and the L7 workflow builds the V7.1 deploy manifest from these.')
+output containerAppNames object = {
+  launchOps: launchOpsName
+  controlTower: controlTowerName
+  mcpTools: mcpToolsName
+  dataApi: dataApiName
+}
+
+@description('MLS_IMAGE_DIGEST as deployed, per app. This is the deploy run\'s record of what each endpoint should be serving; the L7 workflow writes it into the manifest V7.1 compares against /healthz.')
+output imageDigests object = {
+  launchOps: launchOpsImageDigest
+  controlTower: controlTowerImageDigest
+  mcpTools: mcpToolsImageDigest
+  dataApi: dataApiImageDigest
+}
+
 @description('Full HTTPS URL of the MCP Streamable HTTP endpoint. This is the value that goes into the Copilot Studio MCP connector host/path (infra/copilot-studio/agent-definition.md) and into the demo environment variable MCP_SERVER_URL.')
 output mcpToolsEndpoint string = 'https://${mcpToolsApp.outputs.fqdn}${mcpEndpointPath}'
 
@@ -310,9 +546,10 @@ output mcpToolsIdentityClientId string = mcpToolsIdentity.outputs.clientId
 @description('Principal (object) ID of the mcp-tools user-assigned identity, for role assignments made outside this template.')
 output mcpToolsIdentityPrincipalId string = mcpToolsIdentity.outputs.principalId
 
-@description('Resource IDs of the three container apps.')
+@description('Resource IDs of the four container apps.')
 output containerAppResourceIds object = {
   launchOps: launchOpsApp.outputs.resourceId
   controlTower: controlTowerApp.outputs.resourceId
   mcpTools: mcpToolsApp.outputs.resourceId
+  dataApi: dataApiApp.outputs.resourceId
 }

@@ -29,7 +29,8 @@
     "build": "tsc -p tsconfig.json && tsup",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "validate:golden": "node scripts/validate-golden.mjs"
   },
   "peerDependencies": {
     "react": "^18.0.0",

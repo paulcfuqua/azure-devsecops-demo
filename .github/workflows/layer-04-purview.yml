@@ -65,13 +65,22 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           layer: L4 Purview
+      # The audit opens its OWN read-only Security & Compliance session as
+      # mls-verifier (Exchange.ManageAsApp + View-Only Configuration), which is a
+      # different credential from the deployer's app-only cert above. All three
+      # inputs are required by Resolve-MlsInput, so guarding them here turns a
+      # missing one into a named NOTICE instead of an exit-2 stack trace.
       - id: verifier
         uses: ./.github/actions/demo-env-guard
         with:
           client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          layer: L4 verification (mls-verifier)
+          additional: |
+            MLS_TENANT_DOMAIN=${{ vars.MLS_TENANT_DOMAIN || vars.PURVIEW_ORGANIZATION }}
+            MLS_VERIFIER_APP_ID=${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
+            MLS_VERIFIER_CERT_BASE64=${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
+          layer: L4 verification (mls-verifier, Security & Compliance app-only)
       - name: Check Security & Compliance app-only credentials
         id: scc
         env:
@@ -160,11 +169,18 @@ jobs:
     if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.apply.result != 'failure' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: demo
+    timeout-minutes: 45
     permissions:
       id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verifier Security & Compliance credentials not configured
+        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice title=L4 not independently verified::verification/layer-04-audit.ps1 needs its own read-only S&C session as mls-verifier and one of AZURE_VERIFIER_CLIENT_ID / MLS_TENANT_DOMAIN / MLS_VERIFIER_APP_ID / MLS_VERIFIER_CERT_BASE64 is absent. S&C PowerShell has no OIDC path, so certificate app-only auth is the only unattended option; without it the label audit stays a human-run step under the sponsor's login, exactly as the L04 playbook's degrade path allows. Nothing was verified and nothing was faked."
 
       - name: Azure login (OIDC, mls-verifier)
         if: ${{ needs.preflight.outputs.verifier == 'true' }}
@@ -174,14 +190,72 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # Connect-IPPSSession -CertificateThumbprint resolves the certificate out of
+      # the CurrentUser\My store, so the PFX has to be IN that store before the
+      # audit runs. .NET implements that store on Linux too (it lives under
+      # ~/.dotnet/corefx/cryptography/x509stores/my), which is why this uses the
+      # X509Store API rather than Import-PfxCertificate — the latter is a
+      # Windows-only cmdlet and does not exist on the runner. The thumbprint is
+      # derived from the certificate itself so there is no fourth variable to keep
+      # in step, and the PFX is removed from disk immediately.
+      - name: Install the mls-verifier certificate and install ExchangeOnlineManagement
+        id: cert
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        shell: pwsh
+        env:
+          MLS_VERIFIER_CERT_BASE64: ${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
+          MLS_VERIFIER_CERT_PASSWORD: ${{ secrets.MLS_VERIFIER_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module ExchangeOnlineManagement -Force -Scope CurrentUser -AllowClobber
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'mls-verifier.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:MLS_VERIFIER_CERT_BASE64))
+          try {
+            $flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet -bor
+                     [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+            $certificate = if ($env:MLS_VERIFIER_CERT_PASSWORD) {
+              [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $pfxPath, (ConvertTo-SecureString $env:MLS_VERIFIER_CERT_PASSWORD -AsPlainText -Force), $flags)
+            }
+            else {
+              [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, '', $flags)
+            }
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
+            $store.Open('ReadWrite')
+            $store.Add($certificate)
+            $store.Close()
+            "thumbprint=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "Installed the mls-verifier certificate (thumbprint $($certificate.Thumbprint), expires $($certificate.NotAfter.ToString('u')))."
+          }
+          finally {
+            Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
+      # -Checkpoint layer: this is the layer's own run. L11 re-runs the same script
+      # with -Checkpoint post-down / post-up, which is how V4.2 proves the labels
+      # and their GUIDs survived a kill/rebuild cycle.
       - name: Run verification/layer-04-audit.ps1
         id: audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
         uses: ./.github/actions/layer-audit
         with:
           layer: '04'
+          args: |
+            -Organization
+            ${{ vars.MLS_TENANT_DOMAIN || vars.PURVIEW_ORGANIZATION }}
+            -VerifierAppId
+            ${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
+            -CertificateThumbprint
+            ${{ steps.cert.outputs.thumbprint }}
+            -Checkpoint
+            layer
+            -LabelGuidPath
+            verification/reports/label-guids.json
 
       - name: Upload audit report
-        if: ${{ steps.audit.outputs.ran == 'true' }}
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: layer-04-audit-report

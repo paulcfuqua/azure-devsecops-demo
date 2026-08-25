@@ -265,7 +265,27 @@ reversible by changing one parameter or one line of `naming.bicep`.
 - **[derived] `zoneRedundant: false`** on the Container Apps environment: zone redundancy
   requires an infrastructure subnet (a VNet), which this consumption-only design does not
   have.
-- **[derived] `ingressAllowInsecure: false`** on all three apps (AVM defaults to `true`).
+- **[derived] `ingressAllowInsecure: false`** on all four apps (AVM defaults to `true`).
+- **Not derived — required: `data-api` is provisioned here, and `DATA_API_ORIGIN` is
+  injected into both frontends.** This template predates `apps/data-api`, so it shipped
+  three apps while both frontends' `ApiProvider` fetched `/api/...` and their nginx
+  proxied that to `${DATA_API_ORIGIN}` — a variable whose image default is a deliberately
+  unreachable loopback address. Every `/api` call answered 502 and both dashboards
+  rendered empty. `data-api` now provisions first (the frontends take the origin from its
+  FQDN, so Bicep orders it), with its own user-assigned identity for the same reason
+  `mcp-tools` has one: it reads Entra-only Azure SQL, the Fabric SQL analytics endpoint,
+  Defender and Log Analytics with no stored credential.
+- **[derived] `data-api` ingress is external.** Internal-only would be tighter, but it is
+  the browser's data path through a same-origin proxy, `/healthz` is the first thing
+  anyone checks when a dashboard is blank, and it serves read-only, allowlisted,
+  row-capped synthetic data.
+- **[derived] `MLS_IMAGE_DIGEST` on every app.** L7's V7.1 binds "endpoint is up" to
+  "endpoint serves the audited build" by comparing the health payload's content-hash
+  marker with the digest the deploy run recorded, and it refuses to pass on liveness
+  alone. The frontends' nginx templates interpolate the variable into `/healthz`;
+  `data-api` reads it as its `build` marker. `layer-07-apps.yml` resolves the digest from
+  the registry, falling back to whatever the last per-app CI deploy stamped on the running
+  app, and `'unset'` when neither answers — so the criterion says so rather than passing.
 - **Not derived — required: `mcp-tools` ingress is external.** Copilot Studio reaches it
   from outside Azure. There is no parameter for this (see the L7 section).
 - **[derived] A user-assigned identity for `mcp-tools`** rather than system-assigned —
@@ -318,5 +338,5 @@ Get-ChildItem infra/bicep -Recurse -Include *.bicep,*.bicepparam |
 `verification/layer-{02,06,07}-audit.ps1`. Locally proven now: templates compile, names
 resolve exclusively through `naming.bicep` (no file outside it contains the literal
 `mls`), and the pinned spend-profile values reach the compiled ARM — `autoPauseDelay: 60`,
-`minCapacity: '0.5'`, SKU `GP_S_Gen5`, `minReplicas: 0` on all three apps — which is the
+`minCapacity: '0.5'`, SKU `GP_S_Gen5`, `minReplicas: 0` on all four apps — which is the
 compile-time assertion the L6 playbook's Deferred-validation section asks Track E for.

@@ -28,11 +28,16 @@ server {
     gzip on;
     gzip_types text/css application/javascript application/json image/svg+xml;
 
-    # Liveness endpoint for ACA probes and V7.1. The L7 CI deploy step stamps
-    # the image content hash alongside this marker (see docs/runbooks/layers/L07.md).
+    # Liveness endpoint for ACA probes and V7.1. The content-hash marker is
+    # MLS_IMAGE_DIGEST, substituted here by the same envsubst pass and set on the
+    # container app by the L7 deploy (infra/bicep/apps/main.bicep). V7.1 compares
+    # it against the imageDigest the deploy run recorded, which is what binds
+    # "endpoint is up" to "endpoint serves the audited build" — a 200 alone does
+    # not satisfy the criterion. Its image default is the literal "unset", so a
+    # container deployed outside that path says so instead of pretending.
     location = /healthz {
         default_type text/plain;
-        return 200 "ok\n";
+        return 200 "ok ${MLS_IMAGE_DIGEST}\n";
     }
 
     # Data API, same-origin. Trailing slash on proxy_pass strips the /api prefix,

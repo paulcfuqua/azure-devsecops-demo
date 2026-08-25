@@ -42,7 +42,14 @@ on:
         required: false
         default: false
       image_tag:
-        description: GHCR tag to deploy for all three apps (empty keeps the bicepparam placeholder).
+        description: GHCR tag to deploy for all four apps (empty keeps the bicepparam placeholder).
+        type: string
+        required: false
+        default: ''
+      canary_pr:
+        description: >-
+          Canary PR number for V7.4. The L7 lead opens it (the Verifier never writes to
+          the repo); empty falls back to the MLS_L7_CANARY_PR demo variable.
         type: string
         required: false
         default: ''
@@ -59,7 +66,13 @@ on:
         required: false
         default: false
       image_tag:
-        description: GHCR tag to deploy for all three apps (empty keeps the bicepparam placeholder).
+        description: GHCR tag to deploy for all four apps (empty keeps the bicepparam placeholder).
+        type: string
+        required: false
+        default: ''
+      canary_pr:
+        description: >-
+          Canary PR number for V7.4 (empty falls back to the MLS_L7_CANARY_PR demo variable).
         type: string
         required: false
         default: ''
@@ -110,6 +123,15 @@ jobs:
       # mcp-tools ingress is external unconditionally (Copilot Studio connects
       # server-to-server from Microsoft's cloud), so there is no ingress toggle.
       MCP_TOOLS_PORT: ${{ vars.MCP_TOOLS_PORT || '80' }}
+      DATA_API_PORT: ${{ vars.DATA_API_PORT || '80' }}
+      # data-api cloud mode. Without the Fabric SQL analytics endpoint the app
+      # provisions in LOCAL mode, which answers 503 on every table route because
+      # data/generated is not baked into the image — the template says so in its
+      # dataApiBackendModeResolved output rather than crash-looping the revision.
+      # MLS_SQL_ENDPOINT is the same demo variable L5 and L8 read.
+      MLS_FABRIC_SQL_ENDPOINT: ${{ vars.MLS_SQL_ENDPOINT }}
+      MLS_FABRIC_DATABASE: ${{ vars.MLS_LAKEHOUSE_NAME || 'mls_operations' }}
+      MLS_GITHUB_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
 
@@ -129,11 +151,12 @@ jobs:
             echo "No image_tag supplied; keeping the demo.bicepparam placeholder images."
             exit 0
           fi
-          registry="ghcr.io/${REPO}"
+          registry="ghcr.io/$(printf '%s' "${REPO}" | tr '[:upper:]' '[:lower:]')"
           {
             echo "LAUNCH_OPS_IMAGE=${registry}/launch-ops:${IMAGE_TAG}"
             echo "CONTROL_TOWER_IMAGE=${registry}/control-tower:${IMAGE_TAG}"
             echo "MCP_TOOLS_IMAGE=${registry}/mcp-tools:${IMAGE_TAG}"
+            echo "DATA_API_IMAGE=${registry}/data-api:${IMAGE_TAG}"
           } >> "${GITHUB_ENV}"
           echo "resolved=true" >> "${GITHUB_OUTPUT}"
 
@@ -143,6 +166,67 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # ---------------------------------------------------------------------
+      # V7.1's content-hash marker. The criterion binds "endpoint is up" to
+      # "endpoint serves the audited build", so it needs the digest of the image
+      # each app is actually running — and it refuses to pass on liveness alone.
+      #
+      # Two sources, in order:
+      #   1. the registry, via `docker buildx imagetools inspect`. Anonymous pull
+      #      on a public GHCR repo, so no credential and no image download — it
+      #      reads the manifest only. This is the authoritative answer for the
+      #      tag this run is about to deploy.
+      #   2. whatever MLS_IMAGE_DIGEST is already stamped on the running app.
+      #      That value was written by the per-app CI run that last rolled an
+      #      image (app-*-ci.yml pins by digest and stamps it), so preserving it
+      #      is what stops this declarative converge from wiping the record of a
+      #      newer per-app deploy.
+      # Neither available -> 'unset', and V7.1 says so instead of passing.
+      # ---------------------------------------------------------------------
+      - name: Resolve the image digest for each app
+        id: digests
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          CA_LAUNCH_OPS: ${{ steps.names.outputs.ca-launch-ops }}
+          CA_CONTROL_TOWER: ${{ steps.names.outputs.ca-control-tower }}
+          CA_MCP: ${{ steps.names.outputs.ca-mcp }}
+          CA_DATA_API: ${{ steps.names.outputs.ca-data-api }}
+        run: |
+          set -euo pipefail
+
+          from_registry() {
+            docker buildx imagetools inspect "$1" --format '{{ .Manifest.Digest }}' 2>/dev/null || true
+          }
+
+          from_container_app() {
+            az containerapp show --resource-group "${RG_APPS}" --name "$1" \
+              --query "properties.template.containers[0].env[?name=='MLS_IMAGE_DIGEST'].value | [0]" \
+              -o tsv 2>/dev/null || true
+          }
+
+          resolve() {
+            local image="$1" app_name="$2" digest_var="$3" digest=""
+            if [ -n "${image}" ]; then
+              digest="$(from_registry "${image}")"
+            fi
+            if [ -z "${digest}" ] || [ "${digest}" = "null" ]; then
+              digest="$(from_container_app "${app_name}")"
+            fi
+            if [ -z "${digest}" ] || [ "${digest}" = "null" ]; then
+              digest="unset"
+              echo "::warning title=No image digest for ${app_name}::Neither the registry nor the running container app could supply an image digest, so MLS_IMAGE_DIGEST will be 'unset' and L7 V7.1 will report that the health payload does not carry the deployed digest. That is the honest outcome, not a pass."
+            fi
+            echo "${digest_var}=${digest}" >> "${GITHUB_ENV}"
+            echo "${app_name}: ${digest}"
+          }
+
+          # The *_IMAGE variables were written to GITHUB_ENV by the previous step,
+          # so they are readable here; they are absent when no image_tag was given.
+          resolve "${LAUNCH_OPS_IMAGE:-}" "${CA_LAUNCH_OPS}" LAUNCH_OPS_IMAGE_DIGEST
+          resolve "${CONTROL_TOWER_IMAGE:-}" "${CA_CONTROL_TOWER}" CONTROL_TOWER_IMAGE_DIGEST
+          resolve "${MCP_TOOLS_IMAGE:-}" "${CA_MCP}" MCP_TOOLS_IMAGE_DIGEST
+          resolve "${DATA_API_IMAGE:-}" "${CA_DATA_API}" DATA_API_IMAGE_DIGEST
 
       - name: What-if the apps deployment
         env:
@@ -169,18 +253,68 @@ jobs:
             --name "l7-apps-${GITHUB_RUN_ID}" \
             --output json > l7-outputs.json
           jq '.properties.outputs' l7-outputs.json > l7-manifest.json
+
+          data_api_mode="$(jq -r '.dataApiBackendModeResolved.value // "unknown"' l7-manifest.json)"
           {
             echo "### L7 app endpoints"
             echo '```json'
             cat l7-manifest.json
             echo '```'
             echo
-            echo "Target ports in effect — launch-ops: ${LAUNCH_OPS_PORT}, control-tower: ${CONTROL_TOWER_PORT}, mcp-tools: ${MCP_TOOLS_PORT}."
+            echo "Target ports in effect — launch-ops: ${LAUNCH_OPS_PORT}, control-tower: ${CONTROL_TOWER_PORT}, mcp-tools: ${MCP_TOOLS_PORT}, data-api: ${DATA_API_PORT}."
             if [ "${LAUNCH_OPS_PORT}" = "80" ]; then
               echo
-              echo "> **P-1 open:** ports are still on the placeholder 80. Set LAUNCH_OPS_PORT / CONTROL_TOWER_PORT / MCP_TOOLS_PORT to 8080 in the demo environment once real images are published."
+              echo "> **P-1 open:** ports are still on the placeholder 80. Set LAUNCH_OPS_PORT / CONTROL_TOWER_PORT / MCP_TOOLS_PORT / DATA_API_PORT to 8080 in the demo environment once real images are published."
             fi
+            echo
+            echo "\`DATA_API_ORIGIN\` on both frontends: \`$(jq -r '.dataApiOrigin.value // "(absent)"' l7-manifest.json)\`"
+            echo "data-api backend mode: \`${data_api_mode}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${data_api_mode}" != "cloud" ]; then
+            echo "::warning title=data-api is not in cloud mode::The template resolved MLS_DATA_BACKENDS='${data_api_mode}' because MLS_SQL_ENDPOINT is not set on the demo environment. LOCAL mode reads data/generated, which is not in the image, so every /api/tables route will answer 503 and both dashboards will render empty. Set MLS_SQL_ENDPOINT to the lakehouse SQL analytics endpoint (the L5 lakehouse metadata's sqlEndpointProperties.connectionString) and re-run."
+          fi
+
+      # ---------------------------------------------------------------------
+      # The V7.1 deploy manifest, in the exact shape the audit reads:
+      #   {"apps":[{"name":"<container app>","imageDigest":"<sha256:...>"}]}
+      #
+      # Built from the deployment's own outputs (containerAppNames + imageDigests)
+      # rather than reconstructed from workflow variables, so the manifest records
+      # what ARM actually accepted. Without it Test-PublicEndpoint returns a FINAL
+      # failure — "Refusing to pass on liveness alone" — however healthy the apps
+      # are, because a 200 from an app serving last week's image is not what the
+      # criterion asks about.
+      # ---------------------------------------------------------------------
+      - name: Write the V7.1 deploy manifest for the Verifier
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          jq '.containerAppNames.value as $names
+              | .imageDigests.value as $digests
+              | { apps: [ $names
+                          | to_entries[]
+                          | { name: .value, imageDigest: ($digests[.key] // "unset") } ] }' \
+            l7-manifest.json > l7-verifier-manifest.json
+          cat l7-verifier-manifest.json
+
+          # An empty apps array means the outputs did not carry the two objects
+          # this reads, and V7.1 would then fail with "no imageDigest in the deploy
+          # manifest" for every app — a pipeline defect wearing an estate defect's
+          # clothes. Fail here, where the cause is visible.
+          if [ "$(jq '.apps | length' l7-verifier-manifest.json)" = "0" ]; then
+            echo "::error title=Empty V7.1 deploy manifest::The L7 deployment outputs carried no containerAppNames/imageDigests, so the Verifier has nothing to bind endpoints to builds with."
+            exit 1
+          fi
+
+      - name: Upload the V7.1 deploy manifest
+        if: ${{ always() && !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-07-deploy-manifest
+          path: l7-verifier-manifest.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload L7 artifacts
         if: ${{ always() }}
@@ -190,6 +324,7 @@ jobs:
           path: |
             what-if-l7.txt
             l7-manifest.json
+            l7-verifier-manifest.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -199,11 +334,46 @@ jobs:
     if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: demo
+    # V7.5 observes 0 -> N -> 0 per app and waits 15 minutes before its phase-3
+    # read, giving up at +30. Two apps, so the audit alone can run for an hour;
+    # that wait is synchronous by design (kill-rebuild.md section 5 does not
+    # exclude it) and it is the criterion, not overhead.
+    timeout-minutes: 120
     permissions:
       id-token: write
       contents: read
+    env:
+      # Read token for V7.4's `gh pr view` / check-runs reads. The Verifier's own
+      # least-privilege PAT when the human provisioned one; otherwise the
+      # run-scoped GITHUB_TOKEN, which GitHub mints per run and stores nowhere —
+      # so "CI holds no stored secret" still holds either way.
+      MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+      GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
     steps:
       - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Verifier identity not configured
+        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice title=L7 not independently verified::AZURE_VERIFIER_CLIENT_ID is not set on the demo environment, so verification/layer-07-audit.ps1 was skipped rather than run as the deployer SP."
+
+      # V7.2 shells out to `npm --prefix apps/shared/spec-renderer run
+      # validate:golden` from the audited commit. Without the toolchain and the
+      # workspace install that criterion fails on a missing binary rather than on
+      # a bad fixture.
+      - uses: actions/setup-node@v4
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install workspace dependencies (V7.2 runs the golden-spec validator)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        run: npm ci
 
       - name: Azure login (OIDC, mls-verifier — Reader only)
         if: ${{ needs.preflight.outputs.verifier == 'true' }}
@@ -213,14 +383,57 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Download the V7.1 deploy manifest
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: layer-07-deploy-manifest
+          path: l7-manifest
+
+      # V7.3 needs the Log Analytics workspace CUSTOMER id (a GUID), which is an
+      # L6 output. Rather than plumb the L6 deployment outputs across a workflow
+      # boundary, the Verifier reads it from ARM under its own Reader credential —
+      # the same identity that then runs the KQL query.
+      - name: Resolve the Log Analytics customer id
+        id: law
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        env:
+          RG_PLATFORM: ${{ steps.names.outputs.rg-platform }}
+          LAW_NAME: ${{ steps.names.outputs.law }}
+        run: |
+          set -euo pipefail
+          customer_id="$(az monitor log-analytics workspace show \
+            --resource-group "${RG_PLATFORM}" --workspace-name "${LAW_NAME}" \
+            --query customerId -o tsv 2>/dev/null || true)"
+          if [ -z "${customer_id}" ]; then
+            echo "::warning title=Log Analytics workspace not readable::Could not resolve the customer id for ${LAW_NAME} in ${RG_PLATFORM}. V7.3 will report that no workspace id was available."
+          fi
+          echo "customer-id=${customer_id}" >> "${GITHUB_OUTPUT}"
+
+      # -AppName is deliberately left at the script's default: `pwsh -File`
+      # cannot bind a string[] (a comma-joined value arrives as ONE element and a
+      # space-separated one silently drops the tail), and the default already
+      # names both frontends. The Ask tab is not part of any L7 criterion.
       - name: Run verification/layer-07-audit.ps1
         id: audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
         uses: ./.github/actions/layer-audit
         with:
           layer: '07'
+          args: |
+            -ResourceGroupName
+            ${{ steps.names.outputs.rg-apps }}
+            -DeployManifestPath
+            l7-manifest/l7-verifier-manifest.json
+            -Repository
+            ${{ github.repository }}
+            ${{ steps.law.outputs.customer-id && '-LogAnalyticsWorkspaceId' || '' }}
+            ${{ steps.law.outputs.customer-id }}
+            ${{ (inputs.canary_pr || vars.MLS_L7_CANARY_PR) && '-CanaryPrNumber' || '' }}
+            ${{ inputs.canary_pr || vars.MLS_L7_CANARY_PR }}
 
       - name: Upload audit report
-        if: ${{ steps.audit.outputs.ran == 'true' }}
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: layer-07-audit-report

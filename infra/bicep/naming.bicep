@@ -51,11 +51,12 @@ var requiredTagNames = [
 ]
 
 @export()
-@description('[derived] Short app keys used in resource names. mcp-tools shortens to "mcp", giving mls-mcp-demo-ca — the Copilot Studio amendment (2026-08-24) replaced the copilot-svc LLM service (mls-copilot-demo-ca, the CLAUDE.md worked example) with an MCP tool server.')
+@description('[derived] Short app keys used in resource names. mcp-tools shortens to "mcp", giving mls-mcp-demo-ca — the Copilot Studio amendment (2026-08-24) replaced the copilot-svc LLM service (mls-copilot-demo-ca, the CLAUDE.md worked example) with an MCP tool server. dataApi keeps its full slug so the container app is mls-data-api-demo-ca, which is the name .github/workflows/app-data-api-ci.yml already derives as <prefix>-<APP_SLUG>-<env>-ca.')
 var appKeys = {
   launchOps: 'launch-ops'
   controlTower: 'control-tower'
   mcpTools: 'mcp'
+  dataApi: 'data-api'
 }
 
 @export()

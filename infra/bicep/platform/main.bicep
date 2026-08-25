@@ -316,6 +316,23 @@ module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
 }
 
 // ------------------------------------------------------------------ outputs (the L6 layer manifest for the Verifier)
+//
+// FOUR OUTPUT NAMES BELOW ARE LOAD-BEARING, not cosmetic. verification/layer-06-audit.ps1
+// reads `az deployment sub show --name layer-06 --query properties.outputs` and looks the
+// manifest up by name:
+//
+//   sqlDatabaseId             (or sqlDbId / databaseId)                        -> V6.1, V6.4
+//   containerAppEnvironmentId (or acaEnvironmentId / managedEnvironmentId)     -> V6.1
+//   lawCustomerId             (or logAnalyticsCustomerId / workspaceCustomerId)-> V6.2, and L7's V7.3
+//   costExportAccountName     (or exportStorageAccountName / storageAccountName) -> V6.3
+//
+// The descriptive names this template already published (…ResourceId, …CustomerId,
+// costExportStorageResourceId) are NOT in any of those alias lists, so before this block
+// existed every one of those criteria resolved to an empty string and failed with "no
+// resource id available" — a FAIL caused by the pipeline, not by the estate. Both spellings
+// are emitted: the descriptive ones stay because the workflows and the L6 playbook already
+// name them, and the four below are what the audit resolves. Renaming either set breaks a
+// consumer; add, never rename.
 
 @description('Resource ID of the Log Analytics workspace.')
 output logAnalyticsWorkspaceResourceId string = logAnalytics.outputs.resourceId
@@ -346,6 +363,26 @@ output sqlDatabaseName string = sqlDbName
 
 @description('Resource ID of the cost-export storage account.')
 output costExportStorageResourceId string = costExportStorage.outputs.resourceId
+
+// --- the four names verification/layer-06-audit.ps1 resolves the manifest by ---
+
+@description('ARM resource ID of the serverless SQL database. V6.1 (`az sql db show --ids`) and V6.4 (auto-pause status) both address the database by id. Composed from naming.bicep rather than read back from the AVM module so the shape is pinned by this template.')
+output sqlDatabaseId string = resourceId(
+  subscription().subscriptionId,
+  rgDataName,
+  'Microsoft.Sql/servers/databases',
+  sqlName,
+  sqlDbName
+)
+
+@description('ARM resource ID of the Container Apps environment, under the name V6.1 resolves. Same value as containerAppsEnvironmentResourceId.')
+output containerAppEnvironmentId string = containerAppsEnvironment.outputs.resourceId
+
+@description('Log Analytics workspace CUSTOMER id (GUID), under the name V6.2 and L7 V7.3 resolve. Same value as logAnalyticsWorkspaceCustomerId. Not the ARM resource id — `az monitor log-analytics query --workspace` takes the customer id.')
+output lawCustomerId string = logAnalytics.outputs.logAnalyticsWorkspaceId
+
+@description('NAME (not resource id) of the cost-export storage account, under the name V6.3 resolves. `az storage blob list --account-name` takes a name; costExportStorageResourceId is the id the export-definition step needs, and the two are not interchangeable.')
+output costExportAccountName string = costExportStorage.outputs.name
 
 @description('Names of the four demo resource groups, as created.')
 output resourceGroupNames object = {

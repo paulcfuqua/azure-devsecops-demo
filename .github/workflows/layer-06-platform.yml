@@ -30,6 +30,14 @@ on:
         type: boolean
         required: false
         default: false
+      verify_only:
+        description: >-
+          Skip the deploy and run only the L6 audit, with both async criteria enforced.
+          This is how V6.3 (first cost export, <= 24 h) and V6.4 (SQL auto-pause, +75 min)
+          are closed after the layer run recorded them PENDING.
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       location:
@@ -42,9 +50,25 @@ on:
         type: boolean
         required: false
         default: false
+      verify_only:
+        description: >-
+          Skip the deploy and run only the L6 audit, with both async criteria enforced
+          (closes the PENDING V6.3 and V6.4 from an earlier run).
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
+
+env:
+  # The deployment history entry the L6 layer manifest lives in. L06.md's V6.1
+  # query is `az deployment sub show --name layer-06 --query properties.outputs`
+  # and verification/layer-06-audit.ps1 defaults -DeploymentName to exactly this,
+  # so the name is part of the contract rather than a label. It is deliberately
+  # STABLE, not run-scoped: a `verify_only` re-check hours later has to be able to
+  # find the manifest without being told which run produced it.
+  L6_DEPLOYMENT_NAME: layer-06
 
 jobs:
   preflight:
@@ -74,12 +98,23 @@ jobs:
   deploy:
     name: deploy L6 platform
     needs: preflight
-    if: ${{ needs.preflight.outputs.configured == 'true' }}
+    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.verify_only }}
     runs-on: ubuntu-latest
     environment: demo
     permissions:
       id-token: write
       contents: read
+    outputs:
+      # The layer manifest, handed to the verify job as explicit audit arguments.
+      # Read back out of the deployment outputs rather than reconstructed here, so
+      # what the audit checks is what Bicep declared (L06.md: "Expected values
+      # resolve from the Bicep-declared manifest, never from a teammate's message").
+      sql-database-id: ${{ steps.manifest.outputs.sql-database-id }}
+      aca-environment-id: ${{ steps.manifest.outputs.aca-environment-id }}
+      law-customer-id: ${{ steps.manifest.outputs.law-customer-id }}
+      cost-export-account: ${{ steps.manifest.outputs.cost-export-account }}
+      completed-at: ${{ steps.manifest.outputs.completed-at }}
+      sql-last-touched: ${{ steps.seeded.outputs.sql-last-touched }}
     env:
       # Consumed by infra/bicep/platform/demo.bicepparam via readEnvironmentVariable().
       AZURE_LOCATION: ${{ inputs.location }}
@@ -109,10 +144,11 @@ jobs:
             --location "${AZURE_LOCATION}" \
             --template-file infra/bicep/platform/main.bicep \
             --parameters infra/bicep/platform/demo.bicepparam \
-            --name "l6-platform-${GITHUB_RUN_ID}" \
+            --name "${L6_DEPLOYMENT_NAME}" \
             | tee what-if-l6.txt
 
       - name: Deploy the platform
+        id: manifest
         if: ${{ !inputs.dry_run }}
         run: |
           set -euo pipefail
@@ -120,9 +156,39 @@ jobs:
             --location "${AZURE_LOCATION}" \
             --template-file infra/bicep/platform/main.bicep \
             --parameters infra/bicep/platform/demo.bicepparam \
-            --name "l6-platform-${GITHUB_RUN_ID}" \
+            --name "${L6_DEPLOYMENT_NAME}" \
             --output json > l6-outputs.json
           jq '.properties.outputs' l6-outputs.json > l6-manifest.json
+
+          # The four names verification/layer-06-audit.ps1 resolves the manifest
+          # by. They are emitted by infra/bicep/platform/main.bicep specifically
+          # for this: before they existed the audit found nothing under any of
+          # its accepted aliases and V6.1/V6.2/V6.3/V6.4 all failed with "no
+          # <thing> available" — a FAIL manufactured by the pipeline. Failing
+          # here instead is deliberate: a manifest the Verifier cannot read is a
+          # broken layer, not a broken audit.
+          missing=""
+          for key in sqlDatabaseId containerAppEnvironmentId lawCustomerId costExportAccountName; do
+            value="$(jq -r --arg k "${key}" '.[$k].value // ""' l6-manifest.json)"
+            if [ -z "${value}" ]; then
+              missing="${missing} ${key}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error title=L6 manifest incomplete::The layer-06 deployment outputs are missing:${missing}. verification/layer-06-audit.ps1 resolves every expected value from these, so the Verifier could not audit this layer."
+            exit 1
+          fi
+
+          # Recorded BEFORE the seed so it is the deployment's own completion
+          # time — V6.3's 24-hour cost-export window opens at L6 completion.
+          {
+            echo "sql-database-id=$(jq -r '.sqlDatabaseId.value' l6-manifest.json)"
+            echo "aca-environment-id=$(jq -r '.containerAppEnvironmentId.value' l6-manifest.json)"
+            echo "law-customer-id=$(jq -r '.lawCustomerId.value' l6-manifest.json)"
+            echo "cost-export-account=$(jq -r '.costExportAccountName.value' l6-manifest.json)"
+            echo "completed-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "${GITHUB_OUTPUT}"
+
           {
             echo "### L6 deployment manifest"
             echo '```json'
@@ -214,6 +280,20 @@ jobs:
             -SqlAccessToken $sqlToken `
             -Confirm:$false
 
+      # V6.4's 75-minute idle clock starts at "the last deployment touch of the
+      # DB" (L06.md), which is the seed above and nothing later. Recorded here so
+      # the audit can compute the deadline instead of assuming the window opened
+      # the moment it happened to run — without this it either sleeps out the
+      # whole window on the rebuild's critical path or fails a database that has
+      # simply not been idle long enough yet. `always()` because a failed seed
+      # still touched the database.
+      - name: Record when the database was last touched (V6.4 window start)
+        id: seeded
+        if: ${{ always() && !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "sql-last-touched=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
       - name: Upload L6 artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -228,14 +308,28 @@ jobs:
   verify:
     name: verify L6 (mls-verifier)
     needs: [preflight, deploy]
-    if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    # `always()` plus the explicit result test so `verify_only` (which skips the
+    # deploy job entirely) still verifies. A FAILED deploy is excluded — there is
+    # nothing to audit.
+    if: >-
+      ${{ always()
+          && needs.preflight.outputs.configured == 'true'
+          && !inputs.dry_run
+          && !contains(fromJSON('["failure","cancelled"]'), needs.deploy.result) }}
     runs-on: ubuntu-latest
     environment: demo
+    timeout-minutes: 60
     permissions:
       id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verifier identity not configured
+        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice title=L6 not independently verified::AZURE_VERIFIER_CLIENT_ID is not set on the demo environment, so verification/layer-06-audit.ps1 was skipped rather than run as the deployer SP."
 
       - name: Azure login (OIDC, mls-verifier — Reader only)
         if: ${{ needs.preflight.outputs.verifier == 'true' }}
@@ -245,17 +339,93 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Run verification/layer-06-audit.ps1
+      # ---------------------------------------------------------------------
+      # INLINE RUN (the layer's own): the four manifest values come from the
+      # deploy job's outputs, and the two async criteria are given their window
+      # starts and a ZERO wait budget:
+      #
+      #   V6.3  first cost export, <= 24 h   -> PENDING with a deadline
+      #   V6.4  SQL auto-pause,    +75 min   -> PENDING with a deadline
+      #
+      # Neither is softened: -SqlPauseWaitMinutes 0 means "evaluate once", and
+      # the criterion still FAILs if the deadline has already passed. This is
+      # what docs/runbooks/kill-rebuild.md section 5 requires when it excludes
+      # both from the <60-minute clock — the alternative is 75 minutes of sleep
+      # sitting on the rebuild's critical path, in front of L7 and L8.
+      # ---------------------------------------------------------------------
+      - name: Run verification/layer-06-audit.ps1 (layer run)
         id: audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' && !inputs.verify_only }}
         uses: ./.github/actions/layer-audit
         with:
           layer: '06'
+          args: |
+            -SubscriptionId
+            ${{ vars.AZURE_SUBSCRIPTION_ID }}
+            -DeploymentName
+            ${{ env.L6_DEPLOYMENT_NAME }}
+            -SqlDatabaseId
+            ${{ needs.deploy.outputs.sql-database-id }}
+            -ContainerAppEnvironmentId
+            ${{ needs.deploy.outputs.aca-environment-id }}
+            -LogAnalyticsWorkspaceId
+            ${{ needs.deploy.outputs.law-customer-id }}
+            -CostExportAccountName
+            ${{ needs.deploy.outputs.cost-export-account }}
+            -LayerCompletedUtc
+            ${{ needs.deploy.outputs.completed-at }}
+            -SqlLastTouchedUtc
+            ${{ needs.deploy.outputs.sql-last-touched }}
+            -SqlPauseWaitMinutes
+            0
+
+      # ---------------------------------------------------------------------
+      # RE-CHECK RUN (`verify_only: true`, dispatched once the windows have
+      # elapsed): no deploy, no window starts, no grace. -EnforceCostExport
+      # turns V6.3's PENDING into a verdict, and omitting -SqlLastTouchedUtc
+      # does the same for V6.4 — a database that is not Paused by now is the
+      # idle-cost model being broken, which is what the criterion is for.
+      # The manifest is resolved from the layer-06 deployment outputs, which is
+      # why that deployment name is stable rather than run-scoped.
+      # ---------------------------------------------------------------------
+      - name: Run verification/layer-06-audit.ps1 (async re-check)
+        id: recheck
+        if: ${{ needs.preflight.outputs.verifier == 'true' && inputs.verify_only }}
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '06'
+          args: |
+            -SubscriptionId
+            ${{ vars.AZURE_SUBSCRIPTION_ID }}
+            -DeploymentName
+            ${{ env.L6_DEPLOYMENT_NAME }}
+            -EnforceCostExport
+            -SqlPauseWaitMinutes
+            0
+
+      - name: Restate what is still open
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### L6 — two criteria are still open by design"
+            echo
+            echo "| Criterion | Window | Closes with |"
+            echo "|---|---|---|"
+            echo "| V6.3 first cost-export file | 24 h from L6 completion | \`gh workflow run layer-06-platform.yml -f verify_only=true\` |"
+            echo "| V6.4 SQL auto-pause | +75 min from the seed | the same run |"
+            echo
+            echo "Both are recorded PENDING with their deadlines in the L6 report, not"
+            echo "passed and not failed. \`kill-rebuild.md\` section 5 excludes both from"
+            echo "the <60-minute rebuild clock; that exclusion is only honest if they are"
+            echo "actually closed afterwards, so the re-check is not optional."
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload audit report
-        if: ${{ steps.audit.outputs.ran == 'true' }}
+        if: ${{ always() && (steps.audit.outputs.ran == 'true' || steps.recheck.outputs.ran == 'true') }}
         uses: actions/upload-artifact@v4
         with:
-          name: layer-06-audit-report
+          name: layer-06-audit-report-${{ inputs.verify_only && 'recheck' || 'layer' }}
           path: verification/reports/
           if-no-files-found: warn
           retention-days: 30

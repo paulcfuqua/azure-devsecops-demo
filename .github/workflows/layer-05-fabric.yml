@@ -64,12 +64,18 @@ jobs:
           additional: |
             FABRIC_CAPACITY_ID=${{ vars.FABRIC_CAPACITY_ID }}
           layer: L5 Fabric
+      # FABRIC_CAPACITY_ID is required by the audit too: V5.1 asserts the workspace
+      # is bound to that capacity and V5.4 reads its state, and neither can be
+      # guessed. Guarded here so a missing value skips with a NOTICE instead of
+      # exiting 2.
       - id: verifier
         uses: ./.github/actions/demo-env-guard
         with:
           client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            FABRIC_CAPACITY_ID=${{ vars.FABRIC_CAPACITY_ID }}
           layer: L5 verification (mls-verifier)
 
   deploy:
@@ -214,11 +220,24 @@ jobs:
     if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: demo
+    timeout-minutes: 60
     permissions:
       id-token: write
       contents: read
+    env:
+      # V5.3 asserts the ten row counts against the deterministic seed. The audit
+      # falls back to this path when -ExpectedCountPath is absent; passing it
+      # explicitly keeps the report's Preflight table honest about which fixture
+      # was read.
+      MLS_EXPECTED_COUNTS: data/generators/tests/expected_counts.json
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verifier identity not configured
+        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice title=L5 not independently verified::AZURE_VERIFIER_CLIENT_ID and/or FABRIC_CAPACITY_ID is absent from the demo environment, so verification/layer-05-audit.ps1 was skipped."
 
       - name: Azure login (OIDC, mls-verifier — Reader + workspace Viewer)
         if: ${{ needs.preflight.outputs.verifier == 'true' }}
@@ -228,14 +247,42 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # V5.3 queries the lakehouse SQL analytics endpoint through Invoke-Sqlcmd.
+      # Without the module the criterion fails with "'Invoke-Sqlcmd' is not
+      # available on this machine" — a runner gap reported as an estate defect,
+      # which is exactly the confusion this whole change removes. 22+ is the
+      # minimum that supports -AccessToken (Entra-only auth, no SQL password).
+      - name: Install SqlServer (V5.3 queries the SQL analytics endpoint)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module SqlServer -Force -Scope CurrentUser -MinimumVersion 22.0.0 -AllowClobber
+
+      # -FabricToken is deliberately NOT passed: the audit mints its own Fabric
+      # token from the mls-verifier login above, so no bearer token ever appears
+      # in a process argument list. -SqlEndpoint is an override for the case where
+      # the lakehouse metadata does not carry sqlEndpointProperties yet (the
+      # endpoint syncs a few minutes behind lakehouse creation); when the demo
+      # variable is unset both lines drop out and the audit resolves it from the
+      # V5.1 evidence.
       - name: Run verification/layer-05-audit.ps1
         id: audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
         uses: ./.github/actions/layer-audit
         with:
           layer: '05'
+          args: |
+            -FabricCapacityId
+            ${{ vars.FABRIC_CAPACITY_ID }}
+            -ExpectedCountPath
+            data/generators/tests/expected_counts.json
+            ${{ vars.MLS_SQL_ENDPOINT && '-SqlEndpoint' || '' }}
+            ${{ vars.MLS_SQL_ENDPOINT }}
 
       - name: Upload audit report
-        if: ${{ steps.audit.outputs.ran == 'true' }}
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: layer-05-audit-report

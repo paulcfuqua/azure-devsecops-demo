@@ -1,77 +1,170 @@
 name: run layer verification audit
 description: >-
-  Invokes verification/layer-<nn>-audit.ps1 defensively. The audit scripts are the
-  Verifier's deliverable (master plan: "verification/layer-<nn>-audit.ps1 — Verifier-only,
-  runs as mls-verifier (Reader)") and do not exist yet in Phase P, so a missing script is
-  a NOTICE, never a failure. The caller is responsible for having authenticated as the
-  verifier identity (mls-verifier) before this step — CLAUDE.md forbids running audits as
-  the deployer SP.
+  Runs verification/layer-<nn>-audit.ps1 as the Verifier and gates the calling job on
+  its exit code. The audit scripts now exist, so a present script ALWAYS executes and a
+  FAIL fails the layer. The Test-Path guard survives only for the partial-checkout case
+  (a branch or ref where verification/ has not merged), where it still skips with a
+  NOTICE. The caller is responsible for having authenticated as the verifier identity
+  (mls-verifier) before this step — CLAUDE.md forbids running audits as the deployer SP.
+
+# ---------------------------------------------------------------------------
+# WHAT CHANGED, AND WHY IT MATTERS (Phase Q turn-key close-out, 2026-08-24)
+#
+# This action used to pipe the audit through `tee`, which meant the pipeline's
+# exit code decided the step and the `ran=true` output was never written on a
+# failure — so the caller's `if: steps.audit.outputs.ran == true` upload was
+# skipped exactly when the report mattered most. It also passed no arguments at
+# all, so every audit fell back to its environment-variable defaults and most of
+# them recorded "no <thing> supplied" FAILs caused by the pipeline rather than by
+# the estate.
+#
+# Now: the script runs unpiped (so its exit code is its own), the transcript is
+# captured to a file and echoed afterwards, the outputs are always written, and
+# the `args` input carries the per-layer inputs.
+#
+# `args` is ONE ARGUMENT PER LINE. Not a shell string: an argument may contain
+# spaces, and splitting on whitespace would break a tenant domain, a manifest
+# path under RUNNER_TEMP or an ISO-8601 timestamp. Blank lines are dropped, so a
+# caller can guard an optional flag/value pair on a repository variable and have
+# both lines disappear cleanly when it is unset.
+#
+# Values that are SECRETS must not go here — process arguments are visible in the
+# runner. Pass those as job-level `env:` instead; every audit reads its GitHub
+# token from MLS_VERIFIER_GH_TOKEN / GH_TOKEN / GITHUB_TOKEN.
+# ---------------------------------------------------------------------------
 
 inputs:
   layer:
     description: 'Two-digit layer number, e.g. "02".'
     required: true
+  args:
+    description: >-
+      Arguments for the audit script, ONE PER LINE (a line "-Repository" followed by a
+      line "owner/name"). Blank lines are ignored, so a flag/value pair guarded by an
+      unset repository variable drops out cleanly. Switch parameters are a single line.
+    required: false
+    default: ''
   script-dir:
     description: 'Directory holding the audit scripts.'
     required: false
     default: verification
   report-dir:
-    description: 'Directory the audit transcript is written to (uploaded as an artifact by the caller).'
+    description: 'Directory the audit writes its Markdown + JSON reports to (uploaded as an artifact by the caller).'
     required: false
     default: verification/reports
   identity:
     description: 'Label for the identity the audit ran as, used in the run summary.'
     required: false
     default: mls-verifier
+  continue-on-failure:
+    description: >-
+      'true' records the failure in the outputs and lets the caller decide. Default
+      'false' — the audit's exit code gates the layer, which is the whole point of a
+      Verifier sign-off.
+    required: false
+    default: 'false'
 
 outputs:
   ran:
     description: "'true' when the audit script existed and was executed."
     value: ${{ steps.audit.outputs.ran }}
+  exit-code:
+    description: 'Exit code of the audit script (0 = no criterion FAILed; 2 = the audit could not start).'
+    value: ${{ steps.audit.outputs.exit-code }}
   report:
-    description: 'Path of the transcript written by this step (empty when the audit did not run).'
+    description: 'Path of the console transcript written by this step (empty when the audit did not run).'
     value: ${{ steps.audit.outputs.report }}
 
 runs:
   using: composite
   steps:
-    - name: Run layer audit (skip with notice when absent)
+    - name: Run layer audit
       id: audit
       shell: bash
       env:
         AUDIT_LAYER: ${{ inputs.layer }}
+        AUDIT_ARGS: ${{ inputs.args }}
         AUDIT_SCRIPT_DIR: ${{ inputs.script-dir }}
         AUDIT_REPORT_DIR: ${{ inputs.report-dir }}
         AUDIT_IDENTITY: ${{ inputs.identity }}
+        AUDIT_CONTINUE: ${{ inputs.continue-on-failure }}
       run: |
         set -euo pipefail
 
         script="${AUDIT_SCRIPT_DIR}/layer-${AUDIT_LAYER}-audit.ps1"
 
         if [ ! -f "${script}" ]; then
-          echo "ran=false" >> "${GITHUB_OUTPUT}"
-          echo "report=" >> "${GITHUB_OUTPUT}"
-          echo "::notice title=Verification audit not authored yet::${script} does not exist. L${AUDIT_LAYER} deployed but was NOT independently verified. Handoff: the Verifier owns this script (master plan, verification/)."
+          {
+            echo "ran=false"
+            echo "exit-code="
+            echo "report="
+          } >> "${GITHUB_OUTPUT}"
+          echo "::notice title=Verification audit missing on this ref::${script} does not exist in this checkout. L${AUDIT_LAYER} deployed but was NOT independently verified."
           {
             echo "### L${AUDIT_LAYER} verification: SKIPPED"
             echo
-            echo "\`${script}\` does not exist yet. The layer deployed, but nothing"
-            echo "independently audited it. This script is the Verifier's deliverable"
-            echo "and is tracked as the L-layer handoff out of Phase P Track G."
+            echo "\`${script}\` is not present in this checkout. The layer deployed, but"
+            echo "nothing independently audited it. The audit scripts are committed on"
+            echo "\`main\`, so on a normal run this branch is unreachable — reaching it"
+            echo "means a partial checkout or a ref that predates \`verification/\`."
           } >> "${GITHUB_STEP_SUMMARY}"
           exit 0
         fi
 
+        # One argument per line, read into an array so values keep their spaces.
+        audit_args=()
+        while IFS= read -r line; do
+          [ -n "${line}" ] || continue
+          audit_args+=("${line}")
+        done <<< "${AUDIT_ARGS}"
+
+        # No pairing validation here on purpose. Switch parameters (-NoRetry,
+        # -EnforceCostExport) legitimately have no value, so "a flag followed by a
+        # flag" is not an error signature. The case this WOULD have caught — a
+        # value line that went blank because its repository variable is unset —
+        # PowerShell already refuses: binding -Domain to the literal token
+        # "-NamingPrefix" raises "Missing an argument for parameter 'Domain'" and
+        # exits non-zero, which this action reports as "COULD NOT START".
+
         mkdir -p "${AUDIT_REPORT_DIR}"
-        report="${AUDIT_REPORT_DIR}/L${AUDIT_LAYER}-$(date -u +%Y%m%dT%H%M%SZ).md"
+        transcript="${AUDIT_REPORT_DIR}/L${AUDIT_LAYER}-console-$(date -u +%Y%m%dT%H%M%SZ).log"
 
-        echo "Running ${script} as ${AUDIT_IDENTITY}"
-        pwsh -NoProfile -NonInteractive -File "${script}" 2>&1 | tee "${report}"
+        echo "Running ${script} as ${AUDIT_IDENTITY} with ${#audit_args[@]} argument(s)."
 
-        echo "ran=true" >> "${GITHUB_OUTPUT}"
-        echo "report=${report}" >> "${GITHUB_OUTPUT}"
+        # No pipeline: `pwsh ... | tee` would hand the step tee's exit code, and
+        # the audit's own code is the Verifier's verdict. Captured first,
+        # published second, acted on last.
+        set +e
+        pwsh -NoProfile -NonInteractive -File "${script}" "${audit_args[@]}" > "${transcript}" 2>&1
+        code=$?
+        set -e
+        cat "${transcript}"
+
         {
-          echo "### L${AUDIT_LAYER} verification: ran as ${AUDIT_IDENTITY}"
+          echo "ran=true"
+          echo "exit-code=${code}"
+          echo "report=${transcript}"
+        } >> "${GITHUB_OUTPUT}"
+
+        case "${code}" in
+          0) verdict="PASS — no criterion FAILed" ;;
+          2) verdict="COULD NOT START — a required input was missing or an identity was wrong" ;;
+          *) verdict="FAIL — at least one criterion FAILed" ;;
+        esac
+
+        {
+          echo "### L${AUDIT_LAYER} verification: ${verdict}"
           echo
-          echo "Transcript: \`${report}\` (uploaded as a run artifact)."
+          echo "Ran as \`${AUDIT_IDENTITY}\`, exit code \`${code}\`."
+          echo "Reports: \`${AUDIT_REPORT_DIR}/L${AUDIT_LAYER}-<timestamp>.md\` and its"
+          echo "\`.json\` sibling, plus this console transcript — all uploaded as a run artifact."
         } >> "${GITHUB_STEP_SUMMARY}"
+
+        if [ "${code}" -ne 0 ]; then
+          if [ "${AUDIT_CONTINUE}" = "true" ]; then
+            echo "::warning title=L${AUDIT_LAYER} verification failed::${verdict}. continue-on-failure is set, so the caller decides."
+            exit 0
+          fi
+          echo "::error title=L${AUDIT_LAYER} verification failed::${verdict}. See the uploaded L${AUDIT_LAYER} report for the criterion table."
+          exit "${code}"
+        fi

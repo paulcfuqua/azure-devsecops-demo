@@ -73,6 +73,8 @@ jobs:
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
       missing: ${{ steps.guard.outputs.missing }}
+      verifier: ${{ steps.verifier.outputs.configured }}
+      tenant-audits: ${{ steps.tenant.outputs.configured }}
     steps:
       - uses: actions/checkout@v4
       - id: guard
@@ -82,6 +84,32 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           layer: infra-down (estate teardown)
+
+      # The down-state audit is the cycle's honesty checkpoint (L11.md deploy
+      # step 2), so it needs the read-only identity like every other audit.
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: post-down verification (mls-verifier)
+
+      # V11.2 re-executes the L3 and L4 audits to prove the teardown did not
+      # cross the tenant-object line. Those two need the tenant domain and the
+      # Security & Compliance app-only certificate; without them V11.2 records
+      # SKIP (via -SkipChildAudit) rather than failing a teardown that worked.
+      - id: tenant
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            MLS_TENANT_DOMAIN=${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
+            MLS_VERIFIER_APP_ID=${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
+            MLS_VERIFIER_CERT_BASE64=${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
+          layer: post-down tenant-object audits (V11.2 re-runs L3 + L4)
 
   fabric:
     name: Fabric items + capacity pause
@@ -262,9 +290,132 @@ jobs:
             echo "still PASS — a regression there means the teardown crossed the line."
           } >> "${GITHUB_STEP_SUMMARY}"
 
+  # ---------------------------------------------------------------------------
+  # THE DOWN-STATE AUDIT — "the cycle's honesty checkpoint" (L11.md deploy step 2:
+  # it must PASS before up.ps1 starts). Two criteria are measurable in this phase:
+  #
+  #   V11.1  every mls-rg-* resource group absent      — the teardown worked
+  #   V11.2  the L3 and L4 audits still PASS           — it did not go too far
+  #
+  # V11.3/V11.4/V11.5 are post-up criteria; the audit records them SKIP with that
+  # reason rather than omitting the ids, so the down-state report still accounts
+  # for all five.
+  #
+  # A regression in V11.2 means the teardown crossed the tenant-object line, which
+  # is simultaneously a G3-boundary violation and a G4 event — so it fails this
+  # run loudly rather than being left for someone to notice later.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: verify down-state (mls-verifier)
+    needs: [preflight, fabric, cost-export, resource-groups]
+    if: >-
+      ${{ always()
+          && needs.preflight.outputs.configured == 'true'
+          && needs.preflight.outputs.verifier == 'true'
+          && needs.resource-groups.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # Consumed by the CHILD L3/L4 audits, which layer-11-audit.ps1 launches in
+      # their own pwsh processes with only -ReportRoot/-NoRetry. They inherit this
+      # environment, and every input they need has an environment-variable
+      # fallback — which is the only channel available across that boundary.
+      MLS_REPOSITORY: ${{ github.repository }}
+      MLS_TENANT_DOMAIN: ${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
+      TENANT_DOMAIN: ${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
+      MLS_VERIFIER_APP_ID: ${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
+      MLS_ENTRA_MANIFEST: infra/entra/manifest.json
+      MLS_LABEL_GUID_PATH: verification/reports/label-guids.json
+      MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-verifier — Reader / Directory.Read.All)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install the mls-verifier certificate for the child L4 audit
+        id: cert
+        if: ${{ needs.preflight.outputs.tenant-audits == 'true' }}
+        shell: pwsh
+        env:
+          MLS_VERIFIER_CERT_BASE64: ${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
+          MLS_VERIFIER_CERT_PASSWORD: ${{ secrets.MLS_VERIFIER_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module ExchangeOnlineManagement -Force -Scope CurrentUser -AllowClobber
+
+          # .NET implements the CurrentUser\My store on Linux as well, which is
+          # what Connect-IPPSSession -CertificateThumbprint reads. The
+          # Import-PfxCertificate cmdlet is Windows-only, hence the raw API.
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'mls-verifier.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:MLS_VERIFIER_CERT_BASE64))
+          try {
+            $flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet -bor
+                     [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+            $certificate = if ($env:MLS_VERIFIER_CERT_PASSWORD) {
+              [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $pfxPath, (ConvertTo-SecureString $env:MLS_VERIFIER_CERT_PASSWORD -AsPlainText -Force), $flags)
+            }
+            else {
+              [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, '', $flags)
+            }
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
+            $store.Open('ReadWrite')
+            $store.Add($certificate)
+            $store.Close()
+            "MLS_VERIFIER_CERT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+          finally {
+            Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Tenant-object audits unavailable
+        if: ${{ needs.preflight.outputs.tenant-audits != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::warning title=V11.2 will record SKIP::MLS_TENANT_DOMAIN and/or the mls-verifier Security & Compliance certificate are not configured, so the L3 and L4 child audits cannot run and V11.2 has no evidence. The audit is invoked with -SkipChildAudit, which records SKIP with that reason — it does NOT pass. V11.1 (all resource groups absent) is still verified."
+
+      - name: Run verification/layer-11-audit.ps1 (down phase)
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '11'
+          args: |
+            -Phase
+            Down
+            -SubscriptionId
+            ${{ vars.AZURE_SUBSCRIPTION_ID }}
+            -ResourceGroupPrefix
+            ${{ steps.names.outputs.prefix }}-rg-
+            -Repository
+            ${{ github.repository }}
+            ${{ needs.preflight.outputs.tenant-audits == 'true' && '' || '-SkipChildAudit' }}
+
+      - name: Upload the down-state audit report
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-11-audit-report-down
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30
+
   summary:
     name: run summary
-    needs: [preflight, fabric, cost-export, resource-groups]
+    needs: [preflight, fabric, cost-export, resource-groups, verify]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -275,6 +426,7 @@ jobs:
           R_FABRIC: ${{ needs.fabric.result }}
           R_COST: ${{ needs.cost-export.result }}
           R_RG: ${{ needs.resource-groups.result }}
+          R_VERIFY: ${{ needs.verify.result }}
         run: |
           set -euo pipefail
           {
@@ -291,16 +443,17 @@ jobs:
             echo "| Fabric items + capacity pause | ${R_FABRIC} |"
             echo "| Cost-export definition | ${R_COST} |"
             echo "| Resource group deletes | ${R_RG} |"
+            echo "| Down-state audit (V11.1 + V11.2) | ${R_VERIFY} |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Fail the run if any teardown stage failed
         env:
-          RESULTS: ${{ needs.fabric.result }} ${{ needs.cost-export.result }} ${{ needs.resource-groups.result }}
+          RESULTS: ${{ needs.fabric.result }} ${{ needs.cost-export.result }} ${{ needs.resource-groups.result }} ${{ needs.verify.result }}
         run: |
           set -euo pipefail
           case " ${RESULTS} " in
             *" failure "*)
-              echo "::error title=Teardown incomplete::At least one stage failed; re-running infra-down is safe and idempotent."
+              echo "::error title=Teardown incomplete or unverified::At least one stage failed. Re-running infra-down is safe and idempotent; a failed down-state audit is NOT — V11.2 failing means the teardown crossed the tenant-object line (G3 boundary + G4 event), so stop and escalate rather than replaying."
               exit 1
               ;;
           esac

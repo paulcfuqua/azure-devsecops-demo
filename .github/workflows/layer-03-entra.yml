@@ -58,12 +58,22 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           layer: L3 Entra
+      # MLS_TENANT_DOMAIN joins the identity variables for the VERIFIER guard only.
+      # verification/layer-03-audit.ps1 composes every expected UPN as
+      # <prefix>@<domain>; infra/entra/manifest.json ships the placeholder
+      # 'mls.example', which apply-entra.ps1 overrides at apply time, so the audit
+      # cannot guess it and Resolve-MlsInput throws (exit 2) without it. Guarding
+      # here means a missing domain skips the audit with a named NOTICE instead of
+      # failing the layer with a stack trace. ENTRA_DOMAIN is accepted as the
+      # pre-existing spelling the deploy side already uses.
       - id: verifier
         uses: ./.github/actions/demo-env-guard
         with:
           client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            MLS_TENANT_DOMAIN=${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
           layer: L3 verification (mls-verifier)
 
   plan:
@@ -182,11 +192,21 @@ jobs:
     if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: demo
+    timeout-minutes: 60
     permissions:
       id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Verifier prerequisites not configured
+        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice title=L3 not independently verified::The demo environment is missing AZURE_VERIFIER_CLIENT_ID and/or MLS_TENANT_DOMAIN, so verification/layer-03-audit.ps1 was skipped rather than run as the wrong identity or against the placeholder domain 'mls.example'. Set them with: gh variable set MLS_TENANT_DOMAIN --env demo --body <verified tenant domain>"
 
       - name: Azure login (OIDC, mls-verifier — Reader / Directory.Read.All)
         if: ${{ needs.preflight.outputs.verifier == 'true' }}
@@ -196,14 +216,26 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # -Domain is the one input this audit cannot derive: the committed manifest
+      # carries the placeholder 'mls.example' and Resolve-MlsInput refuses it, so
+      # without MLS_TENANT_DOMAIN the script exits 2 before recording a criterion.
+      # -NamingPrefix comes from naming.bicep for the same reason as everywhere else.
       - name: Run verification/layer-03-audit.ps1
         id: audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
         uses: ./.github/actions/layer-audit
         with:
           layer: '03'
+          args: |
+            -Domain
+            ${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
+            -NamingPrefix
+            ${{ steps.names.outputs.prefix }}
+            -ManifestPath
+            infra/entra/manifest.json
 
       - name: Upload audit report
-        if: ${{ steps.audit.outputs.ran == 'true' }}
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: layer-03-audit-report

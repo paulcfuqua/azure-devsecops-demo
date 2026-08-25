@@ -1,0 +1,132 @@
+name: verify-l1
+
+# =============================================================================
+# L1 verification — repo skeleton, OIDC wiring, up/down pipelines.
+# Playbook: docs/runbooks/layers/L01.md   Audit: verification/layer-01-audit.ps1
+#
+# WHY THIS IS ITS OWN WORKFLOW, AND NOT A JOB INSIDE infra-up.yml
+#
+# V1.1 reads the MOST RECENT run of infra-up.yml and requires
+# `conclusion == "success"` on both the run and its `oidc-login` job. A job
+# living inside that run would be reading a run that has not concluded yet — the
+# conclusion is null while the job that asks about it is still executing — so it
+# would FAIL for a structural reason, every time, and then retry for thirty
+# minutes before failing anyway. The audit is right; the placement would have
+# been wrong.
+#
+# So it hangs off `workflow_run: completed` instead: GitHub starts this the
+# moment infra-up finishes, by which time the conclusion V1.1 asks for exists.
+# `workflow_dispatch` is kept for a re-run without a rebuild.
+#
+# L1 owns no cloud resource, so this workflow deploys nothing and can never
+# write anything: it checks out, logs in as the read-only identity, and runs one
+# script that is structurally incapable of a mutation (MlsAudit.psm1's transport
+# guards refuse any non-GET az/gh call).
+#
+# Pre-G0 guard: the same `demo` environment guard every other layer uses.
+# =============================================================================
+
+on:
+  workflow_run:
+    workflows: [infra-up]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      workflow_file:
+        description: Workflow whose latest run V1.1 reads for the OIDC round-trip.
+        type: string
+        required: false
+        default: infra-up.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-l1
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      verifier: ${{ steps.verifier.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: L1 verification (mls-verifier)
+
+  verify:
+    name: verify L1 (mls-verifier)
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: demo
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # V1.3's first sweep greps the working tree for these three values, so the
+      # audit needs them in its environment to know what to look FOR. They are
+      # never printed: the audit reports "3 of 3 available (values never logged)".
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+      MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+      GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+    steps:
+      # Full history: V1.3 runs `git grep` over the checked-out tree, and a
+      # shallow clone is still a complete tree at that ref, which is what the
+      # criterion is about — what is committed at the audited commit.
+      - uses: actions/checkout@v4
+
+      - name: Verifier identity not configured
+        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice title=L1 not independently verified::AZURE_VERIFIER_CLIENT_ID is not set on the demo environment, so verification/layer-01-audit.ps1 was skipped. V1.4 reads the deployer's federated credential through Microsoft Graph and must not run as the deployer itself."
+
+      - name: Azure login (OIDC, mls-verifier — Reader / Directory.Read.All)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # -OidcJobName is load-bearing and matches infra-up.yml's job name exactly;
+      # a rename there silently turns V1.1 into "(job absent)". -EnvironmentName
+      # is what V1.4 expects the federated credential's subject to end in:
+      # repo:<owner>/<repo>:environment:demo.
+      - name: Run verification/layer-01-audit.ps1
+        id: audit
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '01'
+          args: |
+            -Repository
+            ${{ github.repository }}
+            -WorkflowFile
+            ${{ inputs.workflow_file || 'infra-up.yml' }}
+            -OidcJobName
+            oidc-login
+            -EnvironmentName
+            demo
+            -RepoRoot
+            ${{ github.workspace }}
+
+      - name: Upload audit report
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-01-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

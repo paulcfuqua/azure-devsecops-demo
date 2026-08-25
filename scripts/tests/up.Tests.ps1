@@ -10,6 +10,11 @@ BeforeAll {
 
     $script:Repo = 'paulcfuqua/azure-devsecops'
 
+    # Every test writes its up-clock record here, never into the real
+    # verification/reports/: a unit test must not leave evidence behind that
+    # looks like a rebuild proof.
+    $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-up-$([guid]::NewGuid().ToString('n'))"
+
     # -AsWhatIf, not -WhatIf: a parameter literally named WhatIf on a function that
     # already declares SupportsShouldProcess collides with the common parameter.
     function Invoke-UpForTest {
@@ -21,10 +26,11 @@ BeforeAll {
             [string]$Mode = 'full',
             [string]$Layers = 'all',
             [string]$Location = 'eastus2',
-            [string]$ImageTag = ''
+            [string]$ImageTag = '',
+            [string]$ReportRoot = $script:ReportRoot
         )
         Invoke-Main -Repository $Repository -Mode $Mode -Layers $Layers -Location $Location `
-            -ImageTag $ImageTag -DryRun:$DryRun -NoWatch:$NoWatch `
+            -ImageTag $ImageTag -DryRun:$DryRun -NoWatch:$NoWatch -ReportRoot $ReportRoot `
             -TimeoutMinutes 1 -PollSeconds 1 -WhatIf:$AsWhatIf
     }
 
@@ -44,6 +50,9 @@ BeforeAll {
 
 AfterAll {
     Remove-Item Env:\MLS_SKIP_MAIN -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $script:ReportRoot) {
+        Remove-Item -LiteralPath $script:ReportRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Describe 'up.ps1' {
@@ -295,6 +304,87 @@ Describe 'up.ps1' {
 
         It 'formats an over-budget duration with hours' {
             Format-Duration -Duration ([timespan]::FromMinutes(75)) | Should -Be '1h 15m 00s'
+        }
+    }
+
+    Context 'clock handover - V11.4 FAILs rather than inventing a start time' {
+        BeforeEach {
+            if (Test-Path -LiteralPath $script:ReportRoot) {
+                Remove-Item -LiteralPath $script:ReportRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'writes up-clock.json under the report root' {
+            $result = Invoke-UpForTest
+            $result.ClockPath | Should -Not -BeNullOrEmpty
+            Test-Path -LiteralPath $result.ClockPath | Should -BeTrue
+            (Split-Path -Path $result.ClockPath -Leaf) | Should -Be 'up-clock.json'
+        }
+
+        It 'records both instants under the exact names layer-11-audit.ps1 falls back to' {
+            # Asserted against the RAW text, not the parsed object: ConvertFrom-Json
+            # turns an ISO-8601 string back into a [datetime], which would hide a
+            # badly formatted file behind PowerShell's own round-trip.
+            $result = Invoke-UpForTest
+            $raw = Get-Content -LiteralPath $result.ClockPath -Raw
+            $raw | Should -Match '"MLS_L11_UP_START":\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"'
+            $raw | Should -Match '"MLS_L11_UP_COMPLETED":\s*"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"'
+            $clock = $raw | ConvertFrom-Json
+            ([datetime]$clock.MLS_L11_UP_COMPLETED) |
+                Should -BeGreaterOrEqual ([datetime]$clock.MLS_L11_UP_START)
+        }
+
+        It 'carries the run identity and the budget verdict, so the record stands alone' {
+            $result = Invoke-UpForTest
+            $clock = Get-Content -LiteralPath $result.ClockPath -Raw | ConvertFrom-Json
+            $clock.repository | Should -Be $script:Repo
+            $clock.runId | Should -Be 9002
+            $clock.conclusion | Should -Be 'success'
+            $clock.budgetMinutes | Should -Be 60
+            $clock.withinBudget | Should -BeTrue
+            (Get-Content -LiteralPath $result.ClockPath -Raw) |
+                Should -Match "\`"githubRunCreatedAt\`":\s*\`"$([regex]::Escape($script:CreatedAt))\`""
+            $clock.clockDefinition | Should -BeLike '*last synchronous layer audit green*'
+        }
+
+        It 'records the start with -NoWatch even though nothing stopped the clock' {
+            $result = Invoke-UpForTest -NoWatch
+            $clock = Get-Content -LiteralPath $result.ClockPath -Raw | ConvertFrom-Json
+            $clock.MLS_L11_UP_START | Should -Not -BeNullOrEmpty
+            $clock.MLS_L11_UP_COMPLETED | Should -BeNullOrEmpty
+            $clock.conclusion | Should -Be 'dispatched'
+        }
+
+        It 'writes nothing on -WhatIf: a rehearsal must not leave a proof record' {
+            $result = Invoke-UpForTest -AsWhatIf
+            $result.ClockPath | Should -BeNullOrEmpty
+            Test-Path -LiteralPath (Join-Path -Path $script:ReportRoot -ChildPath 'up-clock.json') |
+                Should -BeFalse
+        }
+
+        It 'exports both variables to $GITHUB_ENV when running inside Actions' {
+            $githubEnv = Join-Path -Path $script:ReportRoot -ChildPath 'github-env.txt'
+            New-Item -ItemType Directory -Path $script:ReportRoot -Force | Out-Null
+            Set-Content -LiteralPath $githubEnv -Value '' -Encoding utf8
+            $saved = $env:GITHUB_ENV
+            try {
+                $env:GITHUB_ENV = $githubEnv
+                Invoke-UpForTest | Out-Null
+                $lines = @(Get-Content -LiteralPath $githubEnv | Where-Object { $_ })
+                @($lines | Where-Object { $_ -like 'MLS_L11_UP_START=*' }).Count | Should -Be 1
+                @($lines | Where-Object { $_ -like 'MLS_L11_UP_COMPLETED=*' }).Count | Should -Be 1
+            }
+            finally {
+                if ($null -eq $saved) { Remove-Item Env:\GITHUB_ENV -ErrorAction SilentlyContinue }
+                else { $env:GITHUB_ENV = $saved }
+            }
+        }
+
+        It 'warns instead of failing the rebuild when the record cannot be written' {
+            Mock Set-Content { throw 'disk full' }
+            $result = Invoke-UpForTest -WarningAction SilentlyContinue
+            $result.Conclusion | Should -Be 'success'
+            $result.ClockPath | Should -BeNullOrEmpty
         }
     }
 

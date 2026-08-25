@@ -34,5 +34,13 @@ COPY --from=build /repo/apps/launch-ops/dist /usr/share/nginx/html
 # deploy sets DATA_API_ORIGIN to the data-api container app's URL.
 ENV DATA_API_ORIGIN=http://127.0.0.1:8081
 
+# V7.1's content-hash marker, interpolated into /healthz by the same envsubst
+# pass. A default is MANDATORY, not cosmetic: the nginx entrypoint substitutes
+# only variables that are actually present in the environment, so an unset
+# MLS_IMAGE_DIGEST would leave the literal ${MLS_IMAGE_DIGEST} in the config and
+# nginx would refuse to start on an unknown variable. The L7 deploy overwrites
+# it with the digest of the image it rolled.
+ENV MLS_IMAGE_DIGEST=unset
+
 EXPOSE 8080
 # nginx:alpine's default entrypoint/cmd serve the static bundle.
