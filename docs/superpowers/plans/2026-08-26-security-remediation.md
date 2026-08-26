@@ -992,7 +992,7 @@ One missing pattern collapses three NIST families (3.3 Audit, 3.6 IR detection, 
 - Modify: `.github/workflows/layer-03-entra.yml` (Entra `SignInLogs` + `AuditLogs`)
 - Test: `verification/tests/diagnostics.Tests.ps1`
 
-**Outcome: the Bicep half landed as planned; both workflow items moved or stopped, and F9 is partially, not fully, closed.**
+**Outcome: the Bicep half landed as planned; both workflow items moved, and F9 is now fully closed — after a review round that corrected two mistakes.**
 
 `infra/bicep/platform/main.bicep` now routes `diagnosticSettings` for Key Vault, the
 cost-export storage account (account-level metrics *and* blob-service-level data-plane
@@ -1002,32 +1002,46 @@ param; verified against the cached module schema, not assumed) and the Container
 environment, all to the L6 Log Analytics workspace. SQL `auditSettings` now sets
 `isAzureMonitorTargetEnabled: true`. `lawDataRetentionDays` is 90.
 
-The subscription Activity Log did **not** land in `layer-02-landing-zone.yml`. L2 runs
-strictly before L6 in `infra-up.yml`'s layer graph on every invocation, not just first
-bootstrap (teardown deletes the LAW's resource group every cycle), so a diagnostic
-setting there would always be pointed at a Log Analytics workspace that does not exist
-yet — `az monitor diagnostic-settings subscription create --workspace` validates the
-target at request time. Moved to `layer-06-platform.yml`'s deploy job instead, right
-after the LAW becomes a real deployed resource; genuinely wired on every run, not a
-no-op. `layer-02-landing-zone.yml` itself gained only an explanatory comment, not a step.
+The subscription Activity Log did **not** land in `layer-02-landing-zone.yml`. On a full
+`infra-up.yml` pass, `layer-06 needs: [..., layer-04]`, which needs `[..., layer-02]`, so
+L2 always precedes L6, and teardown deletes `mls-rg-platform` (and the LAW inside it)
+every cycle, so a full pass never reaches L2 with the LAW already present — a diagnostic
+setting there would be pointed at a workspace that doesn't exist yet, and
+`az monitor diagnostic-settings subscription create --workspace` validates its target at
+request time. (This is a same-pass invariant, not a universal one: `infra-up.yml` also
+supports a skip-tolerant selective replay, e.g. `layers: l6` alone, which skips L2
+entirely — an earlier draft of this note overstated the claim as "every invocation,"
+caught on review.) Moved to `layer-06-platform.yml`'s deploy job instead, right after the
+LAW becomes a real deployed resource. `layer-02-landing-zone.yml` itself gained only an
+explanatory comment, not a step.
 
-Entra `SignInLogs` + `AuditLogs` did **not** land anywhere. Same LAW-ordering problem as
-the Activity Log (L3 also runs before L6), plus a second, independent blocker: Entra
-tenant-level diagnostic settings are a `Microsoft.aadiam`-namespaced resource addressed
-by tenant scope with no subscription/resource-group path segment — a shape this repo's
-tooling has never exercised — and neither `az monitor diagnostic-settings create --help`
-(available offline) nor anything else in that session confirmed the exact resource-id
-form or the Entra role the deployer SP would need beyond what L3 already holds. Shipping
-an unverified `az rest` call against a real tenant was judged worse than recording the
-gap; `layer-03-entra.yml` gained an explanatory comment only. This needs a live tenant to
-verify and is a candidate for its own follow-up task.
+Entra `SignInLogs` + `AuditLogs` were first **deferred**, then **implemented** after
+review. The first pass recorded this as unverifiable without a live tenant — the
+`Microsoft.aadiam` tenant-scoped resource shape and the Entra role required were both
+unconfirmed in that session, and shipping unverified syntax against a real tenant was
+judged worse than recording the gap. Review disagreed with keeping it deferred: both
+facts are publicly documented (Microsoft Learn, "How to configure Microsoft Entra
+diagnostic settings" — Security Administrator is the named role, and the resource is
+addressed with the same `az monitor diagnostic-settings create` verb the Activity Log
+step already uses, pointed at `/providers/microsoft.aadiam` instead of a subscription),
+and more decisively: "cannot verify without a live tenant" is true of every line in a
+repo where nothing is deployed, so accepting it as a reason to defer would excuse
+deferring everything. Implemented in `layer-06-platform.yml` alongside the Activity Log
+step, same ordering reasoning. One real, still-open loose end: nothing in this repo's IaC
+grants mls-github-deployer the Security Administrator Entra role the step needs at
+runtime — that is recorded in the step's own comment as a known, unverified prerequisite
+(the same shape as F20/F21: a grant expressed in code without a live check that its
+precondition holds), not folded back into F9, and not a reason the code itself is wrong.
 
-Register consequence: 3.3.1/3.3.2/3.3.5 are still GAP, not CLOSED — F9 is their sole
-contributor and F9 itself is only partially remediated — but `gapSeverity` dropped from
-high to medium on all three: every Azure resource-plane audit trail in the estate now
-exists and correlates in one workspace with a 90-day window; only the Entra
-identity-plane half (who authenticated, which CA policy fired, which directory role
-changed) remains dark. See `task-13-report.md` for the full reasoning.
+Register consequence, corrected twice: the first pass downgraded `gapSeverity` on
+`3.3.1`/`3.3.2`/`3.3.5` from `high` to `medium` because most of F9's action items had
+landed. Review called this Critical and reverted it, citing Task 12's own precedent —
+`3.1.5.json` keeps `gapSeverity: "high"` while F13 (its sole contributor) had five of
+seven grants landed, precisely because severity is a property of the finding, not a
+progress meter that softens as work lands. With Entra now also implemented, F9 has no
+remaining open contributor at all, so the controls move past "GAP, reverted to high" to
+**CLOSED, `gapSeverity: "none"`** — the same convention `3.13.1.json` models. See
+`task-13-report.md` for the full before/after reasoning and the fix-round evidence.
 
 - [ ] **Step 1: Write the failing test**
 

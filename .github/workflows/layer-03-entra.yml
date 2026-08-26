@@ -12,21 +12,21 @@ name: layer-03-entra
 # Pre-G0 guard: every job is gated on the `demo` environment variables.
 #
 # F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13)
-# named this file for Entra `SignInLogs` + `AuditLogs` diagnostic routing.
-# NOT implemented here — recorded rather than faked, per that task's
-# instructions. Two independent blockers, not one: (1) the same LAW-does-not-
-# exist-yet ordering problem as the Activity Log setting (see the note in
-# layer-02-landing-zone.yml — L3 also runs before L6); (2) tenant-level Entra
-# diagnostic settings are a `Microsoft.aadiam`-namespaced resource addressed
-# by tenant scope with no subscription/resource-group path segment, a shape
-# this repo's tooling has never exercised, and neither `az monitor
-# diagnostic-settings create --help` (offline) nor anything else available in
-# this session confirms the exact resource-id form or the Entra role the
-# mls-github-deployer SP would need beyond what L3 already holds for
-# users/groups/CA policies/app registrations. Shipping an unverified `az rest`
-# call against a real tenant is exactly the "looks wired" failure mode Task 13
-# was told to avoid. See task-13-report.md; this needs a live tenant to
-# verify and is a candidate for its own follow-up task.
+# named this file for Entra `SignInLogs` + `AuditLogs` diagnostic routing. It
+# is NOT here, for the same ordering reason the Activity Log setting is not in
+# layer-02-landing-zone.yml (see that file's note): on a full infra-up.yml
+# pass L3 precedes L6, so the Log Analytics workspace this setting must
+# reference does not exist yet at this point. The routing is implemented in
+# layer-06-platform.yml's deploy job instead, right after the LAW becomes a
+# real deployed resource — `az monitor diagnostic-settings create --resource
+# "/providers/microsoft.aadiam"`, the same verb the Activity Log step uses,
+# just pointed at the tenant scope instead of the subscription. (An earlier
+# pass recorded this as unverifiable-without-a-live-tenant and deferred it;
+# review corrected that — both the resource shape and the required Security
+# Administrator Entra role are documented on Microsoft Learn, "How to
+# configure Microsoft Entra diagnostic settings" — so it is implemented, not
+# deferred. Whether mls-github-deployer currently holds that Entra role is a
+# separate, still-unverified question — see the comment on that step.)
 # =============================================================================
 
 on:

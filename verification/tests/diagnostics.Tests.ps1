@@ -18,16 +18,24 @@
 # all routed to the L6 Log Analytics workspace, plus a real SQL audit
 # destination (isAzureMonitorTargetEnabled) and retention raised 30 -> 90.
 #
-# NOT covered here: subscription Activity Log and Entra SignInLogs/AuditLogs.
-# See task-13-report.md for why — both were found to need a Log Analytics
-# workspace that does not exist yet at the point in infra-up.yml's layer graph
-# the brief named (L2/L3 run strictly before L6 creates it).
+# The subscription Activity Log and Entra SignInLogs/AuditLogs are NOT in this
+# file — both need a Log Analytics workspace that does not exist yet at the
+# point in infra-up.yml's layer graph the brief named (L2/L3 precede L6 on a
+# same-pass run), so both are wired in layer-06-platform.yml's deploy job
+# instead, right after the LAW becomes a real deployed resource. The second
+# Describe block below guards that half, added after a review round corrected
+# an initial deferral of the Entra item (see task-13-report.md's fix-round
+# section for why "needs a live tenant to verify" was not, in the end, true of
+# the Entra resource shape or the role it needs — both are publicly
+# documented).
 # =============================================================================
 
 BeforeAll {
     $script:RepoRoot = (Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..')).Path
     $script:MainBicepPath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'bicep', 'platform', 'main.bicep'
     $script:MainBicep = Get-Content -LiteralPath $script:MainBicepPath -Raw
+    $script:Layer06Path = Join-Path -Path $script:RepoRoot -ChildPath '.github' -AdditionalChildPath 'workflows', 'layer-06-platform.yml'
+    $script:Layer06 = Get-Content -LiteralPath $script:Layer06Path -Raw
 }
 
 Describe 'platform diagnostics route to Log Analytics (F9)' {
@@ -55,5 +63,28 @@ Describe 'platform diagnostics route to Log Analytics (F9)' {
     It 'raises Log Analytics retention from 30 to the 90-day AU-11/DFARS convention' {
         $script:MainBicep | Should -Match "param\s+lawDataRetentionDays\s+int\s*=\s*90"
         $script:MainBicep | Should -Not -Match "param\s+lawDataRetentionDays\s+int\s*=\s*30"
+    }
+}
+
+Describe 'subscription and tenant diagnostics route to Log Analytics from L6 (F9)' {
+    It 'wires the subscription Activity Log to the LAW' {
+        $script:Layer06 | Should -Match 'az monitor diagnostic-settings subscription create'
+        $script:Layer06 | Should -Match 'logAnalyticsWorkspaceResourceId'
+    }
+
+    It 'wires Entra ID SignInLogs and AuditLogs to the LAW' {
+        $script:Layer06 | Should -Match 'microsoft\.aadiam'
+        $script:Layer06 | Should -Match 'SignInLogs'
+        $script:Layer06 | Should -Match 'AuditLogs'
+    }
+
+    It 'does not overclaim the L2/L3-before-L6 ordering as a universal invariant' {
+        # infra-up.yml supports a skip-tolerant selective replay (`layers: l6`
+        # alone, skipping L2/L3 entirely), so the ordering guarantee only holds
+        # when both run in the same pass. A review round caught this file
+        # overclaiming it as "every invocation" / "a certainty" — guard against
+        # that regressing.
+        $script:Layer06 | Should -Not -Match 'a certainty'
+        $script:Layer06 | Should -Not -Match 'every\s+(single\s+)?invocation'
     }
 }

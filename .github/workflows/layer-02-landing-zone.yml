@@ -15,13 +15,16 @@ name: layer-02-landing-zone
 # F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13)
 # named this file for the subscription Activity Log diagnostic setting. It is
 # NOT here: the setting's destination (the Log Analytics workspace) does not
-# exist until L6 runs, and L6 runs strictly after this layer on every
-# invocation of infra-up.yml (layer-06 needs: [..., layer-04], which needs
-# [..., layer-02]) — not just on first bootstrap, since teardown deletes the
-# LAW's resource group every cycle. The Activity Log wiring lives in
-# layer-06-platform.yml's deploy job instead, immediately after the LAW
-# becomes a real deployed resource. See task-13-report.md for the full
-# reasoning this moved the work rather than faking a step here.
+# exist until L6 runs. On a FULL run, L6 always runs after this layer
+# (layer-06 needs: [..., layer-04], which needs [..., layer-02]), and teardown
+# deletes the LAW's resource group every cycle, so a full pass never reaches
+# this point with the LAW already present. (infra-up.yml also supports a
+# skip-tolerant selective replay — e.g. `layers: l6` alone, skipping this
+# layer entirely — so that is a same-pass invariant, not a universal one; it
+# is still sufficient for why this step doesn't belong here.) The Activity Log
+# wiring lives in layer-06-platform.yml's deploy job instead, immediately
+# after the LAW becomes a real deployed resource. See task-13-report.md for
+# the full reasoning this moved the work rather than faking a step here.
 # =============================================================================
 
 on:

@@ -264,19 +264,23 @@ jobs:
           #
           # The task brief placed this in layer-02-landing-zone.yml, where the
           # finding's "Activity Log and Entra diagnostics via the L2/L3
-          # workflows" fix text also puts it. It cannot live there: L2 runs
-          # BEFORE L6 in infra-up.yml's layer graph (layer-03 needs: [...,
-          # layer-02]; layer-06 needs: [..., layer-04]), on every run of this
-          # pipeline, not just first-time bootstrap — teardown deletes
-          # mls-rg-platform (and the LAW inside it) every cycle, so L2 never
-          # once runs with the LAW already present. `az monitor
-          # diagnostic-settings subscription create --workspace` resolves and
-          # validates that target at request time, so a step placed in L2
-          # would fail (or, written defensively, would skip) on every single
-          # invocation. Placed here instead: this is the first point in the
-          # graph where logAnalyticsWorkspaceResourceId is a real, deployed
-          # resource. Idempotent upsert, like the cost export above — safe to
-          # re-run, and re-points at the new LAW automatically on kill/rebuild.
+          # workflows" fix text also puts it. It cannot live there on a FULL
+          # run: infra-up.yml's layer graph has layer-06 needs: [..., layer-04],
+          # which needs [..., layer-02] — so when L2 and L6 both run in the same
+          # pass, L2 always precedes L6, and teardown deletes mls-rg-platform
+          # (and the LAW inside it) every cycle, so a full pass never has the
+          # LAW already present by the time L2 runs. (infra-up.yml also supports
+          # a skip-tolerant selective replay — `layers: l6` alone, skipping L2 —
+          # so "L2 always runs before the LAW exists" is not a universal
+          # invariant, only a same-pass one; this step does not depend on that
+          # distinction either way.) `az monitor diagnostic-settings
+          # subscription create --workspace` resolves and validates that target
+          # at request time, so a step placed in L2 would fail (or, written
+          # defensively, would skip) on every same-pass invocation. Placed here
+          # instead: this is the first point in the graph where
+          # logAnalyticsWorkspaceResourceId is a real, deployed resource.
+          # Idempotent upsert, like the cost export above — safe to re-run, and
+          # re-points at the new LAW automatically on kill/rebuild.
           law_id="$(jq -r '.logAnalyticsWorkspaceResourceId.value // empty' l6-manifest.json)"
           if [ -z "${law_id}" ]; then
             echo "::notice title=Activity Log not wired::logAnalyticsWorkspaceResourceId was not in the deployment outputs."
@@ -289,6 +293,58 @@ jobs:
             --logs '[{"category":"Administrative","enabled":true},{"category":"Security","enabled":true},{"category":"ServiceHealth","enabled":true},{"category":"Alert","enabled":true},{"category":"Recommendation","enabled":true},{"category":"Policy","enabled":true},{"category":"Autoscale","enabled":true},{"category":"ResourceHealth","enabled":true}]' \
             --output none
           echo "Subscription Activity Log routed to ${law_id}."
+
+      - name: Wire Entra ID SignInLogs and AuditLogs to Log Analytics
+        if: ${{ !inputs.dry_run }}
+        env:
+          PREFIX: ${{ steps.names.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          # F9 (compliance/findings/2026-08-26-prepublication-review.md#f9,
+          # Task 13): tenant-scoped configuration, same reasoning as the
+          # Activity Log step above — it needs the LAW to exist first, so it
+          # lives here rather than in layer-03-entra.yml (L3 also precedes L6
+          # on a full pass, for the same reason documented there and above).
+          #
+          # Originally deferred as unverifiable without a live tenant (the
+          # Microsoft.aadiam resource shape and the Entra role required were
+          # both unconfirmed in that session). Corrected on review: both are
+          # publicly documented (Microsoft Learn, "How to configure Microsoft
+          # Entra diagnostic settings") — Security Administrator is the
+          # required Entra directory role, and the resource addressed is the
+          # same generic `az monitor diagnostic-settings create` verb the
+          # Activity Log step already uses, just pointed at the tenant-scoped
+          # `/providers/microsoft.aadiam` resource instead of a subscription.
+          #
+          # Known, recorded prerequisite this step does NOT itself grant:
+          # mls-github-deployer must hold the Security Administrator Entra
+          # role. Nothing in this repo's IaC grants any Entra directory role
+          # to that SP today (checked: no match anywhere in infra/entra/ or
+          # the bootstrap scripts), so whether it already holds one is
+          # unverified without a live tenant — the same category of gap Task
+          # 12 recorded as F20/F21 (a grant expressed in code without a live
+          # check that its prerequisite holds), not a reason to withhold the
+          # diagnostic-settings call itself. Granting that role is a separate,
+          # deliberate decision (it is materially more powerful than anything
+          # else mls-github-deployer holds — see F7/F8) and is out of scope
+          # here; if this step fails with an authorization error, that is the
+          # first thing to check.
+          #
+          # law_id is recomputed rather than carried from the previous step:
+          # each workflow step's `run:` block is its own shell process, so a
+          # plain shell variable set above does not survive into this one.
+          law_id="$(jq -r '.logAnalyticsWorkspaceResourceId.value // empty' l6-manifest.json)"
+          if [ -z "${law_id}" ]; then
+            echo "::notice title=Entra diagnostics not wired::logAnalyticsWorkspaceResourceId was not in the deployment outputs."
+            exit 0
+          fi
+          az monitor diagnostic-settings create \
+            --name "${PREFIX}-entra-law" \
+            --resource "/providers/microsoft.aadiam" \
+            --workspace "${law_id}" \
+            --logs '[{"category":"SignInLogs","enabled":true},{"category":"AuditLogs","enabled":true}]' \
+            --output none
+          echo "Entra ID SignInLogs/AuditLogs routed to ${law_id}."
 
       - name: Apply the SQL schema and seed the operational tables
         if: ${{ !inputs.dry_run }}
