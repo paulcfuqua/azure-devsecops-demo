@@ -751,3 +751,20 @@ allow that the repo's own NIST initiative would flag, and a possible denial-of-w
 serverless resume may trigger at the gateway before Entra auth, which is SUSPECTED and
 worth verifying post-deploy. Fixing it properly needs a VNet-integrated workload profile,
 a G2 spend decision. F9's SQL auditing makes attempts visible in the interim.
+
+`Policy.ReadWrite.ConditionalAccess` on the deployer (`scripts/bootstrap/01-root-oidc.ps1`,
+`$script:DeployerGraphRoles`, consented Graph application role). This role can disable
+Conditional Access tenant-wide, not merely author the CA policies L3 actually needs it
+for — a materially larger capability than "create/update the two policies in
+`infra/entra/manifest.json`". It is retained deliberately, not an oversight:
+`infra/entra/apply-entra.ps1` calls `POST`/`PATCH identity/conditionalAccess/policies`
+(`:455`, `:468`) to create and update those policies as part of L3's apply step, and
+Microsoft Graph exposes a single application role for writing Conditional Access
+policies — there is no narrower one to swap to, unlike F8's `Application.ReadWrite.All`
+→ `.OwnedBy`, which was a drop-in. The risk is real: a compromised deployer identity (or
+a compromised repo with `id-token: write`) could disable every CA policy in the tenant,
+which for this demo means MFA/Conditional Access enforcement for the five fictional
+admin users goes dark tenant-wide rather than just for one resource. Not fixed here —
+there is no cheaper mitigation available than what Task 10 already did to the
+co-located `Application.ReadWrite.All` grant. Tracked as an accepted risk rather than a
+defect; see F8 in the index above, whose fix note first flagged this in passing.

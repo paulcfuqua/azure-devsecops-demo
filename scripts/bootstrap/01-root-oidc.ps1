@@ -88,9 +88,10 @@ $script:OidcAudience = 'api://AzureADTokenExchange'
 # strictly larger blast radius than the Owner role this identity also holds.
 #
 # Policy.ReadWrite.ConditionalAccess is RETAINED deliberately, not an oversight: L3
-# authors Conditional Access policies and needs it. It can also disable CA tenant-wide,
-# which is a real risk this comment records for the risk register (compliance/assessment/
-# 3.1.5.json) rather than letting it pass unremarked.
+# authors Conditional Access policies and needs it. It can also disable CA tenant-wide -
+# a real, accepted risk recorded in the findings record's "Deferred" section
+# (compliance/findings/2026-08-26-prepublication-review.md, bottom) rather than left
+# unremarked in a code comment only.
 $script:DeployerGraphRoles = [ordered]@{
     'User.ReadWrite.All'                  = '741f803b-c850-494e-b5df-cde7c675a1ca'
     'Group.ReadWrite.All'                 = '62a82d76-70ea-41e2-9197-370581804d09'
