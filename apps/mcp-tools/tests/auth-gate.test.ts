@@ -187,15 +187,58 @@ describe("cloud mode fails closed", () => {
     }
   });
 
-  it("leaves local mode open with no ceremony", () => {
-    const config = loadConfig({} as NodeJS.ProcessEnv);
+  it("no longer leaves local mode open with no ceremony — this was F2", () => {
+    // Local mode used to skip the auth requirement outright. That was the
+    // defect: MLS_TOOL_BACKENDS is unset in every deployed configuration, so
+    // local IS the shape that ships, and it must fail closed exactly like
+    // cloud does — the risk is the external ingress, not the backend mode.
+    expect(() => loadConfig({} as NodeJS.ProcessEnv)).toThrow(/MCP_AUTH_TOKEN/);
+  });
+
+  it("local mode opens only with an explicit opt-out, same as cloud", () => {
+    const config = loadConfig({ MCP_ALLOW_UNAUTHENTICATED: "true" } as NodeJS.ProcessEnv);
+    expect(config.backendMode).toBe("local");
     expect(config.inboundAuth.enforced).toBe(false);
-    expect(config.inboundAuth.deliberatelyOpen).toBe(false);
+    expect(config.inboundAuth.deliberatelyOpen).toBe(true);
   });
 
   it("enforces in local mode too when a token is set", () => {
     const config = loadConfig({ MCP_AUTH_TOKEN: TOKEN } as unknown as NodeJS.ProcessEnv);
     expect(config.inboundAuth.enforced).toBe(true);
+  });
+});
+
+describe("enforcement does not depend on backend mode", () => {
+  // F2: enforcement used to be conditional on backendMode === "cloud", but
+  // MLS_TOOL_BACKENDS is set nowhere in infra/ or .github/, so the deployed
+  // container resolves to "local" and the gate was inert behind a public,
+  // external ingress. The risk is the ingress, not the backend mode.
+
+  it("enforces by default even in local mode when nothing opts out", () => {
+    // The deployed container sets no MLS_TOOL_BACKENDS, so local mode is the
+    // configuration that actually ships — it must not be the unguarded one.
+    expect(() => loadInboundAuth({} as NodeJS.ProcessEnv, "local")).toThrow(/MCP_AUTH_TOKEN/);
+  });
+
+  it("allows an open endpoint only when explicitly chosen, in either mode", () => {
+    for (const mode of ["local", "cloud"] as const) {
+      const auth = loadInboundAuth(
+        { MCP_ALLOW_UNAUTHENTICATED: "true" } as NodeJS.ProcessEnv, mode);
+      expect(auth.deliberatelyOpen).toBe(true);
+      expect(describeInboundAuth(auth)).toMatch(/DISABLED/);
+    }
+  });
+
+  it("parses the body only after the gate has run", async () => {
+    // A 1MB JSON parse must not be reachable without a credential.
+    const { server, url } = await start(enforced);
+    const res = await fetch(`${url}${MCP_PATH}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ padding: "x".repeat(900_000) }),
+    });
+    expect(res.status).toBe(401);
+    await stop(server);
   });
 });
 
@@ -216,9 +259,17 @@ describe("secretsMatch", () => {
 
 describe("loadInboundAuth trims and ignores blanks", () => {
   it("treats whitespace-only as unset", () => {
-    expect(loadInboundAuth({ MCP_AUTH_TOKEN: "   " } as NodeJS.ProcessEnv, "local").enforced).toBe(
-      false,
+    // A whitespace-only token is unset, so with nothing else opting out this
+    // must fail closed — same as no MCP_AUTH_TOKEN at all.
+    expect(() =>
+      loadInboundAuth({ MCP_AUTH_TOKEN: "   " } as NodeJS.ProcessEnv, "local"),
+    ).toThrow(/MCP_AUTH_TOKEN/);
+
+    const auth = loadInboundAuth(
+      { MCP_AUTH_TOKEN: "   ", MCP_ALLOW_UNAUTHENTICATED: "true" } as NodeJS.ProcessEnv,
+      "local",
     );
+    expect(auth.enforced).toBe(false);
   });
 
   it("trims a pasted token", () => {

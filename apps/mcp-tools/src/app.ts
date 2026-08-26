@@ -47,6 +47,14 @@ export function createApp(deps: AppDeps = {}): Express {
   const registry = new ToolRegistry(backends);
 
   const app = express();
+
+  // The gate is mounted BEFORE the body parser, deliberately: an
+  // unauthenticated caller must not be able to make the process parse up to
+  // 1MB of JSON before a credential is even checked. /healthz is unaffected —
+  // the gate is scoped to MCP_PATH, so GET /healthz never reaches it.
+  const gate = requireInboundAuth(config.inboundAuth);
+  app.use(MCP_PATH, gate);
+
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/healthz", (_req, res) => {
@@ -87,12 +95,10 @@ export function createApp(deps: AppDeps = {}): Express {
     });
   });
 
-  // Everything under MCP_PATH is gated; /healthz above stays open because the
-  // Container Apps liveness probe calls it and it discloses no secret (note the
-  // telemetry `reason` is deliberately withheld there for the same reason).
-  const gate = requireInboundAuth(config.inboundAuth);
-  app.use(MCP_PATH, gate);
-
+  // Everything under MCP_PATH is gated (mounted above, before the body
+  // parser); /healthz above stays open because the Container Apps liveness
+  // probe calls it and it discloses no secret (note the telemetry `reason` is
+  // deliberately withheld there for the same reason).
   app.post(MCP_PATH, async (req, res) => {
     // Stateless: a fresh server + transport per request, torn down when the
     // response closes. The expensive state (the loaded lakehouse) lives in the

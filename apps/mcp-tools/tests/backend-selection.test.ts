@@ -77,20 +77,34 @@ async function cloudBackends(config: CloudConfig, mock = new MockFetch()) {
 
 describe("MLS_TOOL_BACKENDS=local is unchanged", () => {
   it("defaults to local when the variable is unset", () => {
-    expect(loadConfig({} as NodeJS.ProcessEnv)).toEqual({
+    // F2: local mode no longer leaves the inbound gate off by default — the
+    // deployed container never sets MLS_TOOL_BACKENDS, so this IS the shape
+    // that ships, and it must fail closed like cloud does (auth-gate.ts).
+    // MCP_ALLOW_UNAUTHENTICATED is the explicit opt-out this test exercises.
+    expect(loadConfig({ MCP_ALLOW_UNAUTHENTICATED: "true" } as NodeJS.ProcessEnv)).toEqual({
       port: 8080,
       backendMode: "local",
-      // Local mode leaves the inbound gate off; cloud mode cannot (auth-gate.ts).
-      inboundAuth: { token: undefined, enforced: false, deliberatelyOpen: false },
+      inboundAuth: { token: undefined, enforced: false, deliberatelyOpen: true },
     });
   });
 
+  it("refuses to boot with no MCP_AUTH_TOKEN and no opt-out — F2", () => {
+    expect(() => loadConfig({} as NodeJS.ProcessEnv)).toThrow(/MCP_AUTH_TOKEN/);
+  });
+
   it("honours PORT", () => {
-    expect(loadConfig({ PORT: "9000" } as NodeJS.ProcessEnv).port).toBe(9000);
+    expect(
+      loadConfig({ PORT: "9000", MCP_ALLOW_UNAUTHENTICATED: "true" } as NodeJS.ProcessEnv).port,
+    ).toBe(9000);
   });
 
   it("needs no cloud settings at all", () => {
-    expect(() => loadConfig({ MLS_TOOL_BACKENDS: "local" } as NodeJS.ProcessEnv)).not.toThrow();
+    expect(() =>
+      loadConfig({
+        MLS_TOOL_BACKENDS: "local",
+        MCP_ALLOW_UNAUTHENTICATED: "true",
+      } as NodeJS.ProcessEnv),
+    ).not.toThrow();
   });
 
   it("still rejects a value that is neither local nor cloud", () => {
