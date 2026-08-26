@@ -239,7 +239,14 @@ jobs:
           if [ "${kind}" = "dependabot" ]; then
             endpoint="repos/${REPO}/dependabot/alerts?state=open&per_page=100"
           else
-            endpoint="repos/${REPO}/code-scanning/alerts?state=open&per_page=100"
+            # F14: a code-scanning alert's most_recent_instance tracks
+            # whichever ref last produced it, and codeql.yml runs on
+            # pull_request -- so a fork PR's own analysis can raise an
+            # "open" alert too. Restrict the listing to the default
+            # branch's own analysis, not just "open".
+            default_branch="$(gh api "repos/${REPO}" --jq '.default_branch')"
+            target_ref="refs/heads/${default_branch}"
+            endpoint="repos/${REPO}/code-scanning/alerts?state=open&ref=${target_ref}&per_page=100"
           fi
 
           if ! gh api "${endpoint}" > alerts.json 2>alerts.err; then
@@ -248,11 +255,35 @@ jobs:
             exit 0
           fi
 
-          # Skip alerts that already have an open self-heal branch.
-          gh pr list --state open --json headRefName --jq '.[].headRefName' > open-branches.txt || true
+          # Skip alerts that already have an open self-heal branch -- scoped
+          # to THIS repository's own refs, never a fork's. (F14: `gh pr list`
+          # enumerates ALL open PRs including forks, and the attacker
+          # controls their own head-branch name, so squatting
+          # self-heal/<kind>-<n>-* names made every alert look
+          # already-handled and the run report "Nothing to heal" -- green.
+          # git/matching-refs is rooted at ${REPO} itself: a fork's branch
+          # lives in the fork's own ref namespace and can never appear here,
+          # so this sidesteps the fork question rather than filtering for
+          # it, and it only needs contents:read, which this job already has
+          # -- unlike gh pr list, which reads pull-requests.)
+          if ! gh api "repos/${REPO}/git/matching-refs/heads/self-heal/?per_page=100" \
+              --jq '.[].ref' > self-heal-branches.txt 2>/dev/null; then
+            : > self-heal-branches.txt
+          fi
 
-          number="$(jq -r '.[].number' alerts.json | while read -r n; do
-            if ! grep -q "self-heal/${kind}-${n}-" open-branches.txt; then
+          if [ "${kind}" = "code-scanning" ]; then
+            # Defense in depth: do not rely on the endpoint's ref= filter
+            # alone -- re-check the field directly so an alert whose most
+            # recent instance is off the default branch can never be picked.
+            candidate_numbers="$(jq -r --arg ref "${target_ref}" \
+              '.[] | select(.most_recent_instance.ref == $ref) | .number' alerts.json)"
+          else
+            candidate_numbers="$(jq -r '.[].number' alerts.json)"
+          fi
+
+          number="$(printf '%s\n' "${candidate_numbers}" | while read -r n; do
+            [ -n "${n}" ] || continue
+            if ! grep -q "self-heal/${kind}-${n}-" self-heal-branches.txt; then
               echo "${n}"
               break
             fi
@@ -298,6 +329,29 @@ jobs:
       # from. The patch itself is committed by GitHub through the autofix API,
       # never from this working tree.
       - uses: actions/checkout@v4
+
+      - name: Assert the alert's most recent instance is on the default branch
+        id: ref-check
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ needs.select.outputs.number }}
+        run: |
+          set -euo pipefail
+          # F14, second defense layer: the `select` job's listing already
+          # filters to the default branch, but an alert number can also
+          # arrive here via workflow_dispatch/repository_dispatch, which
+          # bypasses that listing (and its ref filter) entirely. Re-check
+          # directly so a fork PR's own CodeQL analysis (codeql.yml runs on
+          # pull_request) can never drive the autofix machinery, however the
+          # number was selected.
+          default_branch="$(gh api "repos/${REPO}" --jq '.default_branch')"
+          target_ref="refs/heads/${default_branch}"
+          actual_ref="$(gh api "repos/${REPO}/code-scanning/alerts/${NUMBER}" --jq '.most_recent_instance.ref // ""')"
+          if [ "${actual_ref}" != "${target_ref}" ]; then
+            echo "::error title=Alert not on the default branch::Code scanning alert #${NUMBER}'s most recent instance is on '${actual_ref:-unknown}', not '${target_ref}'. Refusing to run Autofix against it (F14) -- this is very likely a fork PR's own analysis, not a finding on the default branch."
+            exit 1
+          fi
 
       - name: Request a fix from Copilot Autofix
         id: request

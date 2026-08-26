@@ -523,7 +523,7 @@ exactly its expected roles and no others; delete or repurpose
 - **Confidence:** CONFIRMED
 - **Controls:** none — no 800-171 control (availability)
 - **Closed by:** Task 16
-- **Status:** GAP
+- **Status:** CLOSED
 
 **Where:** `.github/workflows/self-heal.yml:252` —
 `gh pr list --state open --json headRefName --jq '.[].headRefName' > open-branches.txt`,
@@ -553,6 +553,26 @@ and assert `most_recent_instance.ref` before proceeding.
 finding against the self-healing pipeline's own integrity, not a CUI-protection gap. It
 is tracked here, and in the findings table, so it does not fall through the gap between
 the security and compliance framings.
+
+**Closed (Task 16):** the branch-squat check now asks
+`gh api repos/${REPO}/git/matching-refs/heads/self-heal/`, scoped to the base
+repository's own ref namespace rather than filtering `gh pr list`'s fork-visible
+results — a fork's branch lives in the fork's own namespace and can never appear
+there, which sidesteps the fork question rather than filtering for it, and needs
+only `contents: read` (verified empirically against a real public repo: zero
+matches returns HTTP 200 with `[]`, never a 404, so a clean repo with no open
+self-heal branches yet still heals correctly). The code-scanning alert listing
+now carries `ref=refs/heads/<default_branch>` (resolved dynamically, not
+hardcoded), and `.most_recent_instance.ref` is re-checked directly against that
+target in two independent places: inside the `select` job's own listing filter,
+and again as the first step of the `autofix` job — the latter because an alert
+number can also arrive via `workflow_dispatch`/`repository_dispatch`, which
+bypasses the `select` job's listing (and its `ref=` filter) entirely.
+`verification/tests/self-heal-selection.Tests.ps1` is a workflow-shape regression
+guard for both changes; it fails against the pre-fix file and passes against the
+fixed one. F14 maps to no control, so unlike a finding with an 800-171 mapping
+there is no `compliance/assessment/*.json` to update — this Status field and the
+plan's Task 16 outcome note are F14's only closure record, same as F15's will be.
 
 ---
 
