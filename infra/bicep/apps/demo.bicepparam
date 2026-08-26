@@ -1,6 +1,6 @@
 // L7 demo parameters.
 //
-// Images: GHCR public path ghcr.io/paulcfuqua/azure-devsecops/<app>:<tag>
+// Images: GHCR public path ghcr.io/paulcfuqua/azure-devsecops-demo/<app>:<tag>
 // ([derived] — free on public repos, anonymous pull, no ACR cost; see README).
 // Per-app CI passes the real tag/digest at deploy time via the *_IMAGE
 // environment variables; the placeholder default keeps the layer deployable
@@ -60,13 +60,22 @@ param dataApiImageDigest = readEnvironmentVariable('DATA_API_IMAGE_DIGEST', 'uns
 param dataApiBackendMode = readEnvironmentVariable('MLS_DATA_BACKENDS', '')
 param fabricSqlEndpoint = readEnvironmentVariable('MLS_FABRIC_SQL_ENDPOINT', '')
 param fabricDatabase = readEnvironmentVariable('MLS_FABRIC_DATABASE', 'mls_operations')
-param githubRepository = readEnvironmentVariable('MLS_GITHUB_REPO', 'paulcfuqua/azure-devsecops')
+param githubRepository = readEnvironmentVariable('MLS_GITHUB_REPO', '')
+
+// Owner tag. Neutral fallback so a downstream deployment never inherits the
+// original author's GitHub handle on every resource group (policy-enforced tag).
+param owner = readEnvironmentVariable('MLS_OWNER', 'mls-demo')
 
 // ASSUMPTION (see infra/copilot-studio/README.md): the MCP server serves
 // Streamable HTTP at /mcp on the container app's external FQDN. This parameter
 // only shapes the mcpToolsEndpoint output; it provisions nothing, so
 // reconciling it with apps/mcp-tools/ costs one variable.
 param mcpEndpointPath = readEnvironmentVariable('MCP_ENDPOINT_PATH', '/mcp')
+
+// Inbound auth for the public MCP endpoint. The layer-07 workflow reads this
+// from Key Vault with its OIDC identity and exports it; it is never a GitHub
+// secret and never touches CI storage (hard rule 5). Empty = OPEN endpoint.
+param mcpAuthToken = readEnvironmentVariable('MCP_AUTH_TOKEN', '')
 
 // There is no ingress parameter: mcp-tools is external + HTTPS-only by
 // requirement, not by configuration (Copilot Studio calls it from outside Azure).

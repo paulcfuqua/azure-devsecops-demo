@@ -1,6 +1,7 @@
 /** Service entry point: the MCP tool server for the Copilot Studio agent. */
 import { createApp, MCP_PATH } from "./app.js";
 import { loadConfig } from "./config.js";
+import { describeInboundAuth } from "./auth-gate.js";
 import { getLakehouseDb } from "./data/lakehouse.js";
 import { initTelemetry } from "./telemetry.js";
 import { createLocalBackends, type Backends } from "./tools/backends.js";
@@ -39,6 +40,11 @@ async function main(): Promise<void> {
         `sql=${backends.lakehouseSql.dialect}, ` +
         `otel=${telemetry.enabled ? telemetry.exporter : `off (${telemetry.reason})`}`,
     );
+    // Printed on its own line so an unauthenticated cloud boot cannot be lost in
+    // the middle of a longer status string.
+    const posture = describeInboundAuth(config.inboundAuth);
+    if (config.inboundAuth.deliberatelyOpen) console.warn(`[mcp-tools] ${posture}`);
+    else console.log(`[mcp-tools] ${posture}`);
   });
 }
 

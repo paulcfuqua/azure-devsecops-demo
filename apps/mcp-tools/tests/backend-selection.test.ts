@@ -30,10 +30,25 @@ const FULL_ENV = {
   MLS_FABRIC_SQL_ENDPOINT: "abc123.datawarehouse.fabric.microsoft.com",
   MLS_FABRIC_DATABASE: "mls_operations",
   MLS_LOG_ANALYTICS_WORKSPACE_ID: "11111111-2222-3333-4444-555555555555",
-  MLS_GITHUB_REPO: "paulcfuqua/azure-devsecops",
+  MLS_GITHUB_REPO: "paulcfuqua/azure-devsecops-demo",
   GITHUB_TOKEN: "ghp_0123456789abcdefghijABCDEFGHIJ",
   AZURE_SUBSCRIPTION_ID: "00000000-1111-2222-3333-444444444444",
+  // Cloud mode fails closed without this (auth-gate.ts): the endpoint has
+  // external ingress, so an unauthenticated cloud boot is refused.
+  MCP_AUTH_TOKEN: "test-inbound-token",
 } as unknown as NodeJS.ProcessEnv;
+
+/**
+ * An MCP transport carrying the inbound credential. FULL_ENV sets MCP_AUTH_TOKEN,
+ * so a cloud-mode app enforces the gate and an unauthenticated client gets 401 —
+ * which is the point. Real callers (the Copilot Studio connector) send the same
+ * header.
+ */
+function authedTransport(port: number) {
+  return new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}${MCP_PATH}`), {
+    requestInit: { headers: { authorization: "Bearer test-inbound-token" } },
+  });
+}
 
 const fakeCredential = {
   async getToken() {
@@ -62,7 +77,12 @@ async function cloudBackends(config: CloudConfig, mock = new MockFetch()) {
 
 describe("MLS_TOOL_BACKENDS=local is unchanged", () => {
   it("defaults to local when the variable is unset", () => {
-    expect(loadConfig({} as NodeJS.ProcessEnv)).toEqual({ port: 8080, backendMode: "local" });
+    expect(loadConfig({} as NodeJS.ProcessEnv)).toEqual({
+      port: 8080,
+      backendMode: "local",
+      // Local mode leaves the inbound gate off; cloud mode cannot (auth-gate.ts).
+      inboundAuth: { token: undefined, enforced: false, deliberatelyOpen: false },
+    });
   });
 
   it("honours PORT", () => {
@@ -261,7 +281,7 @@ describe("cloud mode end to end over MCP", () => {
 
     const client = new Client({ name: "cloud-mode-test", version: "0.0.0" });
     await client.connect(
-      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}${MCP_PATH}`)),
+      authedTransport(port),
     );
     try {
       const { tools } = await client.listTools();
@@ -297,7 +317,7 @@ describe("cloud mode end to end over MCP", () => {
 
     const client = new Client({ name: "cloud-error-test", version: "0.0.0" });
     await client.connect(
-      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}${MCP_PATH}`)),
+      authedTransport(port),
     );
     try {
       const result = await client.callTool({
@@ -339,7 +359,7 @@ describe("cloud mode end to end over MCP", () => {
 
     const client = new Client({ name: "cloud-dialect-test", version: "0.0.0" });
     await client.connect(
-      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}${MCP_PATH}`)),
+      authedTransport(port),
     );
     try {
       const result = await client.callTool({

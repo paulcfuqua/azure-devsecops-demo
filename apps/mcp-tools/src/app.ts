@@ -20,6 +20,7 @@ import { createMcpServer } from "./mcp/server.js";
 import { telemetryStatus } from "./telemetry.js";
 import { createLocalBackends, type Backends } from "./tools/backends.js";
 import { ToolRegistry } from "./tools/index.js";
+import { requireInboundAuth } from "./auth-gate.js";
 
 export const MCP_PATH = "/mcp";
 
@@ -77,8 +78,20 @@ export function createApp(deps: AppDeps = {}): Express {
         enabled: telemetryStatus().enabled,
         exporter: telemetryStatus().exporter,
       },
+      // Posture only — never the token, never a prefix of it. This is what lets
+      // the L7/L8 audits assert from outside that the endpoint is not open.
+      auth: {
+        enforced: config.inboundAuth?.enforced ?? false,
+        deliberatelyOpen: config.inboundAuth?.deliberatelyOpen ?? false,
+      },
     });
   });
+
+  // Everything under MCP_PATH is gated; /healthz above stays open because the
+  // Container Apps liveness probe calls it and it discloses no secret (note the
+  // telemetry `reason` is deliberately withheld there for the same reason).
+  const gate = requireInboundAuth(config.inboundAuth);
+  app.use(MCP_PATH, gate);
 
   app.post(MCP_PATH, async (req, res) => {
     // Stateless: a fresh server + transport per request, torn down when the

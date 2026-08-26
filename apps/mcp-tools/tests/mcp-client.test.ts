@@ -30,7 +30,13 @@ function payloadOf(result: McpToolResult): any {
 }
 
 beforeAll(async () => {
-  const app = createApp({ config: { port: 0, backendMode: "local" } });
+  const app = createApp({
+    config: {
+      port: 0,
+      backendMode: "local",
+      inboundAuth: { token: undefined, enforced: false, deliberatelyOpen: false },
+    },
+  });
   http = app.listen(0);
   await new Promise<void>((resolve) => http.once("listening", () => resolve()));
   baseUrl = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
@@ -66,6 +72,8 @@ describe("MCP over Streamable HTTP", () => {
         get_cost_series: "LocalCostSeriesBackend",
       },
       telemetry: { enabled: false, exporter: "disabled" },
+      // Posture only. A token must never appear on an unauthenticated route.
+      auth: { enforced: false, deliberatelyOpen: false },
     });
   });
 

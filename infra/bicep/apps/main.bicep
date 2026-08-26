@@ -72,7 +72,7 @@
 // ---------------------------------------------------------------------------
 //
 // [derived] Registry: GitHub Container Registry (GHCR) public path
-// ghcr.io/paulcfuqua/azure-devsecops/<app>:<tag> — free on public repos,
+// ghcr.io/paulcfuqua/azure-devsecops-demo/<app>:<tag> — free on public repos,
 // anonymous pull, no ACR resource and no registry credentials to manage
 // (see infra/bicep/README.md). Image references are parameters; the
 // placeholder default is Microsoft's public hello-world image so the layer is
@@ -169,8 +169,12 @@ param fabricSqlEndpoint string = ''
 @description('Lakehouse name exposed as a database on that endpoint.')
 param fabricDatabase string = 'mls_operations'
 
-@description('owner/repo the data-api Dev/Sec feeds read through the GitHub API.')
-param githubRepository string = 'paulcfuqua/azure-devsecops'
+@secure()
+@description('Shared secret the MCP server requires on every inbound call. The container app has EXTERNAL ingress by design, so without this the five tools are callable by anyone who finds the FQDN and every call bills the subscription. Empty leaves the endpoint OPEN and is only appropriate for a throwaway environment. Sourced from Key Vault at deploy time and injected as a container-app secret, never as a plain env value and never through CI (hard rule 5).')
+param mcpAuthToken string = ''
+
+@description('owner/repo the data-api Dev/Sec feeds read through the GitHub API. No default on purpose: a public reference repo must not ship the upstream repo as a fallback. Supplied via MLS_GITHUB_REPO in demo.bicepparam; empty is valid and simply leaves the GitHub feeds unconfigured, which data-api reports at boot in cloud mode.')
+param githubRepository string = ''
 
 @description('[derived] Timespan for data-api\'s app-requests Log Analytics query, ISO-8601.')
 param logAnalyticsTimespan string = 'P14D'
@@ -455,6 +459,28 @@ module controlTowerApp 'br/public:avm/res/app/container-app:0.23.0' = {
   }
 }
 
+// Inbound auth for the MCP endpoint. Both the secret and the env entry are
+// conditional on a token being supplied, so an unconfigured deploy still builds
+// — it just produces an OPEN endpoint, which apps/mcp-tools announces loudly at
+// boot and reports on /healthz as `auth.enforced: false`.
+var mcpAuthConfigured = !empty(mcpAuthToken)
+var mcpToolsSecrets = mcpAuthConfigured
+  ? [
+      {
+        name: 'mcp-auth-token'
+        value: mcpAuthToken
+      }
+    ]
+  : []
+var mcpToolsAuthEnv = mcpAuthConfigured
+  ? [
+      {
+        name: 'MCP_AUTH_TOKEN'
+        secretRef: 'mcp-auth-token'
+      }
+    ]
+  : []
+
 module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
   name: 'l7-ca-mcp-tools'
   params: {
@@ -476,7 +502,10 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
     managedIdentities: {
       userAssignedResourceIds: [mcpToolsIdentity.outputs.resourceId]
     }
-    // No `secrets` block: nothing in this app reads a secret any more.
+    // One secret, and only one: the inbound auth token. Every Azure upstream
+    // still authenticates with the managed identity above — no cloud credential
+    // is stored here.
+    secrets: mcpToolsSecrets
     containers: [
       {
         name: naming.appKeys.mcpTools
@@ -485,7 +514,7 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
           cpu: json(containerCpu)
           memory: containerMemory
         }
-        env: [
+        env: concat([
           {
             name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
             value: appInsights.properties.ConnectionString
@@ -500,7 +529,7 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
             name: 'MLS_IMAGE_DIGEST'
             value: mcpToolsImageDigest
           }
-        ]
+        ], mcpToolsAuthEnv)
       }
     ]
   }

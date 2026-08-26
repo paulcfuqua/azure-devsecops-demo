@@ -24,6 +24,7 @@
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadInboundAuth, type InboundAuth } from "./auth-gate.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /**
@@ -81,6 +82,12 @@ export interface McpToolsConfig {
   backendMode: BackendMode;
   /** Present only when backendMode === "cloud". */
   cloud?: CloudConfig;
+  /**
+   * Who may call this server. Required in cloud mode — the ingress is external
+   * by design, so an unauthenticated endpoint exposes tenant reads and bills the
+   * subscription on every call. See auth-gate.ts.
+   */
+  inboundAuth: InboundAuth;
 }
 
 /** Env var -> what it is for, used to build the fail-fast message. */
@@ -154,7 +161,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): McpToolsConfig
   }
   const port = env.PORT ? Number(env.PORT) : 8080;
   if (requested === "cloud") {
-    return { port, backendMode: "cloud", cloud: loadCloudConfig(env) };
+    // Order matters. loadCloudConfig reports EVERY missing upstream setting in one
+    // message; running the auth gate first would pre-empt that with a single
+    // unrelated error and reintroduce exactly the one-variable-per-attempt boot
+    // loop this module exists to avoid. Auth is checked immediately after, and
+    // gets its own message because it is a different kind of problem.
+    const cloud = loadCloudConfig(env);
+    return { port, backendMode: "cloud", cloud, inboundAuth: loadInboundAuth(env, "cloud") };
   }
-  return { port, backendMode: "local" };
+  return { port, backendMode: "local", inboundAuth: loadInboundAuth(env, "local") };
 }
