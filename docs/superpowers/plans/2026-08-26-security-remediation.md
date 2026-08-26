@@ -1561,6 +1561,14 @@ az monitor diagnostic-settings list --resource "/providers/microsoft.aadiam"
 
 Report it informational rather than gate-failing, matching how items C6/C7/C10 are treated — the point is that a missing setting becomes visible, not that G0 blocks on it.
 
+- [ ] **Step 1c: Disambiguate the findings narrative's status fields**
+
+`compliance/findings/2026-08-26-prepublication-review.md` still shows `Status: GAP` inline for findings the per-control JSON now records as `CLOSED`. The doc header says the JSON is the living register, so this is defensible — but two separate reviewers have had to reason it out from first principles, which means it is not labelled clearly enough.
+
+On a branch whose recurring defect shape is *a document asserting something the code contradicts* (F2, F13, F18, F19, F21, and the `Policy.ReadWrite.ConditionalAccess` comment), leaving a record that reads as stale is the wrong thing to ship.
+
+Either sync each finding's `Status:` to its current state, or mark the field explicitly point-in-time (e.g. `Status at discovery: GAP — current state: see compliance/assessment/<control>.json`). Pick one and apply it uniformly.
+
 - [ ] **Step 2: Reconcile the register**
 
 Every finding closed in Tasks 3-20 has its assessment record updated with status and the closing commit SHA as evidence. Any finding *not* closed keeps its `GAP` status and gains a note saying why — the register must never overstate.
