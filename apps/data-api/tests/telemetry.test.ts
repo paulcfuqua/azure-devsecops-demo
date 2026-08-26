@@ -21,7 +21,7 @@ import {
   routeTemplate,
   spanName,
 } from "../src/telemetry/attributes.js";
-import { startTelemetry } from "../src/telemetry/otel.js";
+import { createAzureMonitorExporter, startTelemetry } from "../src/telemetry/otel.js";
 import { startServer, testConfig } from "./helpers.js";
 
 /**
@@ -166,7 +166,13 @@ describe("startTelemetry", () => {
   it("no-ops cleanly when no connection string is present", async () => {
     const log = vi.fn();
     const telemetry = startTelemetry(
-      { connectionString: undefined, serviceName: "data-api", serviceVersion: "0.1.0", sampleRatio: 1 },
+      {
+        connectionString: undefined,
+        serviceName: "data-api",
+        serviceVersion: "0.1.0",
+        sampleRatio: 1,
+        managedIdentityClientId: undefined,
+      },
       { log },
     );
     expect(telemetry.enabled).toBe(false);
@@ -187,6 +193,7 @@ describe("startTelemetry", () => {
         serviceName: "data-api",
         serviceVersion: "0.1.0",
         sampleRatio: 1,
+        managedIdentityClientId: undefined,
       },
       { log },
     );
@@ -197,7 +204,13 @@ describe("startTelemetry", () => {
   it("exports one server span per request, with only allowlisted attributes", async () => {
     const exporter = new CapturingExporter();
     const telemetry = startTelemetry(
-      { connectionString: undefined, serviceName: "data-api", serviceVersion: "9.9.9", sampleRatio: 1 },
+      {
+        connectionString: undefined,
+        serviceName: "data-api",
+        serviceVersion: "9.9.9",
+        sampleRatio: 1,
+        managedIdentityClientId: undefined,
+      },
       { exporter, log: () => undefined },
     );
     expect(telemetry.enabled).toBe(true);
@@ -244,7 +257,13 @@ describe("startTelemetry", () => {
     // app is most of them. shutdown() must forceFlush first.
     const exporter = new CapturingExporter();
     const telemetry = startTelemetry(
-      { connectionString: undefined, serviceName: "data-api", serviceVersion: "0.1.0", sampleRatio: 1 },
+      {
+        connectionString: undefined,
+        serviceName: "data-api",
+        serviceVersion: "0.1.0",
+        sampleRatio: 1,
+        managedIdentityClientId: undefined,
+      },
       { exporter, log: () => undefined },
     );
     const server = await startServer({ config: testConfig(), telemetry });
@@ -262,7 +281,13 @@ describe("startTelemetry", () => {
   it("keeps route names prefix-independent when mounted under /api", async () => {
     const exporter = new CapturingExporter();
     const telemetry = startTelemetry(
-      { connectionString: undefined, serviceName: "data-api", serviceVersion: "0.1.0", sampleRatio: 1 },
+      {
+        connectionString: undefined,
+        serviceName: "data-api",
+        serviceVersion: "0.1.0",
+        sampleRatio: 1,
+        managedIdentityClientId: undefined,
+      },
       { exporter, log: () => undefined },
     );
     const server = await startServer({
@@ -289,7 +314,13 @@ describe("startTelemetry", () => {
     // transaction view is two disconnected halves.
     const exporter = new CapturingExporter();
     const telemetry = startTelemetry(
-      { connectionString: undefined, serviceName: "data-api", serviceVersion: "0.1.0", sampleRatio: 1 },
+      {
+        connectionString: undefined,
+        serviceName: "data-api",
+        serviceVersion: "0.1.0",
+        sampleRatio: 1,
+        managedIdentityClientId: undefined,
+      },
       { exporter, log: () => undefined },
     );
     const server = await startServer({ config: testConfig(), telemetry });
@@ -314,7 +345,13 @@ describe("startTelemetry", () => {
   it("starts a new root trace when the traceparent is malformed", async () => {
     const exporter = new CapturingExporter();
     const telemetry = startTelemetry(
-      { connectionString: undefined, serviceName: "data-api", serviceVersion: "0.1.0", sampleRatio: 1 },
+      {
+        connectionString: undefined,
+        serviceName: "data-api",
+        serviceVersion: "0.1.0",
+        sampleRatio: 1,
+        managedIdentityClientId: undefined,
+      },
       { exporter, log: () => undefined },
     );
     const server = await startServer({ config: testConfig(), telemetry });
@@ -337,7 +374,13 @@ describe("startTelemetry", () => {
   it("marks 5xx as an error span and 4xx as ordinary", async () => {
     const exporter = new CapturingExporter();
     const telemetry = startTelemetry(
-      { connectionString: undefined, serviceName: "data-api", serviceVersion: "0.1.0", sampleRatio: 1 },
+      {
+        connectionString: undefined,
+        serviceName: "data-api",
+        serviceVersion: "0.1.0",
+        sampleRatio: 1,
+        managedIdentityClientId: undefined,
+      },
       { exporter, log: () => undefined },
     );
     const server = await startServer({
@@ -376,7 +419,13 @@ describe("startTelemetry", () => {
   it("reports the tracing state on /healthz", async () => {
     const exporter = new CapturingExporter();
     const telemetry = startTelemetry(
-      { connectionString: undefined, serviceName: "data-api", serviceVersion: "0.1.0", sampleRatio: 1 },
+      {
+        connectionString: undefined,
+        serviceName: "data-api",
+        serviceVersion: "0.1.0",
+        sampleRatio: 1,
+        managedIdentityClientId: undefined,
+      },
       { exporter, log: () => undefined },
     );
     const server = await startServer({ config: testConfig(), telemetry });
@@ -389,5 +438,35 @@ describe("startTelemetry", () => {
       await server.close();
       await telemetry.shutdown();
     }
+  });
+});
+
+describe("createAzureMonitorExporter — Microsoft Entra ID wiring (F4, Task 8)", () => {
+  // platform/main.bicep now sets disableLocalAuth:true on the App Insights
+  // component, so the exporter must present a credential or ingestion is
+  // refused. These assert the option AzureMonitorTraceExporter actually
+  // receives, at the function boundary, so no test here talks to
+  // @azure/identity or an ingestion endpoint for real.
+  // AzureMonitorTraceExporter (export/trace.js) forwards its constructor
+  // options to an internal `HttpSender` (platform/nodejs/httpSender.js) as
+  // `this.sender.appInsightsClientOptions` — that is the object the sender
+  // checks `if (this.appInsightsClientOptions.credential)` against before it
+  // will attach an AAD bearer token, so it is what these assert against.
+  type ExporterInternals = { sender: { appInsightsClientOptions?: { credential?: unknown } } };
+
+  it("passes no credential option when none is given", () => {
+    const exporter = createAzureMonitorExporter(
+      "InstrumentationKey=11111111-2222-3333-4444-555555555555",
+    ) as unknown as ExporterInternals;
+    expect(exporter.sender.appInsightsClientOptions?.credential).toBeUndefined();
+  });
+
+  it("passes the given credential through to the exporter", () => {
+    const fakeCredential = { getToken: async () => null };
+    const exporter = createAzureMonitorExporter(
+      "InstrumentationKey=11111111-2222-3333-4444-555555555555",
+      fakeCredential as never,
+    ) as unknown as ExporterInternals;
+    expect(exporter.sender.appInsightsClientOptions?.credential).toBe(fakeCredential);
   });
 });

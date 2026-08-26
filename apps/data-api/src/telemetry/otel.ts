@@ -17,6 +17,26 @@
  * capture full request URLs and DB statements by default, and this process
  * handles a connection string and (in cloud mode) a GitHub token. Spans here
  * are hand-built from an allowlist of attributes — see `attributes.ts`.
+ *
+ * MICROSOFT ENTRA ID INGESTION (F4, Task 8). platform/main.bicep now sets
+ * `disableLocalAuth: true` on the App Insights component, so the
+ * instrumentation key in the connection string is no longer enough on its
+ * own — the exporter must also present a Microsoft Entra ID token, or
+ * ingestion is refused. `AzureMonitorTraceExporter` only attaches one when a
+ * `credential` option is supplied (see `@azure/monitor-opentelemetry-
+ * exporter`'s platform/nodejs/httpSender.js:
+ * `if (this.appInsightsClientOptions.credential)`), so flipping
+ * `disableLocalAuth` with no matching change here would have silently
+ * stopped all telemetry from this service. `config.managedIdentityClientId`
+ * (from `AZURE_CLIENT_ID`) gates it: set, it selects the user-assigned
+ * identity the Bicep template grants 'Monitoring Metrics Publisher'
+ * (infra/bicep/apps/main.bicep, module dataApiAppInsightsGrant), reusing
+ * `createCredential` from `../backends/azureAuth.js` — the same helper the
+ * SQL/Fabric/Cost Management/Log Analytics adapters already use. Unset (a
+ * laptop with no managed identity), no credential is built at all:
+ * `createCredential(undefined)` would otherwise fall through to an ambient
+ * `az login` / VS Code session, which is not a choice telemetry should make
+ * on a machine that has no connection string to send to anyway.
  */
 import { AzureMonitorTraceExporter } from "@azure/monitor-opentelemetry-exporter";
 import { trace, type Tracer } from "@opentelemetry/api";
@@ -33,6 +53,8 @@ import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
 } from "@opentelemetry/semantic-conventions";
+import type { TokenCredential } from "@azure/identity";
+import { createCredential } from "../backends/azureAuth.js";
 import type { TelemetryConfig } from "../config.js";
 import { redact } from "../errors.js";
 
@@ -80,7 +102,14 @@ export function startTelemetry(
       return DISABLED;
     }
     try {
-      exporter = createAzureMonitorExporter(config.connectionString);
+      // Only built when a managed identity client id is configured — see the
+      // header comment above for why an unconditional createCredential(undefined)
+      // (which falls through to DefaultAzureCredential's ambient chain) is the
+      // wrong default here.
+      const credential = config.managedIdentityClientId
+        ? createCredential(config.managedIdentityClientId)
+        : undefined;
+      exporter = createAzureMonitorExporter(config.connectionString, credential);
     } catch (err) {
       // A malformed connection string must not take the service down: the API
       // is the product, telemetry is the instrument. Say so loudly and serve.
@@ -148,8 +177,16 @@ export function startTelemetry(
 /**
  * Kept in its own function so the failure mode is contained: a malformed
  * connection string throws in the exporter's constructor, and the caller above
- * turns that into "tracing off", not "service down".
+ * turns that into "tracing off", not "service down". Exported so
+ * tests/telemetry.test.ts can assert the `credential` option is wired through
+ * (or correctly absent) without exercising the rest of `startTelemetry`.
  */
-function createAzureMonitorExporter(connectionString: string): SpanExporter {
-  return new AzureMonitorTraceExporter({ connectionString });
+export function createAzureMonitorExporter(
+  connectionString: string,
+  credential?: TokenCredential,
+): SpanExporter {
+  return new AzureMonitorTraceExporter({
+    connectionString,
+    ...(credential ? { credential } : {}),
+  });
 }

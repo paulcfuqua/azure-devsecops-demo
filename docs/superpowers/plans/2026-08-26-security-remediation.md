@@ -563,22 +563,61 @@ credential, so it bypassed the MCP gate entirely."
 
 ## Task 8: Stop publishing the App Insights key and subscription inventory (F4)
 
+**Amendment (2026-08-26, post-implementation).** The original Step 3 below — "set
+`disableLocalAuth: true` and grant the two UAMIs `Monitoring Metrics Publisher`" — is
+necessary but was not sufficient as written, and shipping it alone would have silently
+broken telemetry rather than fixing F4. `@azure/monitor-opentelemetry-exporter`'s HTTP
+sender only attaches a Microsoft Entra ID bearer token `if (this.appInsightsClientOptions.
+credential)` — the RBAC grant has no effect unless the exporter is also given a
+`credential`, and neither apps/mcp-tools/src/telemetry.ts nor apps/data-api/src/telemetry/
+otel.ts passed one. Verified against Microsoft's own docs (learn.microsoft.com/azure/
+azure-monitor/app/azure-ad-authentication): `Monitoring Metrics Publisher` is confirmed
+correct — "Although the ... role says 'metrics,' it publishes all telemetry" — and the
+Node.js sample there is exactly `useAzureMonitor({ azureMonitorExporterOptions: {
+connectionString, credential } })`. The actual Step 3 (below) adds that credential wiring
+to both apps, gated on `AZURE_CLIENT_ID` being set (the deployed container sets it; a
+laptop with no managed identity does not, and must not fall through to an ambient `az
+login` session for telemetry). It also places the RBAC grant where it has to live —
+infra/bicep/apps/main.bicep, alongside the UAMIs it targets, not platform/main.bicep,
+which deploys before those identities exist — so the Files list below is corrected too.
+The regression test's two `Select-String` patterns are also corrected (below) for two
+real false positives/negatives the brief's literal versions had. None of this changes the
+finding, the fix's intent, or the commit's scope — only what Step 3 has to include for the
+grant to actually do anything.
+
 **Files:**
-- Modify: `infra/bicep/platform/main.bicep:343-344` (delete the output), `:175-185` (`disableLocalAuth`)
+- Modify: `infra/bicep/platform/main.bicep:175-185` (`disableLocalAuth`), `:343-344` (delete the output)
+- New: `infra/bicep/apps/modules/monitoring-metrics-publisher-role.bicep`
+- Modify: `infra/bicep/apps/main.bicep` (two grant modules, one per UAMI)
+- Modify: `apps/mcp-tools/src/telemetry.ts`, `apps/mcp-tools/tests/telemetry.test.ts`
+- Modify: `apps/data-api/src/config.ts`, `apps/data-api/src/telemetry/otel.ts`, `apps/data-api/tests/telemetry.test.ts`
 - Modify: `.github/workflows/layer-06-platform.yml:192-197`, `:299-304`
-- Modify: `.github/workflows/layer-07-apps.yml` (same pattern)
+- Modify: `.github/workflows/layer-07-apps.yml` (same pattern, plus one redundant debug `cat` of an already-non-sensitive manifest)
 - Test: `verification/tests/no-secret-outputs.Tests.ps1` (new)
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: manifests that carry no ingestion credential and no subscription ID.
+- Produces: manifests that carry no ingestion credential and no subscription ID; telemetry
+  ingestion authenticated by Microsoft Entra ID instead of the deleted key.
 
 - [ ] **Step 1: Write the failing test**
 
 ```powershell
 Describe 'deployment manifests leak nothing' {
-    It 'no Bicep output name suggests a connection string or key' {
-        $hits = Select-String -Path 'infra/bicep/**/*.bicep' -Pattern '^output\s+\w*(ConnectionString|Key|Secret)\w*\s'
+    It 'no Bicep output name suggests a connection string, key, or secret' {
+        # NOT the brief's original `Select-String -Path 'infra/bicep/**/*.bicep'`: in
+        # PowerShell's wildcard provider `**` is a literal two-segment wildcard, not a
+        # bash-style recursive globstar, so that glob matches only files exactly two path
+        # segments below infra/bicep/ — missing infra/bicep/naming.bicep (one segment) and
+        # infra/bicep/apps/modules/*.bicep (three), backwards for a check whose whole job
+        # is "no .bicep file anywhere leaks a secret". Get-ChildItem -Recurse instead.
+        $bicepFiles = Get-ChildItem -Path 'infra' -Recurse -Filter '*.bicep'
+        # NOT the brief's original `(ConnectionString|Key|Secret)`: Select-String is
+        # case-insensitive by default, so bare `Key` matches the "Key" inside the two
+        # legitimate, non-secret `keyVaultUri` / `keyVaultResourceId` outputs (both are a
+        # resource locator for the Key Vault *product*, never a secret value).
+        # `Key(?!Vault)` keeps ConnectionString/ApiKey/...Secret... caught everywhere else.
+        $hits = $bicepFiles | Select-String -Pattern '^output\s+\w*(ConnectionString|Key(?!Vault)|Secret)\w*\s'
         $hits | Should -BeNullOrEmpty
     }
     It 'no workflow cats a manifest into the job summary' {
@@ -591,28 +630,55 @@ Describe 'deployment manifests leak nothing' {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `pwsh -c "Invoke-Pester verification/tests/no-secret-outputs.Tests.ps1"`
-Expected: FAIL on both.
+Expected: FAIL on both, against the unfixed repo.
 
 - [ ] **Step 3: Implement**
 
-Delete `output appInsightsConnectionString` — nothing consumes it (`apps/main.bicep:218-221` reads the component as `existing`). Set `disableLocalAuth: true` on the AVM component and grant the two Node services' UAMIs `Monitoring Metrics Publisher`. Replace each `cat <manifest>.json` with an explicit summary of non-sensitive keys, and drop the artifact upload of the raw manifest.
+Delete `output appInsightsConnectionString` — nothing consumes it (`apps/main.bicep`
+reads the component as `existing`). Set `disableLocalAuth: true` on the AVM component.
+Add `infra/bicep/apps/modules/monitoring-metrics-publisher-role.bicep` (same raw-resource
+shape as its sibling `key-vault-secrets-user-role.bicep`, scoped to the App Insights
+component) and call it twice from `apps/main.bicep` — once per UAMI (mcp-tools,
+data-api) — granting each `Monitoring Metrics Publisher` on the platform App Insights
+component. In both apps' telemetry modules, build a credential ONLY when `AZURE_CLIENT_ID`
+is set (reusing each app's existing `DefaultAzureCredential`-with-`managedIdentityClientId`
+helper — `tools/auth.ts`'s `createDefaultCredential` for mcp-tools, `backends/azureAuth.ts`'s
+`createCredential` for data-api — never inventing a new one) and pass it as the exporter's
+`credential` option. Replace each `cat <manifest>.json` with an explicit `jq`-built summary
+of non-sensitive keys (resource group/account/container-app names, image digests, the
+externally-ingress FQDNs — never a resource ID, the Key Vault URI, the SQL FQDN, or
+data-api's internal-only FQDN), and drop the artifact upload of the raw manifest.
 
 - [ ] **Step 4: Verify**
 
-Run: `pwsh -c "Invoke-Pester verification/tests/no-secret-outputs.Tests.ps1"`, then `az bicep build --file infra/bicep/platform/main.bicep --stdout > /dev/null`, then `actionlint .github/workflows/*.yml`.
-Expected: all pass.
+Run: `pwsh -c "Invoke-Pester verification/tests/no-secret-outputs.Tests.ps1"`, then
+`az bicep build --file infra/bicep/platform/main.bicep --stdout > /dev/null` and the same
+for `infra/bicep/apps/main.bicep`, then `actionlint .github/workflows/*.yml`, then
+`npm run typecheck --workspace apps/mcp-tools --workspace apps/data-api` and
+`npm run test --workspace apps/mcp-tools --workspace apps/data-api`.
+Expected: all pass; the two workspaces' test counts move by the number of new
+credential-wiring assertions added (data-api +2, mcp-tools +1 — extended existing test
+files in place rather than adding new ones where the assertion fit naturally).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add infra/bicep/platform/main.bicep .github/workflows/ verification/tests/ compliance/assessment/
+git add infra/bicep/platform/main.bicep infra/bicep/apps/main.bicep \
+  infra/bicep/apps/modules/monitoring-metrics-publisher-role.bicep \
+  apps/mcp-tools/src/telemetry.ts apps/mcp-tools/tests/telemetry.test.ts \
+  apps/data-api/src/config.ts apps/data-api/src/telemetry/otel.ts apps/data-api/tests/telemetry.test.ts \
+  .github/workflows/ verification/tests/ compliance/assessment/
 git commit -m "infra(L6): stop publishing the App Insights key and subscription inventory
 
 Closes F4. layer-06 cat'd l6-manifest.json into GITHUB_STEP_SUMMARY,
 which is unauthenticated-readable on a public repo. It carried
 InstrumentationKey= (and disableLocalAuth defaulted false, so that key
 alone authorises ingestion from anywhere) plus the subscription ID,
-Key Vault URI and SQL FQDN. The output had no consumer."
+Key Vault URI and SQL FQDN. The output had no consumer.
+
+disableLocalAuth:true now refuses that key outright; mcp-tools and
+data-api authenticate ingestion with a Microsoft Entra ID token via
+their UAMIs' Monitoring Metrics Publisher grant instead."
 ```
 
 ---

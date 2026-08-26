@@ -180,6 +180,26 @@ module appInsights 'br/public:avm/res/insights/component:0.8.0' = {
     location: location
     tags: tagsPlatform
     workspaceResourceId: logAnalytics.outputs.resourceId // workspace-based (master plan)
+    // F4 (compliance/findings/2026-08-26-prepublication-review.md#f4, Task 8):
+    // the AVM default is `false`, which means the ingestion key embedded in
+    // the connection string alone authorises telemetry writes from anywhere
+    // on the internet — and that connection string used to be a Bicep output
+    // that layer-06's workflow put in a public job summary. The output is
+    // gone (see the removed `appInsightsConnectionString` output below this
+    // module) and local (key-based) ingestion is now refused outright.
+    // Ingestion moves to Microsoft Entra ID auth: the two Node services that
+    // still send telemetry (mcp-tools, data-api) are granted 'Monitoring
+    // Metrics Publisher' on this component from apps/main.bicep (modules
+    // mcpAppInsightsGrant / dataApiAppInsightsGrant — their identities are
+    // born at L7, after this module deploys at L6), and both apps' telemetry
+    // code now presents a Microsoft Entra token when AZURE_CLIENT_ID is set
+    // (apps/mcp-tools/src/telemetry.ts, apps/data-api/src/telemetry/otel.ts).
+    // Per Microsoft's own docs (learn.microsoft.com/azure/azure-monitor/app/
+    // azure-ad-authentication#disable-local-authentication), disabling local
+    // auth here is exactly the scenario that role and that code path exist
+    // for — "Although the Monitoring Metrics Publisher role says 'metrics,'
+    // it publishes all telemetry to the Application Insights resource."
+    disableLocalAuth: true
   }
   dependsOn: [rgPlatform]
 }
@@ -339,9 +359,6 @@ output logAnalyticsWorkspaceResourceId string = logAnalytics.outputs.resourceId
 
 @description('Log Analytics workspace (customer) ID used by KQL queries (V6.2).')
 output logAnalyticsWorkspaceCustomerId string = logAnalytics.outputs.logAnalyticsWorkspaceId
-
-@description('Application Insights connection string (workspace-based; not a secret).')
-output appInsightsConnectionString string = appInsights.outputs.connectionString
 
 @description('Resource ID of the Container Apps environment (input to L7 app deploys).')
 output containerAppsEnvironmentResourceId string = containerAppsEnvironment.outputs.resourceId

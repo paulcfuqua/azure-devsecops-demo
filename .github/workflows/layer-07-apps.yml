@@ -255,10 +255,27 @@ jobs:
           jq '.properties.outputs' l7-outputs.json > l7-manifest.json
 
           data_api_mode="$(jq -r '.dataApiBackendModeResolved.value // "unknown"' l7-manifest.json)"
+          # F4 (compliance/findings/2026-08-26-prepublication-review.md#f4,
+          # Task 8): the full manifest carries container app resource IDs (each
+          # embedding the subscription ID) and data-api's internal-only origin
+          # (F1/Task 6 made data-api ingressExternal:false — no legitimate
+          # caller is outside the CAE, so its FQDN has no business in a public
+          # job summary either). l7-manifest.json itself stays on the runner;
+          # only a curated, non-sensitive subset goes into the summary, and
+          # none of it is uploaded as an artifact.
           {
-            echo "### L7 app endpoints"
+            echo "### L7 app endpoints (selected non-sensitive keys)"
+            echo
             echo '```json'
-            cat l7-manifest.json
+            jq '{
+              containerAppNames: .containerAppNames.value,
+              dataApiBackendModeResolved: .dataApiBackendModeResolved.value,
+              imageDigests: .imageDigests.value,
+              launchOpsFqdn: .launchOpsFqdn.value,
+              controlTowerFqdn: .controlTowerFqdn.value,
+              mcpToolsFqdn: .mcpToolsFqdn.value,
+              mcpToolsEndpoint: .mcpToolsEndpoint.value
+            }' l7-manifest.json
             echo '```'
             echo
             echo "Target ports in effect — launch-ops: ${LAUNCH_OPS_PORT}, control-tower: ${CONTROL_TOWER_PORT}, mcp-tools: ${MCP_TOOLS_PORT}, data-api: ${DATA_API_PORT}."
@@ -267,7 +284,6 @@ jobs:
               echo "> **P-1 open:** ports are still on the placeholder 80. Set LAUNCH_OPS_PORT / CONTROL_TOWER_PORT / MCP_TOOLS_PORT / DATA_API_PORT to 8080 in the demo environment once real images are published."
             fi
             echo
-            echo "\`DATA_API_ORIGIN\` on both frontends: \`$(jq -r '.dataApiOrigin.value // "(absent)"' l7-manifest.json)\`"
             echo "data-api backend mode: \`${data_api_mode}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -296,7 +312,6 @@ jobs:
                           | to_entries[]
                           | { name: .value, imageDigest: ($digests[.key] // "unset") } ] }' \
             l7-manifest.json > l7-verifier-manifest.json
-          cat l7-verifier-manifest.json
 
           # An empty apps array means the outputs did not carry the two objects
           # this reads, and V7.1 would then fail with "no imageDigest in the deploy
@@ -321,9 +336,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: layer-07-apps
+          # l7-manifest.json is deliberately NOT here (F4, Task 8): it carries
+          # container app resource IDs (each embedding the subscription ID)
+          # and data-api's internal-only origin, and artifacts on a public
+          # repo are downloadable without authentication.
+          # l7-verifier-manifest.json is non-sensitive (app names and image
+          # digests only) and stays — it is also uploaded separately as
+          # layer-07-deploy-manifest for the verify job to download.
           path: |
             what-if-l7.txt
-            l7-manifest.json
             l7-verifier-manifest.json
           if-no-files-found: warn
           retention-days: 14

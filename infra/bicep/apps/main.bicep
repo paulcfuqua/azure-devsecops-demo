@@ -385,6 +385,21 @@ module mcpKvGrant 'modules/key-vault-secrets-user-role.bicep' = {
   }
 }
 
+// Grants this identity 'Monitoring Metrics Publisher' on the platform App
+// Insights component (F4, Task 8 — see platform/main.bicep's appInsights
+// module header and modules/monitoring-metrics-publisher-role.bicep). Without
+// this, disableLocalAuth:true on that component leaves mcp-tools with no way
+// to authenticate telemetry ingestion at all. Scoped to mls-rg-platform,
+// where the component lives.
+module mcpAppInsightsGrant 'modules/monitoring-metrics-publisher-role.bicep' = {
+  name: 'l7-mcp-appi-grant'
+  scope: az.resourceGroup(platformRgName)
+  params: {
+    appInsightsName: appiName
+    principalId: mcpToolsIdentity.outputs.principalId
+  }
+}
+
 // ------------------------------------------------------------------ data-api workload identity
 
 // Same reasoning as mcp-tools, for the same reason: data-api is the browser's
@@ -399,6 +414,19 @@ module dataApiIdentity 'br/public:avm/res/managed-identity/user-assigned-identit
     name: dataApiIdentityName
     location: location
     tags: tagsDataApi
+  }
+}
+
+// Same reason as mcpAppInsightsGrant above: F4 (Task 8) disables local
+// (key-based) App Insights ingestion, so data-api's identity needs
+// 'Monitoring Metrics Publisher' to authenticate telemetry via Microsoft
+// Entra ID instead.
+module dataApiAppInsightsGrant 'modules/monitoring-metrics-publisher-role.bicep' = {
+  name: 'l7-data-api-appi-grant'
+  scope: az.resourceGroup(platformRgName)
+  params: {
+    appInsightsName: appiName
+    principalId: dataApiIdentity.outputs.principalId
   }
 }
 

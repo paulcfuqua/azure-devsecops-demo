@@ -3,20 +3,20 @@
   "applicability": "applicable",
   "criteria": [],
   "assertion": {
-    "status": "GAP",
+    "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f4"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F4: the layer-06 and layer-07 job summaries and uploaded artifacts publish keyVaultUri, sqlServerFqdn, costExportStorageResourceId, lawCustomerId and the subscription ID embedded in every resource ID to a public, unauthenticated surface — estate configuration that CLAUDE.md's own hard rule 5 requires to live only in GitHub environment variables. That data is confidential estate configuration and it is not being protected at rest in its committed/published form."
+    "rationale": "F4: the layer-06 and layer-07 job summaries and uploaded artifacts published keyVaultUri, sqlServerFqdn, costExportStorageResourceId, lawCustomerId and the subscription ID embedded in every resource ID to a public, unauthenticated surface — estate configuration that CLAUDE.md's own hard rule 5 requires to live only in GitHub environment variables. F4 is now CLOSED (Task 8). layer-06-platform.yml and layer-07-apps.yml no longer `cat` the raw deployment manifest into $GITHUB_STEP_SUMMARY or upload it as an artifact; each writes only an explicit, curated subset of keys that contains no resource ID, no Key Vault URI, no SQL FQDN and no Log Analytics customer ID — resource group names, SQL/cost-export account names, container app names, image digests, and the three app FQDNs that are external-ingress by design (data-api's internal-only FQDN, F1/Task 6, is excluded on the same reasoning). The App Insights connection string that used to be the other half of this finding is addressed together with control 3.1.3 (see 3.1.3.json): the Bicep output is deleted and the component's `disableLocalAuth: true` plus the Monitoring Metrics Publisher grants and Microsoft Entra credential wiring in apps/mcp-tools and apps/data-api mean there is no longer an ingestion key for any surface to leak. verification/tests/no-secret-outputs.Tests.ps1 regression-guards the workflow shape of this finding (no workflow may `cat` a manifest into the job summary) and, via 3.1.3's shared evidence, the Bicep-output shape. Overall status is now CLOSED: this control's only contributor (F4) is closed. This control has no other open contributor (checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites 3.13.16)."
   },
-  "recommendation": "Stop cat-ing the full manifest into $GITHUB_STEP_SUMMARY; summarise only non-sensitive selected keys. Drop the artifact upload of the raw manifest entirely.",
-  "gapSeverity": "high",
+  "recommendation": "None outstanding for this control. (Replacing the raw-manifest cat/artifact with a curated, non-sensitive summary in both layer-06-platform.yml and layer-07-apps.yml, and closing the App Insights connection-string half alongside control 3.1.3, Task 8, are all DONE.) A regression here — a workflow cat-ing a manifest (or any of its unsafe keys) into the job summary or an artifact again — would reopen this control; verification/tests/no-secret-outputs.Tests.ps1 catches the workflow shape of that regression.",
+  "gapSeverity": "none",
   "references": [
-    ".github/workflows/layer-06-platform.yml:192-197",
-    ".github/workflows/layer-06-platform.yml:299-304",
+    ".github/workflows/layer-06-platform.yml",
     ".github/workflows/layer-07-apps.yml",
-    "infra/bicep/platform/main.bicep:344"
+    "infra/bicep/platform/main.bicep",
+    "verification/tests/no-secret-outputs.Tests.ps1"
   ]
 }

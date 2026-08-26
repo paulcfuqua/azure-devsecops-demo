@@ -189,10 +189,23 @@ jobs:
             echo "completed-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "${GITHUB_OUTPUT}"
 
+          # F4 (compliance/findings/2026-08-26-prepublication-review.md#f4, Task 8):
+          # the full manifest carries the subscription ID in every resource ID,
+          # plus keyVaultUri, sqlServerFqdn and costExportStorageResourceId, and
+          # job summaries on a public repo are readable without authentication.
+          # l6-manifest.json itself stays on the runner for the later steps in
+          # this job that need it; only a curated, non-sensitive subset below
+          # goes into the summary, and none of it is uploaded as an artifact.
           {
-            echo "### L6 deployment manifest"
+            echo "### L6 deployment manifest (selected non-sensitive keys)"
+            echo
             echo '```json'
-            cat l6-manifest.json
+            jq '{
+              resourceGroupNames: .resourceGroupNames.value,
+              sqlDatabaseName: .sqlDatabaseName.value,
+              costExportAccountName: .costExportAccountName.value,
+              containerAppsEnvironmentDefaultDomain: .containerAppsEnvironmentDefaultDomain.value
+            }' l6-manifest.json
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -299,9 +312,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: layer-06-platform
+          # l6-manifest.json is deliberately NOT here (F4, Task 8): it carries
+          # the subscription ID in every resource ID plus keyVaultUri,
+          # sqlServerFqdn and costExportStorageResourceId, and artifacts on a
+          # public repo are downloadable without authentication.
           path: |
             what-if-l6.txt
-            l6-manifest.json
           if-no-files-found: warn
           retention-days: 14
 

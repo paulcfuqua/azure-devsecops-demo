@@ -38,6 +38,7 @@ import {
   type Tracer,
 } from "@opentelemetry/api";
 import type { BackendMode } from "./config.js";
+import { createDefaultCredential, type TokenCredentialLike } from "./tools/auth.js";
 import { redact } from "./tools/errors.js";
 import type { SqlDialect } from "./tools/sql-dialect.js";
 
@@ -222,6 +223,25 @@ export function telemetryStatus(): TelemetryStatus {
  * SECURITY: the connection string carries an InstrumentationKey and an ingestion
  * endpoint. It is read from the environment, handed straight to the distro, and
  * never logged, never echoed on /healthz, and never put in an error message.
+ *
+ * MICROSOFT ENTRA ID INGESTION (F4, Task 8). The platform App Insights
+ * component now has `disableLocalAuth: true` (infra/bicep/platform/main.bicep),
+ * so the instrumentation key in the connection string above is no longer
+ * enough to authorise ingestion — the exporter must also present a Microsoft
+ * Entra ID token. `@azure/monitor-opentelemetry-exporter`'s HTTP sender only
+ * attaches one when a `credential` is supplied (see the module's
+ * platform/nodejs/httpSender.js: `if (this.appInsightsClientOptions.credential)`),
+ * so a `disableLocalAuth` flip with no matching `credential` here would
+ * silently stop all telemetry from this service. `AZURE_CLIENT_ID` gates it:
+ * set, it selects the user-assigned identity the Bicep template grants
+ * 'Monitoring Metrics Publisher' (infra/bicep/apps/main.bicep, module
+ * mcpAppInsightsGrant) via `createDefaultCredential` — the same helper
+ * `tools/cloud/index.ts` already uses for the SQL/Fabric/Cost Management
+ * adapters. Unset (a laptop with no managed identity), no credential is
+ * built at all: `DefaultAzureCredential` with no `managedIdentityClientId`
+ * would otherwise fall through to an ambient `az login` / VS Code session,
+ * which is not a choice telemetry should be making on a developer machine
+ * that has no connection string to send to anyway.
  */
 /** The distro's one entry point, as a type so the loader can be injected. */
 export interface AzureMonitorModule {
@@ -235,6 +255,13 @@ export interface InitTelemetryDeps {
    * attempt an egress to an ingestion endpoint.
    */
   load?: () => Promise<AzureMonitorModule>;
+  /**
+   * Test seam for the Microsoft Entra ID credential. Production gets a
+   * `DefaultAzureCredential` via `createDefaultCredential` (only when
+   * `AZURE_CLIENT_ID` is set); tests inject a double so constructing it never
+   * touches `@azure/identity` for real.
+   */
+  credential?: TokenCredentialLike;
 }
 
 export async function initTelemetry(
@@ -255,8 +282,16 @@ export async function initTelemetry(
       deps.load ??
       (() => import("@azure/monitor-opentelemetry") as unknown as Promise<AzureMonitorModule>);
     const { useAzureMonitor } = await load();
+    // Only built when AZURE_CLIENT_ID is set — see the header comment above
+    // for why an unconditional DefaultAzureCredential() is the wrong default
+    // here.
+    const clientId = env.AZURE_CLIENT_ID?.trim();
+    const credential = clientId ? deps.credential ?? (await createDefaultCredential(env)) : undefined;
     useAzureMonitor({
-      azureMonitorExporterOptions: { connectionString },
+      azureMonitorExporterOptions: {
+        connectionString,
+        ...(credential ? { credential } : {}),
+      },
       resource: {
         attributes: {
           "service.name": env.MLS_SERVICE_NAME ?? "mls-mcp-tools",

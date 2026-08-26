@@ -351,6 +351,35 @@ describe("initTelemetry", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0].azureMonitorExporterOptions.connectionString).toBe(CONNECTION_STRING);
     expect(seen[0].resource.attributes["service.name"]).toBe("mls-mcp-tools");
+    // No AZURE_CLIENT_ID in this env, so no Microsoft Entra credential is
+    // built at all (F4, Task 8) — see "builds a Microsoft Entra credential…"
+    // below for the AZURE_CLIENT_ID-present case.
+    expect(seen[0].azureMonitorExporterOptions.credential).toBeUndefined();
+  });
+
+  it("builds a Microsoft Entra credential scoped to AZURE_CLIENT_ID when it is set", async () => {
+    // F4/Task 8: platform/main.bicep now sets disableLocalAuth:true on the App
+    // Insights component, so the exporter must present a token or ingestion
+    // is refused. AZURE_CLIENT_ID is what the deployed container sets (it
+    // selects the UAMI granted 'Monitoring Metrics Publisher' — infra/bicep/
+    // apps/main.bicep's mcpAppInsightsGrant); a laptop with no managed
+    // identity never sets it, so this path never runs there.
+    const seen: any[] = [];
+    const fakeCredential: import("../src/tools/auth.js").TokenCredentialLike = {
+      getToken: async () => ({ token: "fake", expiresOnTimestamp: Date.now() + 1000 }),
+    };
+    const status = await initTelemetry(
+      {
+        APPLICATIONINSIGHTS_CONNECTION_STRING: CONNECTION_STRING,
+        AZURE_CLIENT_ID: "11111111-1111-1111-1111-111111111111",
+      } as NodeJS.ProcessEnv,
+      {
+        load: async () => ({ useAzureMonitor: (options) => seen.push(options) }),
+        credential: fakeCredential,
+      },
+    );
+    expect(status).toEqual({ enabled: true, exporter: "azure-monitor" });
+    expect(seen[0].azureMonitorExporterOptions.credential).toBe(fakeCredential);
   });
 
   it("keeps serving when the exporter fails to start, and never echoes the key", async () => {

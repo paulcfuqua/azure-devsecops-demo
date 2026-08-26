@@ -64,6 +64,17 @@ export interface TelemetryConfig {
   readonly serviceVersion: string;
   /** Head sampling ratio, 0..1. */
   readonly sampleRatio: number;
+  /**
+   * User-assigned managed identity client id (F4, Task 8). Set, it selects
+   * the identity granted 'Monitoring Metrics Publisher' on the App Insights
+   * component (infra/bicep/apps/main.bicep's dataApiAppInsightsGrant), which
+   * the exporter needs now that platform/main.bicep sets
+   * `disableLocalAuth: true` there. Absent (a laptop with no managed
+   * identity), the exporter presents no credential at all — see
+   * telemetry/otel.ts's `startTelemetry` for why that is the right default
+   * rather than falling through to an ambient `az login` session.
+   */
+  readonly managedIdentityClientId: string | undefined;
 }
 
 export interface DataApiConfig {
@@ -300,6 +311,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DataApiConfig 
       serviceName: str(env, "OTEL_SERVICE_NAME") ?? "data-api",
       serviceVersion: str(env, "MLS_SERVICE_VERSION") ?? "0.1.0",
       sampleRatio: ratio(env, "MLS_OTEL_SAMPLE_RATIO", 1),
+      // Same AZURE_CLIENT_ID the container's DefaultAzureCredential binds to
+      // everywhere else (see app.ts) — not MLS_MANAGED_IDENTITY_CLIENT_ID,
+      // which is cloud-mode-only and unset in local mode even though
+      // AZURE_CLIENT_ID is always present on the deployed container.
+      managedIdentityClientId: str(env, "AZURE_CLIENT_ID"),
     },
     cloud: requested === "cloud" ? loadCloud(env) : undefined,
   };
