@@ -83,9 +83,11 @@ export interface McpToolsConfig {
   /** Present only when backendMode === "cloud". */
   cloud?: CloudConfig;
   /**
-   * Who may call this server. Required in cloud mode — the ingress is external
-   * by design, so an unauthenticated endpoint exposes tenant reads and bills the
-   * subscription on every call. See auth-gate.ts.
+   * Who may call this server. Required in EVERY mode, not just cloud — the
+   * container app's ingress is external by design regardless of backendMode,
+   * so an unauthenticated endpoint exposes tenant reads and bills the
+   * subscription on every call (F2: enforcement used to key off backendMode
+   * and that was the defect). See auth-gate.ts.
    */
   inboundAuth: InboundAuth;
 }

@@ -229,15 +229,32 @@ describe("enforcement does not depend on backend mode", () => {
     }
   });
 
-  it("parses the body only after the gate has run", async () => {
-    // A 1MB JSON parse must not be reachable without a credential.
+  it("refuses an over-limit body with 401 before the parser ever sees it, not a 413 with a stack trace", async () => {
+    // The payload MUST be comfortably ABOVE express.json's 1MB limit — that is
+    // what actually discriminates "gate before parser" from "parser before
+    // gate". At or under the limit both orderings return 401 (the parser
+    // succeeds silently either way, then the gate blocks), which is exactly
+    // why an earlier version of this test — asserting only status 401 on a
+    // 900KB body — passed under BOTH orderings and would not have caught a
+    // reversion of the reorder. Do not shrink this back under 1MB.
     const { server, url } = await start(enforced);
     const res = await fetch(`${url}${MCP_PATH}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ padding: "x".repeat(900_000) }),
+      body: JSON.stringify({ padding: "x".repeat(2_000_000) }), // ~2MB, well over the 1MB cap
     });
+    const body = await res.text();
+
     expect(res.status).toBe(401);
+    expect(res.status).not.toBe(413);
+    // This is the leak the reorder closes: with the parser running first, an
+    // over-limit body makes express's default error handler answer 413 with a
+    // full stack trace — including local filesystem paths — served to a
+    // caller who never presented a credential. None of that may ever appear.
+    expect(body).not.toMatch(/\n\s*at\s/);
+    expect(body).not.toContain("PayloadTooLargeError");
+    expect(body).not.toMatch(/[A-Za-z]:\\|\/home\/|\/repo\/|\/Users\//);
+
     await stop(server);
   });
 });

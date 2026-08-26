@@ -55,8 +55,9 @@ export interface InboundAuth {
   /** True when requests must carry a valid credential. */
   enforced: boolean;
   /**
-   * Set only when cloud mode is deliberately running open. Surfaced at boot so
-   * an accidental opt-out cannot be silent.
+   * Set when the endpoint is deliberately running open — in either mode, not
+   * just cloud; enforcement no longer keys off backendMode (F2). Surfaced at
+   * boot so an accidental opt-out cannot be silent.
    */
   deliberatelyOpen: boolean;
 }
