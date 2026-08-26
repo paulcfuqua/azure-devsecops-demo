@@ -1,0 +1,21 @@
+{
+  "control": "IR-4",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f17"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F17: zero Microsoft.Insights/actionGroups, metricAlerts or scheduledQueryRules exist anywhere in the estate (verified by repo-wide grep). IR-4 is tailored out of NIST SP 800-171, but incident handling capability is a CMMC-probed 800-53 family, and detection is its first phase. With no alert rule and no action group, there is no automated trigger for triage, containment or any other IR-4 activity - a security-relevant event is noticed only if an operator happens to run a manual KQL query. scripts/bootstrap/03-budget.ps1 is the one notification path in the system, and it is cost-only, actual-spend-only and unrelated to security events (see F15)."
+  },
+  "recommendation": "Stand up at least one Microsoft.Insights/actionGroups and wire scheduledQueryRules against the security-relevant signals F9's diagnosticSettings will start collecting, so a detected event has somewhere to go before any incident-handling procedure - manual or automated - can act on it.",
+  "gapSeverity": "high",
+  "references": [
+    "verification/layer-06-audit.ps1:287",
+    "verification/layer-07-audit.ps1:346",
+    "scripts/bootstrap/03-budget.ps1"
+  ]
+}

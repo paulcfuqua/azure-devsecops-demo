@@ -8,7 +8,8 @@ Describe 'remediation register' {
     It 'has an assessment file for every control named in the findings table' {
         $expected = @('3.1.1','3.1.2','3.1.3','3.1.5','3.1.6','3.1.7',
                       '3.3.1','3.3.2','3.3.5','3.5.1','3.12.1','3.12.3',
-                      '3.13.1','3.13.16','3.14.1')
+                      '3.13.1','3.13.16','3.14.1',
+                      'CM-6','SI-4','IR-4','CP-9')
         foreach ($c in $expected) {
             Test-Path (Join-Path $script:Root "$c.json") | Should -BeTrue -Because "$c is cited by a finding"
         }
@@ -41,9 +42,9 @@ Describe 'remediation register' {
         }
     }
 
-    It 'the narrative findings record exists and covers all 15' {
+    It 'the narrative findings record exists and covers all 18' {
         Test-Path $script:Findings | Should -BeTrue
         $body = Get-Content $script:Findings -Raw
-        1..15 | ForEach-Object { $body | Should -Match "(?m)^#+\s*F$_\b" }
+        1..18 | ForEach-Object { $body | Should -Match "(?m)^#+\s*F$_\b" }
     }
 }

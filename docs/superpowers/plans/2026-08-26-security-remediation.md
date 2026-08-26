@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the 15 findings from the 2026-08-26 pre-publication security review, capturing each one first as durable data so nothing survives only in conversation.
+**Goal:** Close the 15 findings from the 2026-08-26 pre-publication security review, capturing each one first as durable data so nothing survives only in conversation. Task 2 scrubs for 800-53/CMMC gaps the 800-171 pass didn't cover and found three more (F16-F18), bringing the total to 18.
 
 **Architecture:** Task 1 authors every finding into `compliance/assessment/*.json` in the schema defined by the compliance-platform spec — this is simultaneously the durable record, the remediation tracker, and the seed data Plan 2's platform renders. Task 2 runs the additional 800-53/CMMC scrubs so newly-found gaps are closed in the same pass rather than a later one. Tasks 3+ close gaps in dependency order: the dead CI leg first (nothing else can be trusted green until CI actually runs), then the unauthenticated internet endpoints (the only findings an outsider can exploit today), then privilege reduction, then observability, then the app-layer bugs.
 
@@ -76,8 +76,11 @@ Durable capture. Until this lands, all 15 findings exist only in a chat transcri
 | F13 | Zero workload RBAC expressed in IaC | 3.1.1, 3.1.2, 3.1.5 | high | Task 12 |
 | F14 | `self-heal` branch-squatting kill switch + missing `ref` filter | — (availability) | medium | Task 16 |
 | F15 | Cost export non-functional (container mismatch + missing grant) | — (cost control) | medium | Task 17 |
+| F16 | Azure SQL backup posture never decided or verified | CP-9 | medium | Task 18 |
+| F17 | Zero alert rules or action groups anywhere in the estate | SI-4, IR-4 | high | Task 19 |
+| F18 | Sensitivity labels published nowhere — a taxonomy, not a control | CM-6 | medium | Task 20 |
 
-F14 and F15 map to no 800-171 control. They are recorded in `compliance/findings/` and tracked here so they do not fall through the gap between the security and compliance framings.
+F14 and F15 map to no 800-171 control. They are recorded in `compliance/findings/` and tracked here so they do not fall through the gap between the security and compliance framings. F16–F18 (Task 2's 800-53/CMMC scrub) map to NIST SP 800-53 Rev 5 controls that 800-171 tailors *out* — CP-9, SI-4, IR-4, CM-6 — rather than to a 3.x 800-171 control.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1156,7 +1159,154 @@ takes to exhaust a \$200 credit."
 
 ---
 
-## Task 18: Full-suite verification and register reconciliation
+## Task 18: Pin Azure SQL backup posture (F16)
+
+**Files:**
+- Modify: `infra/bicep/platform/main.bicep:264-282` (`databases` array)
+- Modify: `verification/layer-06-audit.ps1` (new V6.5 criterion)
+- Test: `az bicep build`
+
+**Why:** no `shortTermRetentionPolicy` or `requestedBackupStorageRedundancy` is set on the database, so both resolve to whatever the platform default is on a given deployment day — never decided, never audited. CP-9 (backup) is tailored out of 800-171 but is exactly what a CMMC assessor probes next.
+
+- [ ] **Step 1: Write the failing check**
+
+```bash
+grep -n "shortTermRetentionPolicy\|requestedBackupStorageRedundancy" infra/bicep/platform/main.bicep
+```
+Expected: no hits (the defect).
+
+- [ ] **Step 2: Implement**
+
+Add to the `databases` array entry in `main.bicep`:
+
+```bicep
+shortTermRetentionPolicy: {
+  retentionDays: 7 // [derived] platform default made explicit; raise if the sponsor wants more
+}
+requestedBackupStorageRedundancy: 'Local' // [derived] matches the single-region design; document if changed
+```
+
+Add a V6.5 criterion to `verification/layer-06-audit.ps1` asserting `az sql db show` reports the same values, so drift from a future template change is caught rather than silently inherited.
+
+- [ ] **Step 3: Verify**
+
+Run: `az bicep build --file infra/bicep/platform/main.bicep --stdout > /dev/null && echo OK`
+Expected: exit 0. Re-run Step 1's grep: two hits.
+
+- [ ] **Step 4: Run the full suite**
+
+Run: `pwsh -c "Invoke-Pester infra/ verification/"`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add infra/bicep/platform/main.bicep verification/layer-06-audit.ps1 compliance/assessment/
+git commit -m "infra(L6): pin Azure SQL backup retention and storage redundancy
+
+Closes F16. Neither shortTermRetentionPolicy nor
+requestedBackupStorageRedundancy was set, so both resolved to whatever
+the platform default was on a given deployment day rather than a
+decision the template made or the L6 audit verified."
+```
+
+---
+
+## Task 19: Alert on what F9 starts collecting (F17)
+
+**Depends on:** Task 13 (F9) — alerts need the diagnostic data F9 routes to the Log Analytics workspace to exist before a query against it means anything.
+
+**Files:**
+- Modify: `infra/bicep/platform/main.bicep` (`actionGroups`, `scheduledQueryRules`)
+- Modify: `scripts/bootstrap/03-budget.ps1` (share the action group, once Task 17 adds one)
+- Test: `az bicep build`
+
+**Why:** zero `metricAlerts`, `scheduledQueryRules` or `actionGroups` exist anywhere in the estate. Even after F9 lands, nobody would notice a Key Vault access-denied spike, a SQL failed-login spike, or a Container Apps restart loop — the estate has no way to alert on what it monitors.
+
+- [ ] **Step 1: Write the failing check**
+
+```bash
+grep -rn "Microsoft.Insights/actionGroups\|scheduledQueryRules\|metricAlerts" infra/
+```
+Expected: no hits (the defect).
+
+- [ ] **Step 2: Implement**
+
+Add one `Microsoft.Insights/actionGroups` resource (email receiver, reusing the sponsor address `03-budget.ps1` already notifies) and `scheduledQueryRules` against: Key Vault `AuditEvent` with a denied result, SQL `sql-server-logs` failed-login spikes, and Container Apps environment restart counts — all reading from the LAW F9 wires up.
+
+- [ ] **Step 3: Verify**
+
+Run: `az bicep build --file infra/bicep/platform/main.bicep --stdout > /dev/null && echo OK`
+Expected: exit 0.
+
+- [ ] **Step 4: Run the full suite**
+
+Run: `pwsh -c "Invoke-Pester infra/ scripts/bootstrap/"`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add infra/bicep/platform/main.bicep scripts/bootstrap/03-budget.ps1 compliance/assessment/
+git commit -m "infra(L6): add alerting on the signals F9 collects
+
+Closes F17. Zero metricAlerts, scheduledQueryRules or actionGroups
+existed anywhere in the estate, so even fully-logged data (F9) had no
+automated trigger for anyone to notice — the alerting half of SI-4 and
+the detection phase of IR-4 were both absent."
+```
+
+---
+
+## Task 20: Publish the Purview label policy (F18)
+
+**Files:**
+- Modify: `infra/purview/labels.ps1` (add `New-LabelPolicy`/`Set-LabelPolicy`)
+- Modify: `verification/layer-04-audit.ps1` (new V4.3 criterion)
+- Create: `infra/purview/auto-label-design.md` (or remove the `L04.md` reference to it)
+- Test: `infra/purview/tests/labels.Tests.ps1`
+
+**Why:** `labels.ps1` creates the four-label taxonomy but never publishes a policy scoping it to any user or group, despite `L04.md:53` documenting that step as part of the deploy. A label nobody can apply and that triggers no protection action is a taxonomy, not a control — and the Verifier's own V4.1/V4.2 checks only label existence, so this gap is invisible to the audit that is supposed to catch it.
+
+- [ ] **Step 1: Write the failing test**
+
+```powershell
+It 'publishes a label policy, not just the labels' {
+    $script = Get-Content 'infra/purview/labels.ps1' -Raw
+    $script | Should -Match 'New-LabelPolicy|Set-LabelPolicy'
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `pwsh -c "Invoke-Pester infra/purview/tests/labels.Tests.ps1"`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement**
+
+Add a publish step to `Invoke-Main` calling `New-LabelPolicy`/`Set-LabelPolicy`, scoped to the demo users' groups `L04.md` already names, idempotent (update-in-place on drift, same shape as `Initialize-SensitivityLabel`). Add a V4.3 criterion to `verification/layer-04-audit.ps1` asserting the policy exists and is scoped as expected. Either author `infra/purview/auto-label-design.md` (referenced by `L04.md` but never created) or remove the reference.
+
+- [ ] **Step 4: Verify**
+
+Run: `pwsh -c "Invoke-Pester infra/purview/ verification/"`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add infra/purview/ verification/layer-04-audit.ps1 compliance/assessment/
+git commit -m "infra(L4): publish the Purview label policy, not just the labels
+
+Closes F18. labels.ps1 created the four-label taxonomy but never
+published a policy scoping it to any user or group, though L04.md
+documented that step as part of the deploy. A label nobody can apply
+enforces nothing, and V4.1/V4.2 checked only label existence — the
+Verifier's own audit could not have caught this."
+```
+
+---
+
+## Task 21: Full-suite verification and register reconciliation
 
 **Files:**
 - Modify: `compliance/assessment/*.json`
@@ -1179,7 +1329,7 @@ Expected: Pester all green, PSSA 0, npm exit 0, pytest 30, every Bicep artifact 
 
 - [ ] **Step 2: Reconcile the register**
 
-Every finding closed in Tasks 3-17 has its assessment record updated with status and the closing commit SHA as evidence. Any finding *not* closed keeps its `GAP` status and gains a note saying why — the register must never overstate.
+Every finding closed in Tasks 3-20 has its assessment record updated with status and the closing commit SHA as evidence. Any finding *not* closed keeps its `GAP` status and gains a note saying why — the register must never overstate.
 
 - [ ] **Step 3: Verify the register agrees with reality**
 
@@ -1208,8 +1358,8 @@ ones keep GAP status with a stated reason."
 
 **Spec coverage.** This plan implements no section of the compliance-platform spec — deliberately. It consumes only §3.2's assessment schema, in Task 1. The platform itself is Plan 2. The one place they touch is the register, which Task 1 produces and Plan 2 renders.
 
-**Findings coverage.** F1→T6, F2→T4+T5, F3→T7, F4→T8, F5→T3, F6→T9, F7→T9, F8→T10, F9→T13, F10→T11, F11→T14, F12→T15, F13→T12, F14→T16, F15→T17. All 15 have a closing task.
+**Findings coverage.** F1→T6, F2→T4+T5, F3→T7, F4→T8, F5→T3, F6→T9, F7→T9, F8→T10, F9→T13, F10→T11, F11→T14, F12→T15, F13→T12, F14→T16, F15→T17, F16→T18, F17→T19, F18→T20. All 18 have a closing task.
 
-**Sequencing rationale.** T3 first — until CI runs the JS tests, no later green is trustworthy. Then the internet-facing endpoints (T4-T7), the only findings an outsider can exploit. Then leakage (T8), identity (T9-T12), observability (T13), and finally the app-layer bugs (T14-T15), which are real but need a click or a prompt injection to reach.
+**Sequencing rationale.** T3 first — until CI runs the JS tests, no later green is trustworthy. Then the internet-facing endpoints (T4-T7), the only findings an outsider can exploit. Then leakage (T8), identity (T9-T12), observability (T13), and finally the app-layer bugs (T14-T15), which are real but need a click or a prompt injection to reach. T16-T17 harden the pipeline's own integrity and cost backstop. T18-T20 (the 800-53/CMMC scrub, Task 2) are placed last among the per-finding tasks: T19 explicitly depends on T13's diagnostic settings landing first (an alert on a signal that does not yet exist is not an alert), and T18/T20 are independent of every other task, so ordering them after the exploitable and identity-layer fixes costs nothing. T21 closes the plan.
 
 **Known deferral.** The Azure SQL `0.0.0.0-0.0.0.0` firewall rule is *not* in this plan. It needs a VNet-integrated workload profile to fix properly, which is a G2 spend decision that needs pricing against the $200 credit. Task 13's SQL auditing makes unauthorised connection attempts visible in the meantime, which is the honest interim. This omission is deliberate and recorded in the register rather than silently dropped.

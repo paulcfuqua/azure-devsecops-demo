@@ -1,0 +1,22 @@
+{
+  "control": "CM-6",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f18"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F18: infra/purview/labels.ps1's Initialize-SensitivityLabel (lines 85-116) calls only New-Label and Set-Label - no New-LabelPolicy, Set-LabelPolicy, or publish/scope cmdlet appears anywhere in the file or its test. docs/runbooks/layers/L04.md:53 documents 'publishes the label policy scoping the labels to the demo users' groups' as a deploy step that runs; it does not exist in code. verification/layer-04-audit.ps1's V4.1/V4.2 criteria (Test-LabelTaxonomy, Test-LabelPersistence) check label existence and GUID survival only - a grep for LabelPolicy in that file returns zero matches, so even the Verifier's independent audit reports L4 healthy while the labels are unpublished. CM-6 is tailored out of NIST SP 800-171, but establishing and enforcing configuration settings - here, the tenant configuration that would actually apply the label taxonomy - is a CMMC-probed 800-53 family. A label with no policy scoping it to any user or group cannot be applied to content and triggers no protection action: it is a taxonomy, not a control."
+  },
+  "recommendation": "Add a New-LabelPolicy/Set-LabelPolicy step to labels.ps1 publishing the four labels to the demo user/group scope L04.md already names. Extend verification/layer-04-audit.ps1 with a V4.3 criterion asserting the policy exists and is scoped as expected. Author infra/purview/auto-label-design.md or drop the L04.md reference to it.",
+  "gapSeverity": "medium",
+  "references": [
+    "infra/purview/labels.ps1:85-116",
+    "docs/runbooks/layers/L04.md:51-54",
+    "verification/layer-04-audit.ps1:65-95",
+    "verification/layer-04-audit.ps1:97-120"
+  ]
+}

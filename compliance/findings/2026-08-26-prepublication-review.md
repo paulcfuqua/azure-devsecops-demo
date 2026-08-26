@@ -6,6 +6,13 @@ acceptance — reproduced where marked, traced end to end where marked, or confi
 direct inspection otherwise. Fifteen findings resulted. This document is the durable
 record of them; before it existed, they lived only in a chat transcript.
 
+**F16–F18 addendum (same day):** a second scrub applied two lenses the 800-171 pass did
+not — the NIST SP 800-53 Rev 5 moderate-baseline families 800-171 tailors *out* (CM-6,
+SI-4, CP-9, IR-4, CP-10) and CMMC 2.0 Level 1's FAR 52.204-21 basic safeguards — against
+four candidates the first pass surfaced but never ran down. Three confirmed as real gaps
+(F16–F18, below); one (`Standard_LRS` on the cost-export storage account) was checked and
+dismissed — see "Deliberately NOT findings."
+
 **Status for every finding below is GAP.** Nothing on this list has been fixed. Each
 finding's `Fix:` describes what closing it requires, not what has been done. The
 per-control assessment records in `compliance/assessment/*.json` cite this document as
@@ -30,6 +37,9 @@ their evidence and carry the same status.
 | [F13](#f13) | Zero workload RBAC expressed in IaC | high | CONFIRMED | 3.1.1, 3.1.2, 3.1.5 | Task 12 |
 | [F14](#f14) | self-heal branch-squatting kill switch + missing ref filter | medium | CONFIRMED | — (availability) | Task 16 |
 | [F15](#f15) | Cost export non-functional | medium | CONFIRMED | — (cost control) | Task 17 |
+| [F16](#f16) | Azure SQL backup posture never decided or verified | medium | CONFIRMED | CP-9 | Task 18 |
+| [F17](#f17) | Zero alert rules or action groups anywhere in the estate | high | CONFIRMED | SI-4, IR-4 | Task 19 |
+| [F18](#f18) | Sensitivity labels published nowhere — a taxonomy, not a control | medium | CONFIRMED | CM-6 | Task 20 |
 
 ---
 
@@ -576,6 +586,141 @@ fall through the gap between the security and compliance framings.
 
 ---
 
+## F16
+
+**Azure SQL backup posture never decided or verified**
+
+- **Severity:** medium
+- **Confidence:** CONFIRMED
+- **Controls:** CP-9 (NIST SP 800-53 Rev 5 — tailored out of 800-171, still probed by
+  CMMC assessors)
+- **Closed by:** Task 18
+- **Status:** GAP
+
+**Where:** `infra/bicep/platform/main.bicep:236-285` (`module sqlServer`), specifically
+the `databases` array at `:264-282`. No `shortTermRetentionPolicy`,
+`longTermRetentionPolicy`, or `requestedBackupStorageRedundancy` property is set on the
+server or the database. `verification/layer-06-audit.ps1` (V6.1–V6.4) checks SKU,
+auto-pause delay, min/max capacity, LAW connectivity and cost-export presence
+field-for-field (`:113-114`), but no criterion anywhere in that file reads backup
+configuration.
+
+**Confirmed absent, not merely undocumented:** grep for
+`shortTermRetention|longTermRetention|requestedBackupStorageRedundancy|backupStorageRedundancy`
+across `infra/` and `verification/` returns zero matches.
+
+**Impact:** Azure SQL always takes automated backups even when a template asks for
+nothing — but the retention window and the backup storage redundancy tier are
+consequently whatever the platform default resolves to on a given deployment day, not a
+decision this repo made, documented, or checks. Every other SQL property that matters to
+the master plan is pinned and audited field-for-field (`sqlAutoPauseDelayMinutes`,
+`sqlMinCapacity`, `sqlMaxCapacity` all have a V6.1 criterion asserting the exact value);
+backup posture is the one property nobody looked at. An adopter who copies this template
+for a system that does hold CUI inherits an undecided retention window and an undecided
+cross-region replication footprint for backup data — the latter would also quietly widen
+the single-region residency boundary the `allowedLocations` policy
+(`infra/bicep/landing-zone/main.bicep:181-211`) otherwise pins for live resources.
+
+**Fix:** set `requestedBackupStorageRedundancy` and a `shortTermRetentionPolicy`
+(retention days) explicitly on the `databases` array entry, matching the redundancy tier
+appropriate to the data classification in play; add a V6.x criterion asserting the values
+so a future change is caught rather than silently defaulted.
+
+---
+
+## F17
+
+**Zero alert rules or action groups anywhere in the estate**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED
+- **Controls:** SI-4, IR-4 (NIST SP 800-53 Rev 5 — both tailored out of 800-171)
+- **Closed by:** Task 19
+- **Status:** GAP
+
+**Verified:** grep for `metricAlerts|scheduledQueryRules|actionGroups|activityLogAlert`
+across every `.bicep`, `.ps1` and `.yml`/`.yaml` file in the repo returns ZERO matches.
+The only `az monitor` invocations anywhere are read-only queries the Verifier runs by
+hand — `az monitor log-analytics query` (`verification/layer-06-audit.ps1:287`,
+`verification/layer-07-audit.ps1:346`) and `az monitor activity-log list`
+(`verification/layer-02-audit.ps1:158`, `verification/layer-09-audit.ps1:302`) — none of
+which creates a standing alert.
+
+**Distinct from F9:** F9 established that almost nothing is logged. This finding is that
+even once F9's fix lands and Key Vault `AuditEvent`, SQL audit, storage logs and CAE
+diagnostics all route to the Log Analytics workspace, nothing is subscribed to any of it.
+No `Microsoft.Insights/metricAlerts` on SQL DTU, storage, or connection-failure metrics;
+no `scheduledQueryRules` against the workspace (a spike in Key Vault `AuditEvent` denials,
+repeated SQL auth failures, unexpected Container Apps restarts); no
+`Microsoft.Insights/actionGroups` to receive any of it. `scripts/bootstrap/03-budget.ps1`
+is the one place any notification exists in the whole system, and F15 already records
+that those notifications are cost-only, email-only and actual-spend-only — this finding
+is the general case: there is no alerting *capability* anywhere, security or operational.
+
+**Impact:** the estate can detect nothing about itself. An operator learns of a
+security-relevant event only by manually running a KQL query that nobody is scheduled to
+run. This collapses the alerting half of SI-4 (system monitoring — alert on indicators of
+compromise) and removes the only automated trigger IR-4's incident-handling capability
+(detection is its first phase) would have to act on. F9's fix, on its own, buys
+visibility only to someone who thinks to go looking; this is the gap that would actually
+close the loop.
+
+**Fix:** at minimum, a `Microsoft.Insights/actionGroups` resource (email or webhook) plus
+a small set of `scheduledQueryRules`/`metricAlerts` against the signals F9 will start
+collecting — Key Vault access-denied spikes, SQL failed-login spikes, Container Apps
+environment health. Route the budget action group F15 adds to the same action group so
+cost and security alerting share one page-out path.
+
+---
+
+## F18
+
+**Sensitivity labels published nowhere — a taxonomy, not a control**
+
+- **Severity:** medium
+- **Confidence:** CONFIRMED
+- **Controls:** CM-6 (NIST SP 800-53 Rev 5 — tailored out of 800-171)
+- **Closed by:** Task 20
+- **Status:** GAP
+
+**Where:** `infra/purview/labels.ps1` — `Initialize-SensitivityLabel` (`:85-116`) calls
+only `New-Label` (`:111`, create path) and `Set-Label` (`:104`, drift-update path);
+`Invoke-Main` (`:118-129`) loops the four-label taxonomy through it and returns. No
+`New-LabelPolicy`, `Set-LabelPolicy`, or any publish/scope cmdlet appears anywhere in the
+134-line file, or in its test file `infra/purview/tests/labels.Tests.ps1`.
+
+**Documented as done, never implemented:** `docs/runbooks/layers/L04.md:53` lists
+"publishes the label policy scoping the labels to the demo users' groups" as the second
+of three things the L4 deploy step does. It does not — the script that bullet describes
+performs only the first (`L04.md:51`, create-if-absent) and third (`:54`, record GUIDs)
+of the three. `L04.md`'s next step also points at `infra/purview/auto-label-design.md`
+for the (separately unimplemented) auto-labeling policy; that file does not exist in the
+repo.
+
+**Also unverified:** `verification/layer-04-audit.ps1`'s `Test-LabelTaxonomy` (V4.1,
+`:65-95`) and `Test-LabelPersistence` (V4.2, `:97-120`) both call `Get-LabelSnapshot` →
+`Get-Label` and compare label existence/GUIDs; grep for `LabelPolicy` in that file returns
+zero matches. So even the Verifier's independent audit — which CLAUDE.md and the brief
+hold up as the substitute for routine human review — reports L4 healthy while the labels
+remain unpublished.
+
+**Impact:** a Purview sensitivity label with no policy scoping it to any user, group, or
+location does not appear in any Office/Purview client, cannot be applied to a document or
+email, and triggers no downstream protection action. The four labels exist as directory
+objects with GUIDs the L4 audit can enumerate, and nothing else. A label that is never
+published to a user enforces nothing — it is a taxonomy, not a control. For a reference
+implementation this is the same shape of gap as F2 (a control that reads as present in
+design and is absent in the shipped artifact) and F13 (grants documented in prose,
+implemented nowhere), here in the data-governance layer instead of the auth layer.
+
+**Fix:** add a `New-LabelPolicy`/`Set-LabelPolicy` step to `labels.ps1` publishing the
+four labels to the demo user/group scope `L04.md` already names; extend
+`verification/layer-04-audit.ps1` with a V4.3 criterion asserting the policy exists and is
+scoped as expected; author `infra/purview/auto-label-design.md` or drop the `L04.md`
+reference to it.
+
+---
+
 ## Deliberately NOT findings — do not report these
 
 - `apps/vuln-lab`'s three seeded CVEs and two CodeQL flaws are intentional fixtures.
@@ -586,6 +731,14 @@ fall through the gap between the security and compliance framings.
   adopter would inherit it, but it is not a defect to fix here.
 - `mcp-tools` `ingressExternal: true` — required; Copilot Studio calls it from the
   internet.
+- `costExportStorage`'s `skuName: 'Standard_LRS'` (`infra/bicep/platform/main.bicep:296`)
+  — checked as a possible CP-9 gap during the F16–F18 scrub and dismissed. The comment on
+  that line already states the rationale ("cheapest redundancy; exports are reproducible
+  data") and it holds: the container holds daily Cost Management exports that Azure will
+  regenerate from the billing system on the next scheduled run or an on-demand re-export.
+  Nothing unique is lost if the account's single-region copy is unavailable, so LRS is the
+  right choice for this specific, reproducible dataset — unlike the Azure SQL database
+  (F16), which holds seeded operational data with no equivalent regeneration path.
 
 ## Deferred — record as an open gap rather than closing
 

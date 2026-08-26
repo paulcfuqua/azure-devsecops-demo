@@ -1,0 +1,23 @@
+{
+  "control": "SI-4",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f17"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F17: a grep for metricAlerts|scheduledQueryRules|actionGroups|activityLogAlert across every .bicep, .ps1 and .yml/.yaml file in the repo returns zero matches. The only az monitor invocations anywhere are read-only queries the Verifier runs by hand (verification/layer-06-audit.ps1:287, layer-07-audit.ps1:346, layer-02-audit.ps1:158, layer-09-audit.ps1:302); none creates a standing alert. SI-4 is tailored out of NIST SP 800-171, but system monitoring for indicators of compromise is exactly what CMMC assessors probe. Distinct from F9 (which established that almost nothing is logged): even once F9's diagnosticSettings land, nothing is subscribed to the resulting telemetry, so the monitoring loop never closes."
+  },
+  "recommendation": "Add a Microsoft.Insights/actionGroups resource (email or webhook) plus a small set of scheduledQueryRules/metricAlerts against the signals F9's diagnosticSettings will start collecting - Key Vault access-denied spikes, SQL failed-login spikes, Container Apps environment health. Route the budget action group F15 adds to the same action group so cost and security alerting share one page-out path.",
+  "gapSeverity": "high",
+  "references": [
+    "verification/layer-06-audit.ps1:287",
+    "verification/layer-07-audit.ps1:346",
+    "verification/layer-02-audit.ps1:158",
+    "verification/layer-09-audit.ps1:302",
+    "scripts/bootstrap/03-budget.ps1"
+  ]
+}
