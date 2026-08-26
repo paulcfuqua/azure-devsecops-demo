@@ -225,7 +225,7 @@ module nist80053r5 'br/public:avm/ptn/authorization/policy-assignment:0.5.3' = i
     enforcementMode: 'DoNotEnforce'
     subscriptionId: demoSubscriptionId
     identity: 'SystemAssigned' // required: the initiative contains DINE/modify members
-    roleDefinitionIds: [contributorRoleId]
+    roleDefinitionIds: [] // No role grants in DoNotEnforce; enabling enforcement later means granting the specific roles the DINE members declare, never Contributor.
     location: location
   }
   dependsOn: [

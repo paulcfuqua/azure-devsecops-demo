@@ -7,12 +7,11 @@
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f7",
       "compliance/findings/2026-08-26-prepublication-review.md#f8",
-      "compliance/findings/2026-08-26-prepublication-review.md#f10",
       "compliance/findings/2026-08-26-prepublication-review.md#f13"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F7: environment:demo federates to the deployer and grants it Owner on the subscription, and the demo environment has no deployment-branch policy, so an Owner-capable OIDC subject is mintable from any ref by anything executing in a verify job. F8: the deployer service principal holds Application.ReadWrite.All when apply-entra.ps1 only creates and updates three apps it owns, so the actual privilege needed is Application.ReadWrite.OwnedBy — a strictly narrower grant. F10: the NIST policy identity holds standing subscription-scoped Contributor it can never exercise because enforcementMode is DoNotEnforce, so remediation never runs and the grant is pure unused risk. F13: privilege across the estate is inverted — Owner and ReadWrite.All exist where automation is fully automated, while seven documented least-privilege workload grants (data-api, mcp-tools, cost-ingest) exist nowhere in code."
+    "rationale": "F7: environment:demo federates to the deployer and grants it Owner on the subscription, and the demo environment has no deployment-branch policy, so an Owner-capable OIDC subject is mintable from any ref by anything executing in a verify job. F8: the deployer service principal holds Application.ReadWrite.All when apply-entra.ps1 only creates and updates three apps it owns, so the actual privilege needed is Application.ReadWrite.OwnedBy — a strictly narrower grant. F13: privilege across the estate is inverted — Owner and ReadWrite.All exist where automation is fully automated, while seven documented least-privilege workload grants (data-api, mcp-tools, cost-ingest) exist nowhere in code."
   },
   "recommendation": "Federate a distinct verify environment to mls-verifier, with deployment-branch policy restricting both demo and verify to main. Swap Application.ReadWrite.All for Application.ReadWrite.OwnedBy on the deployer. Set roleDefinitionIds: [] on the NIST policy identity — the identity still gets created and the assignment still validates. Express the seven documented workload RBAC grants in IaC.",
   "gapSeverity": "high",
