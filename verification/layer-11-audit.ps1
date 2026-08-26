@@ -268,8 +268,8 @@ function Invoke-Main {
     )
     $subscription = Resolve-MlsInput -Name 'SubscriptionId' -Value $SubscriptionId -EnvironmentVariable @('AZURE_SUBSCRIPTION_ID') `
         -Hint 'The demo subscription whose resource groups, capacity, SQL and consumption this proof reads.'
-    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_REPOSITORY') `
-        -DefaultValue 'paulcfuqua/azure-devsecops' -Hint 'V11.4 cross-checks the wall clock against the workflow runs.'
+    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
+        -Hint 'V11.4 cross-checks the wall clock against the workflow runs.'
     $startUtc = $UpStartUtc
     if ([string]::IsNullOrWhiteSpace($startUtc)) { $startUtc = [Environment]::GetEnvironmentVariable('MLS_L11_UP_START') }
     $completedUtc = $UpCompletedUtc
@@ -311,7 +311,7 @@ function Invoke-Main {
     Invoke-MlsCriterion -Context $context -Id 'V11.2' `
         -Description 'Tenant objects intact (L3/L4 audits still pass)' `
         -Command "pwsh verification/layer-03-audit.ps1   # users/groups/CA/app registrations (V3.1-V3.4)`npwsh verification/layer-04-audit.ps1   # labels + GUIDs (V4.1) - this is V4.2's L11 re-execution" `
-        -Expected 'both audits PASS: 5 users, 4 groups, 3 app registrations, CA still enabledForReportingButNotEnforced, licenses Active, 4 labels with unchanged GUIDs' -NoRetry `
+        -Expected 'both audits PASS: 5 users, 4 groups, 3 app registrations, CA still enabledForReportingButNotEnforced, licences Active for every user flagged licensed, 4 labels with unchanged GUIDs' -NoRetry `
         -Test {
         Test-TenantObjectIntact -Root $PSScriptRoot -Argument $childArgument -Checkpoint $Phase -SkipChildAudit:$SkipChildAudit
     } | Out-Null

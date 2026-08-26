@@ -389,8 +389,8 @@ function Invoke-Main {
         [string]$ReportRoot,
         [switch]$NoRetry
     )
-    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_REPOSITORY') `
-        -DefaultValue 'paulcfuqua/azure-devsecops' -Hint 'The public repo the healing trail lives on.'
+    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
+        -Hint 'The public repo the healing trail lives on.'
     Resolve-MlsInput -Name 'GitHubToken' -Value '' -EnvironmentVariable @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN') `
         -Hint "The Verifier's own GitHub read token (spec F8); both criteria are mostly GitHub reads." | Out-Null
 

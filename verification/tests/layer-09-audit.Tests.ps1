@@ -9,7 +9,7 @@ BeforeAll {
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l09-$([guid]::NewGuid().ToString('n'))"
     $script:DownloadRoot = Join-Path -Path $script:ReportRoot -ChildPath 'downloads'
     New-Item -ItemType Directory -Path $script:DownloadRoot -Force | Out-Null
-    $script:Repository = 'paulcfuqua/azure-devsecops'
+    $script:Repository = 'paulcfuqua/azure-devsecops-demo'
     $script:EnvironmentVariable = @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'AZURE_SUBSCRIPTION_ID',
         'MLS_L9_RUN_ID', 'MLS_L9_RELEASE_TAG', 'MLS_L9_ZAP_RUN_ID')
     $script:SavedEnvironment = @{}

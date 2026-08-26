@@ -30,7 +30,7 @@ BeforeAll {
         if ([string]::IsNullOrWhiteSpace($UpStartUtc)) { $UpStartUtc = [datetime]::UtcNow.AddMinutes(-42).ToString('o') }
         Invoke-Main -Phase $Phase -SubscriptionId $SubscriptionId -ResourceGroupPrefix 'mls-rg-' `
             -UpStartUtc $UpStartUtc -UpCompletedUtc $UpCompletedUtc -WallClockBudgetMinutes 60 `
-            -Repository 'paulcfuqua/azure-devsecops' -FabricCapacityId '99999999-9999-9999-9999-999999999999' `
+            -Repository 'paulcfuqua/azure-devsecops-demo' -FabricCapacityId '99999999-9999-9999-9999-999999999999' `
             -SqlDatabaseId '/subscriptions/s/rg/db' -IdleDailyCostBudget 0.17 -ChildAuditLayer @(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) `
             -SkipChildAudit:$SkipChildAudit -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
@@ -223,7 +223,7 @@ Describe 'layer-11-audit' {
 
         It 'fails V11.4 rather than inventing a start time when up.ps1 recorded none' {
             $context = Invoke-Main -Phase 'Up' -SubscriptionId $script:Subscription -ResourceGroupPrefix 'mls-rg-' `
-                -UpStartUtc '' -UpCompletedUtc '' -WallClockBudgetMinutes 60 -Repository 'paulcfuqua/azure-devsecops' `
+                -UpStartUtc '' -UpCompletedUtc '' -WallClockBudgetMinutes 60 -Repository 'paulcfuqua/azure-devsecops-demo' `
                 -ChildAuditLayer @(1) -ReportRoot $script:ReportRoot -NoRetry
             $row = Get-Row -Context $context -Id 'V11.4'
             $row.Status | Should -Be 'FAIL'

@@ -6,6 +6,10 @@ using './main.bicep'
 
 param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus2')
 
+// Owner tag. Neutral fallback so a downstream deployment never inherits the
+// original author's GitHub handle on every resource group (policy-enforced tag).
+param owner = readEnvironmentVariable('MLS_OWNER', 'mls-demo')
+
 // Entra-only SQL authentication — no SQL passwords exist anywhere.
 param sqlAadAdminLogin = readEnvironmentVariable('SQL_AAD_ADMIN_LOGIN', '')
 param sqlAadAdminObjectId = readEnvironmentVariable('SQL_AAD_ADMIN_OBJECT_ID', '')

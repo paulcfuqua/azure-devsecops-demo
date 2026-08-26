@@ -7,7 +7,7 @@
     Creates/updates the GitHub OIDC deployer identity and the read-only verifier identity:
 
       * App registration `mls-github-deployer` with federated identity credentials for
-        repo paulcfuqua/azure-devsecops (subjects: main branch ref + `demo` environment),
+        the repo you pass as -Repository (subjects: main branch ref + `demo` environment),
         its service principal, Owner on the target subscription, and Microsoft Graph
         *application* permissions (User.ReadWrite.All, Group.ReadWrite.All,
         Application.ReadWrite.All, Policy.ReadWrite.ConditionalAccess, Directory.Read.All).
@@ -27,7 +27,7 @@
     the tenant Global Administrator. Agents author this file; they never execute it.
 
 .EXAMPLE
-    ./01-root-oidc.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -WhatIf
+    ./01-root-oidc.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -Repository <owner>/<repo> -WhatIf
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -36,8 +36,14 @@ param(
     [string]$SubscriptionId,
 
     # GitHub repository the federated credentials trust (owner/name).
-    [ValidatePattern('^[\w.-]+/[\w.-]+$')]
-    [string]$Repository = 'paulcfuqua/azure-devsecops',
+    #
+    # NO DEFAULT, deliberately. This value decides which repo is trusted to deploy into
+    # your subscription. A default would mean anyone who clones this public repo and runs
+    # the script without reading it federates their Azure identity to SOMEONE ELSE'S
+    # repository - a silent, and serious, misconfiguration. Falls back to the
+    # MLS_GITHUB_REPO / MLS_REPOSITORY environment variables, then fails with instructions.
+    [ValidatePattern('^$|^[\w.-]+/[\w.-]+$')]
+    [string]$Repository = '',
 
     # GitHub environment name used by deploy jobs.
     [string]$EnvironmentName = 'demo',
@@ -407,7 +413,33 @@ function Invoke-Main {
     }
 }
 
+function Resolve-RepositoryInput {
+    <# -Repository, then MLS_GITHUB_REPO / MLS_REPOSITORY, then a hard stop. Never a
+       built-in default: see the -Repository parameter comment for why guessing here is
+       a security problem rather than a convenience. #>
+    param([AllowEmptyString()][string]$Value)
+    if (-not [string]::IsNullOrWhiteSpace($Value)) { return $Value }
+    foreach ($name in @('MLS_GITHUB_REPO', 'MLS_REPOSITORY')) {
+        $fromEnvironment = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($fromEnvironment)) { return $fromEnvironment }
+    }
+    throw @'
+No GitHub repository was supplied, and this script will not guess one.
+
+The federated credentials it creates decide WHICH REPOSITORY IS TRUSTED to deploy into
+your Azure subscription. Defaulting that to the upstream repo would silently grant a
+repository you do not control the ability to authenticate as your deployer identity.
+
+Pass your own fork/repo explicitly:
+
+    ./01-root-oidc.ps1 -SubscriptionId <sub> -Repository <owner>/<repo>
+
+or set $env:MLS_GITHUB_REPO first.
+'@
+}
+
 if (-not $env:MLS_SKIP_MAIN) {
-    Invoke-Main -SubscriptionId $SubscriptionId -Repository $Repository -EnvironmentName $EnvironmentName `
+    $resolvedRepository = Resolve-RepositoryInput -Value $Repository
+    Invoke-Main -SubscriptionId $SubscriptionId -Repository $resolvedRepository -EnvironmentName $EnvironmentName `
         -DeployerAppName $DeployerAppName -VerifierAppName $VerifierAppName
 }

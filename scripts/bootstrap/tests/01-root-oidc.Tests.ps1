@@ -27,7 +27,7 @@ BeforeAll {
         # never calls ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci fails
         # on any warning. It is still forwarded to Invoke-Main as -WhatIf.
         param([switch]$AsWhatIf)
-        Invoke-Main -SubscriptionId $script:Sub -Repository 'paulcfuqua/azure-devsecops' `
+        Invoke-Main -SubscriptionId $script:Sub -Repository 'paulcfuqua/azure-devsecops-demo' `
             -EnvironmentName 'demo' -DeployerAppName 'mls-github-deployer' -VerifierAppName 'mls-verifier' `
             -WhatIf:$AsWhatIf
     }
@@ -118,8 +118,8 @@ Describe '01-root-oidc' {
             Should -Invoke Invoke-AzCli -Exactly -Times 2 -ParameterFilter {
                 ($Arguments -join ' ') -like 'ad app federated-credential create*'
             }
-            $script:CapturedFedSubjects | Should -Contain 'repo:paulcfuqua/azure-devsecops:ref:refs/heads/main'
-            $script:CapturedFedSubjects | Should -Contain 'repo:paulcfuqua/azure-devsecops:environment:demo'
+            $script:CapturedFedSubjects | Should -Contain 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main'
+            $script:CapturedFedSubjects | Should -Contain 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'
         }
 
         It 'creates a service principal per app' {
@@ -181,8 +181,8 @@ Describe '01-root-oidc' {
             }
             $script:ExistingFedCreds = @{
                 'dep-obj' = @(
-                    [pscustomobject]@{ id = 'fc1'; subject = 'repo:paulcfuqua/azure-devsecops:ref:refs/heads/main'; issuer = 'https://token.actions.githubusercontent.com'; audiences = @('api://AzureADTokenExchange') }
-                    [pscustomobject]@{ id = 'fc2'; subject = 'repo:paulcfuqua/azure-devsecops:environment:demo'; issuer = 'https://token.actions.githubusercontent.com'; audiences = @('api://AzureADTokenExchange') }
+                    [pscustomobject]@{ id = 'fc1'; subject = 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main'; issuer = 'https://token.actions.githubusercontent.com'; audiences = @('api://AzureADTokenExchange') }
+                    [pscustomobject]@{ id = 'fc2'; subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'; issuer = 'https://token.actions.githubusercontent.com'; audiences = @('api://AzureADTokenExchange') }
                 )
             }
             $script:ExistingSps = @{
@@ -251,6 +251,44 @@ Describe '01-root-oidc' {
             Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
                 ($Arguments -join ' ') -match '\b(create|update|delete)\b'
             }
+        }
+    }
+
+    Context 'Resolve-RepositoryInput refuses to guess a repository (public-repo safety, 2026-08-26)' {
+        BeforeEach {
+            $script:SavedRepoEnv = @{}
+            foreach ($name in @('MLS_GITHUB_REPO', 'MLS_REPOSITORY')) {
+                $script:SavedRepoEnv[$name] = [Environment]::GetEnvironmentVariable($name)
+                [Environment]::SetEnvironmentVariable($name, $null)
+            }
+        }
+        AfterEach {
+            foreach ($name in $script:SavedRepoEnv.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $script:SavedRepoEnv[$name])
+            }
+        }
+
+        It 'prefers an explicit value' {
+            Resolve-RepositoryInput -Value 'someone/their-fork' | Should -Be 'someone/their-fork'
+        }
+
+        It 'falls back to MLS_GITHUB_REPO, then MLS_REPOSITORY' {
+            [Environment]::SetEnvironmentVariable('MLS_REPOSITORY', 'from/second')
+            Resolve-RepositoryInput -Value '' | Should -Be 'from/second'
+            [Environment]::SetEnvironmentVariable('MLS_GITHUB_REPO', 'from/first')
+            Resolve-RepositoryInput -Value '' | Should -Be 'from/first'
+        }
+
+        It 'throws rather than defaulting to the upstream repo when nothing is set' {
+            # The whole point: a default here would federate a downstream user's Azure
+            # identity to a repository they do not control.
+            { Resolve-RepositoryInput -Value '' } | Should -Throw
+        }
+
+        It 'never names the upstream repo as a fallback in its error' {
+            $message = try { Resolve-RepositoryInput -Value '' } catch { $_.Exception.Message }
+            $message | Should -Not -BeLike '*paulcfuqua*'
+            $message | Should -BeLike '*-Repository*'
         }
     }
 }

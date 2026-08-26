@@ -11,7 +11,7 @@ BeforeAll {
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'down.ps1')
     Set-StrictMode -Off
 
-    $script:Repo = 'paulcfuqua/azure-devsecops'
+    $script:Repo = 'paulcfuqua/azure-devsecops-demo'
     $script:RealNamingFile = Join-Path -Path $PSScriptRoot -ChildPath '..' `
         -AdditionalChildPath '../infra/bicep/naming.bicep'
     $script:DownScript = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'down.ps1'

@@ -248,8 +248,8 @@ function Invoke-Main {
         [string]$ReportRoot,
         [switch]$NoRetry
     )
-    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_REPOSITORY') `
-        -DefaultValue 'paulcfuqua/azure-devsecops' -Hint 'The repo whose GHAS state and CI artifacts this audit reads.'
+    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
+        -Hint 'The repo whose GHAS state and CI artifacts this audit reads.'
     Resolve-MlsInput -Name 'GitHubToken' -Value '' -EnvironmentVariable @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN') `
         -Hint "The Verifier's own GitHub read token (spec F8) - four of five criteria here are GitHub reads." | Out-Null
     $subscription = Resolve-MlsInput -Name 'SubscriptionId' -Value $SubscriptionId -EnvironmentVariable @('AZURE_SUBSCRIPTION_ID') `

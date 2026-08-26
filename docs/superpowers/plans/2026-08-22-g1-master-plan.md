@@ -61,7 +61,7 @@ showpiece #3, Trivy, ZAP, Syft/sbom-tool, OpenTelemetry.
 ## Repo structure (approved shape — monorepo, pending G1 Q1)
 
 ```
-azure-devsecops/
+azure-devsecops-demo/
 ├── CLAUDE.md                      # working agreements (all agents load this)
 ├── README.md
 ├── .claude/

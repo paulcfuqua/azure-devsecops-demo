@@ -29,7 +29,7 @@ BeforeAll {
     function Invoke-AuditForTest {
         param([switch]$NoRetry, [string]$ManifestPath = $script:ManifestPath, [string]$CanaryPrNumber = '77')
         Invoke-Main -AppName $script:App -DeployManifestPath $ManifestPath -LogAnalyticsWorkspaceId 'law-customer-guid' `
-            -Repository 'paulcfuqua/azure-devsecops' -CanaryPrNumber $CanaryPrNumber -LoadRequestCount 2 `
+            -Repository 'paulcfuqua/azure-devsecops-demo' -CanaryPrNumber $CanaryPrNumber -LoadRequestCount 2 `
             -ScaleInWaitMinutes 15 -ScaleInDeadlineMinutes 30 -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
 }

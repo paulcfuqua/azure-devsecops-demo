@@ -159,7 +159,7 @@ const CODE_SCANNING = [{ number: 12, state: "open", rule: { id: "js/sql-injectio
 
 function github(mock: MockFetch): LiveGithubSecurityBackend {
   return new LiveGithubSecurityBackend({
-    repo: "paulcfuqua/azure-devsecops",
+    repo: "paulcfuqua/azure-devsecops-demo",
     token: "ghp_0123456789abcdefghijABCDEFGHIJ",
     fetchImpl: mock.fetch,
     sleep: noSleep,
@@ -212,7 +212,7 @@ describe("get_github_security — GitHub Advanced Security REST", () => {
         status: 200,
         body: [DEPENDABOT[0]],
         headers: {
-          link: '<https://api.github.com/repos/paulcfuqua/azure-devsecops/dependabot/alerts?page=2>; rel="next"',
+          link: '<https://api.github.com/repos/paulcfuqua/azure-devsecops-demo/dependabot/alerts?page=2>; rel="next"',
         },
       })
       .on((url) => url.includes("dependabot") && url.includes("page=2"), {

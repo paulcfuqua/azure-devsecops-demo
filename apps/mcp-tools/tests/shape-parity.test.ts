@@ -192,7 +192,7 @@ describe("get_github_security — fixture vs GitHub REST", () => {
       .on(/dependabot\/alerts/, { status: 200, body: fixture.dependabot_alerts })
       .on(/code-scanning\/alerts/, { status: 200, body: fixture.code_scanning_alerts });
     const cloud = await new LiveGithubSecurityBackend({
-      repo: "paulcfuqua/azure-devsecops",
+      repo: "paulcfuqua/azure-devsecops-demo",
       token: "ghp_0123456789abcdefghijABCDEFGHIJ",
       fetchImpl: mock.fetch,
       sleep: noSleep,
@@ -210,7 +210,7 @@ describe("get_github_security — fixture vs GitHub REST", () => {
       body: fixture.dependabot_alerts,
     });
     const cloud = await new LiveGithubSecurityBackend({
-      repo: "paulcfuqua/azure-devsecops",
+      repo: "paulcfuqua/azure-devsecops-demo",
       token: "ghp_0123456789abcdefghijABCDEFGHIJ",
       fetchImpl: mock.fetch,
       sleep: noSleep,

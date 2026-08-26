@@ -60,7 +60,7 @@ const CLOUD_ENV = {
   MLS_SQL_DATABASE: "mls_ops",
   MLS_FABRIC_SQL_ENDPOINT: "abc123.datawarehouse.fabric.microsoft.com",
   MLS_FABRIC_DATABASE: "mls_operations",
-  MLS_GITHUB_REPO: "paulcfuqua/azure-devsecops",
+  MLS_GITHUB_REPO: "paulcfuqua/azure-devsecops-demo",
   MLS_GITHUB_TOKEN: "ghp_testtokentesttokentesttoken0123",
   MLS_DEFENDER_SUBSCRIPTION_ID: "11111111-2222-3333-4444-555555555555",
   MLS_LOG_ANALYTICS_WORKSPACE_ID: "66666666-7777-8888-9999-000000000000",
@@ -507,7 +507,7 @@ describe("CloudFeedsBackend", () => {
 
     const feed = await backend.getFeed("workflow-runs");
     expect(calls[0]?.url).toBe(
-      "https://api.github.com/repos/paulcfuqua/azure-devsecops/actions/runs?per_page=100",
+      "https://api.github.com/repos/paulcfuqua/azure-devsecops-demo/actions/runs?per_page=100",
     );
     expect(calls[0]?.headers.authorization).toBe(`Bearer ${CLOUD_ENV.MLS_GITHUB_TOKEN}`);
     expect(calls[0]?.headers["x-github-api-version"]).toBe("2022-11-28");
@@ -555,8 +555,8 @@ describe("CloudFeedsBackend", () => {
     await backend.getFeed("code-scanning-alerts");
     await backend.getFeed("dependabot-alerts");
     expect(calls.map((call) => call.url)).toEqual([
-      "https://api.github.com/repos/paulcfuqua/azure-devsecops/code-scanning/alerts?state=open&per_page=100",
-      "https://api.github.com/repos/paulcfuqua/azure-devsecops/dependabot/alerts?state=open&per_page=100",
+      "https://api.github.com/repos/paulcfuqua/azure-devsecops-demo/code-scanning/alerts?state=open&per_page=100",
+      "https://api.github.com/repos/paulcfuqua/azure-devsecops-demo/dependabot/alerts?state=open&per_page=100",
     ]);
   });
 
@@ -874,7 +874,7 @@ describe("backend selection", () => {
     expect(backends.describe()).toMatchObject({
       sql: "mls-ops-demo-sql.database.windows.net/mls_ops",
       lakehouse: "abc123.datawarehouse.fabric.microsoft.com/mls_operations",
-      github: "paulcfuqua/azure-devsecops",
+      github: "paulcfuqua/azure-devsecops-demo",
       githubAuth: "token present",
     });
     // No identifiers that should not be published on a health endpoint.

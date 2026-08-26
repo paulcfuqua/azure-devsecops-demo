@@ -8,7 +8,7 @@ BeforeAll {
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'up.ps1')
     Set-StrictMode -Off
 
-    $script:Repo = 'paulcfuqua/azure-devsecops'
+    $script:Repo = 'paulcfuqua/azure-devsecops-demo'
 
     # Every test writes its up-clock record here, never into the real
     # verification/reports/: a unit test must not leave evidence behind that

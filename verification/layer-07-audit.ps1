@@ -303,8 +303,8 @@ function Invoke-Main {
         [switch]$NoRetry
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
-    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_REPOSITORY') `
-        -DefaultValue 'paulcfuqua/azure-devsecops' -Hint 'The repo whose per-app CI V7.4 reads.'
+    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
+        -Hint 'The repo whose per-app CI V7.4 reads.'
 
     $manifestPath = $DeployManifestPath
     if ([string]::IsNullOrWhiteSpace($manifestPath)) { $manifestPath = [Environment]::GetEnvironmentVariable('MLS_L7_MANIFEST') }

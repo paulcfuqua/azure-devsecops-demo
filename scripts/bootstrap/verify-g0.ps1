@@ -35,8 +35,10 @@ param(
 
     [string]$DeployerAppName = 'mls-github-deployer',
     [string]$VerifierAppName = 'mls-verifier',
-    [ValidatePattern('^[\w.-]+/[\w.-]+$')]
-    [string]$Repository = 'paulcfuqua/azure-devsecops',
+    # No default: this audit must check the repo YOU federated, not the upstream one.
+    # Falls back to MLS_GITHUB_REPO / MLS_REPOSITORY, then fails with instructions.
+    [ValidatePattern('^$|^[\w.-]+/[\w.-]+$')]
+    [string]$Repository = '',
     [string]$EnvironmentName = 'demo',
     [string]$BudgetName = 'mls-monthly-budget',
     [int]$BudgetAmount = 75
@@ -309,9 +311,23 @@ function Get-FailCount {
     return @($Results | Where-Object { $_.Status -eq 'FAIL' }).Count
 }
 
+function Resolve-RepositoryInput {
+    <# -Repository, then MLS_GITHUB_REPO / MLS_REPOSITORY, then a hard stop. Checking the
+       upstream repo's federation state instead of your own would report a confident,
+       meaningless PASS. #>
+    param([AllowEmptyString()][string]$Value)
+    if (-not [string]::IsNullOrWhiteSpace($Value)) { return $Value }
+    foreach ($name in @('MLS_GITHUB_REPO', 'MLS_REPOSITORY')) {
+        $fromEnvironment = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($fromEnvironment)) { return $fromEnvironment }
+    }
+    throw "No GitHub repository was supplied. Pass -Repository <owner>/<repo> (the repo you federated in 01-root-oidc.ps1) or set `$env:MLS_GITHUB_REPO. This script will not guess: auditing a repository you do not control would report a meaningless PASS."
+}
+
 if (-not $env:MLS_SKIP_MAIN) {
+    $resolvedRepository = Resolve-RepositoryInput -Value $Repository
     $results = Invoke-Main -SubscriptionId $SubscriptionId -DeployerAppName $DeployerAppName `
-        -VerifierAppName $VerifierAppName -Repository $Repository -EnvironmentName $EnvironmentName `
+        -VerifierAppName $VerifierAppName -Repository $resolvedRepository -EnvironmentName $EnvironmentName `
         -BudgetName $BudgetName -BudgetAmount $BudgetAmount
     $results | Format-Table -AutoSize -Wrap | Out-Host
     $failCount = Get-FailCount -Results $results

@@ -7,7 +7,7 @@ BeforeAll {
     Set-StrictMode -Off
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l10-$([guid]::NewGuid().ToString('n'))"
-    $script:Repository = 'paulcfuqua/azure-devsecops'
+    $script:Repository = 'paulcfuqua/azure-devsecops-demo'
     $script:Automation = 'github-actions[bot]'
     $script:EnvironmentVariable = @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'MLS_L10_CODEQL_ALERT',
         'MLS_L10_AUTOFIX_PR', 'MLS_L10_DEPENDABOT_ALERTS', 'MLS_L10_RESEED_MERGED_AT')

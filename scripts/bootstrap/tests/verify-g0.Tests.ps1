@@ -23,7 +23,7 @@ BeforeAll {
 
     function Invoke-VerifyForTest {
         Invoke-Main -SubscriptionId $script:Sub -DeployerAppName 'mls-github-deployer' `
-            -VerifierAppName 'mls-verifier' -Repository 'paulcfuqua/azure-devsecops' `
+            -VerifierAppName 'mls-verifier' -Repository 'paulcfuqua/azure-devsecops-demo' `
             -EnvironmentName 'demo' -BudgetName 'mls-monthly-budget' -BudgetAmount 75
     }
 
@@ -50,8 +50,8 @@ Describe 'verify-g0' {
             'mls-verifier'        = @([pscustomobject]@{ id = 'ver-obj'; appId = 'ver-app'; displayName = 'mls-verifier' })
         }
         $script:FedCreds = @(
-            [pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops:ref:refs/heads/main' }
-            [pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops:environment:demo' }
+            [pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main' }
+            [pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo' }
         )
         $script:Sps = @{ 'dep-app' = @([pscustomobject]@{ id = 'sp-dep' }) }
         $script:RoleAssignments = @([pscustomobject]@{ id = 'ra1' })
@@ -135,7 +135,7 @@ Describe 'verify-g0' {
         }
 
         It 'flags a missing federation subject' {
-            $script:FedCreds = @([pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops:ref:refs/heads/main' })
+            $script:FedCreds = @([pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main' })
             $results = Invoke-VerifyForTest
             $row = Get-Row $results 'Federation'
             $row.Status | Should -Be 'FAIL'

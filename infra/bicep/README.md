@@ -199,7 +199,7 @@ reversible by changing one parameter or one line of `naming.bicep`.
 **Registry**
 
 - **[derived] GHCR as the container registry.** Images come from the public path
-  `ghcr.io/paulcfuqua/azure-devsecops/<app>:<tag>`. GHCR is **free on public repos** with
+  `ghcr.io/paulcfuqua/azure-devsecops-demo/<app>:<tag>`. GHCR is **free on public repos** with
   anonymous pull, so the estate needs **no ACR resource and no registry credentials** —
   it removes a billed resource from the idle run-rate and a secret from the system. Image
   references are parameters; the placeholder default is

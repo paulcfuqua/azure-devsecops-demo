@@ -83,7 +83,7 @@ both apps against generated data; a real local MCP handshake
 **Deferred validation:** the Copilot Studio agent itself — cloud-only, see P-8.
 
 ### Track G — GitHub + CI (maps to L1, L9) — live on GitHub, no Azure
-Create public monorepo `paulcfuqua/azure-devsecops`, push, branch protection, secret
+Create public monorepo `paulcfuqua/azure-devsecops-demo`, push, branch protection, secret
 scanning + push protection, Dependabot config, CodeQL workflow, path-filtered app CI
 (build/test/scan jobs live now; deploy jobs guarded behind the existence of the `demo`
 environment variables so they no-op until G0). **Validate:** actionlint clean; Actions

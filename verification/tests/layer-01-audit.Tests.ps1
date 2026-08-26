@@ -7,7 +7,7 @@ BeforeAll {
     Set-StrictMode -Off
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l01-$([guid]::NewGuid().ToString('n'))"
-    $script:Repository = 'paulcfuqua/azure-devsecops'
+    $script:Repository = 'paulcfuqua/azure-devsecops-demo'
     $script:TokenVariable = @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
     $script:IdentityVariable = @('AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID', 'FABRIC_CAPACITY_ID')
     $script:SavedEnvironment = @{}
@@ -50,7 +50,7 @@ Describe 'layer-01-audit' {
         $script:JobConclusion = 'success'
         $script:SecretScanning = 'enabled'
         $script:PushProtection = 'enabled'
-        $script:Subject = 'repo:paulcfuqua/azure-devsecops:environment:demo'
+        $script:Subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'
         $script:Issuer = 'https://token.actions.githubusercontent.com'
 
         Mock Invoke-MlsGh {
@@ -110,9 +110,9 @@ Describe 'layer-01-audit' {
 
         It 'records the exact query it ran and the expectation for each criterion' {
             $context = Invoke-AuditForTest
-            (Get-Row -Context $context -Id 'V1.2').Command | Should -BeLike '*gh api repos/paulcfuqua/azure-devsecops*'
+            (Get-Row -Context $context -Id 'V1.2').Command | Should -BeLike '*gh api repos/paulcfuqua/azure-devsecops-demo*'
             (Get-Row -Context $context -Id 'V1.2').Expected | Should -Be '{"ss":"enabled","pp":"enabled"}'
-            (Get-Row -Context $context -Id 'V1.4').Expected | Should -BeLike '*repo:paulcfuqua/azure-devsecops:environment:demo*'
+            (Get-Row -Context $context -Id 'V1.4').Expected | Should -BeLike '*repo:paulcfuqua/azure-devsecops-demo:environment:demo*'
         }
     }
 
@@ -127,7 +127,7 @@ Describe 'layer-01-audit' {
         }
 
         It 'fails V1.4 when the federated subject is a branch wildcard instead of the environment binding' {
-            $script:Subject = 'repo:paulcfuqua/azure-devsecops:ref:refs/heads/*'
+            $script:Subject = 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/*'
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V1.4'
             $row.Status | Should -Be 'FAIL'

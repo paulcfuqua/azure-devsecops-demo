@@ -28,8 +28,8 @@ var defaultEnv = 'demo'
 var defaultCostCenter = 'demo'
 
 @export()
-@description('[derived] Default value for the owner tag — the repo owner GitHub handle.')
-var defaultOwner = 'paulcfuqua'
+@description('[derived] Fallback value for the owner tag. Deliberately NOT a personal GitHub handle: this is a public reference repo, and a hardcoded handle would tag every resource group of every downstream user with the original author\'s identity. Override per deployment with the MLS_OWNER environment variable, which both demo.bicepparam files read into the owner param.')
+var defaultOwner = 'mls-demo'
 
 @export()
 @description('[derived] Default value for the dataClassification tag; synthetic data only.')

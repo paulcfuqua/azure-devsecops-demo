@@ -24,7 +24,7 @@
     # AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, FABRIC_CAPACITY_ID
 
 .EXAMPLE
-    ./layer-01-audit.ps1 -Repository paulcfuqua/azure-devsecops -NoRetry
+    ./layer-01-audit.ps1 -Repository paulcfuqua/azure-devsecops-demo -NoRetry
 #>
 [CmdletBinding()]
 param(
@@ -197,8 +197,8 @@ function Invoke-Main {
         [string]$ReportRoot,
         [switch]$NoRetry
     )
-    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_REPOSITORY') `
-        -DefaultValue 'paulcfuqua/azure-devsecops' -Hint 'The public monorepo the L1 control plane lives in.'
+    $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
+        -Hint 'The public monorepo the L1 control plane lives in.'
     $githubToken = Resolve-MlsInput -Name 'GitHubToken' -Value '' -EnvironmentVariable @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN') `
         -Hint "The Verifier's own GitHub read token (spec F8); the audit must never run in the deployer's context."
     $root = Resolve-MlsInput -Name 'RepoRoot' -Value $RepoRoot -EnvironmentVariable @('MLS_REPO_ROOT') `

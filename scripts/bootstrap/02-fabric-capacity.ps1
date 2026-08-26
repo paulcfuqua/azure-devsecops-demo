@@ -41,6 +41,11 @@ param(
 
     [string]$Location = 'eastus2',
 
+    # Value of the policy-enforced `owner` tag. Neutral fallback on purpose: this is a
+    # public reference repo, and a hardcoded personal handle would tag every downstream
+    # user's capacity with the original author's identity.
+    [string]$Owner = '',
+
     # Capacity administrator UPN(s); required for -Mode F2.
     [string[]]$AdminUpn = @(),
 
@@ -48,6 +53,10 @@ param(
 )
 
 Set-StrictMode -Version Latest
+
+$script:OwnerTag = if (-not [string]::IsNullOrWhiteSpace($Owner)) { $Owner }
+elseif (-not [string]::IsNullOrWhiteSpace($env:MLS_OWNER)) { $env:MLS_OWNER }
+else { 'mls-demo' }
 $ErrorActionPreference = 'Stop'
 
 $script:FabricApiVersion = '2023-11-01'
@@ -169,7 +178,7 @@ function New-FabricCapacityResource {
             env                = 'demo'
             app                = 'fabric'
             costCenter         = 'demo'
-            owner              = 'paulcfuqua'
+            owner              = $script:OwnerTag
             dataClassification = 'internal'
             managedBy          = 'iac'
         }

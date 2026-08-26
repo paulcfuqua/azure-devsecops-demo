@@ -128,7 +128,7 @@ MLS_TOOL_BACKENDS=cloud
 MLS_FABRIC_SQL_ENDPOINT=<guid>.datawarehouse.fabric.microsoft.com
 MLS_FABRIC_DATABASE=mls_operations
 MLS_LOG_ANALYTICS_WORKSPACE_ID=<workspace GUID>
-MLS_GITHUB_REPO=paulcfuqua/azure-devsecops
+MLS_GITHUB_REPO=paulcfuqua/azure-devsecops-demo
 GITHUB_TOKEN=<security_events scope>          # or MLS_GITHUB_TOKEN
 AZURE_SUBSCRIPTION_ID=<subscription>
 # optional
