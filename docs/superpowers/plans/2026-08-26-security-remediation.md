@@ -1512,6 +1512,20 @@ Steps: write the failing test asserting a post-L7 SQL seed invocation exists; ru
 
 ---
 
+## Task 24: Smoke-test the container images in CI (F22)
+
+**Files:** Modify `.github/workflows/app-{control-tower,launch-ops,data-api,mcp-tools}-ci.yml`
+
+App CI runs `docker build` and Trivy-scans the result, but **never starts the container**. Nothing curls `/healthz` before merge; the only runtime check is `verification/layer-07-audit.ps1`, which runs post-deployment against live Azure.
+
+That matters because Task 14 hardened both frontend images to run as `USER nginx`, and the failure mode is silent rather than loud: a non-writable `/etc/nginx/conf.d` makes the entrypoint skip templating and serve the **stock nginx welcome page**, which answers 200 to a naive health check while serving none of the app. Same class as F5 — a CI gap that means something is never actually exercised.
+
+Add a step after the image build: `docker run -d` the built image, poll `/healthz` until ready or timeout, assert the response is the app's own payload (not the stock nginx page — check for a field only the app emits), then stop the container. Keep it in the job that already holds the image, and do **not** put it in a job holding `id-token: write` or `packages: write` (the split established in earlier tasks).
+
+Steps: write the failing assertion first (a workflow-shape test in `verification/tests/`, since the runtime check cannot execute locally); implement; run `actionlint`; update the register and close F22; commit `ci: smoke-test container images before merge`.
+
+---
+
 ## Task 23: Full-suite verification and register reconciliation
 
 **Files:**
