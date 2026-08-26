@@ -10,15 +10,18 @@
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F2: the MCP auth gate used to throw only in backendMode 'cloud' and MLS_TOOL_BACKENDS is never set, so tool calls were accepted from callers whose identity was never established. Task 4 closed the application half: loadInboundAuth no longer keys enforcement off backendMode, so a caller must now present a credential by default in every mode, including the local mode that actually ships. F2 itself is NOT closed — the deployed token is still not resolved from Key Vault and MLS_TOOL_BACKENDS is still unset in infra/ and CI, so the identity that IS established today is only ever the single shared static token, not yet a managed one; Task 5 is pending. F3: the Direct Line token endpoint mints tokens — which carry the MCP credential — to any caller whenever DIRECTLINE_ALLOWED_ORIGINS is unset or the Origin header is absent, with no boot-time check that the variable is even configured, so no process or device identification occurs before a usable credential is issued."
+    "rationale": "F2: the MCP auth gate used to throw only in backendMode 'cloud' and MLS_TOOL_BACKENDS is never set, so tool calls were accepted from callers whose identity was never established. F2 is now CLOSED (Tasks 4 and 5). Task 4 closed the application half: loadInboundAuth no longer keys enforcement off backendMode, so a caller must now present a credential by default in every mode, including the local mode that actually ships. Task 5 closed the infra half: the deployed token is now resolved from Key Vault via keyVaultUrl + the mcp-tools UAMI's Key Vault Secrets User grant (infra/bicep/apps/main.bicep, module mcpKvGrant) rather than a `@secure()` Bicep parameter, and MLS_TOOL_BACKENDS is set explicitly via mcpToolsBackendMode (default 'local') so the identity that must present a credential is no longer contingent on infra/ or CI ever having wired the value through — the container app resolves its own secret at runtime under its own managed identity. F3: the Direct Line token endpoint mints tokens — which carry the MCP credential — to any caller whenever DIRECTLINE_ALLOWED_ORIGINS is unset or the Origin header is absent, with no boot-time check that the variable is even configured, so no process or device identification occurs before a usable credential is issued. F3 is NOT closed; it is Task 7, pending. Overall status stays GAP because of F3 alone: F2's contribution to this control is fully remediated, but F3 independently issues MCP-capable credentials to unidentified callers through a different code path (apps/directline-token), regardless of F2's status."
   },
-  "recommendation": "Invert the MCP auth gate default to enforced-unless-explicitly-opted-out and resolve the token via Key Vault + UAMI. Make the Direct Line token endpoint refuse (500) when DIRECTLINE_ALLOWED_ORIGINS is unset and refuse (403) when Origin is absent, so a caller's identity is established before any credential is issued.",
-  "gapSeverity": "critical",
+  "recommendation": "Make the Direct Line token endpoint refuse (500) when DIRECTLINE_ALLOWED_ORIGINS is unset and refuse (403) when Origin is absent, so a caller's identity is established before any credential is issued. (The MCP auth gate default and Key Vault token resolution recommended here previously are DONE — Tasks 4 and 5.)",
+  "gapSeverity": "high",
   "references": [
     "apps/mcp-tools/src/auth-gate.ts:126-155",
     "apps/mcp-tools/src/app.ts:49-58",
     "apps/mcp-tools/src/config.ts:156",
     "apps/directline-token/src/functions/directline-token.mjs:60-67",
-    "apps/directline-token/src/functions/directline-token.mjs:94-99"
+    "apps/directline-token/src/functions/directline-token.mjs:94-99",
+    "infra/bicep/apps/main.bicep:364",
+    "infra/bicep/apps/main.bicep:537-541",
+    "infra/bicep/apps/modules/key-vault-secrets-user-role.bicep"
   ]
 }

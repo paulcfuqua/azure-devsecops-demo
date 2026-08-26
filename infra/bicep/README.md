@@ -21,7 +21,7 @@ infra/bicep/
     ├── main.bicep
     ├── demo.bicepparam
     └── modules/
-        └── key-vault-secrets-user-role.bicep   # retained, currently UNREFERENCED
+        └── key-vault-secrets-user-role.bicep   # referenced by main.bicep (mcpKvGrant) — see below
 ```
 
 > **Copilot Studio amendment (2026-08-24).** The `copilot-svc` container app is now the
@@ -87,14 +87,17 @@ creation), then:
 Nothing here bills while idle beyond SQL storage + LAW retention, which is exactly the
 master plan's built-but-parked envelope (< $15/month).
 
-**Key Vault after the amendment.** The vault is still created, but it now has **zero
-secret consumers**: `anthropic-api-key` was its only intended tenant, and the app that
-read it is now an MCP server authenticating with a managed identity. Bicep never held the
-value, so nothing is deleted here — only the comments and the `keyVaultUri` output
-description changed. The vault is kept deliberately: it costs ~$0 empty, the Direct Line
-channel key (a new G0 item) is the obvious next occupant, and destroying/recreating a
-soft-deleted vault name is precisely the rebuild hazard `KEY_VAULT_CREATE_MODE=recover`
-exists to absorb. Whether the Direct Line key is vaulted at all is a sponsor decision.
+**Key Vault after the amendment.** The vault is still created, and at the amendment itself
+it dropped to **zero secret consumers**: `anthropic-api-key` was its only intended tenant,
+and the app that read it is now an MCP server authenticating with a managed identity.
+Bicep never held the value, so nothing was deleted at L6 — only the comments and the
+`keyVaultUri` output description changed. That zero-consumer state did not last: Task 5
+(2026-08-26, closing finding F2's infra half) gave the vault a new tenant, `mcp-auth-token`
+— the MCP server's inbound auth token — read by `apps/main.bicep` via `keyVaultUrl` and the
+mcp-tools UAMI (see the L7 section below). The Direct Line channel key (a G0 item) is
+expected to be the vault's second occupant; destroying/recreating a soft-deleted vault name
+is precisely the rebuild hazard `KEY_VAULT_CREATE_MODE=recover` exists to absorb. Whether
+the Direct Line key is vaulted at all is a sponsor decision.
 
 ### L7 — apps (`apps/main.bicep`)
 
@@ -117,10 +120,20 @@ defaulted to `true`: an internal-only MCP server is not a supported state of thi
 so it should not be expressible. `ingressAllowInsecure` stays `false`, so only the
 TLS-terminated `https://` listener exists.
 
-**No secret reference.** The `anthropic-api-key` Key Vault secret, the app's
-`ANTHROPIC_API_KEY` environment variable, and the **Key Vault Secrets User** grant that
-made the reference resolvable are all deleted. The amendment turns "no stored secrets in
-CI" from a documented exception into an absolute, and there is nothing left to read.
+**No `ANTHROPIC_API_KEY` secret reference — a DIFFERENT one now exists.** The
+`anthropic-api-key` Key Vault secret, the app's `ANTHROPIC_API_KEY` environment variable,
+and the **Key Vault Secrets User** grant that made that reference resolvable are all
+still deleted; the amendment turned "no stored secrets in CI" from a documented exception
+into an absolute for that credential specifically. But mcp-tools' external ingress needed
+an inbound auth token of its own (finding F2, `compliance/findings/2026-08-26-
+prepublication-review.md#f2`), and Task 5 (2026-08-26) closed that finding's infra half by
+adding it back as a Key Vault reference — `mcp-auth-token`, read via `keyVaultUrl` +
+`identity` (not a `value`) so the token never crosses into this template, the parameter
+file, ARM deployment history, or a `what-if` log. The **Key Vault Secrets User** grant is
+therefore back too, scoped to this app's UAMI on the vault (module `mcpKvGrant` in
+`apps/main.bicep`, using `apps/modules/key-vault-secrets-user-role.bicep` — no longer
+unreferenced). CI still never sees the token: the layer-07 workflow does not read or
+export it, and the container app resolves it directly at runtime.
 
 **The user-assigned identity is kept** (`mls-mcp-demo-id`), on a new justification —
 the old one ("the grant must exist before the app provisions, because the app resolves a
@@ -175,18 +188,19 @@ Only three, each because **no AVM module covers the case**:
    management-group AVM module creates the group but does not move subscriptions into
    it, and no separate AVM module exists for the association.
 2. **`Microsoft.Authorization/roleAssignments` scoped to an existing Key Vault**
-   (`apps/modules/key-vault-secrets-user-role.bicep`) — **currently unreferenced.** It
-   existed solely to let the copilot app read `anthropic-api-key`, and went with the
-   secret at the 2026-08-24 amendment. The file is kept rather than deleted because the
-   amendment introduces a **Direct Line channel key** as a new G0 item for the embedded
-   control-tower surface; that is the next credential this estate will hold, Key Vault is
-   where it belongs, and this module is exactly the shape needed to grant access to it.
-   If the sponsor decides the Direct Line key will not be vaulted, delete the file and
-   this entry together. The original rationale still holds whenever it returns: AVM
-   embeds `roleAssignments` *inside* each resource module, which cannot work here — the
-   vault is deployed at L6, long before the L7 identity exists, and
-   `avm/ptn/authorization/role-assignment` targets MG/subscription/RG scope, not a single
-   resource.
+   (`apps/modules/key-vault-secrets-user-role.bicep`) — **referenced again, as of Task 5
+   (2026-08-26).** It originally existed solely to let the copilot app read
+   `anthropic-api-key`, and went unreferenced with that app and secret at the 2026-08-24
+   amendment. It is referenced again from `apps/main.bicep` (module `mcpKvGrant`), now
+   granting the **mcp-tools** UAMI access to a different secret — `mcp-auth-token`, the
+   MCP server's inbound auth token, closing finding F2's infra half
+   (`compliance/findings/2026-08-26-prepublication-review.md#f2`). The **Direct Line
+   channel key** the previous note anticipated is still a separate, undecided G0 item —
+   whether it uses this same module or a dedicated grant is unresolved and does not block
+   what is here now. The module's own rationale is unchanged: AVM embeds `roleAssignments`
+   *inside* each resource module, which cannot work here — the vault is deployed at L6,
+   long before the L7 identity exists, and `avm/ptn/authorization/role-assignment` targets
+   MG/subscription/RG scope, not a single resource.
 3. **`Microsoft.Insights/components` (`existing`)** (`apps/main.bicep`) — an
    `existing` reference to read the L6 App Insights connection string, not a deployment.
    AVM modules deploy resources; they cannot express an `existing` lookup.

@@ -60,15 +60,55 @@
 //    five Ops/Sec/Cost tool implementations over Streamable HTTP; the LLM loop
 //    now lives in a Copilot Studio agent (infra/copilot-studio/).
 //  * The Key Vault `anthropic-api-key` secret reference and the app's
-//    Key Vault Secrets User grant are GONE. No Anthropic key exists anywhere in
-//    the system, so the whole secret-consuming path is deleted rather than
-//    repointed (amendment section 3, "Discarded").
+//    Key Vault Secrets User grant were deleted here. No Anthropic key exists
+//    anywhere in the system, so that secret-consuming path was removed rather
+//    than repointed (amendment section 3, "Discarded"). A DIFFERENT Key Vault
+//    reference and grant were added back at Task 5 (2026-08-26), for an
+//    unrelated secret — see "MCP INBOUND AUTH TOKEN" below. Nothing about the
+//    Anthropic removal reverses here.
 //  * Ingress is **external + HTTPS-only, unconditionally**. Copilot Studio is a
 //    SaaS caller outside the Container Apps environment: it must resolve and
 //    reach the public FQDN, so the old `copilotExternalIngress` toggle is not a
 //    choice any more and has been removed rather than defaulted to true.
 //  * The **user-assigned identity survives** (renamed mls-mcp-demo-id) and is
 //    justified below.
+// ---------------------------------------------------------------------------
+//
+// ---------------------------------------------------------------------------
+// MCP INBOUND AUTH TOKEN (Task 5, 2026-08-26 — closes finding F2's infra half)
+//
+// F2 (compliance/findings/2026-08-26-prepublication-review.md#f2): Task 4 made
+// apps/mcp-tools fail closed at boot without MCP_AUTH_TOKEN, but nothing ever
+// supplied one. The prior secret param was marked secure, defaulting to empty,
+// but crossed a module boundary into the AVM container-app module's nested
+// deployment, whose own `secrets` parameter is a plain `array` — not secure.
+// That risked the token landing in ARM deployment history, readable
+// by anything holding Reader on the resource group (mls-verifier holds
+// exactly that), and `az deployment group what-if` renders parameter values
+// into the workflow log of what is a PUBLIC repository, where GitHub cannot
+// mask it because it was never a GitHub secret.
+//
+// The fix does not route the token through this template at all. mcpToolsApp's
+// secret uses `keyVaultUrl` + `identity` instead of `value`: Container Apps
+// resolves it directly from the platform Key Vault at runtime using the
+// mcp-tools UAMI, which this template grants `Key Vault Secrets User` on that
+// vault (mcpKvGrant, below — modules/key-vault-secrets-user-role.bicep,
+// repurposed from the deleted copilot-svc/ANTHROPIC_API_KEY path; see that
+// file's header). The token therefore never appears in this template,
+// demo.bicepparam, ARM deployment history, a what-if diff, or CI — and the
+// deployer needs no Key Vault data-plane role to make the grant, only
+// Contributor at the scope the role assignment is written to.
+//
+// The secret named `mcp-auth-token` must exist in the vault BEFORE this layer
+// deploys (docs/runbooks/g0-bootstrap.md item C11); this template does not
+// create it — writing a secret VALUE is exactly the kind of thing hard rule 5
+// keeps out of IaC and CI.
+//
+// MLS_TOOL_BACKENDS is now set explicitly via the `mcpToolsBackendMode`
+// parameter (default 'local') rather than being absent from every workflow,
+// which was F2's other half: the enforcement gate itself no longer keys off
+// backendMode (Task 4), but an unset MLS_TOOL_BACKENDS was still an omission,
+// not a decision.
 // ---------------------------------------------------------------------------
 //
 // [derived] Registry: GitHub Container Registry (GHCR) public path
@@ -82,12 +122,16 @@
 // not passed as parameters — naming is the single source of truth, so the apps
 // layer can locate the L6 environment and App Insights by name.
 //
-// [derived] WHY THE USER-ASSIGNED IDENTITY STAYS (decision, 2026-08-24)
+// [derived] WHY THE USER-ASSIGNED IDENTITY STAYS
+// (decision, 2026-08-24; grant reinstated 2026-08-26, Task 5)
 //
-// The old rationale for it — "the Key Vault role grant must exist before the app
-// provisions, because the app resolves a secret reference at creation time" — is
-// void: there is no secret reference any more. The identity is kept anyway, on a
-// different and stronger justification:
+// The 2026-08-24 rationale for it — "the Key Vault role grant must exist before
+// the app provisions, because the app resolves a secret reference at creation
+// time" — went void when the anthropic-api-key secret was deleted. Task 5
+// restored an equivalent dependency for a DIFFERENT secret, mcp-auth-token
+// (F2's infra half — see "MCP INBOUND AUTH TOKEN" above), so the identity's
+// justification no longer rests on that grant alone; it holds independently on
+// three grounds:
 //
 //   1. The MCP tool server is the ONLY app in the estate that calls Azure data
 //      planes on its own behalf — the lakehouse SQL analytics endpoint, the
@@ -98,7 +142,8 @@
 //   2. User-assigned rather than system-assigned because the grants those tools
 //      need are made by OTHER layers' scripts (a SQL contained-database user via
 //      CREATE USER ... FROM EXTERNAL PROVIDER, a Fabric workspace role
-//      assignment, Cost Management Reader). A user-assigned identity has a
+//      assignment, Cost Management Reader) as well as this template's own
+//      Key Vault Secrets User grant below. A user-assigned identity has a
 //      deterministic name from naming.bicep and a principalId that is an output
 //      of this template, so those grants can be made before or after the app
 //      exists. A system-assigned identity only exists once the app does, which
@@ -106,10 +151,12 @@
 //   3. Its clientId is injected as AZURE_CLIENT_ID so the container's
 //      DefaultAzureCredential binds to this identity and not to an ambient one.
 //
-// What was NOT kept: the 'Key Vault Secrets User' grant. It existed solely to
-// read anthropic-api-key, so it goes with the secret. modules/
-// key-vault-secrets-user-role.bicep is retained but unreferenced — see the
-// README's "Raw resources" note for the conditions under which it returns.
+// The 'Key Vault Secrets User' grant IS back (mcpKvGrant, below), scoped to
+// this identity's principalId on the platform vault. It was deleted with
+// anthropic-api-key at the 2026-08-24 amendment and reinstated at Task 5 for
+// mcp-auth-token — a different secret, the same module
+// (modules/key-vault-secrets-user-role.bicep), now referenced again; see that
+// file's header for the corrected rationale.
 // =============================================================================
 targetScope = 'resourceGroup'
 
@@ -169,9 +216,9 @@ param fabricSqlEndpoint string = ''
 @description('Lakehouse name exposed as a database on that endpoint.')
 param fabricDatabase string = 'mls_operations'
 
-@secure()
-@description('Shared secret the MCP server requires on every inbound call. The container app has EXTERNAL ingress by design, so without this the five tools are callable by anyone who finds the FQDN and every call bills the subscription. Empty leaves the endpoint OPEN and is only appropriate for a throwaway environment. Sourced from Key Vault at deploy time and injected as a container-app secret, never as a plain env value and never through CI (hard rule 5).')
-param mcpAuthToken string = ''
+@description('Backend set mcp-tools serves. Defaults to "local" so the mode is always an explicit deployment decision rather than an omission — the other half of F2 was that MLS_TOOL_BACKENDS was never set anywhere in infra/ or .github/, so the configuration the enforcement gate\'s own doc comments described was never the one actually shipped.')
+@allowed(['local', 'cloud'])
+param mcpToolsBackendMode string = 'local'
 
 @description('owner/repo the data-api Dev/Sec feeds read through the GitHub API. No default on purpose: a public reference repo must not ship the upstream repo as a fallback. Supplied via MLS_GITHUB_REPO in demo.bicepparam; empty is valid and simply leaves the GitHub feeds unconfigured, which data-api reports at boot in cloud mode.')
 param githubRepository string = ''
@@ -202,6 +249,7 @@ param containerMemory string = '0.5Gi'
 var platformRgName = naming.resourceGroupName(companyPrefix, naming.rgPurposes.platform)
 var caeName = naming.containerAppsEnvironmentName(companyPrefix, env)
 var appiName = naming.appInsightsName(companyPrefix, env)
+var kvName = naming.keyVaultName(companyPrefix, env)
 
 var caeResourceId = resourceId(
   subscription().subscriptionId,
@@ -210,8 +258,14 @@ var caeResourceId = resourceId(
   caeName
 )
 
-// No Key Vault reference here any more: the anthropic-api-key secret URL and the
-// secret-consuming plumbing were deleted with the Anthropic decision (2026-08-24).
+// Platform Key Vault from L6. The anthropic-api-key secret reference and its
+// consuming plumbing were deleted with the Anthropic decision (2026-08-24);
+// this reference returned at Task 5 (2026-08-26) for a different secret,
+// mcp-auth-token — see the "MCP INBOUND AUTH TOKEN" header block above.
+resource platformKv 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
+  scope: az.resourceGroup(platformRgName)
+  name: kvName
+}
 
 // Workspace-based App Insights from L6 — connection string is injected into
 // every app so OTel spans land in the shared LAW (V7.3).
@@ -300,6 +354,19 @@ module mcpToolsIdentity 'br/public:avm/res/managed-identity/user-assigned-identi
     name: mcpToolsIdentityName
     location: location
     tags: tagsMcpTools
+  }
+}
+
+// Grants this identity 'Key Vault Secrets User' on the platform vault so the
+// container app can resolve mcp-auth-token via keyVaultUrl at runtime — see
+// the "MCP INBOUND AUTH TOKEN" header block (Task 5, F2 infra half). Scoped to
+// mls-rg-platform, not mls-rg-apps, because that is where the vault lives.
+module mcpKvGrant 'modules/key-vault-secrets-user-role.bicep' = {
+  name: 'l7-mcp-kv-grant'
+  scope: az.resourceGroup(platformRgName)
+  params: {
+    keyVaultName: platformKv.name
+    principalId: mcpToolsIdentity.outputs.principalId
   }
 }
 
@@ -459,30 +526,29 @@ module controlTowerApp 'br/public:avm/res/app/container-app:0.23.0' = {
   }
 }
 
-// Inbound auth for the MCP endpoint. Both the secret and the env entry are
-// conditional on a token being supplied, so an unconfigured deploy still builds
-// — it just produces an OPEN endpoint, which apps/mcp-tools announces loudly at
-// boot and reports on /healthz as `auth.enforced: false`.
-var mcpAuthConfigured = !empty(mcpAuthToken)
-var mcpToolsSecrets = mcpAuthConfigured
-  ? [
-      {
-        name: 'mcp-auth-token'
-        value: mcpAuthToken
-      }
-    ]
-  : []
-var mcpToolsAuthEnv = mcpAuthConfigured
-  ? [
-      {
-        name: 'MCP_AUTH_TOKEN'
-        secretRef: 'mcp-auth-token'
-      }
-    ]
-  : []
+// Inbound auth for the MCP endpoint (F2, infra half — Task 5). Unconditional,
+// unlike the pre-Task-5 shape: apps/mcp-tools now fails closed at boot without
+// MCP_AUTH_TOKEN in every mode (Task 4), so this template must always supply
+// one rather than building an OPEN endpoint by omission. The secret is
+// resolved directly from the platform Key Vault via this app's own UAMI —
+// the token itself never crosses into this template, demo.bicepparam, ARM
+// deployment history or a what-if log. See the "MCP INBOUND AUTH TOKEN"
+// header block for the full exposure analysis.
+var mcpToolsSecrets = [
+  {
+    name: 'mcp-auth-token'
+    keyVaultUrl: '${platformKv.properties.vaultUri}secrets/mcp-auth-token'
+    identity: mcpToolsIdentity.outputs.resourceId
+  }
+]
 
 module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
   name: 'l7-ca-mcp-tools'
+  // Waits on the Key Vault Secrets User grant: Container Apps resolves a
+  // keyVaultUrl secret using the identity's role at the time it needs the
+  // value, and nothing in this module's params references mcpKvGrant's
+  // output, so Bicep would not otherwise order the grant ahead of the app.
+  dependsOn: [mcpKvGrant]
   params: {
     name: mcpToolsName
     location: location
@@ -502,9 +568,10 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
     managedIdentities: {
       userAssignedResourceIds: [mcpToolsIdentity.outputs.resourceId]
     }
-    // One secret, and only one: the inbound auth token. Every Azure upstream
-    // still authenticates with the managed identity above — no cloud credential
-    // is stored here.
+    // One secret, and only one: the inbound auth token, resolved from Key
+    // Vault rather than passed as a value. Every Azure upstream still
+    // authenticates with the managed identity above — no cloud credential is
+    // stored here, and this secret is never a plain value either.
     secrets: mcpToolsSecrets
     containers: [
       {
@@ -514,22 +581,37 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
           cpu: json(containerCpu)
           memory: containerMemory
         }
-        env: concat([
-          {
-            name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-            value: appInsights.properties.ConnectionString
-          }
-          {
-            // Binds DefaultAzureCredential inside the container to the
-            // user-assigned identity above rather than to any ambient identity.
-            name: 'AZURE_CLIENT_ID'
-            value: mcpToolsIdentity.outputs.clientId
-          }
-          {
-            name: 'MLS_IMAGE_DIGEST'
-            value: mcpToolsImageDigest
-          }
-        ], mcpToolsAuthEnv)
+        env: concat(
+          [
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsights.properties.ConnectionString
+            }
+            {
+              // Binds DefaultAzureCredential inside the container to the
+              // user-assigned identity above rather than to any ambient identity.
+              name: 'AZURE_CLIENT_ID'
+              value: mcpToolsIdentity.outputs.clientId
+            }
+            {
+              name: 'MLS_IMAGE_DIGEST'
+              value: mcpToolsImageDigest
+            }
+          ],
+          [
+            {
+              name: 'MCP_AUTH_TOKEN'
+              secretRef: 'mcp-auth-token'
+            }
+            {
+              // F2's other half: the backend set is now a deployment decision,
+              // not an absence. apps/mcp-tools/src/config.ts reads this and
+              // defaults to 'local' itself if it is ever unset again.
+              name: 'MLS_TOOL_BACKENDS'
+              value: mcpToolsBackendMode
+            }
+          ]
+        )
       }
     ]
   }

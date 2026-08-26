@@ -1,7 +1,20 @@
 // =============================================================================
 // key-vault-secrets-user-role.bicep — grants a principal 'Key Vault Secrets
-// User' on the platform Key Vault (RBAC-mode vault; needed by copilot-svc to
-// resolve its ANTHROPIC_API_KEY secret reference).
+// User' on the platform Key Vault (RBAC-mode vault).
+//
+// REPURPOSED (Task 5, 2026-08-26 — F2 infra half). This module originally
+// existed for `copilot-svc` to resolve its `ANTHROPIC_API_KEY` secret
+// reference; both the app and the secret were deleted at the 2026-08-24
+// Copilot Studio amendment, and this module went unreferenced with them (see
+// infra/bicep/README.md's former "Raw resources" note). It is referenced
+// again from infra/bicep/apps/main.bicep (module `mcpKvGrant`), now granting
+// the mcp-tools UAMI access to a DIFFERENT secret — `mcp-auth-token`, the MCP
+// server's inbound auth token (compliance/findings/2026-08-26-prepublication-
+// review.md#f2) — so the container app can resolve it via `keyVaultUrl`
+// instead of the token ever passing through a Bicep parameter, ARM deployment
+// history, or a what-if log. The module's shape and rationale below are
+// unchanged from the original; only its caller and the secret it gates are
+// different.
 //
 // RAW RESOURCE, deliberately: AVM has no standalone module for a role
 // assignment scoped to an EXISTING individual resource. AVM embeds

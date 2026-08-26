@@ -245,10 +245,16 @@ still looks like the plan of record.
 Exact names and schemas are owned by `apps/mcp-tools/` and are discovered at runtime;
 this table is the contract we expect, not a duplicate definition.
 
-### 4.3 MCP server authentication — **OPEN DECISION, needs a sponsor call**
+### 4.3 MCP server authentication — **DECIDED: API key (interim); OAuth 2.0 + Entra is the follow-on**
 
 The MCP server has external HTTPS ingress because Copilot Studio must reach it from
-outside Azure. That makes its authentication a real security decision, not a checkbox.
+outside Azure. That makes its authentication a real security decision, not a checkbox —
+and it was left open here past the point where the rest of the estate had already acted
+on it, which is what the 2026-08-26 pre-publication security review flagged as finding F2
+(`compliance/findings/2026-08-26-prepublication-review.md#f2`): the auth gate this section
+assumes existed was, in the shipped configuration, inert. **The decision below is now
+closed**, and the code and the G0 runbook both implement it — `docs/runbooks/g0-bootstrap.md`
+item C11 is the resulting G0 item this section's original recommendation called for.
 
 Copilot Studio's MCP wizard offers exactly three options (verified): **None**,
 **API key** (header or query), and **OAuth 2.0** (dynamic discovery / dynamic / manual).
@@ -260,12 +266,19 @@ Entra auth is not available here.
 | Option | Verdict |
 |---|---|
 | **None** | **Rejected.** An unauthenticated tool server on the public internet, in a demo whose entire subject is governance, is indefensible — synthetic data notwithstanding. |
-| **API key (header)** | Acceptable interim. The key lives in the Power Platform *connection*, entered once in the portal: never in the repo, never in GitHub Actions. Same class of credential as the Direct Line secret. |
-| **OAuth 2.0 → Microsoft Entra ID** | Target state. Needs an app registration and a client secret held in the connector, and is user-delegated (no client credentials). |
+| **API key (header)** | **Chosen (interim).** The key lives in the Power Platform *connection*, entered once in the portal: never in the repo, never in GitHub Actions. Same class of credential as the Direct Line secret. |
+| **OAuth 2.0 → Microsoft Entra ID** | Target state, not yet implemented. Needs an app registration and a client secret held in the connector, and is user-delegated (no client credentials). |
 
-**Recommendation:** ship with **API key** to unblock, and treat **OAuth 2.0 + Entra** as
-the follow-on. Consider Container Apps built-in authentication (Easy Auth) in front of
-the app as defence in depth. Whichever is chosen becomes a G0 item.
+**What's implemented, as of Tasks 4–5 (2026-08-26):** `apps/mcp-tools` fails closed at boot
+unless `MCP_AUTH_TOKEN` is set or `MCP_ALLOW_UNAUTHENTICATED=true` is explicitly chosen
+(Task 4 — `apps/mcp-tools/src/auth-gate.ts`), and the token is a Key Vault secret
+(`mcp-auth-token`) the container app resolves at runtime via its own user-assigned
+identity — never a Bicep parameter, never in ARM deployment history, never in CI (Task 5 —
+`infra/bicep/apps/main.bicep`). Give the same token value to the Copilot Studio custom
+connector as its API key (`docs/runbooks/g0-bootstrap.md` item C11); the server accepts
+either `Authorization: Bearer <token>` or `x-api-key: <token>`. **OAuth 2.0 + Entra and
+Container Apps Easy Auth (defence in depth) remain the follow-on** — neither is
+implemented yet, and both stay open items beyond this task's scope.
 
 ---
 

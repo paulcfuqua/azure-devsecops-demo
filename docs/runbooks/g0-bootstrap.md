@@ -323,9 +323,11 @@ it is still about sign-in risk and auto-labeling, nothing else.
     V3.4 narrows to match — see the seat-count note in § B. `CountViolation` in the audit
     output means the seat pool is exhausted, not that the step failed.
 
-11. ⚠ **Create the MCP inbound auth secret** — *added 2026-08-26; closes the one finding
-    from the pre-publication security review.* Runs **after** L6 creates the Key Vault and
-    **before** L7 deploys the apps.
+11. ⚠ **Create the MCP inbound auth secret** — *added 2026-08-26 for finding F2 from the
+    pre-publication security review* (`compliance/findings/2026-08-26-prepublication-
+    review.md#f2`); *this step itself is unchanged by Task 5's infra fix — only how the
+    running container gets the value changed, see below.* Runs **after** L6 creates the
+    Key Vault and **before** L7 deploys the apps.
 
     `apps/mcp-tools` runs with **external ingress by design** — Copilot Studio calls it
     from the public internet, so internal-only is not an option. Without a token its five
@@ -341,11 +343,16 @@ it is still about sign-in risk and auto-labeling, nothing else.
     az keyvault secret set --vault-name <kv> --name mcp-auth-token       --value "$(openssl rand -base64 32)"
     ```
 
-    The layer-07 workflow reads it with its OIDC identity and passes it as the
-    `mcpAuthToken` deploy parameter, which lands as a **container-app secret** — never a
-    plain env value, never a GitHub secret, never in CI storage (hard rule 5). Give the
-    same value to the Copilot Studio custom connector as its API key; the server accepts
-    either `Authorization: Bearer <token>` or `x-api-key: <token>`.
+    The **layer-07 workflow never reads, exports, or touches this token at all.** The
+    container app resolves it directly from Key Vault at runtime through its own
+    user-assigned identity: `infra/bicep/apps/main.bicep` grants that identity **Key Vault
+    Secrets User** on the vault (module `mcpKvGrant`) and declares the container-app secret
+    as a `keyVaultUrl` reference, not a `value`. The token therefore never becomes a deploy
+    parameter, a plain env value, a GitHub secret, or anything CI stores or logs (hard rule
+    5) — it never appears in `demo.bicepparam`, ARM deployment history, or an
+    `az deployment group what-if` log either. Give the same value to the Copilot Studio
+    custom connector as its API key; the server accepts either `Authorization: Bearer
+    <token>` or `x-api-key: <token>`.
 
     Verify: `GET /healthz` on the app reports `auth.enforced: true`, and `POST /mcp`
     without a credential returns **401**. If `auth.enforced` is `false`, the endpoint is

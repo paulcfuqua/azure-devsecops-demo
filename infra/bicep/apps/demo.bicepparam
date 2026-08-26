@@ -72,10 +72,17 @@ param owner = readEnvironmentVariable('MLS_OWNER', 'mls-demo')
 // reconciling it with apps/mcp-tools/ costs one variable.
 param mcpEndpointPath = readEnvironmentVariable('MCP_ENDPOINT_PATH', '/mcp')
 
-// Inbound auth for the public MCP endpoint. The layer-07 workflow reads this
-// from Key Vault with its OIDC identity and exports it; it is never a GitHub
-// secret and never touches CI storage (hard rule 5). Empty = OPEN endpoint.
-param mcpAuthToken = readEnvironmentVariable('MCP_AUTH_TOKEN', '')
+// Inbound auth for the public MCP endpoint (F2, infra half — Task 5). There is
+// no parameter for it any more: main.bicep resolves mcp-auth-token directly
+// from the platform Key Vault via the mcp-tools container app's own
+// user-assigned identity (keyVaultUrl + identity, not a value), so the token
+// never crosses into this parameter file, the deploy command, ARM deployment
+// history or a what-if log, and the layer-07 workflow never reads or exports
+// it (hard rule 5). The secret must exist in the vault before this layer
+// deploys — see docs/runbooks/g0-bootstrap.md item C11.
+//
+// The backend set mcp-tools serves IS still a deploy parameter:
+param mcpToolsBackendMode = readEnvironmentVariable('MLS_TOOL_BACKENDS', 'local')
 
 // There is no ingress parameter: mcp-tools is external + HTTPS-only by
 // requirement, not by configuration (Copilot Studio calls it from outside Azure).
