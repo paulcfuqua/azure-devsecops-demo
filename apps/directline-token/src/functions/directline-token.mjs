@@ -12,9 +12,13 @@ import { exchangeSecretForToken, TokenExchangeError } from "../tokenExchange.mjs
 //   * `trustedOrigins` — Direct Line embeds the allowed client domains in the
 //     token itself, so a token minted here is only usable from the control
 //     tower's own origin.
-//   * the CORS allow-list below, which refuses to answer other origins.
-//   * Functions' platform rate limiting, plus the fact that a leaked token
-//     expires in ~30 minutes and is scoped to one conversation.
+//   * the origin guard below, which refuses to mint at all when
+//     DIRECTLINE_ALLOWED_ORIGINS is unset (500) or the caller sent no Origin
+//     or a non-allow-listed one (403). There is no rate limiting here:
+//     host.json configures none and authLevel is "anonymous" by design (see
+//     above), so the origin guard is the only thing standing between this
+//     endpoint and an open faucet. A leaked token still expires in ~30
+//     minutes and is scoped to one conversation.
 //
 // Application settings (all set by L6; the secret is a Key Vault reference, so
 // its value never appears in this repo or in a pipeline log):
@@ -57,7 +61,19 @@ export async function directLineToken(request, context) {
     return { status: 204, headers };
   }
 
-  if (allowed.length > 0 && origin && !allowed.includes(origin)) {
+  if (allowed.length === 0) {
+    // Refuse to mint an unbound token when the allow-list was never
+    // configured: skipping this would also drop the minted token's own
+    // origin binding (trustedOrigins below), not just this guard.
+    context.error("DIRECTLINE_ALLOWED_ORIGINS is unset; refusing to mint an unbound token.");
+    return {
+      status: 500,
+      headers,
+      jsonBody: { error: "Token endpoint is not configured." },
+    };
+  }
+
+  if (!origin || !allowed.includes(origin)) {
     context.warn(`Refused a token request from a non-allow-listed origin: ${origin}`);
     return {
       status: 403,
@@ -71,7 +87,9 @@ export async function directLineToken(request, context) {
       secret: process.env.DIRECTLINE_SECRET,
       randomUUID,
       baseUrl: process.env.DIRECTLINE_DOMAIN || undefined,
-      trustedOrigins: allowed.length > 0 ? allowed : undefined,
+      // allowed is never empty here: the allow-list guard above already
+      // refused the request (500) before this point if it were.
+      trustedOrigins: allowed,
     });
     return { status: 200, headers, jsonBody: token };
   } catch (error) {
