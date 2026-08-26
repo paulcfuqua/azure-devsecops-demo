@@ -15,6 +15,33 @@
 # hostname: an unresolvable NAME in proxy_pass stops nginx from starting at all,
 # whereas an unreachable ADDRESS lets the app serve normally and fail only the
 # API calls with a 502 you can actually diagnose from /healthz's routePrefix.
+#
+# CSP (F11, shared with control-tower): connect-src is narrower here than in
+# control-tower because this app has no Ask tab / Direct Line channel. It still
+# needs:
+#   - 'self'                    /api/* via the proxy below (data-api)
+#   - https://js.monitor.azure.com
+#     https://*.in.applicationinsights.azure.com
+#     https://dc.services.visualstudio.com
+#                                the Application Insights Web SDK
+#                                (telemetry/browser.ts, duplicated from
+#                                control-tower), loaded whenever
+#                                VITE_APPLICATIONINSIGHTS_CONNECTION_STRING is
+#                                set: its remote config fetch and its
+#                                region-specific ingestion endpoint (the legacy
+#                                global host is kept for older-style connection
+#                                strings with no IngestionEndpoint)
+# style-src needs 'unsafe-inline': Fluent UI v9 (Griffel) injects its CSS-in-JS
+# via <style> tags with no nonce wired up, and default-src alone does not
+# cover style-src -- verified by building this app and loading it under this
+# exact policy (see apps/control-tower/nginx.conf.template for the full
+# before/after evidence; the Griffel dependency and its lack of nonce support
+# are identical in this app).
+#
+# add_header does not merge across nesting levels: a location block that sets
+# its own add_header (below, /assets/ sets Cache-Control) stops inheriting the
+# server-level ones. So the security headers are repeated in that location too,
+# rather than relying on inheritance and silently losing them on hashed assets.
 server {
     listen 8080;
     server_name _;
@@ -24,6 +51,10 @@ server {
 
     gzip on;
     gzip_types text/css application/javascript application/json image/svg+xml;
+
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://js.monitor.azure.com https://*.in.applicationinsights.azure.com https://dc.services.visualstudio.com; frame-ancestors 'none'; base-uri 'none'" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
 
     # Liveness endpoint for ACA probes and V7.1. The content-hash marker is
     # MLS_IMAGE_DIGEST, substituted here by the same envsubst pass and set on the
@@ -52,9 +83,14 @@ server {
         proxy_read_timeout 60s;
     }
 
-    # Hashed build assets are immutable.
+    # Hashed build assets are immutable. Repeats the security headers set
+    # above: this location's own add_header for Cache-Control means it no
+    # longer inherits the server block's add_header directives.
     location /assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://js.monitor.azure.com https://*.in.applicationinsights.azure.com https://dc.services.visualstudio.com; frame-ancestors 'none'; base-uri 'none'" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy no-referrer always;
         try_files $uri =404;
     }
 

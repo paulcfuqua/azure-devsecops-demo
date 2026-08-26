@@ -61,6 +61,30 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/**
+ * F11: `Action.OpenUrl.url` and `Image.url` arrive from the Copilot Studio
+ * agent over Direct Line with no validation upstream (`agent/transcript.ts`),
+ * so a prompt injection can put any string here — including a `javascript:`
+ * URI. Fluent's `useLinkBase_unstable` forwards `href` to the `<a>` element
+ * unsanitised, and React 18 only warns about it in development; it does not
+ * block it. `Image.url` cannot execute script via `<img src>`, but an
+ * attacker-controlled scheme there is still an outbound beacon.
+ *
+ * This is an ALLOWLIST, not a blocklist: only `http://` / `https://` passes.
+ * That is what makes it immune to case variation (`JaVaScRiPt:`) and
+ * leading-whitespace tricks that defeat a naive `startsWith("javascript:")`
+ * check — an anchored, case-insensitive match on the scheme we *want* is safe
+ * by construction, unlike enumerating every scheme we don't.
+ */
+const SAFE_URL = /^https?:\/\//i;
+
+function safeUrl(value: unknown): string | undefined {
+  const s = str(value);
+  if (!s) return undefined;
+  const trimmed = s.trim();
+  return SAFE_URL.test(trimmed) ? trimmed : undefined;
+}
+
 function elements(value: unknown): AdaptiveElement[] {
   return Array.isArray(value) ? (value as AdaptiveElement[]) : [];
 }
@@ -121,8 +145,8 @@ function CardElement({ element, onAction }: ElementProps): JSX.Element {
       );
 
     case "Image": {
-      const url = str(element.url);
-      if (!url) return <UnsupportedElement type="Image (no url)" />;
+      const url = safeUrl(element.url);
+      if (!url) return <UnsupportedElement type="Image (no url, or unsafe scheme)" />;
       return <img className={styles.image} src={url} alt={str(element.altText) ?? ""} />;
     }
 
@@ -192,13 +216,13 @@ function CardActions({
       {list.map((action, i) => {
         const title = action.title ?? action.type;
         if (action.type === "Action.OpenUrl") {
-          const url = str(action.url);
+          const url = safeUrl(action.url);
           return url ? (
             <Link key={i} href={url} target="_blank" rel="noreferrer noopener">
               {title}
             </Link>
           ) : (
-            <UnsupportedElement key={i} type="Action.OpenUrl (no url)" />
+            <UnsupportedElement key={i} type="Action.OpenUrl (no url, or unsafe scheme)" />
           );
         }
         if (action.type === "Action.Submit") {

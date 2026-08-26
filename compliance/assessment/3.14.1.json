@@ -5,22 +5,22 @@
   "assertion": {
     "status": "GAP",
     "evidence": [
-      "compliance/findings/2026-08-26-prepublication-review.md#f11",
       "compliance/findings/2026-08-26-prepublication-review.md#f12"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F11: javascript: hrefs are accepted end to end in Adaptive Cards (Action.OpenUrl and Image) with no scheme guard and no CSP on either nginx frontend — a traced XSS path from a prompt-injected agent response to script execution in control-tower's origin, where a live Direct Line token sits in JS memory. F12: the SQL dialect gate's comment-nesting logic is dialect-unaware (SQLite does not nest, T-SQL does), so a crafted unterminated comment or quote causes scrubSql to swallow the tail of a query past where the semicolon and forbidden-verb scans look; not exploitable today only because db.prepare() compiles a single statement, and lakehouse.ts already calls db.exec/db.run three lines away — one refactor from losing that incidental protection."
+    "rationale": "F11 is now CLOSED (Task 14): Action.OpenUrl.url and Image.url in AdaptiveCardView.tsx are constrained by an /^https?:\\/\\//i allowlist (rejects javascript:, case-varied and whitespace-padded variants, data:, vbscript:; the fallback UnsupportedElement renders instead of a dropped/blank element), both nginx templates now emit a Content-Security-Policy (script-src 'self'; style-src 'self' 'unsafe-inline', required because Fluent UI v9's Griffel injects CSS-in-JS with no nonce wired up; connect-src scoped to Direct Line's REST+websocket host, the directline-token Function's default hostname, and the Application Insights Web SDK's config/ingestion hosts — verified in a real browser against the built bundle, not just read off the template, including the negative case: the brief's originally suggested CSP was verified to break both the Ask tab's token fetch and all Griffel-based styling) plus X-Content-Type-Options and Referrer-Policy, and both frontend Dockerfiles now drop to USER nginx (verified against the actual nginx.org Alpine package contents, not assumed, for the base image's pid path, /etc/nginx/conf.d writability, and the non-existent /var/cache/nginx). This control's only remaining open contributor is F12: the SQL dialect gate's comment-nesting logic is dialect-unaware (SQLite does not nest, T-SQL does), so a crafted unterminated comment or quote causes scrubSql to swallow the tail of a query past where the semicolon and forbidden-verb scans look; not exploitable today only because db.prepare() compiles a single statement, and lakehouse.ts already calls db.exec/db.run three lines away — one refactor from losing that incidental protection."
   },
-  "recommendation": "Delete the dead node --check CI step (see 3.12.3). Add an /^https?:\\/\\//i scheme guard on both Action.OpenUrl.url and Image.url in AdaptiveCardView.tsx, add CSP/X-Content-Type-Options/Referrer-Policy to both nginx templates, and add USER nginx to both frontend Dockerfiles. Make scrubSql return a structural-validity flag and reject any statement ending in an unclosed comment, quote, backtick or bracket, with comment nesting made dialect-aware (SQLite non-nesting vs T-SQL nesting).",
-  "gapSeverity": "high",
+  "recommendation": "F11's remediation is done; a regression here (a new Action/element with an unguarded url, or a CSP relaxation) would reopen this control. Outstanding for F12 (Task 15): make scrubSql return a structural-validity flag and reject any statement ending in an unclosed comment, quote, backtick or bracket, with comment nesting made dialect-aware (SQLite non-nesting vs T-SQL nesting).",
+  "gapSeverity": "medium",
   "references": [
     ".github/workflows/lint-ci.yml:196-202",
-    "apps/control-tower/src/AdaptiveCardView.tsx:194-202",
-    "apps/control-tower/src/AdaptiveCardView.tsx:123-127",
-    "apps/shared/spec-renderer/src/markdown.tsx:14",
-    "apps/control-tower/Dockerfile:24",
-    "apps/launch-ops/Dockerfile:24",
+    "apps/control-tower/src/AdaptiveCardView.tsx:64-87",
+    "apps/control-tower/tests/adaptive-card-url.test.tsx",
+    "apps/control-tower/nginx.conf.template",
+    "apps/launch-ops/nginx.conf.template",
+    "apps/control-tower/Dockerfile",
+    "apps/launch-ops/Dockerfile",
     "apps/mcp-tools/src/tools/sql-dialect.ts:154-166",
     "apps/mcp-tools/src/tools/sql-dialect.ts:229-265",
     "apps/mcp-tools/src/tools/sql-dialect.ts:267",

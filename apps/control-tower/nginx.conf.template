@@ -18,6 +18,43 @@
 #
 # The Ask tab's Direct Line token endpoint is a separate service and is reached
 # by absolute URL (VITE_DIRECTLINE_TOKEN_URL), not through this proxy.
+#
+# CSP (F11): connect-src has to cover every origin the Ask tab legitimately
+# calls, not just Direct Line, or the tab breaks instead of the javascript:
+# vector it is meant to close. That is:
+#   - 'self'                    /api/* via the proxy below (data-api)
+#   - https://*.botframework.com + wss://*.botframework.com
+#                                Direct Line 3.0 REST (conversations/activities)
+#                                and its streaming websocket -- wildcarded for
+#                                the regional hosts VITE_DIRECTLINE_DOMAIN can
+#                                select (europe./india.directline.botframework.com)
+#   - https://*.azurewebsites.net
+#                                the directline-token Function's default
+#                                hostname -- VITE_DIRECTLINE_TOKEN_URL is baked
+#                                in at build time and reached directly, not
+#                                through this proxy (see above), so its origin
+#                                has to be allowlisted explicitly
+#   - https://js.monitor.azure.com
+#     https://*.in.applicationinsights.azure.com
+#     https://dc.services.visualstudio.com
+#                                the Application Insights Web SDK
+#                                (telemetry/browser.ts), loaded whenever
+#                                VITE_APPLICATIONINSIGHTS_CONNECTION_STRING is
+#                                set: its remote config fetch and its ingestion
+#                                endpoint (region-specific, e.g.
+#                                eastus-8.in.applicationinsights.azure.com; the
+#                                legacy global host is kept for older-style
+#                                connection strings with no IngestionEndpoint)
+# style-src needs 'unsafe-inline': Fluent UI v9 (Griffel) injects its CSS-in-JS
+# via <style> tags with no nonce wired up, and default-src alone does not
+# cover style-src -- verified by building this app and loading it under this
+# exact policy: a policy without this came back with every Griffel style
+# rule rejected and the UI unstyled.
+#
+# add_header does not merge across nesting levels: a location block that sets
+# its own add_header (below, /assets/ sets Cache-Control) stops inheriting the
+# server-level ones. So the security headers are repeated in that location too,
+# rather than relying on inheritance and silently losing them on hashed assets.
 server {
     listen 8080;
     server_name _;
@@ -27,6 +64,10 @@ server {
 
     gzip on;
     gzip_types text/css application/javascript application/json image/svg+xml;
+
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.botframework.com wss://*.botframework.com https://*.azurewebsites.net https://js.monitor.azure.com https://*.in.applicationinsights.azure.com https://dc.services.visualstudio.com; frame-ancestors 'none'; base-uri 'none'" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
 
     # Liveness endpoint for ACA probes and V7.1. The content-hash marker is
     # MLS_IMAGE_DIGEST, substituted here by the same envsubst pass and set on the
@@ -55,9 +96,14 @@ server {
         proxy_read_timeout 60s;
     }
 
-    # Hashed build assets are immutable.
+    # Hashed build assets are immutable. Repeats the security headers set
+    # above: this location's own add_header for Cache-Control means it no
+    # longer inherits the server block's add_header directives.
     location /assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.botframework.com wss://*.botframework.com https://*.azurewebsites.net https://js.monitor.azure.com https://*.in.applicationinsights.azure.com https://dc.services.visualstudio.com; frame-ancestors 'none'; base-uri 'none'" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy no-referrer always;
         try_files $uri =404;
     }
 
