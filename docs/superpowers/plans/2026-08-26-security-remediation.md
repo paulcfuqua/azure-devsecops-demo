@@ -79,8 +79,11 @@ Durable capture. Until this lands, all 15 findings exist only in a chat transcri
 | F16 | Azure SQL backup posture never decided or verified | CP-9 | medium | Task 18 |
 | F17 | Zero alert rules or action groups anywhere in the estate | SI-4, IR-4 | high | Task 19 |
 | F18 | Sensitivity labels published nowhere — a taxonomy, not a control | CM-6 | medium | Task 20 |
+| F19 | cost-ingest documented as deployed; deploys nowhere | — (availability/completeness) | medium | *unassigned* |
+| F20 | data-api's contained-user grant is expressed but never applies | — (availability) | medium | *unassigned* |
+| F21 | `mls-verifier`'s documented Fabric workspace Viewer grant does not exist | — (availability — breaks the Verifier sign-off gate) | high | *unassigned* |
 
-F14 and F15 map to no 800-171 control. They are recorded in `compliance/findings/` and tracked here so they do not fall through the gap between the security and compliance framings. F16–F18 (Task 2's 800-53/CMMC scrub) map to NIST SP 800-53 Rev 5 controls that 800-171 tailors *out* — CP-9, SI-4, IR-4, CM-6 — rather than to a 3.x 800-171 control.
+F14 and F15 map to no 800-171 control. They are recorded in `compliance/findings/` and tracked here so they do not fall through the gap between the security and compliance framings. F16–F18 (Task 2's 800-53/CMMC scrub) map to NIST SP 800-53 Rev 5 controls that 800-171 tailors *out* — CP-9, SI-4, IR-4, CM-6 — rather than to a 3.x 800-171 control. F19–F21 were surfaced building Task 12 (F13's closing task): same shape again — a document asserting something the code never does — but none is a CUI-protection gap, so none maps to an 800-171 control either. No task in this plan owns closing them; they need one.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -885,15 +888,35 @@ DoNotEnforce, so no remediation ever runs — and it outlives RG teardown."
 ## Task 12: Express workload RBAC in IaC (F13)
 
 **Files:**
-- Create: `infra/bicep/apps/modules/workload-role-assignments.bicep`
+- Create: `infra/bicep/apps/modules/workload-role-assignments.bicep` (subscription-scoped grants)
+- Create: `infra/bicep/apps/modules/log-analytics-reader-role.bicep` (resource-scoped grant — added beyond the original file list: Bicep's BCP139 forbids one file mixing a subscription-scope and a resourceGroup-scope resource, so the LAW-scoped grant needed its own module rather than a parameter on the first)
 - Create: `data/seed/sql/900-contained-users.sql`
 - Modify: `infra/bicep/apps/main.bicep`
-- Modify: `infra/fabric/provision-workspace.ps1` (workspace Viewer role)
+- Modify: `infra/fabric/fabric-api.psm1` (new `Add-FabricWorkspaceRoleAssignment`/`Get-FabricWorkspaceRoleAssignment` — no role-assignment wrapper existed before this task, contrary to the original brief's premise; see F21)
+- Modify: `infra/fabric/provision-workspace.ps1` (workspace Viewer role; also corrects a false docstring — see F21)
 - Test: `verification/tests/workload-rbac.Tests.ps1`
 
 **Why:** the repo contains **zero** role assignments for its workload identities. The only `Microsoft.Authorization/roleAssignments` resource is `key-vault-secrets-user-role.bicep`, documented as unreferenced and written for a component deleted in August. Seven grants are described in prose and implemented nowhere. This is not only a compliance gap: `main.bicep:263` resolves `dataApiMode` to `cloud` as soon as `fabricSqlEndpoint` is non-empty — which C9 has you set after L5 — at which point `data-api` 403s on every backend call.
 
-**The seven grants:**
+**Outcome: five of the seven grants, not seven.** Two are excluded, each with a different owner, and F13 stays OPEN because of them:
+
+| Principal | Role | Scope | Status |
+|---|---|---|---|
+| data-api UAMI | Log Analytics Reader | LAW | DONE — Task 12 |
+| data-api UAMI | Security Reader | subscription | DONE — Task 12 |
+| data-api UAMI | SQL contained-database user | database | DONE — Task 12 (expressed; does not yet apply in a single `infra-up.yml` pass — see F20) |
+| data-api UAMI | Fabric workspace Viewer | workspace | DONE — Task 12 |
+| mcp-tools UAMI | Log Analytics Reader | LAW | DONE — Task 12 |
+| mcp-tools UAMI | Security Reader | subscription | DONE — Task 12 |
+| mcp-tools UAMI | Cost Management Reader | subscription | DONE — Task 12 |
+| Cost Management service | Storage Blob Data Contributor | export container | **EXCLUDED — owned by Task 17 (F15).** Its own plan section names this exact grant and lists `layer-06-platform.yml` among its files; the export's identity is created there, not by Bicep, so Task 12 has no `principalId` to grant. |
+| cost-ingest | Storage Blob Data Reader | storage account | **EXCLUDED — blocked by F19.** cost-ingest has no Function App, and therefore no identity, anywhere in this repo's IaC, despite `infra-up.yml:31` claiming it deploys inside `layer-06-platform.yml`. There is nothing to grant a role to. |
+
+Building this task also surfaced two more findings, recorded but not fixed here: **F20** (the SQL grant above is expressed but nothing re-invokes `seed.ps1 -Target sql` after L7 creates the identity, so it never applies in a single `infra-up.yml` pass) and **F21** (mls-verifier's own documented Fabric workspace Viewer grant does not exist either — a different principal, breaking the L5 Verifier audit independent of F13).
+
+**The test asserts only the five**, by design — asserting a role NAME for the two excluded grants would pass on a comment alone, which is precisely the failure mode the GUID-with-comment ruling below exists to prevent.
+
+**Original seven-grant framing (superseded):**
 
 | Principal | Role | Scope |
 |---|---|---|
@@ -1456,7 +1479,7 @@ ones keep GAP status with a stated reason."
 
 **Spec coverage.** This plan implements no section of the compliance-platform spec — deliberately. It consumes only §3.2's assessment schema, in Task 1. The platform itself is Plan 2. The one place they touch is the register, which Task 1 produces and Plan 2 renders.
 
-**Findings coverage.** F1→T6, F2→T4+T5, F3→T7, F4→T8, F5→T3, F6→T9, F7→T9, F8→T10, F9→T13, F10→T11, F11→T14, F12→T15, F13→T12, F14→T16, F15→T17, F16→T18, F17→T19, F18→T20. All 18 have a closing task.
+**Findings coverage.** F1→T6, F2→T4+T5, F3→T7, F4→T8, F5→T3, F6→T9, F7→T9, F8→T10, F9→T13, F10→T11, F11→T14, F12→T15, F13→T12 (partial — 5/7 grants; the other two are owned by T17 and blocked by F19), F14→T16, F15→T17, F16→T18, F17→T19, F18→T20. All original 18 have a closing task. F19, F20 and F21 (surfaced building T12) do not — each needs a new task.
 
 **Sequencing rationale.** T3 first — until CI runs the JS tests, no later green is trustworthy. Then the internet-facing endpoints (T4-T7), the only findings an outsider can exploit. Then leakage (T8), identity (T9-T12), observability (T13), and finally the app-layer bugs (T14-T15), which are real but need a click or a prompt injection to reach. T16-T17 harden the pipeline's own integrity and cost backstop. T18-T20 (the 800-53/CMMC scrub, Task 2) are placed last among the per-finding tasks: T19 explicitly depends on T13's diagnostic settings landing first (an alert on a signal that does not yet exist is not an alert), and T18/T20 are independent of every other task, so ordering them after the exploitable and identity-layer fixes costs nothing. T21 closes the plan.
 

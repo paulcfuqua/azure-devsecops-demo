@@ -40,6 +40,11 @@ their evidence and carry the same status.
 | [F16](#f16) | Azure SQL backup posture never decided or verified | medium | CONFIRMED | CP-9 | Task 18 |
 | [F17](#f17) | Zero alert rules or action groups anywhere in the estate | high | CONFIRMED | SI-4, IR-4 | Task 19 |
 | [F18](#f18) | Sensitivity labels published nowhere — a taxonomy, not a control | medium | CONFIRMED | CM-6 | Task 20 |
+| [F19](#f19) | cost-ingest documented as deployed; deploys nowhere | medium | CONFIRMED | — (availability/completeness) | — (needs a new task) |
+| [F20](#f20) | data-api's contained-user grant is expressed but never applies | medium | CONFIRMED | — (availability) | — (needs a new task) |
+| [F21](#f21) | mls-verifier's documented Fabric workspace Viewer grant does not exist | high | CONFIRMED | — (availability — breaks the Verifier's sign-off gate) | — (needs a new task) |
+
+F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings.
 
 ---
 
@@ -718,6 +723,72 @@ four labels to the demo user/group scope `L04.md` already names; extend
 `verification/layer-04-audit.ps1` with a V4.3 criterion asserting the policy exists and is
 scoped as expected; author `infra/purview/auto-label-design.md` or drop the `L04.md`
 reference to it.
+
+---
+
+## F19
+
+**cost-ingest documented as deployed; deploys nowhere**
+
+- **Severity:** medium
+- **Confidence:** CONFIRMED
+- **Controls:** none — no 800-171 control (availability/completeness)
+- **Closed by:** not assigned
+- **Status:** GAP
+
+**Where:** `.github/workflows/infra-up.yml:31` — "WHERE THE FINOPS LEG LIVES. `apps/cost-ingest` (Cost Management daily export → storage → consumption Function → lakehouse `cost_daily`) is an L6 resource and deploys inside layer-06-platform.yml alongside the export wiring it consumes." `apps/cost-ingest/README.md:143`'s RBAC table says the identity's grants are "granted by L6's Bicep".
+
+**Verified absent, not merely undocumented:** `grep -rn cost-ingest infra/` returns zero matches — no Bicep resource of any kind. `grep -n "cost-ingest|functionapp|Microsoft.Web" .github/workflows/layer-06-platform.yml` also returns zero matches — the workflow that is supposed to deploy it creates an Azure SQL schema, loads ten tables, and wires the Cost Management export definition, and nothing else. There is no Function App, and therefore no identity, for cost-ingest anywhere in this repo's infrastructure.
+
+**Found while:** implementing Task 12 (F13) — `cost-ingest -> Storage Blob Data Reader` is one of F13's seven documented workload grants. There is no principalId to grant that role to, because the principal does not exist.
+
+**Impact:** cost-ingest is not on the critical demo path and nothing silently mis-secures as a result of this gap on its own — it simply will not exist when `apps/cost-ingest` or `infra-up.yml`'s own commentary says it will. A sponsor or adopter who reads `infra-up.yml:31` or the README's RBAC table and concludes the FinOps leg is live would be wrong; the daily Cost Management export (once Task 17/F15 lands) would write to storage with nothing downstream ever reading it into the lakehouse.
+
+**Fix:** either provision `apps/cost-ingest` as a real Azure Function App with its own user-assigned identity (new deploy surface, new spend decision against the sponsor's 30-day credit — a G2-shaped decision, not a remediation-task one), or correct `infra-up.yml:31` and the README's RBAC table to state plainly that the Function does not deploy yet. Do not build the Function App as part of closing F13 or F19 without that decision being made explicitly.
+
+---
+
+## F20
+
+**data-api's contained-user grant is expressed but never applies**
+
+- **Severity:** medium
+- **Confidence:** CONFIRMED
+- **Controls:** none — no 800-171 control (availability)
+- **Closed by:** not assigned
+- **Status:** GAP
+
+**Where:** `data/seed/sql/sql-seed.psm1`'s `Install-SeedSchema` (`Get-ChildItem -Filter *.sql | Sort-Object Name`, applied unconditionally, no error tolerance — `Invoke-SeedSqlCommand` uses `ErrorAction Stop`); `.github/workflows/layer-06-platform.yml`'s single `data/seed/seed.ps1 -Target sql` invocation; `.github/workflows/layer-07-apps.yml`, which never invokes it a second time.
+
+**The mechanism:** `data/seed/sql/900-contained-users.sql` (Task 12, F13) expresses `CREATE USER [mls-data-api-demo-id] FROM EXTERNAL PROVIDER;` — correct code, and it is genuinely idempotent once it succeeds. But `seed.ps1 -Target sql` runs exactly once, inside L6, which completes before L7 creates the data-api user-assigned identity. On that first (and, today, only) pass the statement cannot resolve the AAD principal and is guarded to fail loudly rather than abort the rest of the DDL (`BEGIN TRY/CATCH` with a severity-10, non-terminating `RAISERROR` — see that file's header). The guard protects L6's existing, working SQL seed from a regression; it does not make the grant apply. Nothing re-runs the seed script after L7, so in a single `infra-up.yml` pass the grant never lands in a live tenant.
+
+**Distinct from F13, deliberately not folded into it:** F13 is "zero workload RBAC expressed in IaC" — the `.sql` file genuinely is that expression, so F13's remedy is satisfied for this one grant. The defect here is different in kind: the code that would make the grant real is never invoked at the right time. Folding this into F13's rationale would make it close silently the moment F13's other two grants land (Task 17, F19), and the sequencing bug would vanish with it.
+
+**Impact:** `data-api` 403s against Azure SQL until someone manually re-runs `data/seed/seed.ps1 -Target sql` after L7 — the same "dated failure" shape F13 itself describes (days 7-14 of the sponsor's 30-day clock, once G0 item C9 sets `fabricSqlEndpoint`), just one layer further down: the code now exists, but nothing calls it a second time.
+
+**Fix:** add a step to `.github/workflows/layer-07-apps.yml`, after the data-api identity is created, that re-invokes `data/seed/seed.ps1 -Target sql` (idempotent — the other nine tables and the `schema_version` stamps are all no-ops on a second run) so the grant actually lands in a standard `infra-up.yml` pass.
+
+---
+
+## F21
+
+**mls-verifier's documented Fabric workspace Viewer grant does not exist**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED
+- **Controls:** none — no 800-171 control (availability — breaks the Verifier's sign-off gate CLAUDE.md treats as authoritative)
+- **Closed by:** not assigned
+- **Status:** GAP
+
+**Where:** `infra/fabric/provision-workspace.ps1` (before this task's correction) asserted at lines 19-22: "at L5 the `mls-verifier` service principal is granted the workspace VIEWER role on `mls-operations`... That grant happens in the L5 deploy path, not in this script." `verification/layer-05-audit.ps1:57` builds its Fabric bearer header on that same assumption ("workspace Viewer, granted"). `.github/workflows/layer-05-fabric.yml`'s step named "Azure login (OIDC, mls-verifier — Reader + workspace Viewer)" only logs in — it grants nothing.
+
+**Verified absent, not merely undocumented:** before Task 12 added `Add-FabricWorkspaceRoleAssignment`/`Get-FabricWorkspaceRoleAssignment`, `infra/fabric/fabric-api.psm1` had no role-assignment function at all (every function in the file, lines 27-468, grepped for `roleAssignment|Viewer|grant` — zero hits). `grep -n "Viewer|roleAssignment|grant" .github/workflows/layer-05-fabric.yml -i` returns only the job-step label quoted above, which calls nothing.
+
+**Found while:** implementing Task 12 (F13) — the instruction to "use the existing REST path in infra/fabric/fabric-api.psm1 rather than inventing a new one" for data-api's Fabric Viewer grant assumed a role-assignment wrapper already existed. It did not; one was added for data-api's (different) grant, which is how this gap surfaced.
+
+**Impact:** if `mls-verifier` genuinely has no Fabric workspace role, the entire L5 Verifier audit 403s in live operation, independent of F13. CLAUDE.md's core control is "a layer is DONE only on the Verifier's sign-off, running as mls-verifier (Reader), never as the deployer SP" — a Verifier that cannot authenticate to the Fabric REST API cannot produce that sign-off for L5 at all. Same class as F6 (verifier had no federated credential): a control whose absence is invisible until the moment the estate depends on it.
+
+**Fix:** grant `mls-verifier`'s principal the Fabric workspace Viewer role using the same `Add-FabricWorkspaceRoleAssignment` function Task 12 added for data-api (a different call, a different principal, a different finding) — from the L5 deploy path (`layer-05-fabric.yml`), matching what the corrected docstring now says is NOT yet true rather than what the original docstring falsely claimed was already true.
 
 ---
 

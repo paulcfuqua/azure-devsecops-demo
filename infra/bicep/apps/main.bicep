@@ -400,6 +400,48 @@ module mcpAppInsightsGrant 'modules/monitoring-metrics-publisher-role.bicep' = {
   }
 }
 
+// F13 (compliance/findings/2026-08-26-prepublication-review.md#f13,
+// Task 12): grants 'Log Analytics Reader' on the platform LAW — mcp-tools
+// reads it via tools/cloud/log-analytics.ts:14. Scoped to the workspace
+// resource, not the resource group or subscription.
+module mcpLawReaderGrant 'modules/log-analytics-reader-role.bicep' = {
+  name: 'l7-mcp-law-reader-grant'
+  scope: az.resourceGroup(platformRgName)
+  params: {
+    logAnalyticsWorkspaceName: lawName
+    principalId: mcpToolsIdentity.outputs.principalId
+  }
+}
+
+// F13, Task 12: grants 'Security Reader' at SUBSCRIPTION scope — Defender for
+// Cloud posture (tools/cloud/defender-posture.ts:18) is a subscription-wide
+// construct with no narrower resource to bind to. See
+// modules/workload-role-assignments.bicep's header for why this is a separate
+// subscription-scope module rather than a parameter on the resource-scoped
+// grants above.
+module mcpSecurityReaderGrant 'modules/workload-role-assignments.bicep' = {
+  name: 'l7-mcp-security-reader-grant'
+  scope: subscription()
+  params: {
+    principalId: mcpToolsIdentity.outputs.principalId
+    // 'Security Reader' — read Defender for Cloud recommendations, alerts and secure score; no write access (built-in role, stable GUID; verified against learn.microsoft.com/azure/role-based-access-control/built-in-roles/security).
+    roleDefinitionId: '39bc4728-0917-49c7-9d2c-d95423bc2eb4'
+  }
+}
+
+// F13, Task 12: grants 'Cost Management Reader' at SUBSCRIPTION scope —
+// mcp-tools reads subscription cost data (tools/auth.ts:92), which has no
+// narrower resource to scope to.
+module mcpCostManagementReaderGrant 'modules/workload-role-assignments.bicep' = {
+  name: 'l7-mcp-cost-mgmt-reader-grant'
+  scope: subscription()
+  params: {
+    principalId: mcpToolsIdentity.outputs.principalId
+    // 'Cost Management Reader' — view cost data and configuration (exports, budgets); no write access (built-in role, stable GUID; verified against learn.microsoft.com/azure/role-based-access-control/built-in-roles/management-and-governance).
+    roleDefinitionId: '72fafb9e-0641-4937-9268-a91bfd8191a3'
+  }
+}
+
 // ------------------------------------------------------------------ data-api workload identity
 
 // Same reasoning as mcp-tools, for the same reason: data-api is the browser's
@@ -429,6 +471,64 @@ module dataApiAppInsightsGrant 'modules/monitoring-metrics-publisher-role.bicep'
     principalId: dataApiIdentity.outputs.principalId
   }
 }
+
+// F13, Task 12: grants 'Log Analytics Reader' on the platform LAW — data-api
+// reads it via MLS_LOG_ANALYTICS_WORKSPACE_ID (dataApiCloudEnv above).
+module dataApiLawReaderGrant 'modules/log-analytics-reader-role.bicep' = {
+  name: 'l7-data-api-law-reader-grant'
+  scope: az.resourceGroup(platformRgName)
+  params: {
+    logAnalyticsWorkspaceName: lawName
+    principalId: dataApiIdentity.outputs.principalId
+  }
+}
+
+// F13, Task 12: grants 'Security Reader' at SUBSCRIPTION scope — data-api
+// reads Defender for Cloud's secure score via MLS_DEFENDER_SUBSCRIPTION_ID
+// (dataApiCloudEnv above). Same role, same scope and same reasoning as
+// mcpSecurityReaderGrant above; a separate module invocation because each
+// Microsoft.Authorization/roleAssignments name is derived per-principal
+// (guid(subscription().id, principalId, roleDefinitionId)).
+module dataApiSecurityReaderGrant 'modules/workload-role-assignments.bicep' = {
+  name: 'l7-data-api-security-reader-grant'
+  scope: subscription()
+  params: {
+    principalId: dataApiIdentity.outputs.principalId
+    // 'Security Reader' — read Defender for Cloud recommendations, alerts and secure score; no write access (built-in role, stable GUID; verified against learn.microsoft.com/azure/role-based-access-control/built-in-roles/security).
+    roleDefinitionId: '39bc4728-0917-49c7-9d2c-d95423bc2eb4'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// F13 STATUS SUMMARY (compliance/findings/2026-08-26-prepublication-review.md
+// #f13, Task 12) — five of the seven documented workload grants are expressed
+// above or below; two are NOT, and F13 stays OPEN because of them:
+//
+//   * data-api  -> SQL contained-database user   -- data/seed/sql/900-contained-users.sql
+//   * data-api  -> Fabric workspace Viewer        -- infra/fabric/provision-workspace.ps1 (-DataApiPrincipalId)
+//   * data-api  -> Log Analytics Reader           -- dataApiLawReaderGrant, above
+//   * data-api  -> Security Reader                -- dataApiSecurityReaderGrant, above
+//   * mcp-tools -> Log Analytics Reader           -- mcpLawReaderGrant, above
+//   * mcp-tools -> Security Reader                -- mcpSecurityReaderGrant, above
+//   * mcp-tools -> Cost Management Reader         -- mcpCostManagementReaderGrant, above
+//
+// NOT expressed here:
+//   * Cost Management service -> Storage Blob Data Contributor: owned by
+//     Task 17 (F15) — the export's identity is created in
+//     .github/workflows/layer-06-platform.yml, not by Bicep, so there is no
+//     principalId available to this template to grant.
+//   * cost-ingest -> Storage Blob Data Reader: blocked on F19 — cost-ingest
+//     has no Function App, and therefore no identity, anywhere in this
+//     repo's IaC (infra-up.yml:31's claim that it deploys inside
+//     layer-06-platform.yml does not hold).
+//
+// Also recorded, NOT fixed here (different principal, different failure mode
+// — see each finding): F20 (the SQL grant above is expressed but nothing
+// re-runs data/seed/seed.ps1 -Target sql after L7 creates the identity, so it
+// never applies in a single infra-up.yml pass) and F21 (mls-verifier's own
+// documented Fabric workspace Viewer grant does not exist either, breaking
+// the L5 Verifier audit — unrelated to this layer's workload identities).
+// ---------------------------------------------------------------------------
 
 // ------------------------------------------------------------------ container apps
 

@@ -210,6 +210,87 @@ function Get-FabricTable {
     return @(Get-CollectionValue -Response $response)
 }
 
+function Get-FabricWorkspaceRoleAssignment {
+    <#
+    .SYNOPSIS
+        Role assignments for a workspace, or $null for a given principal when absent.
+        GET /v1/workspaces/{workspaceId}/roleAssignments
+    .DESCRIPTION
+        F13 (compliance/findings/2026-08-26-prepublication-review.md#f13, Task 12):
+        used to make Add-FabricWorkspaceRoleAssignment idempotent — check before
+        granting rather than relying on the API to reject a duplicate.
+        Ref: https://learn.microsoft.com/en-us/rest/api/fabric/core/workspaces/list-workspace-role-assignments
+        Pagination (continuationToken/continuationUri) is not followed: every known
+        caller (a handful of workload identities, never users) fits in one page, and
+        the repo's other Fabric list wrappers (Get-FabricWorkspace, Get-FabricLakehouse)
+        make the same simplifying assumption.
+    .PARAMETER PrincipalId
+        When supplied, returns only the one assignment for that principal (or $null).
+        Omit to return every assignment in the workspace.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$WorkspaceId,
+        [string]$PrincipalId = ''
+    )
+    $response = Invoke-FabricApi -Token $Token -Method GET -Path "workspaces/$WorkspaceId/roleAssignments"
+    $assignments = @(Get-CollectionValue -Response $response)
+    if ([string]::IsNullOrWhiteSpace($PrincipalId)) { return $assignments }
+    $found = @($assignments | Where-Object { $_ -and (Get-PropertyValue -InputObject $_.principal -Name 'id') -eq $PrincipalId })
+    if ($found.Count -ge 1) { return $found[0] }
+    return $null
+}
+
+function Add-FabricWorkspaceRoleAssignment {
+    <#
+    .SYNOPSIS
+        Grant a principal a workspace role.
+        POST /v1/workspaces/{workspaceId}/roleAssignments
+    .DESCRIPTION
+        F13 (compliance/findings/2026-08-26-prepublication-review.md#f13, Task 12):
+        the REST path apps/main.bicep's grant modules cannot reach — a Fabric
+        workspace role assignment is not an ARM resource, so it cannot be a Bicep
+        `Microsoft.Authorization/roleAssignments` the way the subscription- and
+        resource-scoped grants in infra/bicep/apps/modules/ are. This is the
+        function provision-workspace.ps1 calls for data-api's workspace Viewer
+        grant; the caller is responsible for idempotency (check
+        Get-FabricWorkspaceRoleAssignment first) — this function always POSTs.
+        Ref: https://learn.microsoft.com/en-us/rest/api/fabric/core/workspaces/add-workspace-role-assignment
+    .PARAMETER PrincipalType
+        One of the Fabric API's documented PrincipalType values (User,
+        ServicePrincipal, Group, ServicePrincipalProfile, EntireTenant). A
+        user-assigned managed identity authenticates as a service principal, so a
+        UAMI's principalId is passed with type 'ServicePrincipal' — Fabric's REST
+        API has no separate "managed identity" principal type (see this API's
+        "Microsoft Entra supported identities" table: Service principal and
+        Managed identities share the same row).
+    .PARAMETER Role
+        One of the Fabric API's documented WorkspaceRole values (Admin, Member,
+        Contributor, Viewer).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$WorkspaceId,
+        [Parameter(Mandatory)][string]$PrincipalId,
+        [ValidateSet('User', 'ServicePrincipal', 'Group', 'ServicePrincipalProfile', 'EntireTenant')]
+        [string]$PrincipalType = 'ServicePrincipal',
+        [ValidateSet('Admin', 'Member', 'Contributor', 'Viewer')]
+        [Parameter(Mandatory)][string]$Role
+    )
+    if (-not $PSCmdlet.ShouldProcess($PrincipalId, "Grant Fabric workspace role '$Role' in workspace $WorkspaceId")) {
+        return $null
+    }
+    $body = [ordered]@{
+        principal = [ordered]@{
+            id   = $PrincipalId
+            type = $PrincipalType
+        }
+        role      = $Role
+    }
+    return Invoke-FabricApi -Token $Token -Method POST -Path "workspaces/$WorkspaceId/roleAssignments" -Body $body
+}
+
 function Get-FabricCapacity {
     <#
     .SYNOPSIS
@@ -474,6 +555,8 @@ Export-ModuleMember -Function @(
     'Get-FabricLakehouse',
     'New-FabricLakehouse',
     'Get-FabricTable',
+    'Get-FabricWorkspaceRoleAssignment',
+    'Add-FabricWorkspaceRoleAssignment',
     'Get-FabricCapacity',
     'Wait-FabricOperation',
     'New-FabricDataAgentDefinition',
