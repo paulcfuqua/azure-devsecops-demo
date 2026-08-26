@@ -132,12 +132,40 @@ const FORBIDDEN_BY_DIALECT: Record<SqlDialect, string[]> = {
   ],
 };
 
+export interface ScrubResult {
+  /**
+   * Structurally faithful text with comments, string literals and quoted/
+   * bracketed identifiers blanked out — what keyword and `;` scanning run
+   * against.
+   */
+  text: string;
+  /**
+   * False if the input ends while still inside an unclosed comment, quote,
+   * backtick or bracket. When false, `text` is a PARTIAL scrub — everything
+   * from the unclosed opener onward was swallowed rather than scanned, so
+   * the caller must reject before trusting `text` for anything else.
+   */
+  terminated: boolean;
+}
+
 /**
  * Remove comments, string literals and quoted identifiers, replacing each with a
  * space so token boundaries survive. The result is structurally faithful but
- * contains no user text, which is what makes keyword and `;` scanning sound.
+ * contains no user text, which is what makes keyword and `;` scanning sound —
+ * PROVIDED the input was fully terminated; see `terminated` above.
+ *
+ * Nesting is dialect-aware for block comments: T-SQL genuinely nests `/* *\/`,
+ * so depth must return to 0 to close. SQLite does NOT nest — to the real
+ * engine, the FIRST `*\/` after an opening `/*` closes it, full stop, whatever
+ * `/*` sequences appear inside. Tracking depth unconditionally (tempting,
+ * since it is the "stricter" reading) is wrong for SQLite specifically: a
+ * crafted `/* a /* b *\/` has exactly one real close, so depth-tracking never
+ * returns to 0 and the scrubber treats it as unterminated — swallowing
+ * everything after it, including a stacked statement, from both the `;` scan
+ * and the forbidden-verb scan. Scoping nesting to `dialect === "tsql"` fixes
+ * that without weakening T-SQL, which really does need it.
  */
-export function scrubSql(sql: string): string {
+export function scrubSql(sql: string, dialect: SqlDialect): ScrubResult {
   let out = "";
   let i = 0;
   const n = sql.length;
@@ -145,59 +173,74 @@ export function scrubSql(sql: string): string {
     const ch = sql[i] as string;
     const next = sql[i + 1];
 
-    // -- line comment
+    // -- line comment: extends to end of line or end of input either way, so
+    // it can never itself be "unterminated".
     if (ch === "-" && next === "-") {
       while (i < n && sql[i] !== "\n") i += 1;
       out += " ";
       continue;
     }
-    // /* block comment */ (T-SQL nests these; SQLite does not — handle nesting,
-    // which is the stricter reading and cannot under-scrub either dialect)
+    // /* block comment */ — see the dialect-aware nesting note above.
     if (ch === "/" && next === "*") {
       let depth = 1;
       i += 2;
       while (i < n && depth > 0) {
-        if (sql[i] === "/" && sql[i + 1] === "*") { depth += 1; i += 2; continue; }
-        if (sql[i] === "*" && sql[i + 1] === "/") { depth -= 1; i += 2; continue; }
+        if (dialect === "tsql" && sql[i] === "/" && sql[i + 1] === "*") {
+          depth += 1;
+          i += 2;
+          continue;
+        }
+        if (sql[i] === "*" && sql[i + 1] === "/") {
+          depth -= 1;
+          i += 2;
+          continue;
+        }
         i += 1;
       }
+      if (depth > 0) return { text: out, terminated: false };
       out += " ";
       continue;
     }
     // 'string literal', '' escapes the quote
     if (ch === "'") {
       i += 1;
+      let closed = false;
       while (i < n) {
         if (sql[i] === "'" && sql[i + 1] === "'") { i += 2; continue; }
-        if (sql[i] === "'") { i += 1; break; }
+        if (sql[i] === "'") { i += 1; closed = true; break; }
         i += 1;
       }
+      if (!closed) return { text: out, terminated: false };
       out += " '' ";
       continue;
     }
-    // "quoted identifier" / [bracketed identifier] / `backticked identifier`
+    // "quoted identifier" / `backticked identifier`
     if (ch === '"' || ch === "`") {
       const quote = ch;
       i += 1;
+      let closed = false;
       while (i < n) {
         if (sql[i] === quote && sql[i + 1] === quote) { i += 2; continue; }
-        if (sql[i] === quote) { i += 1; break; }
+        if (sql[i] === quote) { i += 1; closed = true; break; }
         i += 1;
       }
+      if (!closed) return { text: out, terminated: false };
       out += " id ";
       continue;
     }
+    // [bracketed identifier]
     if (ch === "[") {
       i += 1;
       while (i < n && sql[i] !== "]") i += 1;
-      i += 1;
+      if (i >= n) return { text: out, terminated: false };
+      i += 1; // consume ']'
       out += " id ";
       continue;
     }
     out += ch;
     i += 1;
   }
-  return out;
+  return { text: out, terminated: true };
 }
 
 export class SqlRejected extends Error {
@@ -211,6 +254,10 @@ export class SqlRejected extends Error {
  * The single gate both backends run before any engine sees the text. Enforces,
  * identically in SQLite and T-SQL:
  *
+ *   0. the statement is structurally complete — no comment, quote, backtick
+ *      or bracket left open (see `scrubSql`'s `terminated` flag). Checked
+ *      FIRST: an unterminated opener means the scrub below is partial, so
+ *      nothing downstream may be trusted yet.
  *   1. exactly ONE statement (a trailing `;` is allowed, a second statement is
  *      not — sql.js quietly runs only the first, but a TDS batch would run them
  *      all, so this check is what makes the two backends behave the same);
@@ -226,7 +273,19 @@ export function assertReadOnlySingleStatement(sql: unknown, dialect: SqlDialect)
     throw new SqlRejected("query_lakehouse_sql requires a non-empty 'sql' string");
   }
 
-  const scrubbed = scrubSql(sql);
+  const { text: scrubbed, terminated } = scrubSql(sql, dialect);
+
+  // (0) structural validity, before anything else runs: an unclosed comment,
+  // quote, backtick or bracket means `scrubbed` only covers the text up to
+  // the unclosed opener — the `;` scan and the keyword scan below would be
+  // blind to everything past it (F12). The caller is an LLM agent that will
+  // retry, so tell it exactly what to fix.
+  if (!terminated) {
+    throw new SqlRejected(
+      "The statement has an unterminated comment or quoted section. Send one complete " +
+        "SELECT (or WITH … SELECT) with all comments and quotes closed.",
+    );
+  }
 
   // (1) single statement. Scan the scrubbed text: any ';' with non-whitespace
   // after it means a second statement.

@@ -276,29 +276,117 @@ describe("the read-only gate — one implementation, both dialects", () => {
       expect(message).toMatch(/Rewrite it as a plain SELECT/);
     }
   });
+
+  // -- F12: SQLite does not nest block comments; T-SQL does. The original
+  // scrubber tracked nesting depth unconditionally, which is the STRICTER
+  // reading for T-SQL (correct) but the WRONG one for SQLite: a fake nested
+  // `/*` with only one real `*/` reads as never-closed, so the scrubber ate
+  // everything after it — hiding a stacked statement from both the `;` scan
+  // and the forbidden-verb scan below, while the raw text (stacked statement
+  // included) still reached the engine. Same trick with an unterminated `'`,
+  // `[` or backtick.
+  describe("unterminated comments and quotes (F12)", () => {
+    it.each([
+      ["SELECT 1 /* a /* b */ ; DELETE FROM launches", "tsql"],
+      ["SELECT 1 ` ; DROP TABLE launches", "sqlite"],
+      ["SELECT 1 ' ; DROP TABLE launches", "sqlite"],
+      ["SELECT 1 [ ; DROP TABLE launches", "sqlite"],
+    ] as const)(
+      "rejects as unterminated: %s (%s)",
+      (sql, dialect) => {
+        expect(() => assertReadOnlySingleStatement(sql, dialect)).toThrow(/unterminated/i);
+      },
+    );
+
+    // NOTE on the fifth case from the brief — verified, not assumed, against
+    // the real-engine semantics both F12 and this fix describe: to SQLite,
+    // `/* a /* b */` is a CLOSED comment (first `*/` wins, no nesting), so
+    // `terminated` is correctly TRUE for this input under "sqlite". What it
+    // exposes is " ; DELETE FROM launches" as a second, raw statement — which
+    // is exactly what the PRE-EXISTING single-statement scan exists to catch,
+    // and now can, because the comment is no longer over-scrubbed. Asserting
+    // "/unterminated/i" here would be asserting the wrong defect for the
+    // dialect whose entire point is that it does NOT nest.
+    it(
+      "SQLite: the same fake-nested comment is correctly CLOSED (not unterminated) " +
+        "and the exposed tail is caught by the single-statement check instead",
+      () => {
+        expect(() =>
+          assertReadOnlySingleStatement("SELECT 1 /* a /* b */ ; DELETE FROM launches", "sqlite"),
+        ).toThrow(/single SQL statement/i);
+      },
+    );
+
+    it("still accepts a legitimate nested-looking comment", () => {
+      expect(() =>
+        assertReadOnlySingleStatement("SELECT 1 /* note: a/b ratio */", "sqlite"),
+      ).not.toThrow();
+      expect(() =>
+        assertReadOnlySingleStatement("SELECT 1 /* note: a/b ratio */", "tsql"),
+      ).not.toThrow();
+    });
+
+    it("the rejection message tells the (LLM) caller what to do", () => {
+      try {
+        assertReadOnlySingleStatement("SELECT 1 ' ; DROP TABLE launches", "sqlite");
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        const message = (err as Error).message;
+        expect(message).toMatch(/unterminated/i);
+        expect(message).toMatch(/send one complete/i);
+      }
+    });
+  });
 });
 
 describe("scrubSql", () => {
   it("removes line and block comments", () => {
-    expect(scrubSql("SELECT 1 -- DROP TABLE t\n")).not.toMatch(/drop/i);
-    expect(scrubSql("SELECT /* DROP TABLE t */ 1")).not.toMatch(/drop/i);
+    expect(scrubSql("SELECT 1 -- DROP TABLE t\n", "sqlite").text).not.toMatch(/drop/i);
+    expect(scrubSql("SELECT /* DROP TABLE t */ 1", "sqlite").text).not.toMatch(/drop/i);
   });
 
   it("handles nested block comments (T-SQL allows them)", () => {
-    expect(scrubSql("SELECT /* a /* DROP */ b */ 1")).not.toMatch(/drop/i);
+    const result = scrubSql("SELECT /* a /* DROP */ b */ 1", "tsql");
+    expect(result.text).not.toMatch(/drop/i);
+    expect(result.terminated).toBe(true);
+  });
+
+  it("does NOT nest block comments for SQLite: the first */ closes", () => {
+    // Same raw text as the T-SQL case above. For T-SQL it takes BOTH `*/` to
+    // close (genuine nesting). For SQLite the FIRST `*/` closes — DROP is
+    // still scrubbed (it's inside the now-shorter comment), but "b */ 1" is
+    // exposed as live text, with a stray `*/` in it, because the comment was
+    // really over once SQLite saw its first close.
+    const result = scrubSql("SELECT /* a /* DROP */ b */ 1", "sqlite");
+    expect(result.terminated).toBe(true);
+    expect(result.text).not.toMatch(/drop/i);
+    expect(result.text).toContain("b */ 1");
   });
 
   it("removes string literals, including doubled-quote escapes", () => {
-    expect(scrubSql("SELECT 'it''s a DROP' AS x")).not.toMatch(/drop/i);
+    expect(scrubSql("SELECT 'it''s a DROP' AS x", "sqlite").text).not.toMatch(/drop/i);
   });
 
   it("removes quoted and bracketed identifiers", () => {
-    expect(scrubSql('SELECT "DROP" FROM t')).not.toMatch(/drop/i);
-    expect(scrubSql("SELECT [DROP] FROM t")).not.toMatch(/drop/i);
+    expect(scrubSql('SELECT "DROP" FROM t', "sqlite").text).not.toMatch(/drop/i);
+    expect(scrubSql("SELECT [DROP] FROM t", "sqlite").text).not.toMatch(/drop/i);
   });
 
   it("preserves structure so token boundaries and semicolons survive", () => {
-    expect(scrubSql("SELECT 'a';SELECT 'b'")).toMatch(/;/);
-    expect(scrubSql("SELECT a FROM b")).toContain("FROM");
+    expect(scrubSql("SELECT 'a';SELECT 'b'", "sqlite").text).toMatch(/;/);
+    expect(scrubSql("SELECT a FROM b", "sqlite").text).toContain("FROM");
+  });
+
+  it("flags terminated: false for an unclosed comment, quote, backtick or bracket", () => {
+    expect(scrubSql("SELECT 1 /* never closed", "tsql").terminated).toBe(false);
+    expect(scrubSql("SELECT 1 '", "sqlite").terminated).toBe(false);
+    expect(scrubSql("SELECT 1 `", "sqlite").terminated).toBe(false);
+    expect(scrubSql("SELECT 1 [", "sqlite").terminated).toBe(false);
+    expect(scrubSql('SELECT 1 "', "sqlite").terminated).toBe(false);
+  });
+
+  it("flags terminated: true for well-formed input", () => {
+    expect(scrubSql("SELECT 1", "sqlite").terminated).toBe(true);
+    expect(scrubSql("SELECT 1;", "tsql").terminated).toBe(true);
   });
 });
