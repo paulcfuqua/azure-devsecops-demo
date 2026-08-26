@@ -2,6 +2,7 @@
   "name": "@mls/cost-ingest",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Cost Management daily export -> lakehouse cost_daily (L6): a consumption-plan Azure Function, blob-triggered on the cost-export container, that parses the exported CSV, normalises it to the cost_daily shape and replaces the month's partition in OneLake. Managed identity only; no stored credential exists anywhere in the app.",
   "//workspaces": "IS a member of the repo-root `workspaces` list, alongside apps/directline-token which deploys the same way. An earlier note here claimed the opposite on the grounds that hoisting server SDKs would pollute the browser apps' dependency graph; that reasoning does not hold — npm hoisting does not make a package importable from a workspace that has not declared it, and @azure/identity is hoisted by apps/data-api regardless. Being a member is what makes root `npm test` run this package's suite; the only package deliberately excluded is apps/vuln-lab, whose pinned CVEs hoisting would silently patch.",
   "type": "module",

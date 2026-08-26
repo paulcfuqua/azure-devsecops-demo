@@ -2,6 +2,7 @@
   "name": "@mls/mcp-tools",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Meridian Launch Systems MCP tool server (L8): the five ops/sec/cost tools exposed over Streamable HTTP for the custom Microsoft Copilot Studio agent to attach as tools. No LLM lives here.",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,7 +1,8 @@
 {
-  "name": "azure-devsecops",
+  "name": "azure-devsecops-demo",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Meridian Launch Systems demo monorepo — npm workspace root for the apps tree.",
   "engines": {
     "node": ">=20"

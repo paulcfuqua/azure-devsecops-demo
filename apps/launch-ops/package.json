@@ -2,6 +2,7 @@
   "name": "@mls/launch-ops",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Meridian Launch Systems launch-ops app: schedule, outcomes, scrub analysis, and fleet reference views rendered from @mls/spec-renderer specs. LOCAL_DATA mode reads data/generated JSON; the ApiProvider targets the L7 SQL/lakehouse-backed API.",
   "type": "module",
   "scripts": {

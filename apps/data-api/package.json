@@ -2,6 +2,7 @@
   "name": "@mls/data-api",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Meridian Launch Systems serving layer (L7): the REST API both frontends' ApiProvider already expects — GET /tables/:table for the ten generator tables and GET /feeds/:name for the six control-tower feeds. LOCAL backends read data/generated + committed fixtures (test harness); CLOUD backends read Azure SQL, the Fabric lakehouse SQL analytics endpoint and the live GitHub / Defender / Log Analytics APIs via managed identity.",
   "type": "module",
   "main": "./dist/index.js",

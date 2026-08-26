@@ -2,6 +2,7 @@
   "name": "@mls/spec-renderer",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Fixed JSON-spec-to-UI renderer for Meridian Launch Systems apps. The copilot emits JSON component specs (never UI code); this library validates them against spec.schema.json and renders Fluent UI v9 components.",
   "type": "module",
   "main": "./dist/index.cjs",

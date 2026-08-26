@@ -1,0 +1,49 @@
+Meridian Launch Systems — Azure DevSecOps Reference Demo
+Copyright 2026 Paul Fuqua
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------------------
+
+"Meridian Launch Systems" is a fictional company invented for this demonstration.
+It is not affiliated with, endorsed by, or derived from any real organization, and
+any resemblance to an existing company of a similar name is coincidental.
+
+All people, credentials, telemetry and business records in this repository are
+synthetic. The demo personas (Dana Reyes, Miles Okafor, Priya Natarajan, Sofia
+Lindqvist, Marcus Webb) are fictional and contain no real personal data.
+
+Public facts about the launch industry — vehicle names, launch sites and similar
+reference data — are used as background colour only and remain the property of
+their respective owners. Nothing in this repository is proprietary to, or derived
+from, any employer of the author.
+
+--------------------------------------------------------------------------------
+
+DELIBERATELY VULNERABLE CODE
+
+The package under `apps/vuln-lab/` intentionally contains known-vulnerable
+dependency pins and unsafe code paths. They exist solely as fixtures for the
+self-healing pipeline demonstration and are never imported by, built into, or
+deployed with any application in this repository. See `SECURITY.md` before
+reporting anything found there.
+
+--------------------------------------------------------------------------------
+
+Microsoft, Azure, Microsoft Entra, Microsoft Purview, Microsoft Fabric, Copilot
+Studio, Power Platform and GitHub are trademarks of the Microsoft group of
+companies. This project is an independent work and is not affiliated with or
+endorsed by Microsoft.
+
+Third-party dependencies are distributed under their own licenses; see the
+`package.json` and lockfile of each workspace for details.

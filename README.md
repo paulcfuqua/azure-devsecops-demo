@@ -105,3 +105,20 @@ this one does not; it is recorded as open item P-8 in the
    the code fix (Dependabot writes the dependency ones) → patch PR → CI gauntlet →
    auto-merge on green → deploy → finding closed. Both healers are GitHub platform
    features, free on a public repo; we wrote neither. The PR trail is the demo.
+
+## Security and license
+
+Some of the vulnerabilities in this repository are **deliberate**. Everything under
+[`apps/vuln-lab/`](apps/vuln-lab/) carries real, deliberately unpatched CVEs and two
+CodeQL-detectable flaws — they are the fixtures showpiece #3 heals, they are never
+imported by any deployed app, and Dependabot or CodeQL alerts against them are the demo
+working rather than a defect. Read [SECURITY.md](SECURITY.md) before reporting anything
+found there; it also explains how to privately report a genuine issue found anywhere else.
+
+"Meridian Launch Systems" is a fictional company. Every person, credential and business
+record here is synthetic — see [NOTICE](NOTICE).
+
+Licensed under the **[Apache License 2.0](LICENSE)**. This is demonstration software,
+provided as is and without warranty, that provisions billable cloud resources; read
+[docs/runbooks/g0-bootstrap.md](docs/runbooks/g0-bootstrap.md) — including its cost model
+and spending guardrails — before deploying it anywhere.

@@ -2,6 +2,7 @@
   "name": "@mls/vuln-lab",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "DELIBERATELY VULNERABLE dependency lab (L10 self-healing showpiece seed). NEVER imported by any deployed app.",
   "type": "commonjs",
   "main": "index.js",
