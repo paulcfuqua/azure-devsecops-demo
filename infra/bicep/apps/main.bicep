@@ -8,8 +8,8 @@
 //     --template-file infra/bicep/apps/main.bicep \
 //     --parameters infra/bicep/apps/demo.bicepparam
 //
-// Apps (spec architecture summary, as amended 2026-08-24):
-//   data-api       external ingress   minReplicas=0
+// Apps (spec architecture summary, as amended 2026-08-26 — F1/Task 6):
+//   data-api       INTERNAL ingress   minReplicas=0   (was external; see below)
 //   launch-ops     external ingress   minReplicas=0
 //   control-tower  external ingress   minReplicas=0
 //   mcp-tools      external ingress   minReplicas=0
@@ -38,12 +38,27 @@
 //      at that app's HTTPS FQDN. The dependency is one-directional and Bicep
 //      infers it, so data-api provisions first.
 //
-// It is EXTERNAL ingress. Internal-only would be tighter, but the service is the
-// browser's data path through a same-origin proxy, /healthz is the first thing
-// anyone checks when a dashboard is blank, and apps/data-api/README.md already
-// treats the service as internet-reachable ("This API is reachable from the
-// internet and answers with tenant data") when it refuses a wildcard CORS
-// origin. It is read-only, allowlisted, row-capped and serves synthetic data.
+// It is INTERNAL-ONLY ingress (F1, Task 6 — was EXTERNAL until 2026-08-26).
+// data-api shipped with ingressExternal:true and, by its own source comment
+// (src/app.ts:56), "deliberately no Authorization here" in front of a managed
+// identity that reads Azure SQL, the Fabric lakehouse, Log Analytics, Defender
+// secure score and GitHub security alerts. Both frontends already proxy
+// `/api/*` server-side through nginx (control-tower and launch-ops
+// nginx.conf.template), so the only legitimate callers live inside this
+// Container Apps environment — internal ingress is strictly better than a
+// shared token here: nothing to distribute, nothing to rotate, nothing that
+// can leak from a static bundle. Azure Container Apps still assigns an FQDN to
+// an internal-ingress app, resolvable within the environment, which is what
+// DATA_API_ORIGIN below points both frontends at. The old rationale for
+// external ingress ("it's the browser's data path", "/healthz is the first
+// thing anyone checks when a dashboard is blank") does not survive contact
+// with the cost math: one unauthenticated request every 59 minutes, from
+// anywhere on the internet, holds `GP_S_Gen5` serverless SQL open against its
+// 60s autoPauseDelay — about $188/month against a $200 credit, no flood
+// required. /healthz is now reached with `az containerapp exec`, not a browser.
+// src/config.ts:159's wildcard-CORS refusal message ("This API is reachable
+// from the internet...") is now stale prose on an otherwise-still-useful
+// guardrail; out of scope here, left for a docs pass.
 //
 // MLS_IMAGE_DIGEST is injected into every app for L7 V7.1: the criterion binds
 // "endpoint is up" to "endpoint serves the audited build" by comparing the
@@ -398,7 +413,7 @@ module dataApiApp 'br/public:avm/res/app/container-app:0.23.0' = {
     location: location
     tags: tagsDataApi
     environmentResourceId: caeResourceId
-    ingressExternal: true
+    ingressExternal: false // F1 (Task 6): no legitimate caller is outside the CAE
     ingressTargetPort: dataApiTargetPort
     ingressAllowInsecure: false
     scaleSettings: scaleToZero
