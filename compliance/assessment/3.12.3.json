@@ -5,12 +5,11 @@
   "assertion": {
     "status": "GAP",
     "evidence": [
-      "compliance/findings/2026-08-26-prepublication-review.md#f5",
       "compliance/findings/2026-08-26-prepublication-review.md#f6"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F5: lint-ci's node job dies on its first step — a stale glob over .github/scripts/, deleted by the 2026-08-24 amendment, under set -euo pipefail with no nullglob — so npm test never runs across seven workspaces and the vuln-lab CVE-seed integrity check never executes. The JS/TS test gate is absent, not merely failing, and required checks being chosen 'after the first CI run' risks locking a permanently-red job out of the merge gauntlet forever. F6: the verifier's missing federated credential (3.12.1) means the per-layer verify jobs that are meant to provide ongoing control monitoring cannot authenticate at all, so continuous monitoring of security controls structurally does not happen despite G0 reporting green."
+    "rationale": "F6: the verifier's missing federated credential (3.12.1) means the per-layer verify jobs that are meant to provide ongoing control monitoring cannot authenticate at all, so continuous monitoring of security controls structurally does not happen despite G0 reporting green."
   },
   "recommendation": "Delete the dead node --check step outright rather than patching it with nullglob — a step that silently checks nothing is worse than a visibly failing one. Fix the verifier's federated credential per the 3.12.1 assessment and extend verify-g0.ps1 to assert real authentication succeeds, not just that the app registration exists.",
   "gapSeverity": "high",

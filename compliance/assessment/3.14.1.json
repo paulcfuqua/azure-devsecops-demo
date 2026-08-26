@@ -5,13 +5,12 @@
   "assertion": {
     "status": "GAP",
     "evidence": [
-      "compliance/findings/2026-08-26-prepublication-review.md#f5",
       "compliance/findings/2026-08-26-prepublication-review.md#f11",
       "compliance/findings/2026-08-26-prepublication-review.md#f12"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F5: the dead node CI leg means flaws across seven JS/TS workspaces are never caught by npm test, and the vuln-lab CVE-seed integrity check never runs — the flaw-detection gate is silently absent rather than visibly red. F11: javascript: hrefs are accepted end to end in Adaptive Cards (Action.OpenUrl and Image) with no scheme guard and no CSP on either nginx frontend — a traced XSS path from a prompt-injected agent response to script execution in control-tower's origin, where a live Direct Line token sits in JS memory. F12: the SQL dialect gate's comment-nesting logic is dialect-unaware (SQLite does not nest, T-SQL does), so a crafted unterminated comment or quote causes scrubSql to swallow the tail of a query past where the semicolon and forbidden-verb scans look; not exploitable today only because db.prepare() compiles a single statement, and lakehouse.ts already calls db.exec/db.run three lines away — one refactor from losing that incidental protection."
+    "rationale": "F11: javascript: hrefs are accepted end to end in Adaptive Cards (Action.OpenUrl and Image) with no scheme guard and no CSP on either nginx frontend — a traced XSS path from a prompt-injected agent response to script execution in control-tower's origin, where a live Direct Line token sits in JS memory. F12: the SQL dialect gate's comment-nesting logic is dialect-unaware (SQLite does not nest, T-SQL does), so a crafted unterminated comment or quote causes scrubSql to swallow the tail of a query past where the semicolon and forbidden-verb scans look; not exploitable today only because db.prepare() compiles a single statement, and lakehouse.ts already calls db.exec/db.run three lines away — one refactor from losing that incidental protection."
   },
   "recommendation": "Delete the dead node --check CI step (see 3.12.3). Add an /^https?:\\/\\//i scheme guard on both Action.OpenUrl.url and Image.url in AdaptiveCardView.tsx, add CSP/X-Content-Type-Options/Referrer-Policy to both nginx templates, and add USER nginx to both frontend Dockerfiles. Make scrubSql return a structural-validity flag and reject any statement ending in an unclosed comment, quote, backtick or bracket, with comment nesting made dialect-aware (SQLite non-nesting vs T-SQL nesting).",
   "gapSeverity": "high",
