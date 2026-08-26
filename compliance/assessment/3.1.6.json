@@ -1,0 +1,22 @@
+{
+  "control": "3.1.6",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f7"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F7: verify jobs — a nonsecurity function, read-only auditing — declare environment: demo and id-token: write while intending to run as the Reader-scoped verifier. Because the OIDC subject derives from the job's environment name rather than the client-id passed to azure/login, these nominally non-privileged jobs actually federate to the Owner-capable deployer identity, so a non-privileged (audit) function is never actually accessing the system through a non-privileged account or role."
+  },
+  "recommendation": "Move verify jobs to a dedicated verify environment federated only to mls-verifier (Reader), distinct from the demo environment used for deploys, so nonsecurity/audit functions run under a genuinely non-privileged identity.",
+  "gapSeverity": "high",
+  "references": [
+    ".github/workflows/verify-l1.yml:69-72",
+    ".github/workflows/self-heal.yml:683",
+    ".github/workflows/layer-07-apps.yml:336",
+    "scripts/bootstrap/01-root-oidc.ps1:354-358"
+  ]
+}

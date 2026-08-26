@@ -1,0 +1,22 @@
+{
+  "control": "3.13.16",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f4"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F4: the layer-06 and layer-07 job summaries and uploaded artifacts publish keyVaultUri, sqlServerFqdn, costExportStorageResourceId, lawCustomerId and the subscription ID embedded in every resource ID to a public, unauthenticated surface — estate configuration that CLAUDE.md's own hard rule 5 requires to live only in GitHub environment variables. That data is confidential estate configuration and it is not being protected at rest in its committed/published form."
+  },
+  "recommendation": "Stop cat-ing the full manifest into $GITHUB_STEP_SUMMARY; summarise only non-sensitive selected keys. Drop the artifact upload of the raw manifest entirely.",
+  "gapSeverity": "high",
+  "references": [
+    ".github/workflows/layer-06-platform.yml:192-197",
+    ".github/workflows/layer-06-platform.yml:299-304",
+    ".github/workflows/layer-07-apps.yml",
+    "infra/bicep/platform/main.bicep:344"
+  ]
+}

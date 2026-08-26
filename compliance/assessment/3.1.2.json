@@ -1,0 +1,25 @@
+{
+  "control": "3.1.2",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f1",
+      "compliance/findings/2026-08-26-prepublication-review.md#f13"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F1: data-api's middleware chain has a readOnlyGuard but no authentication layer in front of it, so external ingress means any caller can execute any exposed transaction (feed reads, table scans) without being limited to a permitted set. F13: zero workload RBAC exists in IaC — there is no principal-scoped restriction on which transactions or functions each workload identity may perform; the only grants that exist are subscription-scoped Owner (deployer) and Reader (verifier), an all-or-nothing shape with no per-function limitation for data-api, mcp-tools or cost-ingest."
+  },
+  "recommendation": "Set ingressExternal:false on data-api so its transactions are reachable only via the server-side proxy. Express the seven documented workload RBAC grants in IaC scoped to the specific transactions each principal needs (SQL contained-database user, Fabric Viewer, Log Analytics Reader, Security Reader, Cost Management Reader, Storage Blob Data Contributor/Reader) rather than the current all-or-nothing subscription grants.",
+  "gapSeverity": "critical",
+  "references": [
+    "apps/data-api/src/app.ts:56",
+    "apps/data-api/src/app.ts:67-169",
+    "infra/bicep/apps/main.bicep:334",
+    "infra/bicep/apps/main.bicep:637",
+    "infra/bicep/apps/main.bicep:101",
+    "infra/bicep/platform/main.bicep:301"
+  ]
+}

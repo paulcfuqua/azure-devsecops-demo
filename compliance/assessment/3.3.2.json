@@ -1,0 +1,19 @@
+{
+  "control": "3.3.2",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f9"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F9: with zero diagnosticSettings anywhere in the estate, no per-identity action against Key Vault, SQL, storage or the Container Apps environment is captured. Entra SignInLogs and AuditLogs are also not routed anywhere. Without that collection, no individual user's or workload identity's actions can be uniquely traced or held accountable — the traceability this control requires has nothing to trace against."
+  },
+  "recommendation": "Same collection fix as 3.3.1 (diagnosticSettings on Key Vault, storage, SQL server, CAE), plus route the subscription Activity Log and Entra SignInLogs/AuditLogs via the L2/L3 workflows so identity-to-action traceability exists across both data and control planes.",
+  "gapSeverity": "high",
+  "references": [
+    "infra/bicep/platform/main.bicep:236-285"
+  ]
+}

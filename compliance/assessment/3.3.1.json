@@ -1,0 +1,20 @@
+{
+  "control": "3.3.1",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f9"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F9: a grep for diagnosticSettings|auditingSettings|az monitor diagnostic across all Bicep, YAML and PowerShell in the repo returns zero matches. Key Vault access to the estate's only real credentials (Direct Line secret, mcp-auth-token) is entirely unlogged. SQL auditSettings default to Enabled but with neither storageAccountResourceId nor isAzureMonitorTargetEnabled set, so auditing is nominally on and writes nowhere. No audit logs or records exist to enable monitoring, analysis, investigation or reporting of unauthorized activity anywhere in the estate."
+  },
+  "recommendation": "Add diagnosticSettings on Key Vault, storage, the SQL server and the Container Apps environment, routed to the Log Analytics workspace. Set SQL auditSettings with isAzureMonitorTargetEnabled: true so the nominally-enabled audit actually writes somewhere. lawDailyQuotaGb: '1' already bounds the cost.",
+  "gapSeverity": "high",
+  "references": [
+    "infra/bicep/platform/main.bicep:236-285",
+    "infra/bicep/platform/main.bicep:91-93"
+  ]
+}

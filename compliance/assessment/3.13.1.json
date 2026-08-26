@@ -1,0 +1,23 @@
+{
+  "control": "3.13.1",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f1",
+      "compliance/findings/2026-08-26-prepublication-review.md#f2"
+    ],
+    "assertedBy": "paulcfuqua",
+    "assertedAt": "2026-08-26",
+    "rationale": "F1: data-api's external boundary (ingressExternal: true) has no inbound authentication, so the estate's external communications boundary is neither monitored nor controlled for anyone who discovers the FQDN. F2: mcp-tools' external boundary is required to stay open (Copilot Studio calls it from the internet), but the auth gate meant to protect that boundary is inert in the shipped configuration — the control the repo advertises most prominently at its key internal/external boundary is not actually enforced."
+  },
+  "recommendation": "Set ingressExternal:false on data-api so it is no longer an external boundary at all. Invert the MCP auth gate default and wire MLS_TOOL_BACKENDS plus Key Vault token resolution so the boundary that must legitimately stay external (mcp-tools) is actually protected.",
+  "gapSeverity": "critical",
+  "references": [
+    "apps/data-api/src/app.ts:56",
+    "infra/bicep/apps/main.bicep:334",
+    "apps/mcp-tools/src/auth-gate.ts:123-147",
+    "apps/mcp-tools/src/config.ts:156"
+  ]
+}
