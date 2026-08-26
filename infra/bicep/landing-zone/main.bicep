@@ -66,10 +66,6 @@ var nistR5InitiativeId = tenantResourceId('Microsoft.Authorization/policySetDefi
 // Built-in role definitions needed by remediation identities.
 // 'Tag Contributor' — role required by the inherit-tag modify policy.
 var tagContributorRoleId = tenantResourceId('Microsoft.Authorization/roleDefinitions', '4a9ae827-6dc8-4573-8ac7-8239d42aa03f')
-// 'Contributor' — [derived] blanket role for the NIST initiative identity: the
-// initiative contains deployIfNotExists/modify member policies, and ARM refuses
-// the assignment without an identity even in DoNotEnforce mode.
-var contributorRoleId = tenantResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
 
 // Required tags with short segments for assignment names (MG-scope policy
 // assignment names are capped at 24 characters).
