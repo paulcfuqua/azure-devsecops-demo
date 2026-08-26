@@ -191,7 +191,7 @@ jobs:
     needs: [preflight, apply]
     if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    environment: demo
+    environment: verify
     timeout-minutes: 60
     permissions:
       id-token: write

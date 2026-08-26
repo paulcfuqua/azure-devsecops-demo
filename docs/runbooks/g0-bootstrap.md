@@ -245,12 +245,15 @@ it is still about sign-in risk and auto-labeling, nothing else.
    from fabric.microsoft.com. Same day as item 1 — under the 30-day master clock every
    trial either matches the window or outlives it, so staggering buys nothing.
 3. ⚠ **Run `scripts/bootstrap/01-root-oidc.ps1`** (agent-authored in Phase P). Under
-   your login it: creates app registration `mls-github-deployer` with federated
-   credentials for this repo; grants Owner on the subscription; prints the
+   your login it: creates app registration `mls-github-deployer` with a federated
+   credential for this repo's `demo` environment only (deliberately no branch-ref
+   credential — 2026-08-26 finding F7); grants Owner on the subscription; prints the
    admin-consent URL for Graph application permissions (`User.ReadWrite.All`,
    `Group.ReadWrite.All`, `Application.ReadWrite.All`,
-   `Policy.ReadWrite.ConditionalAccess`, `Directory.Read.All`) — you click consent;
-   and creates the read-only `mls-verifier` app (Reader + `Directory.Read.All`).
+   `Policy.ReadWrite.ConditionalAccess`, `Directory.Read.All`)
+   — you click consent; and creates the read-only `mls-verifier` app (Reader +
+   `Directory.Read.All`) with its **own** federated credential on a distinct `verify`
+   environment, never `demo` (2026-08-26 findings F6/F7 — see item C9 below).
 4. ⚠ **Fabric SP API toggle:** in the Fabric admin portal enable **"Service principals
    can use Fabric APIs"** and add `mls-github-deployer` as admin on the trial capacity
    (~2 min, portal-only).
@@ -362,15 +365,35 @@ it is still about sign-in risk and auto-labeling, nothing else.
     `MCP_ALLOW_UNAUTHENTICATED=true`. Cloud mode otherwise refuses to boot without a
     token, by design: an open endpoint has to be chosen, never defaulted into.
 
-### C9 — the `demo` GitHub environment, variable by variable
+### C9 — the `demo` and `verify` GitHub environments, variable by variable
 
 These are GitHub **environment variables**, not secrets, and they are never committed
-(spec F5 / CLAUDE.md hard rule 5). Create the environment once and set each value:
+(spec F5 / CLAUDE.md hard rule 5). Create **both** environments — `demo` for deploy jobs,
+and `verify` for the Verifier (2026-08-26 findings F6/F7: `mls-verifier`'s federated
+credential is on a `verify` subject, deliberately distinct from the deployer's `demo`
+subject, so every `verify` job now declares `environment: verify` rather than `demo`) —
+and set each value:
 
 ```
 gh api -X PUT repos/paulcfuqua/azure-devsecops-demo/environments/demo
+gh api -X PUT repos/paulcfuqua/azure-devsecops-demo/environments/verify
 gh variable set <NAME> --env demo --body <value>
+gh variable set <NAME> --env verify --body <value>
 ```
+
+> **Why two environments, and why the same variable in both (2026-08-26).** GitHub
+> environment variables do not cascade between sibling environments. Every `verify` job's
+> `preflight` gate still runs under `environment: demo` (it only ever reads `vars.*`, never
+> logs in, so reusing the deployer's subject there costs nothing) and decides whether a
+> verify job should attempt to run at all — so `AZURE_VERIFIER_CLIENT_ID`,
+> `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` must exist on `demo` for that gate to read
+> `true`. The `verify` job itself now runs under `environment: verify`, where the SAME three
+> variables (plus `MLS_TENANT_DOMAIN` / `MLS_VERIFIER_APP_ID` for L4) must also exist for its
+> own `azure/login` to resolve them. Set each verifier-related variable in **both** places
+> with the **same value**. A deployment-branch policy restricting both environments to
+> `main` is a further, recommended hardening step (not required for G0, not yet scripted
+> here) — see finding F7's compounding point in
+> `compliance/findings/2026-08-26-prepublication-review.md#f7`.
 
 **Required before anything deploys** — `demo-env-guard` gates every Azure-facing job on
 these, and `scripts/up.ps1` refuses to dispatch without them:
@@ -403,11 +426,13 @@ these, and `scripts/up.ps1` refuses to dispatch without them:
 
 **Required for the Verifier** — without these the layer workflows skip their audits with a
 NOTICE rather than running them as the wrong identity. A skipped audit is not a passed
-one, so an estate configured this far is deployed but unverified:
+one, so an estate configured this far is deployed but unverified. Set each of these on
+**both** `demo` (the `preflight` gate reads it there) and `verify` (the `verify` job's
+`azure/login` reads it there) — see the box above:
 
 | Variable | Value | Read by |
 |---|---|---|
-| `AZURE_VERIFIER_CLIENT_ID` | `mls-verifier` app ID (item C3) | every `verify` job's `azure/login` |
+| `AZURE_VERIFIER_CLIENT_ID` | `mls-verifier` app ID (item C3) | `preflight`'s verifier-configured gate (on `demo`) and every `verify` job's `azure/login` (on `verify`) |
 | `MLS_TENANT_DOMAIN` | the tenant's **verified domain**, e.g. `contoso.onmicrosoft.com` | L3 `-Domain` (UPNs are `<prefix>@<domain>`; the committed manifest ships the placeholder `mls.example`), L4 `-Organization`, and both again inside V11.2. `ENTRA_DOMAIN` / `PURVIEW_ORGANIZATION` are accepted as the older spellings |
 | `MLS_VERIFIER_APP_ID` | `mls-verifier` app ID again, for the Security & Compliance app-only session | L4 V4.1/V4.2. Defaults to `AZURE_VERIFIER_CLIENT_ID` when unset |
 
@@ -446,35 +471,40 @@ has run. Each one is an audit input that cannot be derived from ARM:
 | `DATA_API_APP_NAME` | `<prefix>-data-api-<env>-ca` | Overrides the derived container app name in `app-data-api-ci.yml` |
 | `MCP_ENDPOINT_PATH` | `/mcp` | Path the MCP server serves Streamable HTTP on |
 
-### C9b — the `demo` environment's secrets, and why each one exists
+### C9b — the `demo` and `verify` environments' secrets, and why each one exists
 
 CI still holds **no LLM key and no cloud credential**: everything Azure authenticates by
 OIDC / workload identity federation, and the system's one runtime secret — the Direct Line
 secret — lives in Key Vault and is read from there at run time, never stored here
 (2026-08-24 amendment § 2). The secrets below exist for exactly one reason: **Security &
 Compliance PowerShell has no federated path**, so certificate app-only auth is the only
-way to touch Purview labels unattended.
+way to touch Purview labels unattended. The two verifier-only secrets (`MLS_VERIFIER_CERT_*`,
+`MLS_VERIFIER_GH_TOKEN`) are read inside `verify` jobs, which now run under the `verify`
+environment (2026-08-26 findings F6/F7) — set them with `--env verify`, not `--env demo`;
+`PURVIEW_CERT_BASE64` stays on `demo` since the L4 **deploy** job is unaffected by this fix.
 
 | Secret | Needed by | If absent |
 |---|---|---|
-| `PURVIEW_CERT_BASE64` (+ `PURVIEW_CERT_PASSWORD`) | the L4 **deploy** job's `Connect-IPPSSession` | `labels.ps1` stays a human-run step under your login — the L04 playbook's documented degrade path. Nothing fails |
-| `MLS_VERIFIER_CERT_BASE64` (+ `MLS_VERIFIER_CERT_PASSWORD`) | the L4 **audit**'s own read-only S&C session as `mls-verifier`, and the L3/L4 child audits V11.2 re-runs after a teardown | L4 verification skips with a NOTICE, and V11.2 records SKIP via `-SkipChildAudit`. Neither is a pass — the labels are simply unverified |
-| `MLS_VERIFIER_GH_TOKEN` | the Verifier's GitHub reads (V1.x, V7.4, V9.1–V9.4, V10.1, V10.2) | the audits fall back to the run-scoped `GITHUB_TOKEN`, which GitHub mints per run and stores nowhere. That covers everything **except Dependabot alerts**, which that token is refused on — so V10.2 reports an unreadable trail rather than a passing one. A fine-grained PAT with `security_events: read` closes it |
-| `SELF_HEAL_TOKEN` | `self-heal.yml`'s PR authoring | PRs are authored by `GITHUB_TOKEN`, whose `pull_request` runs start approval-required, so auto-merge cannot fire unattended. Parked sponsor decision |
+| `PURVIEW_CERT_BASE64` (+ `PURVIEW_CERT_PASSWORD`) | the L4 **deploy** job's `Connect-IPPSSession` (env `demo`) | `labels.ps1` stays a human-run step under your login — the L04 playbook's documented degrade path. Nothing fails |
+| `MLS_VERIFIER_CERT_BASE64` (+ `MLS_VERIFIER_CERT_PASSWORD`) | the L4 **audit**'s own read-only S&C session as `mls-verifier` (env `verify`), and the L3/L4 child audits V11.2 re-runs after a teardown | L4 verification skips with a NOTICE, and V11.2 records SKIP via `-SkipChildAudit`. Neither is a pass — the labels are simply unverified |
+| `MLS_VERIFIER_GH_TOKEN` | the Verifier's GitHub reads (V1.x, V7.4, V9.1–V9.4, V10.1, V10.2), all in `verify`-environment jobs | the audits fall back to the run-scoped `GITHUB_TOKEN`, which GitHub mints per run and stores nowhere. That covers everything **except Dependabot alerts**, which that token is refused on — so V10.2 reports an unreadable trail rather than a passing one. A fine-grained PAT with `security_events: read` closes it |
+| `SELF_HEAL_TOKEN` | `self-heal.yml`'s PR authoring (env `demo`) | PRs are authored by `GITHUB_TOKEN`, whose `pull_request` runs start approval-required, so auto-merge cannot fire unattended. Parked sponsor decision |
 
 Both certificates are the same shape: export the app's certificate as a PFX and store it
 base64-encoded. Set the password secret only if the PFX has one.
 
 ```
-gh secret set MLS_VERIFIER_CERT_BASE64 --env demo < <(base64 -w0 mls-verifier.pfx)
+gh secret set MLS_VERIFIER_CERT_BASE64 --env verify < <(base64 -w0 mls-verifier.pfx)
 ```
 
 ## D. What "G0 complete" means
 
 The Orchestrator re-runs `scripts/bootstrap/verify-g0.ps1` (read-only) and gets: a
 logged-in CLI context; `mls-github-deployer` with federation + Owner + consented Graph
-permissions; `mls-verifier` present; Fabric capacity visible with SP API access on;
-trial licenses assigned; a production-or-sandbox Power Platform environment linked to a
+permissions; `mls-verifier` present with its own federated credential whose subject is
+distinct from the deployer's (2026-08-26 findings F6/F7); Fabric capacity visible with SP
+API access on; trial licenses assigned; a production-or-sandbox Power Platform environment
+linked to a
 Copilot Studio pay-as-you-go billing plan on this subscription; budget in place. Only
 then does Layer 1 deploy.
 

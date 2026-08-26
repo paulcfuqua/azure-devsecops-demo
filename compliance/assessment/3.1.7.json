@@ -3,20 +3,20 @@
   "applicability": "applicable",
   "criteria": [],
   "assertion": {
-    "status": "GAP",
+    "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f7"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F7: anything executing inside a verify job — a compromised action, a malicious transitive dependency pulled by npm ci, a tampered audit script — can read the job-scoped ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN, mint a token with subject environment:demo, and exchange it against the Owner-capable deployer in three HTTP calls, going Reader to Owner. Nothing prevents this non-privileged execution context from invoking the privileged function, and (compounded by F9's absent diagnostic logging) the escalation is not captured in any audit log."
+    "rationale": "F7: anything executing inside a verify job — a compromised action, a malicious transitive dependency pulled by npm ci, a tampered audit script — could read the job-scoped ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN, mint a token with subject environment:demo, and exchange it against the Owner-capable deployer in three HTTP calls, going Reader to Owner. Nothing prevented this non-privileged execution context from invoking the privileged function. F7 is now CLOSED (Task 9): mls-verifier's federated credential is on a distinct environment:verify subject, and every verify job now declares environment: verify rather than environment: demo, so the OIDC token a verify job can mint no longer matches any credential federated to the deployer — the escalation primitive itself is removed, not merely made harder. verify-g0.ps1's Test-VerifierApp additionally asserts the verifier's subject is never shared with the deployer's, so a future misconfiguration reintroducing the collision fails G0 rather than passing silently. This control has no other open contributor (checked: no other finding cites 3.1.7)."
   },
-  "recommendation": "Federate a distinct verify environment to mls-verifier with deployment-branch policy restricting both demo and verify to main; assert the distinctness of the verify subject from the deployer's in verify-g0.ps1. Combined with F9's fix, capture the resulting OIDC token exchanges in diagnostic logging so any future privileged-function execution is auditable.",
-  "gapSeverity": "high",
+  "recommendation": "None outstanding for this control. (The verify/demo environment split and its Test-VerifierApp distinctness assertion, Task 9, are DONE.) Combined with F9's eventual diagnostic-logging fix, capturing OIDC token exchanges would make any future privileged-function execution auditable after the fact — a defense-in-depth addition, not a precondition for closing this control. A regression — environment: verify removed from a verify job, or the verifier re-federated to environment:demo — would reopen it.",
+  "gapSeverity": "none",
   "references": [
-    "scripts/bootstrap/01-root-oidc.ps1:354-358",
-    ".github/workflows/verify-l1.yml:69-72",
-    "docs/runbooks/layers/L01.md:41",
-    "docs/runbooks/layers/L01.md:155"
+    "scripts/bootstrap/01-root-oidc.ps1:377-422",
+    "scripts/bootstrap/verify-g0.ps1:211-244",
+    ".github/workflows/verify-l1.yml:69",
+    "docs/runbooks/layers/L01.md"
   ]
 }

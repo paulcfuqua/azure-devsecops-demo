@@ -168,7 +168,7 @@ jobs:
     needs: [preflight, apply]
     if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.apply.result != 'failure' && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    environment: demo
+    environment: verify
     timeout-minutes: 45
     permissions:
       id-token: write

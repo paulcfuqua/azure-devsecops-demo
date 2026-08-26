@@ -7,13 +7,19 @@
     Checks (all read-only; no mutation is ever issued):
       1. Azure CLI logged in and pointed at the target subscription.
       2. Deployer app (mls-github-deployer) exists.
-      3. Both GitHub OIDC federated credential subjects present on the deployer app.
+      3. The deployer's `environment:<EnvironmentName>` GitHub OIDC federated credential
+         subject is present (2026-08-26 finding F7: there is deliberately no branch-ref
+         subject to check for any more - see 01-root-oidc.ps1).
       4. Deployer service principal holds Owner on the subscription.
       5. Graph application permissions ADMIN-CONSENTED for the deployer SP
          (User.ReadWrite.All, Group.ReadWrite.All, Application.ReadWrite.All,
          Policy.ReadWrite.ConditionalAccess, Directory.Read.All - checked via
          appRoleAssignments, which only exist after consent).
-      6. Verifier app (mls-verifier) exists.
+      6. Verifier app (mls-verifier) exists AND holds its OWN federated credential on the
+         `environment:<VerifierEnvironmentName>` subject, DISTINCT from the deployer's
+         (2026-08-26 findings F6/F7 - an app registration existing is not proof the
+         identity can authenticate, and a subject shared with the deployer would let a
+         verify job mint the Owner-capable deployer's token instead of this one's).
       7. Fabric capacity reachable via the Fabric REST API (trial or F2). The
          "service principals can use Fabric APIs" toggle itself is portal-verified
          (spec F2) - this check runs under the human's token.
@@ -40,6 +46,9 @@ param(
     [ValidatePattern('^$|^[\w.-]+/[\w.-]+$')]
     [string]$Repository = '',
     [string]$EnvironmentName = 'demo',
+    # Must match -VerifierEnvironmentName on 01-root-oidc.ps1. Deliberately distinct from
+    # -EnvironmentName (2026-08-26 findings F6/F7) - see Test-VerifierApp below.
+    [string]$VerifierEnvironmentName = 'verify',
     [string]$BudgetName = 'mls-monthly-budget',
     [int]$BudgetAmount = 75
 )
@@ -138,15 +147,14 @@ function Test-Federation {
     }
     $creds = Invoke-AzCli -Arguments @('ad', 'app', 'federated-credential', 'list', '--id', $app.id, '--output', 'json')
     $subjects = @($creds | ForEach-Object { $_.subject })
-    $expected = @(
-        "repo:${Repository}:ref:refs/heads/main",
-        "repo:${Repository}:environment:$EnvironmentName"
-    )
-    $missing = @($expected | Where-Object { $subjects -notcontains $_ })
-    if ($missing.Count -eq 0) {
-        return New-CheckResult -Check 'Federation' -Passed $true -Detail 'main + environment subjects present'
+    # ONLY the environment subject, deliberately (2026-08-26 finding F7): 01-root-oidc.ps1
+    # no longer creates a branch-ref credential, so this audit must not expect one either -
+    # a leftover expectation here would fail G0 forever on a correctly-fixed deployer.
+    $expectedSubject = "repo:${Repository}:environment:$EnvironmentName"
+    if ($subjects -contains $expectedSubject) {
+        return New-CheckResult -Check 'Federation' -Passed $true -Detail 'environment subject present'
     }
-    return New-CheckResult -Check 'Federation' -Passed $false -Detail "missing subject(s): $($missing -join '; ')"
+    return New-CheckResult -Check 'Federation' -Passed $false -Detail "missing subject: $expectedSubject"
 }
 
 function Test-OwnerRole {
@@ -201,12 +209,38 @@ function Test-GraphConsent {
 }
 
 function Test-VerifierApp {
-    param([Parameter(Mandatory)][string]$VerifierAppName)
+    <#
+        2026-08-26 findings F6/F7: an app REGISTRATION existing is not proof the verifier
+        can authenticate - it needs its own federated credential - and that credential's
+        subject must be DISTINCT from the deployer's, or a verify job can mint a token
+        that exchanges for the Owner-capable deployer instead of this Reader-scoped
+        identity. Both are asserted here so G0 cannot report green on either gap.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$VerifierAppName,
+        [Parameter(Mandatory)][string]$DeployerAppName,
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][string]$VerifierEnvironmentName
+    )
     $app = Get-AdAppByName -DisplayName $VerifierAppName
-    if ($app) {
-        return New-CheckResult -Check 'VerifierApp' -Passed $true -Detail "appId $($app.appId)"
+    if (-not $app) {
+        return New-CheckResult -Check 'VerifierApp' -Passed $false -Detail "app registration '$VerifierAppName' not found (run 01-root-oidc.ps1)"
     }
-    return New-CheckResult -Check 'VerifierApp' -Passed $false -Detail "app registration '$VerifierAppName' not found (run 01-root-oidc.ps1)"
+    $expectedSubject = "repo:${Repository}:environment:$VerifierEnvironmentName"
+    $verifierCreds = Invoke-AzCli -Arguments @('ad', 'app', 'federated-credential', 'list', '--id', $app.id, '--output', 'json')
+    $verifierSubjects = @($verifierCreds | ForEach-Object { $_.subject })
+    if ($verifierSubjects -notcontains $expectedSubject) {
+        return New-CheckResult -Check 'VerifierApp' -Passed $false -Detail "no federated credential for subject '$expectedSubject' - mls-verifier cannot authenticate (run 01-root-oidc.ps1)"
+    }
+    $deployerApp = Get-AdAppByName -DisplayName $DeployerAppName
+    if ($deployerApp) {
+        $deployerCreds = Invoke-AzCli -Arguments @('ad', 'app', 'federated-credential', 'list', '--id', $deployerApp.id, '--output', 'json')
+        $deployerSubjects = @($deployerCreds | ForEach-Object { $_.subject })
+        if ($deployerSubjects -contains $expectedSubject) {
+            return New-CheckResult -Check 'VerifierApp' -Passed $false -Detail "subject '$expectedSubject' is federated to BOTH apps - it must be distinct to the verifier (2026-08-26 finding F7)"
+        }
+    }
+    return New-CheckResult -Check 'VerifierApp' -Passed $true -Detail "appId $($app.appId); federated credential present, subject distinct from the deployer's"
 }
 
 function Test-FabricCapacity {
@@ -281,6 +315,7 @@ function Invoke-Main {
         [Parameter(Mandatory)][string]$VerifierAppName,
         [Parameter(Mandatory)][string]$Repository,
         [Parameter(Mandatory)][string]$EnvironmentName,
+        [string]$VerifierEnvironmentName = 'verify',
         [Parameter(Mandatory)][string]$BudgetName,
         [Parameter(Mandatory)][int]$BudgetAmount
     )
@@ -290,7 +325,7 @@ function Invoke-Main {
         @{ Name = 'Federation'; Run = { Test-Federation -DeployerAppName $DeployerAppName -Repository $Repository -EnvironmentName $EnvironmentName } }
         @{ Name = 'OwnerRole'; Run = { Test-OwnerRole -DeployerAppName $DeployerAppName -SubscriptionId $SubscriptionId } }
         @{ Name = 'GraphConsent'; Run = { Test-GraphConsent -DeployerAppName $DeployerAppName } }
-        @{ Name = 'VerifierApp'; Run = { Test-VerifierApp -VerifierAppName $VerifierAppName } }
+        @{ Name = 'VerifierApp'; Run = { Test-VerifierApp -VerifierAppName $VerifierAppName -DeployerAppName $DeployerAppName -Repository $Repository -VerifierEnvironmentName $VerifierEnvironmentName } }
         @{ Name = 'FabricCapacity'; Run = { Test-FabricCapacity } }
         @{ Name = 'Licenses'; Run = { Test-License } }
         @{ Name = 'Budget'; Run = { Test-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName -BudgetAmount $BudgetAmount } }
@@ -328,7 +363,7 @@ if (-not $env:MLS_SKIP_MAIN) {
     $resolvedRepository = Resolve-RepositoryInput -Value $Repository
     $results = Invoke-Main -SubscriptionId $SubscriptionId -DeployerAppName $DeployerAppName `
         -VerifierAppName $VerifierAppName -Repository $resolvedRepository -EnvironmentName $EnvironmentName `
-        -BudgetName $BudgetName -BudgetAmount $BudgetAmount
+        -VerifierEnvironmentName $VerifierEnvironmentName -BudgetName $BudgetName -BudgetAmount $BudgetAmount
     $results | Format-Table -AutoSize -Wrap | Out-Host
     $failCount = Get-FailCount -Results $results
     if ($failCount -gt 0) {

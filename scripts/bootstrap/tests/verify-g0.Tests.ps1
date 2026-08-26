@@ -24,7 +24,8 @@ BeforeAll {
     function Invoke-VerifyForTest {
         Invoke-Main -SubscriptionId $script:Sub -DeployerAppName 'mls-github-deployer' `
             -VerifierAppName 'mls-verifier' -Repository 'paulcfuqua/azure-devsecops-demo' `
-            -EnvironmentName 'demo' -BudgetName 'mls-monthly-budget' -BudgetAmount 75
+            -EnvironmentName 'demo' -VerifierEnvironmentName 'verify' `
+            -BudgetName 'mls-monthly-budget' -BudgetAmount 75
     }
 
     function Get-Row {
@@ -49,10 +50,15 @@ Describe 'verify-g0' {
             'mls-github-deployer' = @([pscustomobject]@{ id = 'dep-obj'; appId = 'dep-app'; displayName = 'mls-github-deployer' })
             'mls-verifier'        = @([pscustomobject]@{ id = 'ver-obj'; appId = 'ver-app'; displayName = 'mls-verifier' })
         }
-        $script:FedCreds = @(
-            [pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main' }
-            [pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo' }
-        )
+        # Fed creds are keyed by app OBJECT id (dep-obj / ver-obj), mirroring the real
+        # `az ad app federated-credential list --id <objectId>` call - Test-VerifierApp
+        # reads BOTH apps' credentials to check the verifier's subject is distinct from
+        # the deployer's (2026-08-26 findings F6/F7), so a mock that ignored --id would
+        # mask that distinctness check entirely.
+        $script:FedCredsByAppObjectId = @{
+            'dep-obj' = @([pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo' })
+            'ver-obj' = @([pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:verify' })
+        }
         $script:Sps = @{ 'dep-app' = @([pscustomobject]@{ id = 'sp-dep' }) }
         $script:RoleAssignments = @([pscustomobject]@{ id = 'ra1' })
         $script:AppRoleAssignments = [pscustomobject]@{
@@ -77,7 +83,9 @@ Describe 'verify-g0' {
             if ($joined -like 'ad app list*') {
                 return $script:Apps[(Get-AzArgValue $Arguments '--display-name')]
             }
-            if ($joined -like 'ad app federated-credential list*') { return $script:FedCreds }
+            if ($joined -like 'ad app federated-credential list*') {
+                return $script:FedCredsByAppObjectId[(Get-AzArgValue $Arguments '--id')]
+            }
             if ($joined -like 'ad sp list*') {
                 $filter = Get-AzArgValue $Arguments '--filter'
                 if ($filter -match "appId eq '([^']+)'") { return $script:Sps[$Matches[1]] }
@@ -135,11 +143,34 @@ Describe 'verify-g0' {
         }
 
         It 'flags a missing federation subject' {
-            $script:FedCreds = @([pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main' })
+            $script:FedCredsByAppObjectId['dep-obj'] = @()
             $results = Invoke-VerifyForTest
             $row = Get-Row $results 'Federation'
             $row.Status | Should -Be 'FAIL'
             $row.Detail | Should -BeLike '*environment:demo*'
+        }
+
+        It 'flags a verifier with no federated credential at all (2026-08-26 finding F6)' {
+            $script:FedCredsByAppObjectId['ver-obj'] = @()
+            $results = Invoke-VerifyForTest
+            $row = Get-Row $results 'VerifierApp'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*environment:verify*'
+        }
+
+        It 'flags a verifier federated to the SAME subject as the deployer (2026-08-26 finding F7)' {
+            # The exact misconfiguration the fix exists to prevent: reusing the deployer's
+            # environment subject instead of giving the verifier a distinct one of its own.
+            # Modelled by pointing -VerifierEnvironmentName at 'demo' (the deployer's own
+            # -EnvironmentName) and federating the verifier to that same subject.
+            $script:FedCredsByAppObjectId['ver-obj'] = @([pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo' })
+            $results = Invoke-Main -SubscriptionId $script:Sub -DeployerAppName 'mls-github-deployer' `
+                -VerifierAppName 'mls-verifier' -Repository 'paulcfuqua/azure-devsecops-demo' `
+                -EnvironmentName 'demo' -VerifierEnvironmentName 'demo' `
+                -BudgetName 'mls-monthly-budget' -BudgetAmount 75
+            $row = Get-Row $results 'VerifierApp'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*distinct*'
         }
 
         It 'flags missing licenses by trial name' {

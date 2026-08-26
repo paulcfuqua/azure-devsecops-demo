@@ -113,13 +113,27 @@ Describe '01-root-oidc' {
             }
         }
 
-        It 'creates federated credentials for the main branch and the demo environment' {
+        It 'creates a federated credential for the deployer''s demo environment and NOT a branch-ref credential' {
+            Invoke-MainForTest | Out-Null
+            $script:CapturedFedSubjects | Should -Contain 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'
+            $script:CapturedFedSubjects | Should -Not -Contain 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main'
+        }
+
+        It 'creates a federated credential for the VERIFIER, not just the deployer' {
             Invoke-MainForTest | Out-Null
             Should -Invoke Invoke-AzCli -Exactly -Times 2 -ParameterFilter {
                 ($Arguments -join ' ') -like 'ad app federated-credential create*'
             }
-            $script:CapturedFedSubjects | Should -Contain 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main'
-            $script:CapturedFedSubjects | Should -Contain 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'
+            Should -Invoke Invoke-AzCli -Exactly -Times 1 -ParameterFilter {
+                ($Arguments -join ' ') -like "ad app federated-credential create* --id ver-obj*"
+            }
+        }
+
+        It 'gives the verifier a subject distinct from the deployer''s' {
+            Invoke-MainForTest | Out-Null
+            $verifierSubjects = $script:CapturedFedSubjects | Where-Object { $_ -match 'environment:verify$' }
+            $verifierSubjects | Should -Not -BeNullOrEmpty
+            $verifierSubjects | Should -Not -Contain 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'
         }
 
         It 'creates a service principal per app' {
@@ -181,8 +195,10 @@ Describe '01-root-oidc' {
             }
             $script:ExistingFedCreds = @{
                 'dep-obj' = @(
-                    [pscustomobject]@{ id = 'fc1'; subject = 'repo:paulcfuqua/azure-devsecops-demo:ref:refs/heads/main'; issuer = 'https://token.actions.githubusercontent.com'; audiences = @('api://AzureADTokenExchange') }
                     [pscustomobject]@{ id = 'fc2'; subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'; issuer = 'https://token.actions.githubusercontent.com'; audiences = @('api://AzureADTokenExchange') }
+                )
+                'ver-obj' = @(
+                    [pscustomobject]@{ id = 'fc3'; subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:verify'; issuer = 'https://token.actions.githubusercontent.com'; audiences = @('api://AzureADTokenExchange') }
                 )
             }
             $script:ExistingSps = @{

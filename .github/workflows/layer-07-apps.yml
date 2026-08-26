@@ -354,7 +354,7 @@ jobs:
     needs: [preflight, deploy]
     if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    environment: demo
+    environment: verify
     # V7.5 observes 0 -> N -> 0 per app and waits 15 minutes before its phase-3
     # read, giving up at +30. Two apps, so the audit alone can run for an hour;
     # that wait is synchronous by design (kill-rebuild.md section 5 does not

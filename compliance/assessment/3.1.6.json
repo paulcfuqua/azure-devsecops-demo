@@ -3,20 +3,21 @@
   "applicability": "applicable",
   "criteria": [],
   "assertion": {
-    "status": "GAP",
+    "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f7"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F7: verify jobs — a nonsecurity function, read-only auditing — declare environment: demo and id-token: write while intending to run as the Reader-scoped verifier. Because the OIDC subject derives from the job's environment name rather than the client-id passed to azure/login, these nominally non-privileged jobs actually federate to the Owner-capable deployer identity, so a non-privileged (audit) function is never actually accessing the system through a non-privileged account or role."
+    "rationale": "F7: verify jobs — a nonsecurity function, read-only auditing — declared environment: demo and id-token: write while intending to run as the Reader-scoped verifier. Because the OIDC subject derives from the job's environment name rather than the client-id passed to azure/login, these nominally non-privileged jobs could actually federate to the Owner-capable deployer identity, so a non-privileged (audit) function was never actually confined to a non-privileged account or role. F7 is now CLOSED (Task 9): mls-verifier is federated to its own environment:verify subject, never environment:demo; the deployer's unused branch-ref credential is removed; and every verify job — verify-l1.yml, the layer-02 through layer-09 verify jobs, self-heal.yml's L10 job, and infra-down.yml's L11 down-state job — now declares environment: verify. A verify job can therefore no longer mint a token matching the deployer's federated credential at all, regardless of what code executes inside it, so the non-privileged audit function genuinely runs under a non-privileged identity. This control has no other open contributor (checked: no other finding cites 3.1.6)."
   },
-  "recommendation": "Move verify jobs to a dedicated verify environment federated only to mls-verifier (Reader), distinct from the demo environment used for deploys, so nonsecurity/audit functions run under a genuinely non-privileged identity.",
-  "gapSeverity": "high",
+  "recommendation": "None outstanding for this control. (The verify/demo environment split, Task 9, is DONE.) A regression — a verify job reverted to environment: demo, or mls-verifier re-federated to the demo subject — would reopen this control. A deployment-branch policy restricting both environments to main remains a recommended defense-in-depth addition, tracked in docs/runbooks/g0-bootstrap.md item C9, but is not required to close this control: existing `github.event_name != 'pull_request'` guards on every deploy job already prevent an untrusted ref from reaching environment: demo today.",
+  "gapSeverity": "none",
   "references": [
-    ".github/workflows/verify-l1.yml:69-72",
+    "scripts/bootstrap/01-root-oidc.ps1:377-422",
+    ".github/workflows/verify-l1.yml:69",
     ".github/workflows/self-heal.yml:683",
-    ".github/workflows/layer-07-apps.yml:336",
-    "scripts/bootstrap/01-root-oidc.ps1:354-358"
+    ".github/workflows/layer-07-apps.yml:357",
+    "docs/runbooks/g0-bootstrap.md"
   ]
 }

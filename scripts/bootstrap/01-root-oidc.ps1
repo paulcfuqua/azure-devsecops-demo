@@ -6,16 +6,26 @@
 .DESCRIPTION
     Creates/updates the GitHub OIDC deployer identity and the read-only verifier identity:
 
-      * App registration `mls-github-deployer` with federated identity credentials for
-        the repo you pass as -Repository (subjects: main branch ref + `demo` environment),
-        its service principal, Owner on the target subscription, and Microsoft Graph
-        *application* permissions (User.ReadWrite.All, Group.ReadWrite.All,
-        Application.ReadWrite.All, Policy.ReadWrite.ConditionalAccess, Directory.Read.All).
-      * App registration `mls-verifier` with its service principal, Reader on the target
-        subscription, and READ-ONLY Graph application permissions Directory.Read.All +
-        Policy.Read.All (CA policy state audits). Its S&C PowerShell access for
-        Get-Label audits (View-Only Configuration + Exchange.ManageAsApp) is a manual
-        step printed at the end - EXO role assignment is not cleanly scriptable here.
+      * App registration `mls-github-deployer` with a federated identity credential for
+        the repo you pass as -Repository (subject: the `demo` environment only). There is
+        deliberately no branch-ref credential here (2026-08-26 finding F7): a `repo:<r>:
+        ref:refs/heads/main` subject is mintable by any job with `id-token: write` that
+        runs on main, deploy or not, which would let it reach this identity's Owner grant
+        while bypassing the `demo` environment's protection rules entirely. The
+        environment subject is sufficient for every deploy job, which already declares
+        `environment: demo`. Also: its service principal, Owner on the target
+        subscription, and Microsoft Graph *application* permissions (User.ReadWrite.All,
+        Group.ReadWrite.All, Application.ReadWrite.All, Policy.ReadWrite.ConditionalAccess,
+        Directory.Read.All).
+      * App registration `mls-verifier` with its OWN federated identity credential on a
+        subject DISTINCT from the deployer's - `environment:verify`, never `environment:
+        demo` (2026-08-26 findings F6/F7: reusing the deployer's subject would let anything
+        executing in a verify job mint a token that exchanges for the Owner-capable
+        deployer instead of this Reader-scoped identity). Also: its service principal,
+        Reader on the target subscription, and READ-ONLY Graph application permissions
+        Directory.Read.All + Policy.Read.All (CA policy state audits). Its S&C PowerShell
+        access for Get-Label audits (View-Only Configuration + Exchange.ManageAsApp) is a
+        manual step printed at the end - EXO role assignment is not cleanly scriptable here.
 
     The script NEVER grants admin consent itself - it prints the admin-consent URL for
     each app and you click it (G0 runbook, docs/runbooks/g0-bootstrap.md, step C3).
@@ -47,6 +57,13 @@ param(
 
     # GitHub environment name used by deploy jobs.
     [string]$EnvironmentName = 'demo',
+
+    # GitHub environment name used by verify jobs. Deliberately DISTINCT from
+    # -EnvironmentName (2026-08-26 findings F6/F7): the OIDC subject is derived from the
+    # job's declared `environment:`, not from the client-id passed to azure/login, so
+    # reusing 'demo' here would let any verify job mint the Owner-capable deployer's
+    # subject instead of this Reader-scoped identity's.
+    [string]$VerifierEnvironmentName = 'verify',
 
     [string]$DeployerAppName = 'mls-github-deployer',
 
@@ -335,6 +352,7 @@ function Invoke-Main {
         [Parameter(Mandatory)][string]$SubscriptionId,
         [Parameter(Mandatory)][string]$Repository,
         [Parameter(Mandatory)][string]$EnvironmentName,
+        [string]$VerifierEnvironmentName = 'verify',
         [Parameter(Mandatory)][string]$DeployerAppName,
         [Parameter(Mandatory)][string]$VerifierAppName
     )
@@ -349,8 +367,9 @@ function Invoke-Main {
     Write-Status "`n== $DeployerAppName ==" -Color Cyan
     $deployer = Initialize-AdApp -DisplayName $DeployerAppName
     if ($deployer) {
-        Initialize-FederatedCredential -AppObjectId $deployer.id -Name 'github-main' `
-            -Subject "repo:${Repository}:ref:refs/heads/main" | Out-Null
+        # Deliberately ONE credential, not two (2026-08-26 finding F7): a branch-ref
+        # subject here would let any id-token:write job on main mint this identity's
+        # Owner-capable subject while bypassing the demo environment's protection rules.
         Initialize-FederatedCredential -AppObjectId $deployer.id -Name "github-env-$EnvironmentName" `
             -Subject "repo:${Repository}:environment:$EnvironmentName" | Out-Null
         $deployerSp = Initialize-ServicePrincipal -AppId $deployer.appId
@@ -364,13 +383,19 @@ function Invoke-Main {
         $consentUrls[$DeployerAppName] = Get-AdminConsentUrl -TenantId $tenantId -AppId $deployer.appId
     }
     else {
-        Write-Status "(-WhatIf) Would then create federated credentials (main + $EnvironmentName), service principal, Owner assignment, and declare Graph permissions for '$DeployerAppName'." -Color Yellow
+        Write-Status "(-WhatIf) Would then create a federated credential ($EnvironmentName), service principal, Owner assignment, and declare Graph permissions for '$DeployerAppName'." -Color Yellow
     }
 
     # ---- verifier -----------------------------------------------------------------
     Write-Status "`n== $VerifierAppName ==" -Color Cyan
     $verifier = Initialize-AdApp -DisplayName $VerifierAppName
     if ($verifier) {
+        # Its OWN credential on its OWN environment (2026-08-26 findings F6/F7) - never
+        # $EnvironmentName. Reusing the deployer's subject here is exactly what would let
+        # a verify job mint a token that authenticates as the Owner-capable deployer
+        # instead of this Reader-scoped identity.
+        Initialize-FederatedCredential -AppObjectId $verifier.id -Name "github-env-$VerifierEnvironmentName" `
+            -Subject "repo:${Repository}:environment:$VerifierEnvironmentName" | Out-Null
         $verifierSp = Initialize-ServicePrincipal -AppId $verifier.appId
         if ($verifierSp) {
             Initialize-RoleAssignment -PrincipalObjectId $verifierSp.id -Role 'Reader' -Scope $scope | Out-Null
@@ -382,7 +407,7 @@ function Invoke-Main {
         $consentUrls[$VerifierAppName] = Get-AdminConsentUrl -TenantId $tenantId -AppId $verifier.appId
     }
     else {
-        Write-Status "(-WhatIf) Would then create service principal, Reader assignment, and declare Directory.Read.All + Policy.Read.All for '$VerifierAppName'." -Color Yellow
+        Write-Status "(-WhatIf) Would then create a federated credential ($VerifierEnvironmentName), service principal, Reader assignment, and declare Directory.Read.All + Policy.Read.All for '$VerifierAppName'." -Color Yellow
     }
 
     # ---- consent instructions (NEVER automated) ------------------------------------
@@ -441,5 +466,5 @@ or set $env:MLS_GITHUB_REPO first.
 if (-not $env:MLS_SKIP_MAIN) {
     $resolvedRepository = Resolve-RepositoryInput -Value $Repository
     Invoke-Main -SubscriptionId $SubscriptionId -Repository $resolvedRepository -EnvironmentName $EnvironmentName `
-        -DeployerAppName $DeployerAppName -VerifierAppName $VerifierAppName
+        -VerifierEnvironmentName $VerifierEnvironmentName -DeployerAppName $DeployerAppName -VerifierAppName $VerifierAppName
 }

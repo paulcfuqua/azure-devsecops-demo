@@ -685,6 +685,28 @@ their UAMIs' Monitoring Metrics Publisher grant instead."
 
 ## Task 9: Verifier federated credential and environment split (F6, F7)
 
+**Amendment (2026-08-26, post-implementation).** The file list below names
+`layer-02`…`layer-09` by layer number but omits where L11's verify job actually lives:
+there is no `layer-11-*.yml` file — L11's down-state verify job ("verify down-state
+(mls-verifier)") is the `verify` job inside `infra-down.yml` (line 317 pre-fix). Found by
+grepping every workflow for `AZURE_VERIFIER_CLIENT_ID`, which turned up exactly the set
+named here plus `infra-down.yml` — not, e.g., any of the `app-*-ci.yml` workflows, whose
+`environment: demo` jobs never reference the verifier at all and were correctly left
+alone. `infra-down.yml:317` is included in the actual edit.
+
+Two further consequential changes, not named in the steps below but required for the fix
+to be self-consistent: (1) `verify-g0.ps1`'s `Test-Federation` expected BOTH the
+`ref:refs/heads/main` and `environment:demo` subjects on the deployer; deleting the
+branch-ref credential per Step 3 without updating this check would make G0 fail forever
+on a correctly-fixed deployer, so `Test-Federation` now expects only the environment
+subject. (2) Every GitHub environment variable the Verifier's `azure/login` reads
+(`AZURE_VERIFIER_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, plus L4's
+`MLS_TENANT_DOMAIN`/`MLS_VERIFIER_APP_ID`) must now exist on **both** `demo` (read by the
+unchanged `preflight` gate) and `verify` (read by the now-moved `verify` job) — GitHub
+environment variables and secrets do not cascade between sibling environments. Documented
+in `docs/runbooks/g0-bootstrap.md` C9/C9b rather than scripted, since environment creation
+is a human G0 action.
+
 **Files:**
 - Modify: `scripts/bootstrap/01-root-oidc.ps1:352-386`
 - Modify: `scripts/bootstrap/verify-g0.ps1` (`Test-VerifierApp`)
@@ -760,6 +782,16 @@ deployer's unused branch-ref credential."
 ---
 
 ## Task 10: Narrow the deployer's Graph permissions (F8)
+
+**Amendment (2026-08-26, post-implementation).** The file list below does not name
+`verify-g0.ps1`, but its `$script:GraphConsentedRoles` hashtable independently declares
+the SAME permission set (for `Test-GraphConsent`'s admin-consent check) with the same
+`Application.ReadWrite.All` GUID. Leaving it unchanged after the deployer stops
+requesting/consenting that role would mean `Test-GraphConsent` checks for consent of a
+permission that no longer exists in the deployer's `requiredResourceAccess` at all — G0
+would report `GraphConsent: FAIL` forever on a correctly-fixed deployer, the same failure
+mode Task 9's amendment describes for `Test-Federation`. Swapped the same GUID there too,
+and in its test fixture's `$script:RoleIds`.
 
 **Files:**
 - Modify: `scripts/bootstrap/01-root-oidc.ps1:66-72`
