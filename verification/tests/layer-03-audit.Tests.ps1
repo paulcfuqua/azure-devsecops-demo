@@ -30,6 +30,25 @@ BeforeAll {
         param([string]$Name)
         return @($script:Manifest.groups | Where-Object { $_.displayName -eq $Name })[0]
     }
+
+    function Get-TestManifestPath {
+        <# Writes a copy of the real manifest with the per-user "licensed" flags rewritten,
+           and returns its path. -Licensed lists the userPrincipalNamePrefix values to flag
+           true; everything else is flagged false. -Strip removes the property entirely,
+           which is the pre-2026-08-26 manifest shape. #>
+        param([string[]]$Licensed = @(), [switch]$Strip, [Parameter(Mandatory)][string]$Name)
+        $manifest = Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+        foreach ($user in $manifest.users) {
+            if ($Strip) { $user.PSObject.Properties.Remove('licensed'); continue }
+            $user.licensed = [bool]($user.userPrincipalNamePrefix -in $Licensed)
+        }
+        if (-not (Test-Path -LiteralPath $script:ReportRoot)) {
+            New-Item -ItemType Directory -Path $script:ReportRoot -Force | Out-Null
+        }
+        $path = Join-Path -Path $script:ReportRoot -ChildPath "$Name.json"
+        $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path -Encoding utf8
+        return $path
+    }
 }
 
 AfterAll {
@@ -112,6 +131,51 @@ Describe 'layer-03-audit' {
             (Get-Row -Context $context -Id 'V3.1').Expected | Should -BeLike '*5 users*'
             (Get-Row -Context $context -Id 'V3.1').Expected | Should -BeLike '*4 groups*'
             (Get-Row -Context $context -Id 'V3.1').Expected | Should -BeLike '*3 app registrations*'
+        }
+    }
+
+    Context 'V3.4 follows the per-user "licensed" flag (seat-cost decision, 2026-08-26)' {
+        It 'audits only the flagged users and leaves V3.1 counting all 5' {
+            $path = Get-TestManifestPath -Licensed @('dana.reyes', 'miles.okafor') -Name 'two-licensed'
+            $context = Invoke-Main -Domain $script:Domain -ManifestPath $path -ReportRoot $script:ReportRoot -NoRetry
+            $row = Get-Row -Context $context -Id 'V3.4'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*dana.reyes*'
+            $row.Observed | Should -BeLike '*miles.okafor*'
+            # The unlicensed three are deliberately absent from V3.4 ...
+            $row.Observed | Should -Not -BeLike '*sofia.lindqvist*'
+            $row.Observed | Should -Not -BeLike '*marcus.webb*'
+            # ... but must still exist and still be counted by V3.1.
+            (Get-Row -Context $context -Id 'V3.1').Expected | Should -BeLike '*5 users*'
+            (Get-Row -Context $context -Id 'V3.1').Status | Should -Be 'PASS'
+        }
+
+        It 'fails when a flagged user is the one missing its assignment' {
+            $script:LicenseState = 'Error'
+            $script:LicenseError = 'CountViolation'
+            $path = Get-TestManifestPath -Licensed @('dana.reyes') -Name 'one-licensed-broken'
+            $context = Invoke-Main -Domain $script:Domain -ManifestPath $path -ReportRoot $script:ReportRoot -NoRetry
+            $row = Get-Row -Context $context -Id 'V3.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*CountViolation*'
+        }
+
+        It 'passes with an explicit note when no user is flagged licensed' {
+            $path = Get-TestManifestPath -Licensed @() -Name 'none-licensed'
+            $context = Invoke-Main -Domain $script:Domain -ManifestPath $path -ReportRoot $script:ReportRoot -NoRetry
+            $row = Get-Row -Context $context -Id 'V3.4'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*no manifest user is flagged licensed*'
+        }
+
+        It 'treats a manifest without the flag as fully licensed (backward compatible)' {
+            $path = Get-TestManifestPath -Strip -Name 'no-flag'
+            $context = Invoke-Main -Domain $script:Domain -ManifestPath $path -ReportRoot $script:ReportRoot -NoRetry
+            $row = Get-Row -Context $context -Id 'V3.4'
+            $row.Status | Should -Be 'PASS'
+            foreach ($prefix in @('dana.reyes', 'miles.okafor', 'priya.natarajan', 'sofia.lindqvist', 'marcus.webb')) {
+                $row.Observed | Should -BeLike "*$prefix*"
+            }
         }
     }
 

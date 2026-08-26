@@ -1,5 +1,6 @@
 {
-  "$comment": "Meridian Launch Systems demo identity manifest (Layer L3). All people are FICTIONAL; no real PII. UPNs are composed as <userPrincipalNamePrefix>@<domain>; the domain below is a placeholder overridden at apply time via apply-entra.ps1 -Domain (the tenant's real verified domain). Applied by apply-entra.ps1 - idempotent create-if-absent/update.",
+  "$comment": "Meridian Launch Systems demo identity manifest (Layer L3). All people are FICTIONAL; no real PII - this file is committed to a PUBLIC repo, so real presenters are added in the portal only and never listed here (CLAUDE.md hard rule 4). UPNs are composed as <userPrincipalNamePrefix>@<domain>; the domain below is a placeholder overridden at apply time via apply-entra.ps1 -Domain (the tenant's real verified domain). Applied by apply-entra.ps1 - idempotent create-if-absent/update.",
+  "$licensingComment": "'licensed' controls which users V3.4 asserts an EMS E5 assignment for; it does NOT assign anything. apply-entra.ps1 assigns no licences at all - it only sets usageLocation, which is a prerequisite for licensing. Assignment itself is a human step in the M365 admin center (g0-bootstrap.md item C10). All five are true while the EMS E5 trial's free seats last; at trial expiry flip the ones you no longer sign in as to false and V3.4 narrows with no code change. A user with the flag absent is treated as licensed, so older manifests audit exactly as before.",
   "domain": "mls.example",
   "users": [
     {
@@ -10,7 +11,8 @@
       "userPrincipalNamePrefix": "dana.reyes",
       "jobTitle": "Director of Flight Operations",
       "department": "Flight Operations",
-      "usageLocation": "US"
+      "usageLocation": "US",
+      "licensed": true
     },
     {
       "displayName": "Miles Okafor",
@@ -20,7 +22,8 @@
       "userPrincipalNamePrefix": "miles.okafor",
       "jobTitle": "Security Analyst",
       "department": "Security",
-      "usageLocation": "US"
+      "usageLocation": "US",
+      "licensed": true
     },
     {
       "displayName": "Priya Natarajan",
@@ -30,7 +33,8 @@
       "userPrincipalNamePrefix": "priya.natarajan",
       "jobTitle": "Site Reliability Engineer",
       "department": "Platform Engineering",
-      "usageLocation": "US"
+      "usageLocation": "US",
+      "licensed": true
     },
     {
       "displayName": "Sofia Lindqvist",
@@ -40,7 +44,8 @@
       "userPrincipalNamePrefix": "sofia.lindqvist",
       "jobTitle": "Finance Analyst",
       "department": "Finance",
-      "usageLocation": "US"
+      "usageLocation": "US",
+      "licensed": true
     },
     {
       "displayName": "Marcus Webb",
@@ -50,7 +55,8 @@
       "userPrincipalNamePrefix": "marcus.webb",
       "jobTitle": "Chief Operating Officer",
       "department": "Executive",
-      "usageLocation": "US"
+      "usageLocation": "US",
+      "licensed": true
     }
   ],
   "groups": [

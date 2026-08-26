@@ -11,7 +11,11 @@
             plus a drift sweep for mls-prefixed objects absent from the manifest).
       V3.2  Graph queries confirm group memberships (set equality with the manifest).
       V3.3  CA policy state == enabledForReportingButNotEnforced.
-      V3.4  License assignment state == success for all 5.
+      V3.4  License assignment state == success for every user the manifest flags
+            "licensed": true (all 5 during the trial; narrows after expiry).
+
+    The audit never assigns a licence and neither does apply-entra.ps1 - assignment is a
+    human step (g0-bootstrap.md C10). V3.4 reports what the tenant actually shows.
 
     Every expected value comes from infra/entra/manifest.json at the audited commit - the
     audit reads the manifest, not the plan text (L03.md section Validation cycle).
@@ -40,12 +44,26 @@ Import-Module (Join-Path -Path $PSScriptRoot -ChildPath 'MlsAudit.psm1') -Force
 
 function Get-ManifestUserPrincipalName {
     <# UPNs are composed as <userPrincipalNamePrefix>@<domain>; the manifest domain is a
-       placeholder overridden at apply time, so the audit composes them the same way. #>
+       placeholder overridden at apply time, so the audit composes them the same way.
+
+       -LicensedOnly narrows the set to users the manifest flags "licensed": true, which is
+       what V3.4 asserts against. A user with the property absent counts as licensed, so a
+       manifest predating the flag audits exactly as it did before. V3.1/V3.2 deliberately
+       do NOT narrow - every declared user must exist and hold its group memberships
+       whether or not anyone pays for a seat. #>
     param(
         [Parameter(Mandatory)]$Manifest,
-        [Parameter(Mandatory)][string]$Domain
+        [Parameter(Mandatory)][string]$Domain,
+        [switch]$LicensedOnly
     )
-    return @($Manifest.users | ForEach-Object { "$($_.userPrincipalNamePrefix)@$Domain" })
+    $user = @($Manifest.users)
+    if ($LicensedOnly) {
+        $user = @($user | Where-Object {
+                $flag = Get-MlsProperty -InputObject $_ -Name 'licensed'
+                $null -eq $flag -or [bool]$flag
+            })
+    }
+    return @($user | ForEach-Object { "$($_.userPrincipalNamePrefix)@$Domain" })
 }
 
 function Test-DirectoryObjectCount {
@@ -163,12 +181,22 @@ function Test-ConditionalAccessState {
 }
 
 function Test-LicenseAssignment {
-    <# V3.4 - EMS E5 assignment Active with no error, for all five users. #>
+    <# V3.4 - EMS E5 assignment Active with no error, for every user the manifest flags
+       licensed. That set is all five while the trial's free seats last; after expiry it
+       narrows to whoever is still signed in as on stage. Users deliberately left
+       unlicensed are not a finding - an unlicensed demo persona still exists, still holds
+       its group memberships (V3.1/V3.2), and still sits in the report-only CA scope. What
+       it loses is sign-in risk and enforced CA, which is a licensing fact, not drift. #>
     param(
         [Parameter(Mandatory)]$Manifest,
         [Parameter(Mandatory)][string]$Domain,
         [Parameter(Mandatory)][string]$LicenseSkuPartNumber
     )
+    $target = Get-ManifestUserPrincipalName -Manifest $Manifest -Domain $Domain -LicensedOnly
+    if ($target.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true -Observed 'no manifest user is flagged licensed - nothing to assert' `
+            -Detail 'Every user carries "licensed": false, so the demo is running fully unlicensed: no sign-in risk feed and no enforceable CA. Deliberate after trial expiry; if it is not deliberate, the flags are wrong.'
+    }
     $skus = Get-MlsCollection -Response (Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/subscribedSkus')
     $sku = @($skus | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'skuPartNumber') -eq $LicenseSkuPartNumber })
     if ($sku.Count -eq 0) {
@@ -178,7 +206,7 @@ function Test-LicenseAssignment {
     $skuId = Get-MlsProperty -InputObject $sku[0] -Name 'skuId'
     $problem = [System.Collections.Generic.List[string]]::new()
     $observed = [System.Collections.Generic.List[string]]::new()
-    foreach ($upn in (Get-ManifestUserPrincipalName -Manifest $Manifest -Domain $Domain)) {
+    foreach ($upn in $target) {
         $user = Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/users/$upn`?`$select=licenseAssignmentStates"
         $states = @(Get-MlsProperty -InputObject $user -Name 'licenseAssignmentStates')
         $relevant = @($states | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'skuId') -eq $skuId })
@@ -248,10 +276,11 @@ function Invoke-Main {
         -Expected 'both manifest CA policies present with State == enabledForReportingButNotEnforced' `
         -Test { Test-ConditionalAccessState -Manifest $manifest } | Out-Null
 
+    $licensedUser = Get-ManifestUserPrincipalName -Manifest $manifest -Domain $tenantDomain -LicensedOnly
     Invoke-MlsCriterion -Context $context -Id 'V3.4' `
-        -Description 'License assignment state == success for all 5' `
+        -Description "License assignment state == success for all $($licensedUser.Count) licensed of $(@($manifest.users).Count)" `
         -Command "GET /v1.0/subscribedSkus`nGET /v1.0/users/<upn>?`$select=licenseAssignmentStates" `
-        -Expected "every manifest user carries the $LicenseSkuPartNumber assignment with State == Active and no error" `
+        -Expected "each of the $($licensedUser.Count) manifest user(s) flagged licensed carries the $LicenseSkuPartNumber assignment with State == Active and no error" `
         -Test { Test-LicenseAssignment -Manifest $manifest -Domain $tenantDomain -LicenseSkuPartNumber $LicenseSkuPartNumber } | Out-Null
 
     return $context
