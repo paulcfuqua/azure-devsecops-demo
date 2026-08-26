@@ -71,6 +71,11 @@ env:
 jobs:
   preflight:
     name: preflight (demo environment guard)
+    # Fork pull requests must not reach the `demo` environment. This job mints no
+    # OIDC token (top-level permissions are contents: read), so it was never a
+    # credential path — but a public-repo PR should not touch a deployment
+    # environment at all, and the deploy job below carries the same guard.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     environment: demo
     outputs:
