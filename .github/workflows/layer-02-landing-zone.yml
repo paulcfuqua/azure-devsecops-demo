@@ -11,6 +11,17 @@ name: layer-02-landing-zone
 #
 # Teardown of this layer is G3 (tenant-level): infra/policy/teardown.ps1.
 # The standard kill/rebuild cycle deliberately leaves L2 in place.
+#
+# F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13)
+# named this file for the subscription Activity Log diagnostic setting. It is
+# NOT here: the setting's destination (the Log Analytics workspace) does not
+# exist until L6 runs, and L6 runs strictly after this layer on every
+# invocation of infra-up.yml (layer-06 needs: [..., layer-04], which needs
+# [..., layer-02]) — not just on first bootstrap, since teardown deletes the
+# LAW's resource group every cycle. The Activity Log wiring lives in
+# layer-06-platform.yml's deploy job instead, immediately after the LAW
+# becomes a real deployed resource. See task-13-report.md for the full
+# reasoning this moved the work rather than faking a step here.
 # =============================================================================
 
 on:

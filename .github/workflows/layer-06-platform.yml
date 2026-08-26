@@ -252,6 +252,44 @@ jobs:
             --output none
           echo "Cost Management daily export ${export_name} configured."
 
+      - name: Wire the subscription Activity Log to Log Analytics
+        if: ${{ !inputs.dry_run }}
+        env:
+          PREFIX: ${{ steps.names.outputs.prefix }}
+        run: |
+          set -euo pipefail
+          # F9 (compliance/findings/2026-08-26-prepublication-review.md#f9,
+          # Task 13): subscription-scope configuration, not a resource of the
+          # template — same category as the cost-export wiring above.
+          #
+          # The task brief placed this in layer-02-landing-zone.yml, where the
+          # finding's "Activity Log and Entra diagnostics via the L2/L3
+          # workflows" fix text also puts it. It cannot live there: L2 runs
+          # BEFORE L6 in infra-up.yml's layer graph (layer-03 needs: [...,
+          # layer-02]; layer-06 needs: [..., layer-04]), on every run of this
+          # pipeline, not just first-time bootstrap — teardown deletes
+          # mls-rg-platform (and the LAW inside it) every cycle, so L2 never
+          # once runs with the LAW already present. `az monitor
+          # diagnostic-settings subscription create --workspace` resolves and
+          # validates that target at request time, so a step placed in L2
+          # would fail (or, written defensively, would skip) on every single
+          # invocation. Placed here instead: this is the first point in the
+          # graph where logAnalyticsWorkspaceResourceId is a real, deployed
+          # resource. Idempotent upsert, like the cost export above — safe to
+          # re-run, and re-points at the new LAW automatically on kill/rebuild.
+          law_id="$(jq -r '.logAnalyticsWorkspaceResourceId.value // empty' l6-manifest.json)"
+          if [ -z "${law_id}" ]; then
+            echo "::notice title=Activity Log not wired::logAnalyticsWorkspaceResourceId was not in the deployment outputs."
+            exit 0
+          fi
+          az monitor diagnostic-settings subscription create \
+            --name "${PREFIX}-activity-law" \
+            --workspace "${law_id}" \
+            --location "${AZURE_LOCATION}" \
+            --logs '[{"category":"Administrative","enabled":true},{"category":"Security","enabled":true},{"category":"ServiceHealth","enabled":true},{"category":"Alert","enabled":true},{"category":"Recommendation","enabled":true},{"category":"Policy","enabled":true},{"category":"Autoscale","enabled":true},{"category":"ResourceHealth","enabled":true}]' \
+            --output none
+          echo "Subscription Activity Log routed to ${law_id}."
+
       - name: Apply the SQL schema and seed the operational tables
         if: ${{ !inputs.dry_run }}
         shell: pwsh

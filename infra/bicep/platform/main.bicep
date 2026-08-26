@@ -88,8 +88,8 @@ param sqlMaxCapacity int = 2
 @description('Key Vault create mode. Flip to recover when a soft-deleted vault with the target name exists (kill/rebuild replay — L6 playbook rollback note).')
 param keyVaultCreateMode string = 'default'
 
-@description('[derived] Log Analytics retention in days: 30 keeps retention inside the free window so idle LAW cost is ingestion-only.')
-param lawDataRetentionDays int = 30
+@description('[derived] Log Analytics retention in days. 90 matches the AU-11 assessment convention and DFARS 252.204-7012(e)\'s 90-day preservation obligation (F9, Task 13) — raised from the 30-day free-tier-only default. The per-GB retention charge past the 31-day free window is bounded by dailyQuotaGb, not by this value.')
+param lawDataRetentionDays int = 90
 
 @description('[derived] Log Analytics daily ingestion cap in GB — runaway-ingest guard for the idle-cost model. -1 disables the cap.')
 param lawDailyQuotaGb string = '1'
@@ -225,6 +225,16 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.15.
     // AVM defaults publicNetworkAccess to Disabled; the two frontend apps have
     // external ingress by design, so the environment must accept public traffic.
     publicNetworkAccess: 'Enabled'
+    // F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13):
+    // appLogsConfiguration above carries container console/system logs, but
+    // that is a distinct ACA mechanism from Azure Monitor diagnosticSettings
+    // (environment-level audit/operational categories, e.g. RequestResponse).
+    // Both now land in the same workspace.
+    diagnosticSettings: [
+      {
+        workspaceResourceId: logAnalytics.outputs.resourceId
+      }
+    ]
   }
   dependsOn: [rgPlatform]
 }
@@ -247,6 +257,17 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.14.0' = {
     // via createMode=recover instead (L6 playbook rollback note).
     enablePurgeProtection: false
     createMode: keyVaultCreateMode
+    // F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13):
+    // the vault holds the estate's only real credentials — the Direct Line
+    // secret and mcp-auth-token — and access to them (AuditEvent) was entirely
+    // unlogged. No categories specified: per the AVM diagnosticSettingFullType
+    // contract, omitting both logCategoriesAndGroups and metricCategories
+    // configures all logs and metrics by default.
+    diagnosticSettings: [
+      {
+        workspaceResourceId: logAnalytics.outputs.resourceId
+      }
+    ]
   }
   dependsOn: [rgPlatform]
 }
@@ -281,6 +302,18 @@ module sqlServer 'br/public:avm/res/sql/server:0.22.0' = {
         endIpAddress: '0.0.0.0'
       }
     ]
+    // F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13):
+    // the AVM default is `{ state: 'Enabled' }` with NEITHER
+    // storageAccountResourceId NOR isAzureMonitorTargetEnabled — auditing that
+    // is nominally on and writes nowhere, and per AVM's own auditSettingsType
+    // doc ("state is Enabled, storageEndpoint or isAzureMonitorTargetEnabled
+    // are required") may hard-fail the deployment outright. This is
+    // server-level (Microsoft.Sql/servers/auditingSettings), so it covers
+    // every database under this server, the one serverless database included.
+    auditSettings: {
+      state: 'Enabled'
+      isAzureMonitorTargetEnabled: true
+    }
     databases: [
       {
         name: sqlDbName
@@ -298,6 +331,17 @@ module sqlServer 'br/public:avm/res/sql/server:0.22.0' = {
         availabilityZone: -1 // no zone pinning in the single-region demo
         zoneRedundant: false
         maxSizeBytes: 34359738368 // 32 GiB
+        // F9: diagnostic logs (SQLInsights, QueryStoreRuntimeStatistics,
+        // Errors, DatabaseWaitStatistics, Timeouts, Blocks, Deadlocks, ...)
+        // are emitted by Microsoft.Sql/servers/databases, not by the server
+        // resource — the sql/server@0.22.0 AVM module has no top-level
+        // diagnosticSettings param (verified against the cached module
+        // schema); databaseType is where it actually lives.
+        diagnosticSettings: [
+          {
+            workspaceResourceId: logAnalytics.outputs.resourceId
+          }
+        ]
       }
     ]
   }
@@ -323,7 +367,25 @@ module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
     // stay off (L6 playbook failure mode 3 assumes the RBAC path).
     allowSharedKeyAccess: false
     minimumTlsVersion: 'TLS1_2'
+    // F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13):
+    // the storage-account resource type only emits Transaction metrics — blob
+    // data-plane logs (StorageRead/StorageWrite/StorageDelete) are emitted by
+    // the blob SERVICE sub-resource (verified against the cached
+    // storage-account@0.33.0 AVM module schema: the top-level
+    // diagnosticSettings param is diagnosticSettingMetricsOnlyType, no
+    // logCategoriesAndGroups; blobServices.diagnosticSettings is the full
+    // type that carries logs), so both are wired.
+    diagnosticSettings: [
+      {
+        workspaceResourceId: logAnalytics.outputs.resourceId
+      }
+    ]
     blobServices: {
+      diagnosticSettings: [
+        {
+          workspaceResourceId: logAnalytics.outputs.resourceId
+        }
+      ]
       containers: [
         {
           name: 'cost-exports' // container name pinned by the L6 audit (V6.3)

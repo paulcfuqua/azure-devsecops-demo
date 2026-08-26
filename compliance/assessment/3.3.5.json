@@ -9,12 +9,14 @@
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F9: because audit-log collection is entirely absent (3.3.1) and no individual action can be traced (3.3.2), no correlation of audit review, analysis and reporting for investigation of suspicious activity is possible in this estate — you cannot alert on, or correlate, data you never collect. This collapses detection (3.6) and incident-response-adjacent controls (3.14.6/.7) downstream of the same gap."
+    "rationale": "F9 (Task 13, partial close): 3.3.1's collection gap is now mostly closed (Key Vault, storage, SQL database, CAE diagnosticSettings plus the subscription Activity Log all land in the same Log Analytics workspace), so cross-resource correlation across the Azure plane is now possible in KQL against a single workspace, and lawDataRetentionDays is raised 30 -> 90 (platform/main.bicep), meeting the AU-11 convention and DFARS 252.204-7012(e)'s 90-day preservation obligation for that data. What review/analysis/reporting still cannot reach: Entra ID SignInLogs and AuditLogs, which remain unrouted (same live-tenant-verification blocker recorded against 3.3.1/3.3.2). Correlating a suspicious Key Vault AuditEvent or SQL query against WHO authenticated to get there, or against a Conditional Access decision, is not possible until that routing exists. Note this control's gap is bounded by whichever of 3.3.1/3.3.2 is worse at any time, not independent of them — it stays open for the same reason."
   },
-  "recommendation": "Same collection fix as 3.3.1/3.3.2, plus raise lawDataRetentionDays from 30 to 90 (platform/main.bicep:91-93) to meet the AU-11 convention and DFARS 252.204-7012(e)'s 90-day preservation obligation, so correlated review and investigation has a sufficient window of data to work against.",
-  "gapSeverity": "high",
+  "recommendation": "Route Entra ID SignInLogs and AuditLogs to the Log Analytics workspace once the Microsoft.aadiam tenant-scoped resource shape and required Entra role can be verified against a live tenant, so identity-plane events can be correlated alongside the resource-plane events already landing in the same workspace. Collection, correlation capacity and retention for everything else Task 13 could reach are DONE.",
+  "gapSeverity": "medium",
   "references": [
-    "infra/bicep/platform/main.bicep:236-285",
-    "infra/bicep/platform/main.bicep:91-93"
+    "infra/bicep/platform/main.bicep:234-400",
+    "infra/bicep/platform/main.bicep:91-93",
+    ".github/workflows/layer-06-platform.yml",
+    ".superpowers/sdd/2026-08-26-security-remediation/task-13-report.md"
   ]
 }

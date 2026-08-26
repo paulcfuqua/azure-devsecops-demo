@@ -10,6 +10,23 @@ name: layer-03-entra
 # infra/entra/teardown.ps1 — never in this workflow.
 #
 # Pre-G0 guard: every job is gated on the `demo` environment variables.
+#
+# F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13)
+# named this file for Entra `SignInLogs` + `AuditLogs` diagnostic routing.
+# NOT implemented here — recorded rather than faked, per that task's
+# instructions. Two independent blockers, not one: (1) the same LAW-does-not-
+# exist-yet ordering problem as the Activity Log setting (see the note in
+# layer-02-landing-zone.yml — L3 also runs before L6); (2) tenant-level Entra
+# diagnostic settings are a `Microsoft.aadiam`-namespaced resource addressed
+# by tenant scope with no subscription/resource-group path segment, a shape
+# this repo's tooling has never exercised, and neither `az monitor
+# diagnostic-settings create --help` (offline) nor anything else available in
+# this session confirms the exact resource-id form or the Entra role the
+# mls-github-deployer SP would need beyond what L3 already holds for
+# users/groups/CA policies/app registrations. Shipping an unverified `az rest`
+# call against a real tenant is exactly the "looks wired" failure mode Task 13
+# was told to avoid. See task-13-report.md; this needs a live tenant to
+# verify and is a candidate for its own follow-up task.
 # =============================================================================
 
 on:

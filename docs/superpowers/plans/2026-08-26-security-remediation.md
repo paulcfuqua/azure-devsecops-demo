@@ -992,6 +992,43 @@ One missing pattern collapses three NIST families (3.3 Audit, 3.6 IR detection, 
 - Modify: `.github/workflows/layer-03-entra.yml` (Entra `SignInLogs` + `AuditLogs`)
 - Test: `verification/tests/diagnostics.Tests.ps1`
 
+**Outcome: the Bicep half landed as planned; both workflow items moved or stopped, and F9 is partially, not fully, closed.**
+
+`infra/bicep/platform/main.bicep` now routes `diagnosticSettings` for Key Vault, the
+cost-export storage account (account-level metrics *and* blob-service-level data-plane
+logs — those are two different resource types in the AVM schema), the SQL **database**
+(not the server — `avm/res/sql/server@0.22.0` has no top-level `diagnosticSettings`
+param; verified against the cached module schema, not assumed) and the Container Apps
+environment, all to the L6 Log Analytics workspace. SQL `auditSettings` now sets
+`isAzureMonitorTargetEnabled: true`. `lawDataRetentionDays` is 90.
+
+The subscription Activity Log did **not** land in `layer-02-landing-zone.yml`. L2 runs
+strictly before L6 in `infra-up.yml`'s layer graph on every invocation, not just first
+bootstrap (teardown deletes the LAW's resource group every cycle), so a diagnostic
+setting there would always be pointed at a Log Analytics workspace that does not exist
+yet — `az monitor diagnostic-settings subscription create --workspace` validates the
+target at request time. Moved to `layer-06-platform.yml`'s deploy job instead, right
+after the LAW becomes a real deployed resource; genuinely wired on every run, not a
+no-op. `layer-02-landing-zone.yml` itself gained only an explanatory comment, not a step.
+
+Entra `SignInLogs` + `AuditLogs` did **not** land anywhere. Same LAW-ordering problem as
+the Activity Log (L3 also runs before L6), plus a second, independent blocker: Entra
+tenant-level diagnostic settings are a `Microsoft.aadiam`-namespaced resource addressed
+by tenant scope with no subscription/resource-group path segment — a shape this repo's
+tooling has never exercised — and neither `az monitor diagnostic-settings create --help`
+(available offline) nor anything else in that session confirmed the exact resource-id
+form or the Entra role the deployer SP would need beyond what L3 already holds. Shipping
+an unverified `az rest` call against a real tenant was judged worse than recording the
+gap; `layer-03-entra.yml` gained an explanatory comment only. This needs a live tenant to
+verify and is a candidate for its own follow-up task.
+
+Register consequence: 3.3.1/3.3.2/3.3.5 are still GAP, not CLOSED — F9 is their sole
+contributor and F9 itself is only partially remediated — but `gapSeverity` dropped from
+high to medium on all three: every Azure resource-plane audit trail in the estate now
+exists and correlates in one workspace with a 90-day window; only the Entra
+identity-plane half (who authenticated, which CA policy fired, which directory role
+changed) remains dark. See `task-13-report.md` for the full reasoning.
+
 - [ ] **Step 1: Write the failing test**
 
 ```powershell
