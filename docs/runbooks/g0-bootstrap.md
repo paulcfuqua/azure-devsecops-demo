@@ -249,8 +249,8 @@ it is still about sign-in risk and auto-labeling, nothing else.
    credential for this repo's `demo` environment only (deliberately no branch-ref
    credential — 2026-08-26 finding F7); grants Owner on the subscription; prints the
    admin-consent URL for Graph application permissions (`User.ReadWrite.All`,
-   `Group.ReadWrite.All`, `Application.ReadWrite.All`,
-   `Policy.ReadWrite.ConditionalAccess`, `Directory.Read.All`)
+   `Group.ReadWrite.All`, `Application.ReadWrite.OwnedBy` — narrowed from `.All`,
+   2026-08-26 finding F8 —, `Policy.ReadWrite.ConditionalAccess`, `Directory.Read.All`)
    — you click consent; and creates the read-only `mls-verifier` app (Reader +
    `Directory.Read.All`) with its **own** federated credential on a distinct `verify`
    environment, never `demo` (2026-08-26 findings F6/F7 — see item C9 below).

@@ -5,18 +5,15 @@
   "assertion": {
     "status": "GAP",
     "evidence": [
-      "compliance/findings/2026-08-26-prepublication-review.md#f8",
       "compliance/findings/2026-08-26-prepublication-review.md#f13"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F8: the deployer service principal holds Application.ReadWrite.All when apply-entra.ps1 only creates and updates three apps it owns, so the actual privilege needed is Application.ReadWrite.OwnedBy — a strictly narrower grant. F13: privilege across the estate is inverted — Owner and ReadWrite.All exist where automation is fully automated, while seven documented least-privilege workload grants (data-api, mcp-tools, cost-ingest) exist nowhere in code. F7, this control's other contributor, is now CLOSED (Task 9): mls-verifier is federated to its own environment:verify subject distinct from the deployer's, so the verify-job escalation path F7 described no longer exists (see 3.1.6/3.1.7)."
+    "rationale": "F13: privilege across the estate is inverted — Owner and ReadWrite.All exist where automation is fully automated, while seven documented least-privilege workload grants (data-api, mcp-tools, cost-ingest) exist nowhere in code. F7 and F8, this control's other two contributors, are now CLOSED (Task 9 and Task 10 respectively): mls-verifier is federated to its own environment:verify subject distinct from the deployer's (closing F7 — see 3.1.6/3.1.7), and the deployer's Graph grant is Application.ReadWrite.OwnedBy rather than .All (closing F8). F13 remains open and is this control's sole remaining contributor, carrying forward the same gapSeverity."
   },
-  "recommendation": "Swap Application.ReadWrite.All for Application.ReadWrite.OwnedBy on the deployer. Express the seven documented workload RBAC grants (data-api, mcp-tools, cost-ingest) in IaC. F7's remediation (the verify environment split) is DONE and needs no further action.",
+  "recommendation": "Express the seven documented workload RBAC grants (data-api, mcp-tools, cost-ingest — see F13's table) in IaC; add a criterion asserting each principal holds exactly its expected roles and no others. F7 and F8's remediations (the verify environment split, and Application.ReadWrite.OwnedBy) are DONE and need no further action.",
   "gapSeverity": "high",
   "references": [
-    "scripts/bootstrap/01-root-oidc.ps1:69",
-    "infra/entra/apply-entra.ps1:415",
     "infra/bicep/apps/main.bicep:637",
     "infra/bicep/apps/main.bicep:101",
     "infra/bicep/platform/main.bicep:301",

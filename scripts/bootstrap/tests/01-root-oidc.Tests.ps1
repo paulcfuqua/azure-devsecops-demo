@@ -10,7 +10,7 @@ BeforeAll {
     $script:GraphRoleIds = @(
         '741f803b-c850-494e-b5df-cde7c675a1ca', # User.ReadWrite.All
         '62a82d76-70ea-41e2-9197-370581804d09', # Group.ReadWrite.All
-        '1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9', # Application.ReadWrite.All
+        '18a4783c-866b-4cc7-a460-3d5e5662c884', # Application.ReadWrite.OwnedBy
         '01c0a623-fc9b-48e9-b794-0756f8e8f067', # Policy.ReadWrite.ConditionalAccess
         '7ab1d382-f21e-4acd-a863-ba3e13f7da61'  # Directory.Read.All
     )
@@ -168,6 +168,12 @@ Describe '01-root-oidc' {
             $verifierGranted | Should -Contain '7ab1d382-f21e-4acd-a863-ba3e13f7da61' # Directory.Read.All
             $verifierGranted | Should -Contain '246dd0d5-5bd0-4def-940b-0421030a5b68' # Policy.Read.All
             $verifierGranted.Count | Should -Be 2
+        }
+
+        It 'does not request tenant-wide application write (2026-08-26 finding F8)' {
+            $script:DeployerGraphRoles.Keys | Should -Not -Contain 'Application.ReadWrite.All'
+            $script:DeployerGraphRoles.Keys | Should -Contain 'Application.ReadWrite.OwnedBy'
+            $script:DeployerGraphRoles['Application.ReadWrite.OwnedBy'] | Should -Be '18a4783c-866b-4cc7-a460-3d5e5662c884'
         }
 
         It 'prints admin-consent URLs but NEVER calls az ad app permission admin-consent' {

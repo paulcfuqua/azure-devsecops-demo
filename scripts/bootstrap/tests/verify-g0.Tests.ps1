@@ -9,7 +9,7 @@ BeforeAll {
     $script:RoleIds = @(
         '741f803b-c850-494e-b5df-cde7c675a1ca',
         '62a82d76-70ea-41e2-9197-370581804d09',
-        '1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9',
+        '18a4783c-866b-4cc7-a460-3d5e5662c884', # Application.ReadWrite.OwnedBy
         '01c0a623-fc9b-48e9-b794-0756f8e8f067',
         '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
     )

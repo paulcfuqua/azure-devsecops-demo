@@ -15,7 +15,7 @@
         environment subject is sufficient for every deploy job, which already declares
         `environment: demo`. Also: its service principal, Owner on the target
         subscription, and Microsoft Graph *application* permissions (User.ReadWrite.All,
-        Group.ReadWrite.All, Application.ReadWrite.All, Policy.ReadWrite.ConditionalAccess,
+        Group.ReadWrite.All, Application.ReadWrite.OwnedBy, Policy.ReadWrite.ConditionalAccess,
         Directory.Read.All).
       * App registration `mls-verifier` with its OWN federated identity credential on a
         subject DISTINCT from the deployer's - `environment:verify`, never `environment:
@@ -80,10 +80,21 @@ $script:GithubOidcIssuer = 'https://token.actions.githubusercontent.com'
 $script:OidcAudience = 'api://AzureADTokenExchange'
 
 # Microsoft Graph *application* (appRole) permission ids.
+#
+# Application.ReadWrite.OwnedBy (not .All, 2026-08-26 finding F8): apply-entra.ps1 only
+# ever creates/updates the three apps in infra/entra/manifest.json, all owned by this
+# deployer, so OwnedBy is a drop-in. .All would let the holder add a credential to ANY
+# app or SP in the tenant - including one holding Global Administrator - which is a
+# strictly larger blast radius than the Owner role this identity also holds.
+#
+# Policy.ReadWrite.ConditionalAccess is RETAINED deliberately, not an oversight: L3
+# authors Conditional Access policies and needs it. It can also disable CA tenant-wide,
+# which is a real risk this comment records for the risk register (compliance/assessment/
+# 3.1.5.json) rather than letting it pass unremarked.
 $script:DeployerGraphRoles = [ordered]@{
     'User.ReadWrite.All'                  = '741f803b-c850-494e-b5df-cde7c675a1ca'
     'Group.ReadWrite.All'                 = '62a82d76-70ea-41e2-9197-370581804d09'
-    'Application.ReadWrite.All'           = '1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9'
+    'Application.ReadWrite.OwnedBy'       = '18a4783c-866b-4cc7-a460-3d5e5662c884'
     'Policy.ReadWrite.ConditionalAccess'  = '01c0a623-fc9b-48e9-b794-0756f8e8f067'
     'Directory.Read.All'                  = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
 }

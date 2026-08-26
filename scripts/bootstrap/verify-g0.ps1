@@ -12,7 +12,7 @@
          subject to check for any more - see 01-root-oidc.ps1).
       4. Deployer service principal holds Owner on the subscription.
       5. Graph application permissions ADMIN-CONSENTED for the deployer SP
-         (User.ReadWrite.All, Group.ReadWrite.All, Application.ReadWrite.All,
+         (User.ReadWrite.All, Group.ReadWrite.All, Application.ReadWrite.OwnedBy,
          Policy.ReadWrite.ConditionalAccess, Directory.Read.All - checked via
          appRoleAssignments, which only exist after consent).
       6. Verifier app (mls-verifier) exists AND holds its OWN federated credential on the
@@ -59,7 +59,7 @@ $ErrorActionPreference = 'Stop'
 $script:GraphConsentedRoles = [ordered]@{
     'User.ReadWrite.All'                 = '741f803b-c850-494e-b5df-cde7c675a1ca'
     'Group.ReadWrite.All'                = '62a82d76-70ea-41e2-9197-370581804d09'
-    'Application.ReadWrite.All'          = '1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9'
+    'Application.ReadWrite.OwnedBy'      = '18a4783c-866b-4cc7-a460-3d5e5662c884'
     'Policy.ReadWrite.ConditionalAccess' = '01c0a623-fc9b-48e9-b794-0756f8e8f067'
     'Directory.Read.All'                 = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
 }
