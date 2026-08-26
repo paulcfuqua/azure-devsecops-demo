@@ -18,16 +18,25 @@
 # all routed to the L6 Log Analytics workspace, plus a real SQL audit
 # destination (isAzureMonitorTargetEnabled) and retention raised 30 -> 90.
 #
-# The subscription Activity Log and Entra SignInLogs/AuditLogs are NOT in this
-# file — both need a Log Analytics workspace that does not exist yet at the
-# point in infra-up.yml's layer graph the brief named (L2/L3 precede L6 on a
-# same-pass run), so both are wired in layer-06-platform.yml's deploy job
-# instead, right after the LAW becomes a real deployed resource. The second
-# Describe block below guards that half, added after a review round corrected
-# an initial deferral of the Entra item (see task-13-report.md's fix-round
-# section for why "needs a live tenant to verify" was not, in the end, true of
-# the Entra resource shape or the role it needs — both are publicly
-# documented).
+# The subscription Activity Log IS wired automatically, in
+# layer-06-platform.yml's deploy job, right after the LAW becomes a real
+# deployed resource (it needs a workspace that doesn't exist yet at the point
+# in infra-up.yml's layer graph the brief originally named).
+#
+# Entra ID SignInLogs/AuditLogs are deliberately NOT wired automatically
+# anywhere. History, briefly: first deferred (unverifiable without a live
+# tenant, in that session); then implemented in layer-06-platform.yml after a
+# review round found the resource shape and required role are both publicly
+# documented; then REMOVED from that workflow on a second review round, because
+# the role required — Security Administrator — is materially more tenant
+# privilege than mls-github-deployer should hold standing (Task 10 narrowed
+# this exact SP's Graph permission specifically to shrink its blast radius,
+# finding F8; adding Security Administrator now would re-inflate that). It is
+# a documented G0 human step instead (docs/runbooks/g0-bootstrap.md § C, item
+# 12) — the same treatment item 4 (Fabric's SP API toggle) already gets for a
+# different one-time, tenant-level, no-pipeline-identity setting. The second
+# Describe block below guards that: the exact command is in the runbook, and
+# — regression guard — the automated call does NOT reappear in the workflow.
 # =============================================================================
 
 BeforeAll {
@@ -36,6 +45,8 @@ BeforeAll {
     $script:MainBicep = Get-Content -LiteralPath $script:MainBicepPath -Raw
     $script:Layer06Path = Join-Path -Path $script:RepoRoot -ChildPath '.github' -AdditionalChildPath 'workflows', 'layer-06-platform.yml'
     $script:Layer06 = Get-Content -LiteralPath $script:Layer06Path -Raw
+    $script:G0Path = Join-Path -Path $script:RepoRoot -ChildPath 'docs' -AdditionalChildPath 'runbooks', 'g0-bootstrap.md'
+    $script:G0 = Get-Content -LiteralPath $script:G0Path -Raw
 }
 
 Describe 'platform diagnostics route to Log Analytics (F9)' {
@@ -66,16 +77,33 @@ Describe 'platform diagnostics route to Log Analytics (F9)' {
     }
 }
 
-Describe 'subscription and tenant diagnostics route to Log Analytics from L6 (F9)' {
-    It 'wires the subscription Activity Log to the LAW' {
+Describe 'subscription Activity Log is automated; Entra diagnostics are a documented G0 step (F9)' {
+    It 'wires the subscription Activity Log to the LAW in layer-06-platform.yml' {
         $script:Layer06 | Should -Match 'az monitor diagnostic-settings subscription create'
         $script:Layer06 | Should -Match 'logAnalyticsWorkspaceResourceId'
     }
 
-    It 'wires Entra ID SignInLogs and AuditLogs to the LAW' {
-        $script:Layer06 | Should -Match 'microsoft\.aadiam'
-        $script:Layer06 | Should -Match 'SignInLogs'
-        $script:Layer06 | Should -Match 'AuditLogs'
+    It 'does NOT wire Entra diagnostics as an automated pipeline call' {
+        # Regression guard in the other direction from most tests here: this
+        # asserts an ABSENCE on purpose. mls-github-deployer must not hold
+        # Security Administrator (see the header comment), so no workflow may
+        # call `az monitor diagnostic-settings create --resource
+        # "/providers/microsoft.aadiam"` — if this starts failing, someone
+        # re-added the automated call this task deliberately removed.
+        $script:Layer06 | Should -Not -Match 'providers/microsoft\.aadiam'
+    }
+
+    It 'documents the Entra diagnostic setting as a G0 human step with the exact command' {
+        $script:G0 | Should -Match 'az monitor diagnostic-settings create'
+        $script:G0 | Should -Match 'providers/microsoft\.aadiam'
+        $script:G0 | Should -Match 'SignInLogs'
+        $script:G0 | Should -Match 'AuditLogs'
+        $script:G0 | Should -Match 'Security Administrator'
+    }
+
+    It 'states the G0 step runs after L6 and requires a role mls-github-deployer does not hold' {
+        $script:G0 | Should -Match '(?i)after\s+(the\s+first\s+successful\s+)?L6'
+        $script:G0 | Should -Match 'mls-github-deployer'
     }
 
     It 'does not overclaim the L2/L3-before-L6 ordering as a universal invariant' {

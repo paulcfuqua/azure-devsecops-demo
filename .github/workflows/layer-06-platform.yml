@@ -294,58 +294,24 @@ jobs:
             --output none
           echo "Subscription Activity Log routed to ${law_id}."
 
-      - name: Wire Entra ID SignInLogs and AuditLogs to Log Analytics
-        if: ${{ !inputs.dry_run }}
-        env:
-          PREFIX: ${{ steps.names.outputs.prefix }}
-        run: |
-          set -euo pipefail
-          # F9 (compliance/findings/2026-08-26-prepublication-review.md#f9,
-          # Task 13): tenant-scoped configuration, same reasoning as the
-          # Activity Log step above — it needs the LAW to exist first, so it
-          # lives here rather than in layer-03-entra.yml (L3 also precedes L6
-          # on a full pass, for the same reason documented there and above).
-          #
-          # Originally deferred as unverifiable without a live tenant (the
-          # Microsoft.aadiam resource shape and the Entra role required were
-          # both unconfirmed in that session). Corrected on review: both are
-          # publicly documented (Microsoft Learn, "How to configure Microsoft
-          # Entra diagnostic settings") — Security Administrator is the
-          # required Entra directory role, and the resource addressed is the
-          # same generic `az monitor diagnostic-settings create` verb the
-          # Activity Log step already uses, just pointed at the tenant-scoped
-          # `/providers/microsoft.aadiam` resource instead of a subscription.
-          #
-          # Known, recorded prerequisite this step does NOT itself grant:
-          # mls-github-deployer must hold the Security Administrator Entra
-          # role. Nothing in this repo's IaC grants any Entra directory role
-          # to that SP today (checked: no match anywhere in infra/entra/ or
-          # the bootstrap scripts), so whether it already holds one is
-          # unverified without a live tenant — the same category of gap Task
-          # 12 recorded as F20/F21 (a grant expressed in code without a live
-          # check that its prerequisite holds), not a reason to withhold the
-          # diagnostic-settings call itself. Granting that role is a separate,
-          # deliberate decision (it is materially more powerful than anything
-          # else mls-github-deployer holds — see F7/F8) and is out of scope
-          # here; if this step fails with an authorization error, that is the
-          # first thing to check.
-          #
-          # law_id is recomputed rather than carried from the previous step:
-          # each workflow step's `run:` block is its own shell process, so a
-          # plain shell variable set above does not survive into this one.
-          law_id="$(jq -r '.logAnalyticsWorkspaceResourceId.value // empty' l6-manifest.json)"
-          if [ -z "${law_id}" ]; then
-            echo "::notice title=Entra diagnostics not wired::logAnalyticsWorkspaceResourceId was not in the deployment outputs."
-            exit 0
-          fi
-          az monitor diagnostic-settings create \
-            --name "${PREFIX}-entra-law" \
-            --resource "/providers/microsoft.aadiam" \
-            --workspace "${law_id}" \
-            --logs '[{"category":"SignInLogs","enabled":true},{"category":"AuditLogs","enabled":true}]' \
-            --output none
-          echo "Entra ID SignInLogs/AuditLogs routed to ${law_id}."
-
+      # F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task
+      # 13): Entra ID SignInLogs/AuditLogs diagnostic routing is deliberately
+      # NOT a step in this workflow. It was implemented here once (Task 13's
+      # fix round), then removed on further review: the only caller-side
+      # requirement Microsoft documents for creating this tenant-scoped
+      # setting is the Security Administrator (or Global Administrator) Entra
+      # directory role, and mls-github-deployer must not hold it — Task 10
+      # narrowed this exact SP from Application.ReadWrite.All to
+      # .ReadWrite.OwnedBy specifically to shrink its tenant blast radius
+      # (finding F8), and granting Security Administrator now would re-inflate
+      # precisely what that task closed, for a one-time setting that never
+      # needs to be replayed by the kill/rebuild loop. This is a G0 human
+      # step instead — docs/runbooks/g0-bootstrap.md § C, item 12 — the same
+      # treatment item 4 (the Fabric "service principals can use Fabric APIs"
+      # toggle) already gets for a different tenant-level, portal/CLI,
+      # one-time setting no pipeline identity should hold standing privilege
+      # for. See that runbook item for the exact command; see
+      # task-13-report.md's second fix round for the full reasoning.
       - name: Apply the SQL schema and seed the operational tables
         if: ${{ !inputs.dry_run }}
         shell: pwsh

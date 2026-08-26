@@ -1015,33 +1015,41 @@ caught on review.) Moved to `layer-06-platform.yml`'s deploy job instead, right 
 LAW becomes a real deployed resource. `layer-02-landing-zone.yml` itself gained only an
 explanatory comment, not a step.
 
-Entra `SignInLogs` + `AuditLogs` were first **deferred**, then **implemented** after
-review. The first pass recorded this as unverifiable without a live tenant — the
-`Microsoft.aadiam` tenant-scoped resource shape and the Entra role required were both
-unconfirmed in that session, and shipping unverified syntax against a real tenant was
-judged worse than recording the gap. Review disagreed with keeping it deferred: both
-facts are publicly documented (Microsoft Learn, "How to configure Microsoft Entra
-diagnostic settings" — Security Administrator is the named role, and the resource is
-addressed with the same `az monitor diagnostic-settings create` verb the Activity Log
-step already uses, pointed at `/providers/microsoft.aadiam` instead of a subscription),
-and more decisively: "cannot verify without a live tenant" is true of every line in a
-repo where nothing is deployed, so accepting it as a reason to defer would excuse
-deferring everything. Implemented in `layer-06-platform.yml` alongside the Activity Log
-step, same ordering reasoning. One real, still-open loose end: nothing in this repo's IaC
-grants mls-github-deployer the Security Administrator Entra role the step needs at
-runtime — that is recorded in the step's own comment as a known, unverified prerequisite
-(the same shape as F20/F21: a grant expressed in code without a live check that its
-precondition holds), not folded back into F9, and not a reason the code itself is wrong.
+Entra `SignInLogs` + `AuditLogs` went through three rounds, not two. First **deferred**
+(unverifiable without a live tenant, in that session — the `Microsoft.aadiam`
+tenant-scoped resource shape and the Entra role required were both unconfirmed). Then
+**implemented** as an automated call in `layer-06-platform.yml`, alongside the Activity
+Log step, after a review round found both facts are in fact publicly documented
+(Microsoft Learn, "How to configure Microsoft Entra diagnostic settings" — Security
+Administrator is the named role) and pointed out that "cannot verify without a live
+tenant" is true of every line in a repo where nothing is deployed, so accepting it as a
+reason to defer would excuse deferring everything. Then **removed again**, on a second
+review round, once it was flagged (by this session, in the first implementation's own
+concerns section) that nothing in this repo's IaC grants `mls-github-deployer` the
+Security Administrator role the automated call needed — and the ruling was not "grant it"
+but "this SP must not hold it": Task 10 narrowed this exact SP from
+`Application.ReadWrite.All` to `.ReadWrite.OwnedBy` specifically to shrink its tenant
+blast radius (finding F8), and adding Security Administrator now would re-inflate
+precisely what that narrowing closed, to automate a setting that is configured once and
+never replayed by the kill/rebuild loop. The remedy that landed is a new G0 human
+checklist item — `docs/runbooks/g0-bootstrap.md` § C, item 12 — carrying the exact
+command, the role requirement, and the after-L6 ordering, in the same style as item 4
+(the Fabric SP API toggle) and item 11 (the MCP auth secret). A documented human step
+with an exact command is treated as a real remedy here, the same standard item 4 already
+meets — not a weaker stand-in for automation.
 
-Register consequence, corrected twice: the first pass downgraded `gapSeverity` on
-`3.3.1`/`3.3.2`/`3.3.5` from `high` to `medium` because most of F9's action items had
-landed. Review called this Critical and reverted it, citing Task 12's own precedent —
-`3.1.5.json` keeps `gapSeverity: "high"` while F13 (its sole contributor) had five of
-seven grants landed, precisely because severity is a property of the finding, not a
-progress meter that softens as work lands. With Entra now also implemented, F9 has no
-remaining open contributor at all, so the controls move past "GAP, reverted to high" to
-**CLOSED, `gapSeverity: "none"`** — the same convention `3.13.1.json` models. See
-`task-13-report.md` for the full before/after reasoning and the fix-round evidence.
+Register consequence, corrected three times across the two review rounds. First, the
+initial pass downgraded `gapSeverity` on `3.3.1`/`3.3.2`/`3.3.5` from `high` to `medium`
+because most of F9's action items had landed — called Critical on review and reverted,
+citing Task 12's own precedent (`3.1.5.json` keeps `gapSeverity: "high"` while F13, its
+sole contributor, had five of seven grants landed — severity is a property of the
+finding, not a progress meter). Second, once Entra was implemented as an automated step,
+the controls moved to **CLOSED, `gapSeverity: "none"`**. Third, once that automated step
+was removed in favor of the G0 item, the rationale text in all three files was rewritten
+again — not the status (closing via a documented human step is still closing, per the
+explicit ruling above) — to describe the real remedy: IaC for everything but the Entra
+piece, a G0 runbook item for that piece. See `task-13-report.md` for the full sequence
+and every fix round's evidence.
 
 - [ ] **Step 1: Write the failing test**
 

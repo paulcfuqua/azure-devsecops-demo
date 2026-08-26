@@ -13,20 +13,21 @@ name: layer-03-entra
 #
 # F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13)
 # named this file for Entra `SignInLogs` + `AuditLogs` diagnostic routing. It
-# is NOT here, for the same ordering reason the Activity Log setting is not in
-# layer-02-landing-zone.yml (see that file's note): on a full infra-up.yml
-# pass L3 precedes L6, so the Log Analytics workspace this setting must
-# reference does not exist yet at this point. The routing is implemented in
-# layer-06-platform.yml's deploy job instead, right after the LAW becomes a
-# real deployed resource — `az monitor diagnostic-settings create --resource
-# "/providers/microsoft.aadiam"`, the same verb the Activity Log step uses,
-# just pointed at the tenant scope instead of the subscription. (An earlier
-# pass recorded this as unverifiable-without-a-live-tenant and deferred it;
-# review corrected that — both the resource shape and the required Security
-# Administrator Entra role are documented on Microsoft Learn, "How to
-# configure Microsoft Entra diagnostic settings" — so it is implemented, not
-# deferred. Whether mls-github-deployer currently holds that Entra role is a
-# separate, still-unverified question — see the comment on that step.)
+# is deliberately NOT anywhere in the pipeline — not here, and not in
+# layer-06-platform.yml either (it was implemented there once, in an earlier
+# round, then removed). Two reasons stack, not one: (1) the same ordering
+# problem as the Activity Log setting (see layer-02-landing-zone.yml's note)
+# — on a full infra-up.yml pass L3 precedes L6, so the Log Analytics
+# workspace this setting would reference does not exist yet at this point;
+# (2) creating this tenant-scoped setting requires the caller to hold
+# Security Administrator (or Global Administrator), and mls-github-deployer
+# must not hold it — Task 10 narrowed this exact SP's Graph permission
+# specifically to shrink its tenant blast radius (finding F8), and granting
+# Security Administrator now would re-inflate precisely what that narrowed,
+# for a setting that is configured once and never replayed by the
+# kill/rebuild loop. This is a G0 human step instead:
+# docs/runbooks/g0-bootstrap.md § C, item 12, carries the exact command. See
+# task-13-report.md's second fix round for the full reasoning.
 # =============================================================================
 
 on:

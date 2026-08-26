@@ -365,6 +365,54 @@ it is still about sign-in risk and auto-labeling, nothing else.
     `MCP_ALLOW_UNAUTHENTICATED=true`. Cloud mode otherwise refuses to boot without a
     token, by design: an open endpoint has to be chosen, never defaulted into.
 
+12. ⚠ **Entra ID `SignInLogs`/`AuditLogs` diagnostic setting** — *added 2026-08-26 for
+    finding F9* (`compliance/findings/2026-08-26-prepublication-review.md#f9`);
+    *deliberately a human step, not a pipeline step — see below.* **Out of sequence
+    with the numbering above in both directions:** it cannot be done until **after**
+    the first successful L6 run (the Log Analytics workspace it points at does not
+    exist before then), and nothing later in this checklist, or in any pipeline layer,
+    waits on it — working through items 1–11 in order and then stopping is a complete
+    bootstrap; come back and do this one once, after L6, whenever convenient.
+
+    This is the one piece of F9 (zero `diagnosticSettings`/audit routing anywhere in
+    the estate) that `layer-06-platform.yml` does not wire automatically, even though
+    the subscription Activity Log right next to it in that workflow does. The
+    difference is the privilege the caller needs: creating a tenant-scoped Entra
+    diagnostic setting requires the **Security Administrator** (or Global
+    Administrator) Entra directory role, and `mls-github-deployer` must not hold it.
+    Item 3 above narrowed this exact SP from `Application.ReadWrite.All` to
+    `.ReadWrite.OwnedBy` specifically to shrink its tenant blast radius (finding F8);
+    granting it Security Administrator now would re-inflate precisely what that
+    narrowing closed, to automate a setting that is configured once and never replayed
+    by the kill/rebuild loop — the same class of one-time, tenant-level, portal/CLI
+    item as C4 (the Fabric SP API toggle) above.
+
+    Run once, signed in as yourself or anyone else holding Security Administrator or
+    Global Administrator:
+
+    ```
+    az monitor diagnostic-settings create \
+      --name <prefix>-entra-law \
+      --resource "/providers/microsoft.aadiam" \
+      --workspace <LAW resource id> \
+      --logs '[{"category":"SignInLogs","enabled":true},{"category":"AuditLogs","enabled":true}]'
+    ```
+
+    `<prefix>` is the `naming.bicep` company prefix (`mls` by default). `<LAW resource
+    id>` is `logAnalyticsWorkspaceResourceId` from the L6 deployment manifest, or
+    resolve it directly: `az monitor log-analytics workspace show --resource-group
+    <rg-platform> --workspace-name <law> --query id -o tsv`.
+
+    Idempotent — safe to re-run; re-run it after any kill/rebuild cycle that recreates
+    `mls-rg-platform`, since that mints a new workspace resource ID and the old
+    setting is left pointing at a deleted one.
+
+    Verify: `az monitor diagnostic-settings list --resource "/providers/microsoft.aadiam"`
+    lists the setting with both `SignInLogs` and `AuditLogs` enabled, and the `SigninLogs`
+    / `AuditLogs` tables in the Log Analytics workspace populate within about 15 minutes
+    of the next sign-in or directory change — distinct from `AzureActivity`, which is the
+    subscription Activity Log layer-06-platform.yml already wires on its own.
+
 ### C9 — the `demo` and `verify` GitHub environments, variable by variable
 
 These are GitHub **environment variables**, not secrets, and they are never committed
