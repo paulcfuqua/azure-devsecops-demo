@@ -1427,7 +1427,31 @@ Verifier's own audit could not have caught this."
 
 ---
 
-## Task 21: Full-suite verification and register reconciliation
+## Task 21: Grant mls-verifier the Fabric workspace Viewer role (F21)
+
+**Files:** Modify `infra/fabric/provision-workspace.ps1`, `.github/workflows/layer-05-fabric.yml`; Test `infra/fabric/tests/provision-workspace.Tests.ps1`
+
+**Why this one matters disproportionately.** `verification/layer-05-audit.ps1:57` builds its Fabric bearer header assuming `mls-verifier` holds workspace Viewer. It does not — nothing grants it. So the L5 Verifier audit 403s the first time it runs against a real tenant, and CLAUDE.md makes the Verifier's sign-off the authoritative test for whether a layer is done. A broken audit gate is worse than a missing feature: it fails in the direction of looking unverified rather than looking fine, but it blocks the layer either way.
+
+Task 12 added `Set-FabricWorkspaceRoleAssignment` to `infra/fabric/fabric-api.psm1` for data-api's grant. Use it. The verifier needs **Viewer** — read-only — matching its Reader-everywhere posture; anything broader is itself a finding.
+
+Steps: write the failing test asserting the L5 deploy path grants the verifier Viewer; run it and watch it fail; implement; re-run; update `compliance/assessment/` for F21's controls and close F21; commit `fix(L5): grant mls-verifier the Fabric workspace Viewer role it audits with`.
+
+---
+
+## Task 22: Apply the SQL contained-database user after L7 (F20)
+
+**Files:** Modify `.github/workflows/layer-07-apps.yml` (or `infra-up.yml`); Test `scripts/tests/up.Tests.ps1`
+
+Task 12 expressed the grant in `data/seed/sql/`, guarded so it cannot abort the L6 seed when the identity does not yet exist. But nothing re-invokes `seed.ps1 -Target sql` after L7 creates the data-api UAMI, so the grant never actually lands in a single `infra-up.yml` pass — `data-api` 403s on every SQL route until someone re-runs the seed by hand.
+
+Add a post-L7 invocation. Keep it idempotent: it must be safe on a tenant where the user already exists, since `up.ps1` replays.
+
+Steps: write the failing test asserting a post-L7 SQL seed invocation exists; run it and watch it fail; implement; re-run; update the register and close F20; commit `fix(L7): apply the SQL contained-database user after the identity exists`.
+
+---
+
+## Task 23: Full-suite verification and register reconciliation
 
 **Files:**
 - Modify: `compliance/assessment/*.json`
