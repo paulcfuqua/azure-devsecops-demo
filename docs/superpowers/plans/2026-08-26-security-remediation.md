@@ -1531,6 +1531,18 @@ actionlint .github/workflows/*.yml
 
 Expected: Pester all green, PSSA 0, npm exit 0, pytest 30, every Bicep artifact exit 0, actionlint silent.
 
+- [ ] **Step 1b: Add a verify-g0 check for the Entra diagnostic setting**
+
+G0 item 12 (Entra `SignInLogs`/`AuditLogs`) is a human step, deliberately un-automated so the deployer never holds a standing Security Administrator role. But unlike C4 (whose Fabric-capacity check implicitly proves the SP toggle) and item 10 (covered by V3.4), it has no verification at all — making F9's closure the only one in the register that rests on a human remembering an unaudited command.
+
+Add a read-only check to `scripts/bootstrap/verify-g0.ps1` asserting the tenant diagnostic setting exists and routes `SignInLogs` + `AuditLogs` to the LAW:
+
+```powershell
+az monitor diagnostic-settings list --resource "/providers/microsoft.aadiam"
+```
+
+Report it informational rather than gate-failing, matching how items C6/C7/C10 are treated — the point is that a missing setting becomes visible, not that G0 blocks on it.
+
 - [ ] **Step 2: Reconcile the register**
 
 Every finding closed in Tasks 3-20 has its assessment record updated with status and the closing commit SHA as evidence. Any finding *not* closed keeps its `GAP` status and gains a note saying why — the register must never overstate.
