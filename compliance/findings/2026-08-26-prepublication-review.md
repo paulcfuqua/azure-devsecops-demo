@@ -42,7 +42,7 @@ their evidence and carry the same status.
 | [F18](#f18) | Sensitivity labels published nowhere — a taxonomy, not a control | medium | CONFIRMED | CM-6 | Task 20 |
 | [F19](#f19) | cost-ingest documented as deployed; deploys nowhere | medium | CONFIRMED | — (availability/completeness) | — (needs a new task) |
 | [F20](#f20) | data-api's contained-user grant is expressed but never applies | medium | CONFIRMED | — (availability) | — (needs a new task) |
-| [F21](#f21) | mls-verifier's documented Fabric workspace Viewer grant does not exist | high | CONFIRMED | — (availability — breaks the Verifier's sign-off gate) | — (needs a new task) |
+| [F21](#f21) | mls-verifier's documented Fabric workspace Viewer grant does not exist | high | CONFIRMED | — (availability — breaks the Verifier's sign-off gate) | Task 21 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings.
 
@@ -960,8 +960,8 @@ all pass after the fix. CM-6 closes outright — F18 was its sole contributor (s
 - **Severity:** high
 - **Confidence:** CONFIRMED
 - **Controls:** none — no 800-171 control (availability — breaks the Verifier's sign-off gate CLAUDE.md treats as authoritative)
-- **Closed by:** not assigned
-- **Status:** GAP
+- **Closed by:** Task 21
+- **Status:** CLOSED
 
 **Where:** `infra/fabric/provision-workspace.ps1` (before this task's correction) asserted at lines 19-22: "at L5 the `mls-verifier` service principal is granted the workspace VIEWER role on `mls-operations`... That grant happens in the L5 deploy path, not in this script." `verification/layer-05-audit.ps1:57` builds its Fabric bearer header on that same assumption ("workspace Viewer, granted"). `.github/workflows/layer-05-fabric.yml`'s step named "Azure login (OIDC, mls-verifier — Reader + workspace Viewer)" only logs in — it grants nothing.
 
@@ -972,6 +972,8 @@ all pass after the fix. CM-6 closes outright — F18 was its sole contributor (s
 **Impact:** if `mls-verifier` genuinely has no Fabric workspace role, the entire L5 Verifier audit 403s in live operation, independent of F13. CLAUDE.md's core control is "a layer is DONE only on the Verifier's sign-off, running as mls-verifier (Reader), never as the deployer SP" — a Verifier that cannot authenticate to the Fabric REST API cannot produce that sign-off for L5 at all. Same class as F6 (verifier had no federated credential): a control whose absence is invisible until the moment the estate depends on it.
 
 **Fix:** grant `mls-verifier`'s principal the Fabric workspace Viewer role using the same `Add-FabricWorkspaceRoleAssignment` function Task 12 added for data-api (a different call, a different principal, a different finding) — from the L5 deploy path (`layer-05-fabric.yml`), matching what the corrected docstring now says is NOT yet true rather than what the original docstring falsely claimed was already true.
+
+**Closed (Task 21):** `infra/fabric/provision-workspace.ps1` gained a `-VerifierPrincipalId` parameter, empty by default (no-op, same shape as `-DataApiPrincipalId`), which grants exactly workspace **Viewer** — never broader — via the existing `Add-FabricWorkspaceRoleAssignment`/`Get-FabricWorkspaceRoleAssignment` pair, checking for an existing `Viewer` assignment first so a replay is a no-op. `.github/workflows/layer-05-fabric.yml`'s `deploy` job (authenticated as `mls-github-deployer`, which becomes the workspace's Admin on creation and so can grant roles in it) now resolves `mls-verifier`'s service-principal **object ID** — Fabric role assignments need the object ID, not the application/client ID, and only `AZURE_VERIFIER_CLIENT_ID` (the client ID) is configured anywhere in this estate — via `az ad sp show --id $AZURE_VERIFIER_CLIENT_ID` (the deployer already holds Graph `Directory.Read.All`), and passes the result to `-VerifierPrincipalId`. The step is skipped, not failed, when `AZURE_VERIFIER_CLIENT_ID` is unset (same "unverified rather than broken" shape the rest of this layer already uses); it hard-fails the run if the lookup resolves to nothing, rather than silently granting nobody. `verification/layer-05-audit.ps1:57`'s Fabric bearer-header assumption now holds. Covered by `infra/fabric/tests/provision-workspace.Tests.ps1`'s new `'mls-verifier workspace Viewer grant (F21)'` context (mocked Fabric API, zero cloud calls): the grant fires exactly once with `Role -eq 'Viewer'` when a principal ID is supplied and none exists yet, is skipped when an existing `Viewer` assignment is found (idempotent replay), never fires with a role other than `Viewer`, stays a no-op when the parameter is omitted, and composes correctly alongside the pre-existing data-api grant in the same run. Not claimed: this has never been exercised against a live tenant — no Azure/Fabric connection was made to build or test it, per this branch's constraints — so the `az ad sp show` resolution and the live Fabric `roleAssignments` call are verified by code reading and mocked-transport tests only, not by an end-to-end run.
 
 ---
 

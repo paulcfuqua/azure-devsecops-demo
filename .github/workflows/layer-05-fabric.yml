@@ -103,6 +103,30 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # F21 (compliance/findings/2026-08-26-prepublication-review.md#f21): the L5
+      # Verifier audit authenticates to the Fabric REST API as mls-verifier on the
+      # assumption it already holds workspace Viewer. Nothing granted it. Fabric
+      # workspace role assignments need the service principal's OBJECT ID, and only
+      # the app/client ID (AZURE_VERIFIER_CLIENT_ID) is configured anywhere in this
+      # estate, so resolve it here via Graph (the deployer already holds
+      # Directory.Read.All) rather than adding a second verifier-identity variable.
+      # Skipped, not failed, when the verifier is not configured at all (same
+      # "unverified, not broken" shape as the verify job's own guard below) -
+      # provision-workspace.ps1's -VerifierPrincipalId stays a no-op without it.
+      - name: Resolve mls-verifier's Fabric workspace principal ID (F21)
+        id: verifier_principal
+        if: ${{ vars.AZURE_VERIFIER_CLIENT_ID != '' }}
+        env:
+          AZURE_VERIFIER_CLIENT_ID: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          principal_id=$(az ad sp show --id "${AZURE_VERIFIER_CLIENT_ID}" --query id --output tsv)
+          if [ -z "${principal_id}" ]; then
+            echo "::error title=mls-verifier service principal not found::az ad sp show returned no object ID for AZURE_VERIFIER_CLIENT_ID; the Fabric workspace Viewer grant (F21) cannot proceed."
+            exit 1
+          fi
+          echo "principal-id=${principal_id}" >> "${GITHUB_OUTPUT}"
+
       - name: Resume the Fabric capacity (G2 statement)
         id: resume
         run: |
@@ -136,6 +160,10 @@ jobs:
         shell: pwsh
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          # Empty when the previous step was skipped (verifier not configured) -
+          # provision-workspace.ps1's -VerifierPrincipalId is a no-op on an empty
+          # string, same shape as -DataApiPrincipalId before L7 exists.
+          VERIFIER_PRINCIPAL_ID: ${{ steps.verifier_principal.outputs.principal-id }}
         run: |
           $ErrorActionPreference = 'Stop'
           $token = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
@@ -143,6 +171,9 @@ jobs:
           $provisionArgs = @{
             Token      = $token
             CapacityId = $env:FABRIC_CAPACITY_ID
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:VERIFIER_PRINCIPAL_ID)) {
+            $provisionArgs['VerifierPrincipalId'] = $env:VERIFIER_PRINCIPAL_ID
           }
           if ($env:DRY_RUN -eq 'true') {
             ./infra/fabric/provision-workspace.ps1 @provisionArgs -WhatIf *>&1 | Tee-Object -FilePath fabric-plan.txt
