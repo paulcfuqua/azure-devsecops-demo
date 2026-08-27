@@ -5,13 +5,19 @@
 
 .DESCRIPTION
     Implements the four master-plan Verify criteria owned by
-    docs/runbooks/layers/L06.md section Validation cycle, and nothing else:
+    docs/runbooks/layers/L06.md section Validation cycle, plus one remediation-era
+    addition that is NOT a master-plan criterion (so it is not in the 43-row
+    traceability table in docs/runbooks/layers/README.md, which is scoped exactly to
+    master-plan criteria -- see that file's header invariant):
 
       V6.1  ARM GET on each resource: SKU/serverless/auto-pause/minReplicas values match
             the manifest exactly (autoPauseDelay 60, minCapacity 0.5, serverless SKU).
       V6.2  KQL query against LAW succeeds as verifier.
       V6.3  First cost export file lands within 24 h (async - closes in the L7 window).
       V6.4  SQL auto-pauses (checked after 75 min idle).
+      V6.5  SQL backup posture (short-term retention + backup storage redundancy)
+            matches the template-pinned values (F16, Task 18 -- CP-9; not a
+            master-plan criterion, see docs/runbooks/layers/L06.md § Validation cycle).
 
     Expected values resolve from the Bicep-declared manifest - the layer-06 deployment
     outputs - never from a teammate's message (L06.md section Validation cycle).
@@ -55,6 +61,8 @@ param(
     [string]$CostExportContainerName = 'cost-exports',
     [int]$ExpectedAutoPauseDelay = 60,
     [double]$ExpectedMinCapacity = 0.5,
+    [int]$ExpectedBackupRetentionDays = 7,
+    [string]$ExpectedBackupStorageRedundancy = 'Local',
     [string]$LayerCompletedUtc,
     [string]$SqlLastTouchedUtc,
     [double]$SqlIdleWindowMinutes = 75,
@@ -226,6 +234,57 @@ function Test-SqlAutoPause {
         -Detail 'Still Online past the window means the idle-cost model is broken - the classic cause is a chatty client (monitoring probe, availability test) keeping the DB awake; check az sql db list-usages and recent connections (L06 failure mode 1).'
 }
 
+function Test-SqlBackupPosture {
+    <# V6.5 (F16, Task 18 - CP-9; not a master-plan criterion - see this script's
+       .DESCRIPTION). requestedBackupStorageRedundancy is a top-level property on the
+       database resource (`az sql db show`); retentionDays lives on the child
+       backupShortTermRetentionPolicies/default resource, which `az sql db show` does
+       not surface - a plain `az resource show --ids <dbId>/backupShortTermRetentionPolicies/default`
+       reaches it without needing the dedicated `az sql db str-policy show` command's
+       separate --resource-group/--server/--database argument shape. #>
+    param(
+        [AllowEmptyString()][string]$SqlDatabaseId,
+        [Parameter(Mandatory)][int]$ExpectedRetentionDays,
+        [Parameter(Mandatory)][string]$ExpectedStorageRedundancy
+    )
+    if ([string]::IsNullOrWhiteSpace($SqlDatabaseId)) {
+        return New-MlsCheckResult -Passed $false -Observed 'no SQL database resource id available' -Final `
+            -Detail 'Pass -SqlDatabaseId / $env:MLS_SQL_DB_ID, or record it in the layer-06 deployment outputs.'
+    }
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $observed = [System.Collections.Generic.List[string]]::new()
+
+    $redundancy = Invoke-MlsAz -AllowFailure -Raw -Argument @(
+        'sql', 'db', 'show', '--ids', $SqlDatabaseId, '--query', 'requestedBackupStorageRedundancy', '--output', 'tsv'
+    )
+    $redundancyValue = "$redundancy".Trim()
+    $observed.Add("requestedBackupStorageRedundancy='$redundancyValue'")
+    if ($redundancyValue -ne $ExpectedStorageRedundancy) {
+        $problem.Add("requestedBackupStorageRedundancy='$redundancyValue', expected '$ExpectedStorageRedundancy'")
+    }
+
+    $policy = Invoke-MlsAz -AllowFailure -Argument @(
+        'resource', 'show', '--ids', "$SqlDatabaseId/backupShortTermRetentionPolicies/default",
+        '--query', '{retentionDays:properties.retentionDays}', '--output', 'json'
+    )
+    if ($null -eq $policy) {
+        $problem.Add('ARM GET on the short-term backup retention policy returned nothing')
+    }
+    else {
+        $retentionDays = Get-MlsProperty -InputObject $policy -Name 'retentionDays'
+        $observed.Add("retentionDays=$retentionDays")
+        if ([int]$retentionDays -ne $ExpectedRetentionDays) {
+            $problem.Add("retentionDays=$retentionDays, expected $ExpectedRetentionDays")
+        }
+    }
+
+    if ($problem.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
+    }
+    return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
+        -Detail 'Backup posture (F16/CP-9) is pinned by the template; any drift from the expected retention window or storage redundancy tier is a FAIL rather than a silent inherited default.'
+}
+
 function Invoke-Main {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
         Justification = 'Every parameter is consumed inside the criterion scriptblocks; PSSA cannot see through scriptblock closures.')]
@@ -239,6 +298,8 @@ function Invoke-Main {
         [string]$CostExportContainerName = 'cost-exports',
         [int]$ExpectedAutoPauseDelay = 60,
         [double]$ExpectedMinCapacity = 0.5,
+        [int]$ExpectedBackupRetentionDays = 7,
+        [string]$ExpectedBackupStorageRedundancy = 'Local',
         [string]$LayerCompletedUtc,
         [string]$SqlLastTouchedUtc,
         [double]$SqlIdleWindowMinutes = 75,
@@ -328,6 +389,15 @@ function Invoke-Main {
         -WindowStartUtc $sqlWindowStart -PendingWhenUnexpired:$sqlWindowKnown `
         -Test { Test-SqlAutoPause -SqlDatabaseId $databaseId } | Out-Null
 
+    # V6.5 (F16, Task 18 - CP-9) - not a master-plan criterion (see .DESCRIPTION); ARM
+    # GET is read-your-writes after deployment success, same retry shape as V6.1.
+    Invoke-MlsCriterion -Context $context -Id 'V6.5' `
+        -Description 'SQL backup posture (short-term retention + backup storage redundancy) matches the template-pinned values' `
+        -Command "az sql db show --ids <dbId> --query requestedBackupStorageRedundancy`naz resource show --ids <dbId>/backupShortTermRetentionPolicies/default --query properties.retentionDays" `
+        -Expected "requestedBackupStorageRedundancy == $ExpectedBackupStorageRedundancy; short-term retentionDays == $ExpectedBackupRetentionDays" `
+        -RetryWindowMinutes 5 `
+        -Test { Test-SqlBackupPosture -SqlDatabaseId $databaseId -ExpectedRetentionDays $ExpectedBackupRetentionDays -ExpectedStorageRedundancy $ExpectedBackupStorageRedundancy } | Out-Null
+
     return $context
 }
 
@@ -337,7 +407,8 @@ if (-not $env:MLS_SKIP_MAIN) {
             -SqlDatabaseId $SqlDatabaseId -ContainerAppEnvironmentId $ContainerAppEnvironmentId `
             -LogAnalyticsWorkspaceId $LogAnalyticsWorkspaceId -CostExportAccountName $CostExportAccountName `
             -CostExportContainerName $CostExportContainerName -ExpectedAutoPauseDelay $ExpectedAutoPauseDelay `
-            -ExpectedMinCapacity $ExpectedMinCapacity -LayerCompletedUtc $LayerCompletedUtc `
+            -ExpectedMinCapacity $ExpectedMinCapacity -ExpectedBackupRetentionDays $ExpectedBackupRetentionDays `
+            -ExpectedBackupStorageRedundancy $ExpectedBackupStorageRedundancy -LayerCompletedUtc $LayerCompletedUtc `
             -SqlLastTouchedUtc $SqlLastTouchedUtc -SqlIdleWindowMinutes $SqlIdleWindowMinutes `
             -SqlPauseWaitMinutes $SqlPauseWaitMinutes `
             -EnforceCostExport:$EnforceCostExport -ReportRoot $ReportRoot -NoRetry:$NoRetry

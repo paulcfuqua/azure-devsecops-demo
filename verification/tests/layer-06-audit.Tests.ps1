@@ -52,6 +52,8 @@ Describe 'layer-06-audit' {
         $script:AcaState = 'Succeeded'
         $script:LawRows = @([pscustomobject]@{ TimeGenerated = '2026-08-24T09:00:00Z' })
         $script:Blobs = @([pscustomobject]@{ name = '20260824/mls-cost-export.csv'; len = 20480 })
+        $script:BackupRedundancy = 'Local'
+        $script:BackupRetentionDays = 7
 
         Mock Invoke-MlsAz {
             $joined = $Argument -join ' '
@@ -66,18 +68,22 @@ Describe 'layer-06-audit' {
             if ($joined -like 'sql db show*' -and $joined -like '*currentSku*') {
                 return [pscustomobject]@{ sku = $script:SqlSku; autoPause = $script:AutoPauseDelay; minCap = $script:MinCapacity; status = $script:SqlStatus }
             }
+            if ($joined -like 'sql db show*' -and $joined -like '*requestedBackupStorageRedundancy*') { return $script:BackupRedundancy }
             if ($joined -like 'sql db show*' -and $joined -like '*status*') { return $script:SqlStatus }
             if ($joined -like 'containerapp env show*') { return $script:AcaState }
             if ($joined -like 'monitor log-analytics query*') { return $script:LawRows }
             if ($joined -like 'storage blob list*') { return $script:Blobs }
+            if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') {
+                return [pscustomobject]@{ retentionDays = $script:BackupRetentionDays }
+            }
             throw "unexpected az call: $joined"
         }
     }
 
     Context 'all criteria pass' {
-        It 'records V6.1-V6.4 as PASS and exits 0' {
+        It 'records V6.1-V6.5 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V6.1', 'V6.2', 'V6.3', 'V6.4')
+            @($context.Criterion).Id | Should -Be @('V6.1', 'V6.2', 'V6.3', 'V6.4', 'V6.5')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -179,6 +185,67 @@ Describe 'layer-06-audit' {
         }
     }
 
+    Context 'the SQL backup posture criterion (F16, Task 18 — CP-9)' {
+        It 'fails V6.5 when requestedBackupStorageRedundancy drifts from the pinned tier' {
+            $script:BackupRedundancy = 'Geo'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike "*requestedBackupStorageRedundancy='Geo'*"
+            $row.Observed | Should -BeLike "*expected 'Local'*"
+        }
+
+        It 'fails V6.5 when the short-term retention window drifts from 7 days' {
+            $script:BackupRetentionDays = 35
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*retentionDays=35, expected 7*'
+        }
+
+        It 'fails V6.5 with an actionable message when the retention policy resource returns nothing' {
+            Mock Invoke-MlsAz {
+                $joined = $Argument -join ' '
+                if ($joined -like 'deployment sub show*') {
+                    return [pscustomobject]@{
+                        sqlDatabaseId             = [pscustomobject]@{ value = 'db-id' }
+                        containerAppEnvironmentId = [pscustomobject]@{ value = 'env-id' }
+                        lawCustomerId             = [pscustomobject]@{ value = 'law' }
+                        costExportAccountName     = [pscustomobject]@{ value = 'sa' }
+                    }
+                }
+                if ($joined -like 'sql db show*' -and $joined -like '*currentSku*') {
+                    return [pscustomobject]@{ sku = 'GP_S_Gen5_1'; autoPause = 60; minCap = 0.5; status = 'Paused' }
+                }
+                if ($joined -like 'sql db show*' -and $joined -like '*requestedBackupStorageRedundancy*') { return 'Local' }
+                if ($joined -like 'sql db show*') { return 'Paused' }
+                if ($joined -like 'containerapp env show*') { return 'Succeeded' }
+                if ($joined -like 'monitor log-analytics query*') { return @([pscustomobject]@{ x = 1 }) }
+                if ($joined -like 'storage blob list*') { return @([pscustomobject]@{ name = 'x.csv'; len = 10 }) }
+                if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') { return $null }
+                throw "unexpected az call: $joined"
+            }
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*returned nothing*'
+        }
+
+        It 'fails V6.5 with an actionable message when no SQL database resource id is available' {
+            Mock Invoke-MlsAz {
+                $joined = $Argument -join ' '
+                if ($joined -like 'deployment sub show*') { return $null }
+                if ($joined -like 'monitor log-analytics query*') { return @() }
+                if ($joined -like 'storage blob list*') { return @() }
+                throw "unexpected az call: $joined"
+            }
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*MLS_SQL_DB_ID*'
+        }
+    }
+
     Context 'retry' {
         It 'retries V6.2 through workspace RBAC propagation without sleeping the whole window' {
             $script:Calls = 0
@@ -195,6 +262,7 @@ Describe 'layer-06-audit' {
                 if ($joined -like 'sql db show*' -and $joined -like '*currentSku*') {
                     return [pscustomobject]@{ sku = 'GP_S_Gen5_1'; autoPause = 60; minCap = 0.5; status = 'Paused' }
                 }
+                if ($joined -like 'sql db show*' -and $joined -like '*requestedBackupStorageRedundancy*') { return 'Local' }
                 if ($joined -like 'sql db show*') { return 'Paused' }
                 if ($joined -like 'containerapp env show*') { return 'Succeeded' }
                 if ($joined -like 'monitor log-analytics query*') {
@@ -203,6 +271,9 @@ Describe 'layer-06-audit' {
                     return @([pscustomobject]@{ TimeGenerated = '2026-08-24T09:00:00Z' })
                 }
                 if ($joined -like 'storage blob list*') { return @([pscustomobject]@{ name = 'x.csv'; len = 10 }) }
+                if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') {
+                    return [pscustomobject]@{ retentionDays = 7 }
+                }
                 throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest
@@ -228,14 +299,18 @@ Describe 'layer-06-audit' {
                     }
                 }
                 if ($joined -like 'sql db show*' -and $joined -like '*currentSku*') { throw 'az sql db show failed with exit code 3.' }
+                if ($joined -like 'sql db show*' -and $joined -like '*requestedBackupStorageRedundancy*') { return 'Local' }
                 if ($joined -like 'sql db show*') { return 'Paused' }
                 if ($joined -like 'containerapp env show*') { return 'Succeeded' }
                 if ($joined -like 'monitor log-analytics query*') { return @([pscustomobject]@{ x = 1 }) }
                 if ($joined -like 'storage blob list*') { return @([pscustomobject]@{ name = 'x.csv'; len = 10 }) }
+                if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') {
+                    return [pscustomobject]@{ retentionDays = 7 }
+                }
                 throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 4
+            @($context.Criterion).Count | Should -Be 5
             (Get-Row -Context $context -Id 'V6.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V6.1').Observed | Should -BeLike '*exit code 3*'
             (Get-Row -Context $context -Id 'V6.2').Status | Should -Be 'PASS'

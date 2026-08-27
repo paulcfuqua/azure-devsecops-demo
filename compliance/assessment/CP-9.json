@@ -3,19 +3,21 @@
   "applicability": "applicable",
   "criteria": [],
   "assertion": {
-    "status": "GAP",
+    "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f16"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F16: the databases array in infra/bicep/platform/main.bicep (lines 264-282) sets no shortTermRetentionPolicy, longTermRetentionPolicy, or requestedBackupStorageRedundancy for the Azure SQL database, and verification/layer-06-audit.ps1's V6.1-V6.4 criteria check SKU, auto-pause and capacity field-for-field but never backup configuration. CP-9 is tailored out of NIST SP 800-171 (expected to be routinely satisfied by nonfederal organizations without specification), but CMMC assessors still probe it. Here the retention window and backup storage redundancy tier are whatever the Azure platform default resolves to, not a decision this repo made, documented, or verifies."
+    "rationale": "F16 (Task 18): infra/bicep/platform/main.bicep's databases array entry now sets backupShortTermRetentionPolicy: { retentionDays: sqlBackupRetentionDays } (default 7) and requestedBackupStorageRedundancy: sqlBackupStorageRedundancy (default 'Local', matching the single-region design the allowedLocations policy otherwise pins for live resources). The brief's own assumed property name, shortTermRetentionPolicy, does not exist on the avm/res/sql/server@0.22.0 module (confirmed via az bicep build, BCP037) -- the real property is backupShortTermRetentionPolicy; requestedBackupStorageRedundancy was named correctly as-is. No backupLongTermRetentionPolicy is set: the database holds seeded synthetic data with a deterministic regenerator (data/seed/), not data an LTR vault needs to protect, so adding one was deliberately left out of this finding's scope. verification/layer-06-audit.ps1 gains a V6.5 criterion (Test-SqlBackupPosture) that ARM-GETs both values -- requestedBackupStorageRedundancy from az sql db show, retentionDays from the child backupShortTermRetentionPolicies/default resource via az resource show -- and fails on any drift from the template-pinned values, the same treatment V6.1 already gives every other SQL property that matters to the master plan. V6.5 is not a master-plan criterion, so it is documented in docs/runbooks/layers/L06.md Section Validation cycle but not added to the master-plan-scoped traceability table in docs/runbooks/layers/README.md. CP-9 is tailored out of NIST SP 800-171 but is exactly what CMMC assessors probe next; F16 was its sole contributor, and with F16 closed this control closes outright. Checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites CP-9."
   },
-  "recommendation": "Set requestedBackupStorageRedundancy and a shortTermRetentionPolicy (retention days) explicitly on the databases array entry, matching the redundancy tier appropriate to the data classification in play. Add a V6.x criterion asserting the values so a future change is caught rather than silently defaulted.",
-  "gapSeverity": "medium",
+  "recommendation": "None outstanding for this control. A regression here -- backupShortTermRetentionPolicy or requestedBackupStorageRedundancy removed from the databases array entry, V6.5 deleted from verification/layer-06-audit.ps1 without replacement, or the pinned values (7 days / Local) silently changed without an accompanying decision -- would reopen it.",
+  "gapSeverity": "none",
   "references": [
-    "infra/bicep/platform/main.bicep:236-285",
-    "infra/bicep/platform/main.bicep:264-282",
-    "verification/layer-06-audit.ps1:113-114"
+    "infra/bicep/platform/main.bicep:317-352",
+    "infra/bicep/platform/demo.bicepparam",
+    "verification/layer-06-audit.ps1",
+    "docs/runbooks/layers/L06.md",
+    ".superpowers/sdd/2026-08-26-security-remediation/task-18-19-report.md"
   ]
 }

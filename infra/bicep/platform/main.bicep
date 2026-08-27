@@ -84,6 +84,13 @@ param sqlMinCapacity string = '0.5'
 @description('SQL serverless maximum capacity in vCores (GP_S_Gen5 SKU capacity).')
 param sqlMaxCapacity int = 2
 
+@description('[derived] Point-in-time (short-term) backup retention in days (F16, Task 18 — CP-9). The AVM sql/server module property is backupShortTermRetentionPolicy.retentionDays, not shortTermRetentionPolicy as F16\'s own Fix text assumed (verified against the cached avm/res/sql/server@0.22.0 module schema, which rejects that name with BCP037). 7 is Azure\'s own platform default made explicit rather than left to resolve silently; the data is seeded synthetic data with a deterministic regenerator (data/seed/), so a week of point-in-time recovery is adequate — raise it only if the sponsor decides the demo needs a longer undo window, which this template would then audit (V6.5), not just inherit.')
+param sqlBackupRetentionDays int = 7
+
+@allowed(['Local', 'Zone', 'Geo', 'GeoZone'])
+@description('[derived] Backup storage redundancy tier (F16, Task 18 — CP-9). Local matches the single-region design (allowedLocations policy, infra/bicep/landing-zone/main.bicep) — Geo/GeoZone would replicate backup data cross-region and quietly widen the residency boundary that policy otherwise pins for live resources. requestedBackupStorageRedundancy is a correctly-named top-level database property in the cached module schema.')
+param sqlBackupStorageRedundancy string = 'Local'
+
 @allowed(['default', 'recover'])
 @description('Key Vault create mode. Flip to recover when a soft-deleted vault with the target name exists (kill/rebuild replay — L6 playbook rollback note).')
 param keyVaultCreateMode string = 'default'
@@ -342,6 +349,20 @@ module sqlServer 'br/public:avm/res/sql/server:0.22.0' = {
             workspaceResourceId: logAnalytics.outputs.resourceId
           }
         ]
+        // F16 (compliance/findings/2026-08-26-prepublication-review.md#f16, Task 18 —
+        // CP-9): neither property was set, so both resolved to whatever the platform
+        // default happened to be on a given deployment day rather than a decision this
+        // template made, documented, or the L6 audit (V6.5) verifies. Azure SQL always
+        // takes automated backups regardless; pinning these two makes the retention
+        // window and the redundancy tier explicit instead of silently inherited. No
+        // backupLongTermRetentionPolicy: the data is seeded synthetic data with a
+        // deterministic regenerator (data/seed/), not data an LTR vault needs to protect
+        // — an adopter holding real data should make that a deliberate addition, not
+        // inherit it from this reference template either.
+        backupShortTermRetentionPolicy: {
+          retentionDays: sqlBackupRetentionDays
+        }
+        requestedBackupStorageRedundancy: sqlBackupStorageRedundancy
       }
     ]
   }

@@ -20,6 +20,12 @@ param sqlAutoPauseDelayMinutes = 60
 param sqlMinCapacity = '0.5'
 param sqlMaxCapacity = 2
 
+// Pinned backup posture (F16, Task 18 — CP-9; V6.5 audit failure on drift) —
+// restated here so the manifest is explicit, same convention as the spend-profile
+// block above.
+param sqlBackupRetentionDays = 7
+param sqlBackupStorageRedundancy = 'Local'
+
 // Flip to 'recover' via env var when replaying against a soft-deleted vault
 // (kill/rebuild loop — see L6 playbook rollback note).
 param keyVaultCreateMode = readEnvironmentVariable('KEY_VAULT_CREATE_MODE', 'default')

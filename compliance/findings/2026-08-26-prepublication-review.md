@@ -644,7 +644,7 @@ Contributor" is correspondingly DONE; F13 itself stays OPEN on F19 alone (see
 - **Controls:** CP-9 (NIST SP 800-53 Rev 5 — tailored out of 800-171, still probed by
   CMMC assessors)
 - **Closed by:** Task 18
-- **Status:** GAP
+- **Status:** CLOSED
 
 **Where:** `infra/bicep/platform/main.bicep:236-285` (`module sqlServer`), specifically
 the `databases` array at `:264-282`. No `shortTermRetentionPolicy`,
@@ -674,6 +674,38 @@ the single-region residency boundary the `allowedLocations` policy
 (retention days) explicitly on the `databases` array entry, matching the redundancy tier
 appropriate to the data classification in play; add a V6.x criterion asserting the values
 so a future change is caught rather than silently defaulted.
+
+**Closed (Task 18):** the brief's own property name was wrong for this AVM module
+version — `avm/res/sql/server@0.22.0` rejects `shortTermRetentionPolicy` (confirmed via
+`az bicep build`, which names the real property in its BCP037 permissible-properties
+list); the correct property is `backupShortTermRetentionPolicy`. `requestedBackupStorageRedundancy`
+was named correctly as-is. `platform/main.bicep`'s `databases` array entry now sets
+`backupShortTermRetentionPolicy: { retentionDays: sqlBackupRetentionDays }` (default 7)
+and `requestedBackupStorageRedundancy: sqlBackupStorageRedundancy` (default `'Local'`,
+matching the single-region design the `allowedLocations` policy otherwise pins — `Geo`/
+`GeoZone` would replicate backup data cross-region without a corresponding decision to do
+so). Both are now-explicit template parameters, restated in `demo.bicepparam` next to the
+existing spend-profile block. No `backupLongTermRetentionPolicy` is set: the database
+holds seeded synthetic data with a deterministic regenerator (`data/seed/`), not data an
+LTR vault needs to protect, so adding one was out of this finding's scope — an adopter
+holding real data should make that a deliberate addition of their own, not inherit it
+from this reference template. `verification/layer-06-audit.ps1` gains a V6.5 criterion
+(`Test-SqlBackupPosture`) asserting both values by ARM GET — `requestedBackupStorageRedundancy`
+is a top-level database property, but `retentionDays` lives on the child
+`backupShortTermRetentionPolicies/default` resource, reached via a plain `az resource
+show` rather than the dedicated `az sql db str-policy show` command (which takes a
+different, `--resource-group`/`--server`/`--database` argument shape than the resource-id
+pattern every other V6.x criterion in this file already uses). V6.5 is NOT a master-plan
+criterion, so it is documented in `docs/runbooks/layers/L06.md` § Validation cycle but
+deliberately not added to the 43-row master-plan traceability table in
+`docs/runbooks/layers/README.md`, which that file's own header states is scoped exactly
+to master-plan criteria (same convention `L04.md` already uses for its own
+non-master-plan supplementary check). TDD: 6 new/updated assertions in
+`verification/tests/layer-06-audit.Tests.ps1` failed against the pre-fix script (V6.5
+absent — `Should -Be $null` rather than `FAIL`/`PASS`, and the two existing criterion-count
+assertions off by one), confirmed by running the test file before `Test-SqlBackupPosture`
+existed; all pass after the fix. CP-9 closes outright — F16 was its sole contributor (see
+`compliance/assessment/CP-9.json`).
 
 ---
 
