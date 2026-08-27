@@ -10,7 +10,7 @@ BeforeAll {
     function New-MatchingBudget {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
             Justification = 'Pure builder: returns an in-memory pscustomobject used as a mocked az response, and changes no state anywhere.')]
-        param([int]$Amount = 75, [string]$Email = 'sponsor@example.com')
+        param([int]$Amount = 75, [string]$Email = 'sponsor@example.com', [string]$ActionGroupResourceId = '')
         $notifications = [ordered]@{}
         foreach ($threshold in @(50, 80, 100)) {
             $notifications["Actual_GreaterThan_${threshold}_Percent"] = [pscustomobject]@{
@@ -19,6 +19,7 @@ BeforeAll {
                 threshold     = $threshold
                 thresholdType = 'Actual'
                 contactEmails = @($Email)
+                contactGroups = if ($ActionGroupResourceId) { @($ActionGroupResourceId) } else { @() }
             }
         }
         foreach ($threshold in @(50, 80)) {
@@ -28,6 +29,7 @@ BeforeAll {
                 threshold     = $threshold
                 thresholdType = 'Forecasted'
                 contactEmails = @($Email)
+                contactGroups = if ($ActionGroupResourceId) { @($ActionGroupResourceId) } else { @() }
             }
         }
         return [pscustomobject]@{
@@ -45,8 +47,9 @@ BeforeAll {
         # -AsWhatIf, not -WhatIf: a parameter literally named WhatIf on a function that
         # never calls ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci fails
         # on any warning. It is still forwarded to Invoke-Main as -WhatIf.
-        param([switch]$AsWhatIf)
-        Invoke-Main -SubscriptionId $script:Sub -Email $script:Email -BudgetName 'mls-monthly-budget' -Amount 75 -WhatIf:$AsWhatIf
+        param([switch]$AsWhatIf, [string]$ActionGroupResourceId = '')
+        Invoke-Main -SubscriptionId $script:Sub -Email $script:Email -BudgetName 'mls-monthly-budget' -Amount 75 `
+            -ActionGroupResourceId $ActionGroupResourceId -WhatIf:$AsWhatIf
     }
 }
 
@@ -163,6 +166,58 @@ Describe '03-budget' {
             $budget.properties.notifications.PSObject.Properties.Remove('Forecasted_GreaterThan_80_Percent')
             $script:ExistingBudget = $budget
             Invoke-BudgetForTest | Out-Null
+            Should -Invoke Invoke-AzCli -Exactly -Times 1 -ParameterFilter {
+                ($Arguments -join ' ') -like 'rest --method put*'
+            }
+        }
+    }
+
+    Context 'F17 (Task 19) -ActionGroupResourceId shares one page-out path with security alerting' {
+        # 03-budget.ps1 runs at G0, which precedes L6 on every infra-up.yml pass -- the
+        # action group this param would reference (platform/main.bicep's
+        # alertActionGroup, Task 19) does not exist yet the first time this script
+        # runs. -ActionGroupResourceId defaults to '' for exactly that reason: these
+        # tests cover both the default no-op (first G0 run, backward compatible) and
+        # the supplementary re-run once L6 has deployed.
+        BeforeAll {
+            $script:Ag = '/subscriptions/s/resourceGroups/mls-rg-platform/providers/Microsoft.Insights/actionGroups/mls-obs-demo-ag'
+        }
+
+        It 'omits contactGroups when no action group id is supplied (the first G0 run, before L6 exists)' {
+            Invoke-BudgetForTest | Out-Null
+            $notifications = $script:CapturedBudgetBody.properties.notifications
+            foreach ($name in $notifications.PSObject.Properties.Name) {
+                @($notifications.$name.contactGroups) | Should -BeNullOrEmpty
+            }
+        }
+
+        It 'adds the action group to every notification''s contactGroups when supplied' {
+            Invoke-BudgetForTest -ActionGroupResourceId $script:Ag | Out-Null
+            $notifications = $script:CapturedBudgetBody.properties.notifications
+            foreach ($name in $notifications.PSObject.Properties.Name) {
+                @($notifications.$name.contactGroups) | Should -Contain $script:Ag
+            }
+        }
+
+        It 'keeps contactEmails alongside contactGroups -- additive, not a replacement' {
+            Invoke-BudgetForTest -ActionGroupResourceId $script:Ag | Out-Null
+            $notifications = $script:CapturedBudgetBody.properties.notifications
+            foreach ($name in $notifications.PSObject.Properties.Name) {
+                @($notifications.$name.contactEmails) | Should -Contain $script:Email
+            }
+        }
+
+        It 'is idempotent once the existing budget already carries the action group' {
+            $script:ExistingBudget = New-MatchingBudget -ActionGroupResourceId $script:Ag
+            Invoke-BudgetForTest -ActionGroupResourceId $script:Ag | Out-Null
+            Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
+                ($Arguments -join ' ') -match 'rest --method (put|post|patch|delete)'
+            }
+        }
+
+        It 'updates (re-runs the PUT) when the existing budget predates the action group and one is now supplied' {
+            $script:ExistingBudget = New-MatchingBudget
+            Invoke-BudgetForTest -ActionGroupResourceId $script:Ag | Out-Null
             Should -Invoke Invoke-AzCli -Exactly -Times 1 -ParameterFilter {
                 ($Arguments -join ' ') -like 'rest --method put*'
             }

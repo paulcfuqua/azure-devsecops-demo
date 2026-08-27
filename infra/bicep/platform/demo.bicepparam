@@ -29,3 +29,8 @@ param sqlBackupStorageRedundancy = 'Local'
 // Flip to 'recover' via env var when replaying against a soft-deleted vault
 // (kill/rebuild loop — see L6 playbook rollback note).
 param keyVaultCreateMode = readEnvironmentVariable('KEY_VAULT_CREATE_MODE', 'default')
+
+// F17 (Task 19) action group email receiver — same sponsor address as
+// scripts/bootstrap/03-budget.ps1's -Email, read from the environment so it is
+// never committed (CLAUDE.md hard rule 5). Empty keeps local builds green.
+param alertNotificationEmail = readEnvironmentVariable('MLS_ALERT_EMAIL', '')

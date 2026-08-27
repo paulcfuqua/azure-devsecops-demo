@@ -3,19 +3,20 @@
   "applicability": "applicable",
   "criteria": [],
   "assertion": {
-    "status": "GAP",
+    "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f17"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F17: zero Microsoft.Insights/actionGroups, metricAlerts or scheduledQueryRules exist anywhere in the estate (verified by repo-wide grep). IR-4 is tailored out of NIST SP 800-171, but incident handling capability is a CMMC-probed 800-53 family, and detection is its first phase. With no alert rule and no action group, there is no automated trigger for triage, containment or any other IR-4 activity - a security-relevant event is noticed only if an operator happens to run a manual KQL query. scripts/bootstrap/03-budget.ps1 is the one notification path in the system, and it is cost-only, actual-spend-only and unrelated to security events (see F15)."
+    "rationale": "F17 (Task 19): a detected event now has somewhere to go before any incident-handling procedure can act on it. infra/bicep/platform/main.bicep adds a Microsoft.Insights/actionGroups (email receiver) plus two Microsoft.Insights/scheduledQueryRules -- a Key Vault AuditEvent denied-result spike and an Azure SQL failed-login spike -- both wired to that action group and both querying the Log Analytics workspace F9 routes diagnostics to. These are the detection trigger IR-4's incident-handling capability needs; they are deliberately not a full incident-response runbook (out of this finding's scope), but the gap this control's rationale named -- zero automated trigger, visibility only to someone who thinks to run a manual KQL query -- is closed. scripts/bootstrap/03-budget.ps1 gained an optional -ActionGroupResourceId parameter so the same action group can be shared with the existing cost-budget notifications (F15/Task 17), one page-out path for both cost and security signals, applied on a re-run once L6 has deployed the action group (G0, where the budget script runs, precedes L6 on every infra-up.yml pass). IR-4 is tailored out of NIST SP 800-171 but is a CMMC-probed 800-53 family; F17 was this control's sole contributor, and with F17 closed this control closes outright. Checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites IR-4."
   },
-  "recommendation": "Stand up at least one Microsoft.Insights/actionGroups and wire scheduledQueryRules against the security-relevant signals F9's diagnosticSettings will start collecting, so a detected event has somewhere to go before any incident-handling procedure - manual or automated - can act on it.",
-  "gapSeverity": "high",
+  "recommendation": "None outstanding for this control. A regression here -- the action group or either scheduledQueryRule removed without replacement -- would reopen it. Building out a fuller incident-response runbook (containment, eradication, lessons-learned) remains a legitimate future addition but is not required to close this finding's gap.",
+  "gapSeverity": "none",
   "references": [
-    "verification/layer-06-audit.ps1:287",
-    "verification/layer-07-audit.ps1:346",
-    "scripts/bootstrap/03-budget.ps1"
+    "infra/bicep/platform/main.bicep",
+    "verification/tests/alerting.Tests.ps1",
+    "scripts/bootstrap/03-budget.ps1",
+    ".superpowers/sdd/2026-08-26-security-remediation/task-18-19-report.md"
   ]
 }

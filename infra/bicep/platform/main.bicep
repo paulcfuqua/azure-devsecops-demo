@@ -101,6 +101,9 @@ param lawDataRetentionDays int = 90
 @description('[derived] Log Analytics daily ingestion cap in GB — runaway-ingest guard for the idle-cost model. -1 disables the cap.')
 param lawDailyQuotaGb string = '1'
 
+@description('[derived] Email receiver for the security/operational action group (F17, Task 19) — reuses the sponsor address scripts/bootstrap/03-budget.ps1 already notifies, so cost and security alerting share one page-out path. Empty disables the email receiver; the action group still deploys (a clean local build stays green, and the resource exists for 03-budget.ps1 to reference by ID once L6 has deployed).')
+param alertNotificationEmail string = ''
+
 // ------------------------------------------------------------------ names + tags
 
 var rgPlatformName = naming.resourceGroupName(companyPrefix, naming.rgPurposes.platform)
@@ -115,6 +118,9 @@ var kvName = naming.keyVaultName(companyPrefix, env)
 var sqlName = naming.sqlServerName(companyPrefix, env)
 var sqlDbName = naming.sqlDatabaseName(companyPrefix, naming.appKeys.launchOps, env)
 var exportStorageName = naming.storageAccountName(companyPrefix, 'cost', env)
+var alertActionGroupName = naming.resourceName(companyPrefix, 'obs', env, 'ag')
+var kvDeniedAccessAlertName = naming.resourceName(companyPrefix, 'kv-denied', env, 'alert')
+var sqlFailedLoginAlertName = naming.resourceName(companyPrefix, 'sql-auth', env, 'alert')
 
 // app tag values follow the role segment of each resource name (README: derived).
 var tagsPlatform = naming.requiredTags(env, 'platform', costCenter, owner, dataClassification)
@@ -421,6 +427,142 @@ module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
     }
   }
   dependsOn: [rgOps]
+}
+
+// ------------------------------------------------------------------ alerting (mls-rg-platform)
+//
+// F17 (compliance/findings/2026-08-26-prepublication-review.md#f17, Task 19): this is
+// the second half of F9 -- collection versus reaction. F9/Task 13 (above) wired
+// diagnosticSettings for Key Vault and the SQL database to the Log Analytics
+// workspace; nothing was subscribed to any of it. Two rules, not a monitoring suite
+// (this task's own scope-discipline instruction) -- both map directly to the
+// access-pattern findings this branch closed (F1 unauthenticated data-api, F2 inert
+// MCP auth gate, F3 fail-open Direct Line token) generalised to the estate's two real
+// credential-and-data surfaces:
+//   - Key Vault AuditEvent denied-result spike: the vault holds the Direct Line
+//     secret and mcp-auth-token (F9's own comment above); httpStatusCode_d >= 300 in
+//     the AzureDiagnostics table (the destination diagnosticSettings uses by default
+//     here -- no logAnalyticsDestinationType override anywhere in this template) is
+//     the field Microsoft's own "who's accessing your vault" guidance and Key Vault
+//     logging samples both use for denied/failed requests.
+//   - Azure SQL failed-login spike: succeeded_s == "false" in SQLSecurityAuditEvents,
+//     the field the auditSettings block above (isAzureMonitorTargetEnabled) actually
+//     populates, against the Entra-only server F13's workload grants authenticate
+//     through.
+//
+// Deliberately NOT added, despite being the brief's own suggestion: a third rule for
+// Container Apps restart counts. The individual container app resources a meaningful
+// restart metric would attach to do not exist at L6 -- they deploy at L7
+// (apps/main.bicep) -- so a metricAlert cannot be authored here without an app
+// resource id this template never sees, and a log-based proxy at the environment
+// scope has no Microsoft-documented column/category contract precise enough to write
+// with confidence absent a live workspace to check it against (this task's own
+// instruction: ask rather than guess when a rule cannot be expressed without a
+// deployed workspace). A cost/usage-spike rule is also deliberately NOT duplicated
+// here: Task 17/F15 already added Forecasted (same-day) budget notifications
+// precisely to close that gap (scripts/bootstrap/03-budget.ps1); a second,
+// KQL-approximated cost alert would be redundant noise against an existing,
+// purpose-built mechanism, and an alert nobody tunes is worse than no alert.
+//
+// Both rules evaluate every 15 minutes -- the cheapest scheduled-query-rule frequency
+// tier (sub-5-minute tiers cost several times more; azure.cn's published price list
+// is the clearest public per-tier breakdown) -- against a 15-minute window, costing
+// on the order of a dollar or two per month combined, comfortably inside the
+// $200/30-day credit and the workspace's own 1 GB/day ingestion cap (dailyQuotaGb).
+//
+// The action group's email receiver reuses the same sponsor address
+// scripts/bootstrap/03-budget.ps1 already notifies, so cost and security alerting
+// share one page-out path -- but 03-budget.ps1 runs at G0, which precedes L6 on every
+// infra-up.yml pass, so this action group's resource id does not exist yet at the
+// point 03-budget.ps1 first runs. 03-budget.ps1 takes an optional
+// -ActionGroupResourceId parameter for exactly this reason: re-running it
+// (idempotent) after L6 has deployed adds this action group as a second,
+// supplementary contact method on the existing budget notifications, rather than
+// this template inventing a same-pass ordering that does not hold.
+module alertActionGroup 'br/public:avm/res/insights/action-group:0.3.0' = {
+  name: 'l6-alert-ag'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    name: alertActionGroupName
+    groupShortName: 'mlsalerts'
+    tags: tagsPlatform
+    emailReceivers: empty(alertNotificationEmail)
+      ? []
+      : [
+          {
+            name: 'sponsor'
+            emailAddress: alertNotificationEmail
+            useCommonAlertSchema: true
+          }
+        ]
+  }
+  dependsOn: [rgPlatform]
+}
+
+module keyVaultDeniedAccessAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3.0' = {
+  name: 'l6-alert-kv'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    name: kvDeniedAccessAlertName
+    location: location
+    tags: tagsPlatform
+    alertDescription: 'F17: Key Vault AuditEvent denied-result spike -- the vault holds the Direct Line secret and mcp-auth-token (F9/F2); unexpected denied responses indicate probing or a misconfigured consumer.'
+    severity: 2
+    enabled: true
+    scopes: [logAnalytics.outputs.resourceId]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT15M'
+    criterias: {
+      allOf: [
+        {
+          query: 'AzureDiagnostics | where ResourceProvider == "MICROSOFT.KEYVAULT" and Category == "AuditEvent" and httpStatusCode_d >= 300'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: [alertActionGroup.outputs.resourceId]
+    autoMitigate: true
+  }
+  dependsOn: [rgPlatform]
+}
+
+module sqlFailedLoginAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3.0' = {
+  name: 'l6-alert-sql'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    name: sqlFailedLoginAlertName
+    location: location
+    tags: tagsPlatform
+    alertDescription: 'F17: Azure SQL failed-login spike against the Entra-only server (F13 workload grants) -- succeeded_s == "false" in SQLSecurityAuditEvents.'
+    severity: 2
+    enabled: true
+    scopes: [logAnalytics.outputs.resourceId]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT15M'
+    criterias: {
+      allOf: [
+        {
+          query: 'AzureDiagnostics | where ResourceProvider == "MICROSOFT.SQL" and Category == "SQLSecurityAuditEvents" and succeeded_s == "false"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: [alertActionGroup.outputs.resourceId]
+    autoMitigate: true
+  }
+  dependsOn: [rgPlatform]
 }
 
 // ------------------------------------------------------------------ outputs (the L6 layer manifest for the Verifier)

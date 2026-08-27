@@ -3,21 +3,20 @@
   "applicability": "applicable",
   "criteria": [],
   "assertion": {
-    "status": "GAP",
+    "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f17"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F17: a grep for metricAlerts|scheduledQueryRules|actionGroups|activityLogAlert across every .bicep, .ps1 and .yml/.yaml file in the repo returns zero matches. The only az monitor invocations anywhere are read-only queries the Verifier runs by hand (verification/layer-06-audit.ps1:287, layer-07-audit.ps1:346, layer-02-audit.ps1:158, layer-09-audit.ps1:302); none creates a standing alert. SI-4 is tailored out of NIST SP 800-171, but system monitoring for indicators of compromise is exactly what CMMC assessors probe. Distinct from F9 (which established that almost nothing is logged): even once F9's diagnosticSettings land, nothing is subscribed to the resulting telemetry, so the monitoring loop never closes."
+    "rationale": "F17 (Task 19): infra/bicep/platform/main.bicep now adds one Microsoft.Insights/actionGroups (email receiver, the same sponsor address scripts/bootstrap/03-budget.ps1 already notifies) and two Microsoft.Insights/scheduledQueryRules against the Log Analytics workspace F9 routes diagnostics to -- a Key Vault AuditEvent denied-result spike (httpStatusCode_d >= 300 in the AzureDiagnostics table, the destination F9's diagnostic settings use by default) and an Azure SQL failed-login spike (SQLSecurityAuditEvents, succeeded_s == \"false\"). Both map directly to the access-pattern findings this branch closed (F1, F2, F3) generalised to the estate's two real credential-and-data surfaces -- Key Vault (the Direct Line secret, mcp-auth-token) and Azure SQL (Entra-only auth, F13's workload grants). A third rule for Container Apps restart counts (the brief's own suggestion) was deliberately dropped: the individual container app resources a meaningful restart metric would attach to do not exist at L6 -- they deploy at L7 -- so a metricAlert cannot be authored here without an app resource id this template never sees, and no log-based proxy at the environment scope has a Microsoft-documented contract precise enough to write with confidence absent a live workspace. A cost/usage-spike rule was also deliberately not duplicated: Task 17/F15 already added Forecasted budget notifications for that gap. Both rules evaluate every 15 minutes, the cheapest scheduled-query-rule frequency tier, keeping combined cost on the order of a dollar or two per month against the $200/30-day credit. SI-4 is tailored out of NIST SP 800-171 but system monitoring for indicators of compromise is exactly what CMMC assessors probe; F17 was this control's sole contributor, and with F17 closed this control closes outright. Checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites SI-4."
   },
-  "recommendation": "Add a Microsoft.Insights/actionGroups resource (email or webhook) plus a small set of scheduledQueryRules/metricAlerts against the signals F9's diagnosticSettings will start collecting - Key Vault access-denied spikes, SQL failed-login spikes, Container Apps environment health. Route the budget action group F15 adds to the same action group so cost and security alerting share one page-out path.",
-  "gapSeverity": "high",
+  "recommendation": "None outstanding for this control. A regression here -- the action group or either scheduledQueryRule removed from platform/main.bicep without replacement, or both rules' queries stop matching the AzureDiagnostics schema F9's diagnostic settings actually populate -- would reopen it.",
+  "gapSeverity": "none",
   "references": [
-    "verification/layer-06-audit.ps1:287",
-    "verification/layer-07-audit.ps1:346",
-    "verification/layer-02-audit.ps1:158",
-    "verification/layer-09-audit.ps1:302",
-    "scripts/bootstrap/03-budget.ps1"
+    "infra/bicep/platform/main.bicep",
+    "verification/tests/alerting.Tests.ps1",
+    "scripts/bootstrap/03-budget.ps1",
+    ".superpowers/sdd/2026-08-26-security-remediation/task-18-19-report.md"
   ]
 }

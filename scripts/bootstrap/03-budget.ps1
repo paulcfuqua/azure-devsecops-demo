@@ -19,15 +19,30 @@
     are additive - forecasted thresholds supplement the actual ones, they do not replace
     them, since actual spend is still the ground truth once it lands.
 
-    Idempotent: if the budget already exists with the desired amount, thresholds and
-    contact email, the script no-ops; otherwise it PUTs the desired state (update, not
-    duplicate - the budget name is the identity).
+    Idempotent: if the budget already exists with the desired amount, thresholds,
+    contact email and action group, the script no-ops; otherwise it PUTs the desired
+    state (update, not duplicate - the budget name is the identity).
+
+    F17 (compliance/findings/2026-08-26-prepublication-review.md#f17, Task 19):
+    -ActionGroupResourceId adds platform/main.bicep's security action group
+    (alertActionGroup) to every notification's contactGroups, alongside contactEmails
+    - additive, never a replacement - so cost and security alerting share one
+    page-out path. Optional and empty by default because this script runs at G0,
+    which precedes L6 on every infra-up.yml pass: the action group does not exist
+    yet the first time a sponsor runs this. Re-run (idempotent) with
+    -ActionGroupResourceId once L6 has deployed to add it as a supplementary
+    contact.
 
 .NOTES
     Gate: G0 (human bootstrap). Agents author this file; they never execute it.
 
 .EXAMPLE
     ./03-budget.ps1 -SubscriptionId <sub> -Email you@example.com -WhatIf
+
+.EXAMPLE
+    # After L6 has deployed: share the security action group's page-out path.
+    ./03-budget.ps1 -SubscriptionId <sub> -Email you@example.com `
+        -ActionGroupResourceId /subscriptions/<sub>/resourceGroups/mls-rg-platform/providers/Microsoft.Insights/actionGroups/mls-obs-demo-ag
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -42,7 +57,11 @@ param(
     [string]$BudgetName = 'mls-monthly-budget',
 
     [ValidateRange(1, 100000)]
-    [int]$Amount = 75
+    [int]$Amount = 75,
+
+    # F17 (Task 19): empty by default - see .DESCRIPTION for why G0 cannot assume
+    # this resource exists yet.
+    [string]$ActionGroupResourceId = ''
 )
 
 Set-StrictMode -Version Latest
@@ -131,9 +150,14 @@ function Get-Budget {
 function Get-DesiredBudgetBody {
     param(
         [Parameter(Mandatory)][int]$Amount,
-        [Parameter(Mandatory)][string]$Email
+        [Parameter(Mandatory)][string]$Email,
+        [string]$ActionGroupResourceId = ''
     )
     $monthStart = [datetime]::new([datetime]::UtcNow.Year, [datetime]::UtcNow.Month, 1, 0, 0, 0, [DateTimeKind]::Utc)
+    # F17 (Task 19): contactGroups is additive alongside contactEmails, never a
+    # replacement - empty when no action group id is supplied (the common G0 case,
+    # before L6 has deployed one; see this script's .DESCRIPTION).
+    $contactGroups = if ($ActionGroupResourceId) { @($ActionGroupResourceId) } else { @() }
     $notifications = [ordered]@{}
     foreach ($threshold in $script:AlertThresholds) {
         $notifications["Actual_GreaterThan_${threshold}_Percent"] = [ordered]@{
@@ -142,6 +166,7 @@ function Get-DesiredBudgetBody {
             threshold     = $threshold
             thresholdType = 'Actual'
             contactEmails = @($Email)
+            contactGroups = $contactGroups
         }
     }
     foreach ($threshold in $script:ForecastThresholds) {
@@ -153,6 +178,7 @@ function Get-DesiredBudgetBody {
             threshold     = $threshold
             thresholdType = 'Forecasted'
             contactEmails = @($Email)
+            contactGroups = $contactGroups
         }
     }
     return [ordered]@{
@@ -169,12 +195,30 @@ function Get-DesiredBudgetBody {
     }
 }
 
+function Test-NotificationContactGroupsMatchDesired {
+    <# F17 (Task 19): contactGroups is authoritative on every run, same as
+       contactEmails elsewhere in this function - no "preserve whatever is already
+       there" merge semantics, consistent with how this script treats every other
+       field. Running without -ActionGroupResourceId after previously supplying one
+       is therefore a real, visible drift (triggers a PUT that removes it), not a
+       silent no-op - deliberate, not an oversight. #>
+    param($Note, [AllowEmptyString()][string]$ActionGroupResourceId)
+    $existingGroups = @()
+    if ($Note.PSObject.Properties.Name -contains 'contactGroups' -and $Note.contactGroups) {
+        $existingGroups = @($Note.contactGroups)
+    }
+    if ($ActionGroupResourceId) { return ($existingGroups -contains $ActionGroupResourceId) }
+    return ($existingGroups.Count -eq 0)
+}
+
 function Test-BudgetMatchesDesired {
-    <# True when the existing budget already has the desired amount, thresholds and email. #>
+    <# True when the existing budget already has the desired amount, thresholds,
+       email and action-group wiring (F17, Task 19). #>
     param(
         $Existing,
         [Parameter(Mandatory)][int]$Amount,
-        [Parameter(Mandatory)][string]$Email
+        [Parameter(Mandatory)][string]$Email,
+        [string]$ActionGroupResourceId = ''
     )
     if (-not $Existing) { return $false }
     $props = $Existing.properties
@@ -192,6 +236,7 @@ function Test-BudgetMatchesDesired {
         if (-not $note.enabled) { return $false }
         if ([int]$note.threshold -ne $threshold) { return $false }
         if (@($note.contactEmails) -notcontains $Email) { return $false }
+        if (-not (Test-NotificationContactGroupsMatchDesired -Note $note -ActionGroupResourceId $ActionGroupResourceId)) { return $false }
     }
     foreach ($threshold in $script:ForecastThresholds) {
         $name = "Forecasted_GreaterThan_${threshold}_Percent"
@@ -200,6 +245,7 @@ function Test-BudgetMatchesDesired {
         if (-not $note.enabled) { return $false }
         if ([int]$note.threshold -ne $threshold) { return $false }
         if (@($note.contactEmails) -notcontains $Email) { return $false }
+        if (-not (Test-NotificationContactGroupsMatchDesired -Note $note -ActionGroupResourceId $ActionGroupResourceId)) { return $false }
     }
     return $true
 }
@@ -210,13 +256,15 @@ function Set-Budget {
         [Parameter(Mandatory)][string]$SubscriptionId,
         [Parameter(Mandatory)][string]$BudgetName,
         [Parameter(Mandatory)][int]$Amount,
-        [Parameter(Mandatory)][string]$Email
+        [Parameter(Mandatory)][string]$Email,
+        [string]$ActionGroupResourceId = ''
     )
     $url = Get-BudgetUrl -SubscriptionId $SubscriptionId -BudgetName $BudgetName
-    $body = Get-DesiredBudgetBody -Amount $Amount -Email $Email
+    $body = Get-DesiredBudgetBody -Amount $Amount -Email $Email -ActionGroupResourceId $ActionGroupResourceId
     $payload = New-TempJsonFile -InputObject $body -WhatIf:$false -Confirm:$false
+    $actionGroupSuffix = if ($ActionGroupResourceId) { "; action group $ActionGroupResourceId" } else { '' }
     try {
-        return Invoke-AzMutation -Target $BudgetName -Action "Create/update `$$Amount monthly budget (actual alerts at $($script:AlertThresholds -join '/')%, forecast alerts at $($script:ForecastThresholds -join '/')% -> $Email)" -Arguments @(
+        return Invoke-AzMutation -Target $BudgetName -Action "Create/update `$$Amount monthly budget (actual alerts at $($script:AlertThresholds -join '/')%, forecast alerts at $($script:ForecastThresholds -join '/')% -> $Email$actionGroupSuffix)" -Arguments @(
             'rest', '--method', 'put', '--url', $url, '--body', "@$payload"
         )
     }
@@ -231,26 +279,29 @@ function Invoke-Main {
         [Parameter(Mandatory)][string]$SubscriptionId,
         [Parameter(Mandatory)][string]$Email,
         [Parameter(Mandatory)][string]$BudgetName,
-        [Parameter(Mandatory)][int]$Amount
+        [Parameter(Mandatory)][int]$Amount,
+        [string]$ActionGroupResourceId = ''
     )
     $existing = Get-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName
-    if (Test-BudgetMatchesDesired -Existing $existing -Amount $Amount -Email $Email) {
-        Write-Status "Budget '$BudgetName' already matches desired state (`$$Amount/month, actual alerts 50/80/100% + forecast alerts 50/80% -> $Email) - no action." -Color Green
+    $actionGroupSuffix = if ($ActionGroupResourceId) { " + security action group $ActionGroupResourceId" } else { '' }
+    if (Test-BudgetMatchesDesired -Existing $existing -Amount $Amount -Email $Email -ActionGroupResourceId $ActionGroupResourceId) {
+        Write-Status "Budget '$BudgetName' already matches desired state (`$$Amount/month, actual alerts 50/80/100% + forecast alerts 50/80% -> $Email$actionGroupSuffix) - no action." -Color Green
         return $existing
     }
     if ($existing) {
         Write-Status "Budget '$BudgetName' exists but drifts from desired state - updating in place." -Color Yellow
     }
-    $result = Set-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName -Amount $Amount -Email $Email
+    $result = Set-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName -Amount $Amount -Email $Email -ActionGroupResourceId $ActionGroupResourceId
     if ($result) {
-        Write-Status "Budget '$BudgetName' set: `$$Amount/month with actual alerts at 50/80/100% and forecast alerts at 50/80% to $Email." -Color Green
+        Write-Status "Budget '$BudgetName' set: `$$Amount/month with actual alerts at 50/80/100% and forecast alerts at 50/80% to $Email$actionGroupSuffix." -Color Green
     }
     else {
-        Write-Status "(-WhatIf) Would set budget '$BudgetName': `$$Amount/month, actual alerts at 50/80/100% and forecast alerts at 50/80% to $Email." -Color Yellow
+        Write-Status "(-WhatIf) Would set budget '$BudgetName': `$$Amount/month, actual alerts at 50/80/100% and forecast alerts at 50/80% to $Email$actionGroupSuffix." -Color Yellow
     }
     return $result
 }
 
 if (-not $env:MLS_SKIP_MAIN) {
-    Invoke-Main -SubscriptionId $SubscriptionId -Email $Email -BudgetName $BudgetName -Amount $Amount
+    Invoke-Main -SubscriptionId $SubscriptionId -Email $Email -BudgetName $BudgetName -Amount $Amount `
+        -ActionGroupResourceId $ActionGroupResourceId
 }

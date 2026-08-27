@@ -717,7 +717,7 @@ existed; all pass after the fix. CP-9 closes outright — F16 was its sole contr
 - **Confidence:** CONFIRMED
 - **Controls:** SI-4, IR-4 (NIST SP 800-53 Rev 5 — both tailored out of 800-171)
 - **Closed by:** Task 19
-- **Status:** GAP
+- **Status:** CLOSED
 
 **Verified:** grep for `metricAlerts|scheduledQueryRules|actionGroups|activityLogAlert`
 across every `.bicep`, `.ps1` and `.yml`/`.yaml` file in the repo returns ZERO matches.
@@ -751,6 +751,61 @@ a small set of `scheduledQueryRules`/`metricAlerts` against the signals F9 will 
 collecting — Key Vault access-denied spikes, SQL failed-login spikes, Container Apps
 environment health. Route the budget action group F15 adds to the same action group so
 cost and security alerting share one page-out path.
+
+**Closed (Task 19), with two corrections to this finding's own Fix text.** First:
+F15/Task 17 never added an action group — it uses Cost Management's native
+`contactEmails` notification receivers (`scripts/bootstrap/03-budget.ps1`), a different
+subsystem (`Microsoft.Consumption/budgets`) from Azure Monitor's
+`Microsoft.Insights/actionGroups`. There was no existing action group to route into.
+Second: Container Apps environment health was dropped from the rule set, not
+implemented — the individual container app resources a meaningful restart metric would
+attach to do not exist at L6 (they deploy at L7, `apps/main.bicep`), so a `metricAlert`
+cannot be authored in this template without an app resource id it never sees, and a
+log-based proxy at the environment scope has no Microsoft-documented column/category
+contract precise enough to write with confidence absent a live workspace to check it
+against — exactly the condition this task's own brief named as a reason to stop and
+verify rather than guess.
+
+What landed instead, scoped deliberately to two rules rather than the brief's three:
+`platform/main.bicep` adds one `Microsoft.Insights/actionGroups` (email receiver, the
+same sponsor address `03-budget.ps1` already notifies) and two
+`Microsoft.Insights/scheduledQueryRules`, both querying the `AzureDiagnostics` table
+(the destination F9's diagnostic settings use by default — no
+`logAnalyticsDestinationType` override exists anywhere in this template) in the Log
+Analytics workspace F9 routes diagnostics to: a Key Vault `AuditEvent` denied-result
+spike (`httpStatusCode_d >= 300`, the field Microsoft's own Key Vault logging guidance
+and third-party samples both use for denied/failed requests — the vault holds the Direct
+Line secret and `mcp-auth-token`) and an Azure SQL failed-login spike
+(`SQLSecurityAuditEvents`, `succeeded_s == "false"`, a field confirmed against
+independent published KQL examples against the Entra-only server F13's workload grants
+authenticate through). Both rules map directly to the access-pattern findings this
+branch closed (F1 unauthenticated data-api, F2 inert MCP auth gate, F3 fail-open Direct
+Line token) generalised to the estate's two real credential-and-data surfaces. A third,
+cost/usage-spike rule — the fourth class this task's own scope-discipline guidance
+named — was deliberately not duplicated either: Task 17/F15 already added `Forecasted`
+budget notifications for exactly that gap, and a second, KQL-approximated mechanism
+would be redundant against an existing, purpose-built one. Both rules evaluate every 15
+minutes, the cheapest scheduled-query-rule frequency tier (sub-5-minute tiers cost
+several times more per published per-tier price lists); combined cost is on the order of
+a dollar or two per month, comfortably inside the $200/30-day credit and the workspace's
+`dailyQuotaGb: '1'` ingestion cap.
+
+On the routing correction: `scripts/bootstrap/03-budget.ps1` gains an optional
+`-ActionGroupResourceId` parameter (empty by default) that adds the new action group to
+every notification's `contactGroups` (Cost Management budgets support action groups
+natively via this field, additive alongside `contactEmails`, never a replacement) —
+empty by default because this script runs at G0, which precedes L6 on every
+`infra-up.yml` pass, so the action group this parameter would reference does not exist
+yet the first time a sponsor runs it. A documented, idempotent re-run with
+`-ActionGroupResourceId` once L6 has deployed adds it as a supplementary contact,
+achieving the "share one page-out path" goal without this template inventing a
+same-pass ordering guarantee that does not hold. TDD: 7 new assertions in
+`verification/tests/alerting.Tests.ps1` (new file, text-pattern regression guard on
+`platform/main.bicep`, same shape as `diagnostics.Tests.ps1`) and 6 new assertions in
+`scripts/bootstrap/tests/03-budget.Tests.ps1` all failed against the pre-fix files
+(confirmed by running both suites before the corresponding implementation existed); all
+pass after the fix. SI-4 and IR-4 both close outright — F17 was each control's sole
+contributor (see `compliance/assessment/SI-4.json`, `compliance/assessment/IR-4.json`).
 
 ---
 
