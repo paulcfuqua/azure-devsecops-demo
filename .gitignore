@@ -32,3 +32,9 @@ data/generated/
 # (reviewable, diffable); the .zip is a build artifact of export/import.
 infra/copilot-studio/solution/*.zip
 
+# Pester result artifacts. `Invoke-Pester -CI` writes testResults.xml by default;
+# lint-ci.yml writes pester-results.xml and uploads it. Neither belongs in git —
+# both appeared untracked during the 2026-08-26 remediation and were stepped
+# around by two separate implementers before being ignored properly.
+testResults.xml
+pester-results.xml
