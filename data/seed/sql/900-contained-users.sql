@@ -33,10 +33,24 @@
    failed". The TRY/CATCH below turns that into a loud, non-terminating
    warning (RAISERROR severity 10 — below the batch-aborting threshold)
    instead: the first pass logs "pending L7" and the schema seed completes
-   normally. Nothing currently RE-RUNS `seed.ps1 -Target sql` after L7 (F20
-   is exactly that gap) — running it again once the identity exists is what
-   actually completes this grant; until then, the statement below is written
-   and idempotent, not yet applied.
+   normally. Re-running the seed once the identity exists is what actually
+   completes this grant.
+
+   F20 CLOSED (Task 22). That re-run now happens automatically:
+   .github/workflows/layer-07-apps.yml invokes
+   `data/seed/seed.ps1 -Target sql -SchemaOnly` after its "Deploy the apps"
+   step, once L7 has created mls-data-api-demo-id in Entra ID. -SchemaOnly
+   applies this directory's DDL without the dataset-completeness check and
+   without touching table data — that job has no Python toolchain to build
+   data/generated/, so a plain -Target sql re-run would throw in
+   Assert-SqlSeedPrerequisite before ever reaching this file. The step runs
+   after the V7.1 manifest is written and carries continue-on-error, so a
+   transient failure in this idempotent remediation cannot cost L7 its
+   Verifier sign-off.
+
+   The RAISERROR text below still tells a human to re-run the seed by hand.
+   That advice remains correct and is deliberately unchanged: it is what you
+   want if you ever read this message, whatever automated it.
 
    Idempotent: guarded by sys.database_principals so a successful re-run
    after L7 is a no-op, matching every other file in this directory.

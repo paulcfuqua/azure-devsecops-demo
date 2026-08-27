@@ -478,7 +478,18 @@ function Invoke-SqlSeed {
     $applied = @(Install-SeedSchema -Connection $Connection -DdlPath $DdlPath -TimeoutSeconds $TimeoutSeconds)
 
     if ($SchemaOnly) {
-        Write-SeedStatus "-SchemaOnly: $($applied.Count) DDL file(s) applied; no row-count check and no data load - this mode never touches table data." -Color Green
+        # Install-SeedSchema gates each file on ShouldProcess, so under -WhatIf
+        # it applies nothing and returns an empty set. Reporting "0 DDL file(s)
+        # applied" would read as a failure rather than a dry run; the
+        # non-SchemaOnly branch's own -WhatIf wording never runs because this
+        # return precedes it.
+        $summary = if ($WhatIfPreference) {
+            '-SchemaOnly -WhatIf: no DDL applied (dry run); each file was listed above as it would be applied'
+        }
+        else {
+            "-SchemaOnly: $($applied.Count) DDL file(s) applied"
+        }
+        Write-SeedStatus "$summary; no row-count check and no data load - this mode never touches table data." -Color Green
         return [pscustomobject]@{
             AppliedDdl           = $applied
             Loaded               = @()

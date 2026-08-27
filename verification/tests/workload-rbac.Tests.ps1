@@ -32,13 +32,19 @@
 #   no Function App, and therefore no identity, anywhere in this repo's IaC,
 #   despite .github/workflows/infra-up.yml:31 claiming otherwise.
 #
-# Two more findings came out of building this layer but are NOT what this
-# file checks, because they are not shaped like a missing grant:
+# Two more findings came out of building this layer. Neither is shaped like a
+# missing RBAC grant, so neither belongs to this file's main body — but F20's
+# wiring is checked here all the same (see the 'F20:' Describe below):
 #   F20 - the SQL file below was expressed but nothing re-ran
 #         data/seed/seed.ps1 -Target sql after L7 creates the identity, so it
-#         never applied in a single infra-up.yml pass. CLOSED (Task 22):
-#         data/seed/tests/sql-seed.Tests.ps1 and data/seed/tests/seed.Tests.ps1
-#         cover the -SchemaOnly post-L7 invocation this file does not.
+#         never applied in a single infra-up.yml pass. CLOSED (Task 22).
+#         Split of coverage: data/seed/tests/sql-seed.Tests.ps1 and
+#         data/seed/tests/seed.Tests.ps1 cover -SchemaOnly's behaviour inside
+#         the seed scripts; the 'F20:' Describe in THIS file covers the
+#         layer-07-apps.yml wiring that invokes it — that the step exists,
+#         passes -SchemaOnly rather than -Force, and is ordered after the V7.1
+#         manifest steps so a transient failure cannot cost L7 its Verifier
+#         sign-off.
 #   F21 - mls-verifier's own documented Fabric workspace Viewer grant did not
 #         exist either (a different principal than any of the above), which
 #         broke the L5 Verifier audit. CLOSED (Task 21).
@@ -182,5 +188,48 @@ Describe 'F20: the SQL contained-user grant is re-applied once the identity exis
         # grant that genuinely has nothing to attach to yet.
         $script:GrantStep | Should -Match '(?m)::warning.*No Azure SQL server found'
         $script:GrantStep | Should -Match '(?m)^\s*exit 0\s*$'
+    }
+
+    # ---- Task 22 review, Important #1: placement and failure posture ----------
+    # The grant is idempotent remediation. It must not be able to cost L7 its
+    # Verifier sign-off, and BOTH of the next two tests are needed for that:
+    # ordering alone still reds the job, and continue-on-error alone would let a
+    # hard failure skip the manifest steps (they carry no always()).
+
+    It 'runs after the V7.1 manifest is written AND uploaded, so a failure here cannot skip them' {
+        $writeIndex = $script:DeployJob.IndexOf('- name: Write the V7.1 deploy manifest for the Verifier')
+        $uploadIndex = $script:DeployJob.IndexOf('- name: Upload the V7.1 deploy manifest')
+        $grantIndex = $script:DeployJob.IndexOf('Apply the SQL contained-database user now that the identity exists (F20)')
+
+        $writeIndex | Should -BeGreaterThan -1
+        $uploadIndex | Should -BeGreaterThan $writeIndex
+        $grantIndex | Should -BeGreaterThan $uploadIndex
+    }
+
+    It 'carries continue-on-error, so a transient failure cannot red the deploy job and starve the verify job' {
+        # verify is `needs: [preflight, deploy]`, which requires deploy to SUCCEED.
+        # Without this, moving the step later would still cost the layer its
+        # sign-off, and L8 is gated on L7 behind that.
+        $script:GrantStep | Should -Match '(?m)^\s*continue-on-error:\s*true\s*$'
+    }
+
+    It 'distinguishes an Azure CLI failure from "L6 has not deployed yet"' {
+        # Both used to look like an empty string, so a throttled or unauthenticated
+        # CLI call silently skipped the grant and F20 recurred with only a warning.
+        $script:GrantStep | Should -Match '\$LASTEXITCODE'
+        $script:GrantStep | Should -Match '(?m)::error.*Azure CLI call failed'
+    }
+
+    It 'refuses to guess when more than one non-master database exists' {
+        # `| [0]` would silently land the grant on an arbitrary database the moment
+        # this estate holds more than one.
+        $script:GrantStep | Should -Not -Match "\[\?name!='master'\]\.name\s*\|\s*\[0\]"
+        $script:GrantStep | Should -Match '(?m)::error.*Ambiguous Azure SQL database'
+    }
+
+    It 'surfaces a failed grant in the run summary, since continue-on-error keeps the job green' {
+        $reportStep = Get-StepBody -StepName 'Report a failed F20 grant pass' -JobBody $script:DeployJob
+        $reportStep | Should -Match "steps\.f20_grant\.outcome == 'failure'"
+        $reportStep | Should -Match 'GITHUB_STEP_SUMMARY'
     }
 }

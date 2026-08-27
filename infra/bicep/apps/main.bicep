@@ -522,12 +522,18 @@ module dataApiSecurityReaderGrant 'modules/workload-role-assignments.bicep' = {
 //     repo's IaC (infra-up.yml:31's claim that it deploys inside
 //     layer-06-platform.yml does not hold).
 //
-// Also recorded, NOT fixed here (different principal, different failure mode
-// — see each finding): F20 (the SQL grant above is expressed but nothing
-// re-runs data/seed/seed.ps1 -Target sql after L7 creates the identity, so it
-// never applies in a single infra-up.yml pass) and F21 (mls-verifier's own
-// documented Fabric workspace Viewer grant does not exist either, breaking
-// the L5 Verifier audit — unrelated to this layer's workload identities).
+// Recorded here, fixed elsewhere (different principal, different failure mode
+// — see each finding); both are now CLOSED and neither is expressed in this
+// template:
+//   * F20 — the SQL grant above was expressed but nothing re-ran
+//     data/seed/seed.ps1 -Target sql after L7 created the identity, so it
+//     never applied in a single infra-up.yml pass. CLOSED by Task 22:
+//     .github/workflows/layer-07-apps.yml now runs `seed.ps1 -Target sql
+//     -SchemaOnly` after the apps deploy.
+//   * F21 — mls-verifier's documented Fabric workspace Viewer grant did not
+//     exist either, breaking the L5 Verifier audit. CLOSED by Task 21:
+//     infra/fabric/provision-workspace.ps1 grants it via
+//     -VerifierPrincipalId. Unrelated to this layer's workload identities.
 // ---------------------------------------------------------------------------
 
 // ------------------------------------------------------------------ container apps

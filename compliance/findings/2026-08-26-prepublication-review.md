@@ -40,7 +40,7 @@ their evidence and carry the same status.
 | [F16](#f16) | Azure SQL backup posture never decided or verified | medium | CONFIRMED | CP-9 | Task 18 |
 | [F17](#f17) | Zero alert rules or action groups anywhere in the estate | high | CONFIRMED | SI-4, IR-4 | Task 19 |
 | [F18](#f18) | Sensitivity labels published nowhere — a taxonomy, not a control | medium | CONFIRMED | CM-6 | Task 20 |
-| [F19](#f19) | cost-ingest documented as deployed; deploys nowhere | medium | CONFIRMED | — (availability/completeness) | — (needs a new task) |
+| [F19](#f19) | cost-ingest documented as deployed; deploys nowhere | medium | CONFIRMED | — (availability/completeness) | *deferred to sponsor — needs a Function App (new deploy surface + a G2 spend decision)* |
 | [F20](#f20) | data-api's contained-user grant is expressed but never applies | medium | CONFIRMED | — (availability) | Task 22 |
 | [F21](#f21) | mls-verifier's documented Fabric workspace Viewer grant does not exist | high | CONFIRMED | — (availability — breaks the Verifier's sign-off gate) | Task 21 |
 
