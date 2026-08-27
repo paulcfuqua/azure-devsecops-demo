@@ -79,11 +79,13 @@ Durable capture. Until this lands, all 15 findings exist only in a chat transcri
 | F16 | Azure SQL backup posture never decided or verified | CP-9 | medium | Task 18 |
 | F17 | Zero alert rules or action groups anywhere in the estate | SI-4, IR-4 | high | Task 19 |
 | F18 | Sensitivity labels published nowhere — a taxonomy, not a control | CM-6 | medium | Task 20 |
-| F19 | cost-ingest documented as deployed; deploys nowhere | — (availability/completeness) | medium | *unassigned* |
-| F20 | data-api's contained-user grant is expressed but never applies | — (availability) | medium | *unassigned* |
-| F21 | `mls-verifier`'s documented Fabric workspace Viewer grant does not exist | — (availability — breaks the Verifier sign-off gate) | high | *unassigned* |
+| F19 | cost-ingest documented as deployed; deploys nowhere | — (availability/completeness) | medium | *deferred to sponsor — needs a Function App, a new deploy surface and a G2 spend decision against the $200 credit* |
+| F20 | data-api's contained-user grant is expressed but never applies | — (availability) | medium | Task 22 |
+| F21 | `mls-verifier`'s documented Fabric workspace Viewer grant does not exist | — (availability — breaks the Verifier sign-off gate) | high | Task 21 |
+| F22 | Container images never smoke-tested in CI | — (availability) | medium | Task 24 |
+| F23 | Three G3 teardown scripts the runbooks instruct operators to run do not exist | CM-6 | high | Task 25 |
 
-F14 and F15 map to no 800-171 control. They are recorded in `compliance/findings/` and tracked here so they do not fall through the gap between the security and compliance framings. F16–F18 (Task 2's 800-53/CMMC scrub) map to NIST SP 800-53 Rev 5 controls that 800-171 tailors *out* — CP-9, SI-4, IR-4, CM-6 — rather than to a 3.x 800-171 control. F19–F21 were surfaced building Task 12 (F13's closing task): same shape again — a document asserting something the code never does — but none is a CUI-protection gap, so none maps to an 800-171 control either. No task in this plan owns closing them; they need one.
+F14 and F15 map to no 800-171 control. They are recorded in `compliance/findings/` and tracked here so they do not fall through the gap between the security and compliance framings. F16–F18 (Task 2's 800-53/CMMC scrub) map to NIST SP 800-53 Rev 5 controls that 800-171 tailors *out* — CP-9, SI-4, IR-4, CM-6 — rather than to a 3.x 800-171 control. F19–F21 were surfaced building Task 12 (F13's closing task): same shape again — a document asserting something the code never does — but none is a CUI-protection gap, so none maps to an 800-171 control either. F22 was surfaced by the Task 16 review. **F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census**: the reviewer found `infra/purview/teardown.ps1` missing, and the census found two more absent scripts (`infra/entra/`, `infra/policy/`) that `kill-rebuild.md` § 7 instructs an operator to run for tenant handback. It is the same defect shape at the largest scale in this register — three scripts and one whole gate class — and it is the only one of these that also breaks a `CLAUDE.md` hard rule (the deploy/teardown/audit triplet, failed by L2, L3 and L4).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1532,6 +1534,179 @@ Steps: write the failing assertion first (a workflow-shape test in `verification
 
 ---
 
+## Task 25: Author the three missing G3 teardown scripts (F23)
+
+**Files:**
+- Create: `infra/purview/teardown.ps1`
+- Create: `infra/entra/teardown.ps1`
+- Create: `infra/policy/teardown.ps1`
+- Create: `infra/purview/tests/teardown.Tests.ps1`
+- Create: `infra/entra/tests/teardown.Tests.ps1`
+- Create: `infra/policy/tests/teardown.Tests.ps1`
+- Modify: `compliance/findings/2026-08-26-prepublication-review.md` (author the F23 entry)
+- Modify: `compliance/assessment/CM-6.json` and any other control F23 maps to
+
+**Why:** `docs/runbooks/kill-rebuild.md` § 7 is a numbered operator procedure for G3
+full-tenant teardown. Steps 1, 2 and 4 instruct a human to run
+`infra/purview/teardown.ps1`, `infra/entra/teardown.ps1` and
+`infra/policy/teardown.ps1`. **None of the three exists.** Only
+`infra/fabric/teardown-items.ps1` was ever written. Step 1 even self-labels
+"[derived name, per L04]" — the runbook knew the name was never real.
+
+Every workflow reference to these paths is a comment, not an executed step, so no
+pipeline breaks. The exposure is operational: an operator performing a tenant
+handback hits file-not-found and either halts or skips ahead, and either way the
+documented outcome does not occur. Tenant objects persist — 5 users, 4 groups and
+3 app registrations per `infra/entra/manifest.json`, the CA policies, the four
+sensitivity labels, MG `mls`, and the NIST + policy assignments — in a tenant whose
+owner has been told they are gone.
+
+This also violates `CLAUDE.md` directly: "Every layer ships a triplet: `deploy`
+path, `teardown` script, `verification/` audit script. A layer without all three is
+not done." L2, L3 and L4 each fail that rule today.
+
+**Safety contract — every one of the three scripts:**
+- Authoring deletion code is permitted (hard rule 1: "Authoring code is always
+  allowed; executing deployments is not"). **Nothing in this task connects to a
+  tenant.**
+- `[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]` — so `-WhatIf`
+  enumerates without deleting and confirmation is required by default.
+- A G3 banner printed before any destructive call, naming the gate, the exact scope,
+  and the irreversible consequence (label GUIDs change; object IDs invalidate).
+- **Never callable from CI.** Refuse to run when `$env:GITHUB_ACTIONS -eq 'true'`
+  unless `-AllowAutomation` is explicitly passed, and no workflow passes it.
+- Idempotent on replay: an object already absent is an informational no-op, never a
+  terminating error — matching `Initialize-SensitivityLabel`'s create-if-absent
+  shape in reverse (spec F6).
+- Reverse-dependency order within each script, matching `kill-rebuild.md` § 7.
+
+- [ ] **Step 1: Write the failing tests**
+
+One test file per script. Assert behaviour, not source text. The shape for each:
+
+One test file per script. Assert behaviour, not source text.
+
+**Follow the repo's existing test convention exactly** — read
+`infra/purview/tests/labels.Tests.ps1` first. It is the model: set
+`$env:MLS_SKIP_MAIN = '1'` in `BeforeAll` so dot-sourcing the script defines its
+functions without executing `Invoke-Main`, then define local stand-in functions for
+every external cmdlet the script calls (the Graph and Az modules are not loaded in
+tests), each carrying the `SuppressMessageAttribute` justifications that file uses,
+and `Mock` them per scenario. Each of the three new scripts must therefore end with
+the same `if (-not $env:MLS_SKIP_MAIN) { Invoke-Main @PSBoundParameters }` guard
+`labels.ps1:224` uses.
+
+The shape for each:
+
+```powershell
+BeforeAll {
+    $env:MLS_SKIP_MAIN = '1'
+
+    # Microsoft.Graph is not loaded in tests: stand-ins so teardown.ps1 binds
+    # against the real names and Should -Invoke can inspect the arguments.
+    function Remove-MgUser {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+            Justification = 'Stand-in for the Microsoft.Graph cmdlet of the same name. Empty body, changes no state.')]
+        [CmdletBinding()]
+        param([Parameter(Mandatory)][string]$UserId)
+    }
+    # ... same shape for Remove-MgGroup, Remove-MgApplication,
+    #     Remove-MgIdentityConditionalAccessPolicy, and the Get-Mg* lookups.
+
+    . "$PSScriptRoot/../teardown.ps1"
+}
+
+AfterAll { $env:MLS_SKIP_MAIN = $null }
+
+Describe 'infra/entra/teardown.ps1' {
+    It 'refuses to run under GitHub Actions without -AllowAutomation' {
+        $env:GITHUB_ACTIONS = 'true'
+        try { { Invoke-Main -Confirm:$false } | Should -Throw '*GITHUB_ACTIONS*' }
+        finally { $env:GITHUB_ACTIONS = $null }
+    }
+
+    It 'deletes nothing under -WhatIf' {
+        Mock Remove-MgUser {}; Mock Remove-MgGroup {}
+        Invoke-Main -WhatIf
+        Should -Invoke Remove-MgUser -Exactly 0
+        Should -Invoke Remove-MgGroup -Exactly 0
+    }
+
+    It 'treats an already-absent object as a no-op, not an error' {
+        Mock Get-MgUser { $null }
+        { Invoke-Main -Confirm:$false } | Should -Not -Throw
+    }
+
+    It 'removes in reverse-dependency order: CA policies, then app registrations, then groups, then users' {
+        $order = [System.Collections.Generic.List[string]]::new()
+        Mock Remove-MgIdentityConditionalAccessPolicy { $order.Add('ca') }
+        Mock Remove-MgApplication { $order.Add('app') }
+        Mock Remove-MgGroup { $order.Add('group') }
+        Mock Remove-MgUser { $order.Add('user') }
+        Invoke-Main -Confirm:$false
+        ($order | Select-Object -Unique) -join ',' | Should -Be 'ca,app,group,user'
+    }
+
+    It 'deletes only what the manifest lists' {
+        $deleted = [System.Collections.Generic.List[string]]::new()
+        Mock Remove-MgUser { $deleted.Add($UserId) }
+        Invoke-Main -Confirm:$false
+        $manifest = Get-Content "$PSScriptRoot/../manifest.json" -Raw | ConvertFrom-Json
+        $deleted.Count | Should -Be $manifest.users.Count
+    }
+}
+```
+
+`Invoke-Main` must therefore declare `[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]`
+for `-WhatIf` and `-Confirm:$false` to bind.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `pwsh -c "Invoke-Pester infra/purview/tests, infra/entra/tests, infra/policy/tests"`
+Expected: FAIL — the three scripts do not exist yet.
+
+- [ ] **Step 3: Implement the three scripts**
+
+`infra/entra/teardown.ps1` is manifest-driven — read `infra/entra/manifest.json` and
+delete only what it lists, never a wildcard sweep. `infra/purview/teardown.ps1`
+removes the label policy first, then the four labels (a label still scoped by a
+policy cannot be deleted). `infra/policy/teardown.ps1` removes the policy
+assignments and the NIST initiative assignment, moves the subscription back to
+tenant root, then deletes MG `mls` — in that order, because a management group with
+a child subscription will not delete.
+
+- [ ] **Step 4: Verify**
+
+Run: `pwsh -c "Invoke-Pester -Path scripts,infra,data,verification,compliance"`
+Expected: PASS, count strictly above the prior baseline. PSScriptAnalyzer 0 at
+Error/Warning on all three new scripts.
+
+- [ ] **Step 5: Author the F23 finding and update the register**
+
+Write F23 into `compliance/findings/2026-08-26-prepublication-review.md` following
+the existing entry format, severity **high**, and update the control record(s) it
+maps to. `CLOSED` means "no known open finding" — never `COMPLIANT`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add infra/purview/ infra/entra/ infra/policy/ compliance/
+git commit -m "infra: author the three G3 teardown scripts the runbooks already documented
+
+Closes F23. kill-rebuild.md section 7 instructed an operator to run
+infra/purview/teardown.ps1, infra/entra/teardown.ps1 and
+infra/policy/teardown.ps1 for full-tenant handback. None existed, so a
+documented teardown left Entra objects, sensitivity labels, the
+management group and the policy assignments in place while reporting
+success. Also satisfies CLAUDE.md's triplet rule for L2, L3 and L4.
+
+All three are -WhatIf-able, confirm by default, refuse to run in CI
+without an explicit opt-out no workflow passes, and no-op on absent
+objects."
+```
+
+---
+
 ## Task 23: Full-suite verification and register reconciliation
 
 **Files:**
@@ -1604,7 +1779,9 @@ ones keep GAP status with a stated reason."
 
 **Spec coverage.** This plan implements no section of the compliance-platform spec — deliberately. It consumes only §3.2's assessment schema, in Task 1. The platform itself is Plan 2. The one place they touch is the register, which Task 1 produces and Plan 2 renders.
 
-**Findings coverage.** F1→T6, F2→T4+T5, F3→T7, F4→T8, F5→T3, F6→T9, F7→T9, F8→T10, F9→T13, F10→T11, F11→T14, F12→T15, F13→T12 (partial — 5/7 grants; the other two are owned by T17 and blocked by F19), F14→T16, F15→T17, F16→T18, F17→T19, F18→T20. All original 18 have a closing task. F19, F20 and F21 (surfaced building T12) do not — each needs a new task.
+**Findings coverage.** F1→T6, F2→T4+T5, F3→T7, F4→T8, F5→T3, F6→T9, F7→T9, F8→T10, F9→T13, F10→T11, F11→T14, F12→T15, F13→T12 (partial — 5/7 grants; the sixth is owned by T17, the seventh blocked by F19), F14→T16, F15→T17, F16→T18, F17→T19, F18→T20, F20→T22, F21→T21, F22→T24, F23→T25. Every finding now has a closing task except **F19**, which is deferred to the sponsor: it needs a Function App, and that is a new deploy surface and a G2 spend decision against the $200/30-day credit rather than something this plan can rule on. T23 closes the plan by replaying every gate and reconciling the register against what actually shipped.
+
+**Findings that grew during execution.** This plan began with 18 findings and ends with 23. F19–F21 were surfaced building T12, F22 by the T16 review, and F23 by the T20 review. That growth is the plan working rather than failing: each was found by a review stage doing its job, and each is the same defect shape — a document asserting something the code never does — which is the most useful single thing this branch has to tell its sponsor.
 
 **Sequencing rationale.** T3 first — until CI runs the JS tests, no later green is trustworthy. Then the internet-facing endpoints (T4-T7), the only findings an outsider can exploit. Then leakage (T8), identity (T9-T12), observability (T13), and finally the app-layer bugs (T14-T15), which are real but need a click or a prompt injection to reach. T16-T17 harden the pipeline's own integrity and cost backstop. T18-T20 (the 800-53/CMMC scrub, Task 2) are placed last among the per-finding tasks: T19 explicitly depends on T13's diagnostic settings landing first (an alert on a signal that does not yet exist is not an alert), and T18/T20 are independent of every other task, so ordering them after the exploitable and identity-layer fixes costs nothing. T21 closes the plan.
 
