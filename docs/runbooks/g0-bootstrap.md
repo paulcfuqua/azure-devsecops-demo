@@ -518,6 +518,7 @@ has run. Each one is an audit input that cannot be derived from ARM:
 | `LAUNCH_OPS_PORT`, `CONTROL_TOWER_PORT`, `MCP_TOOLS_PORT`, `DATA_API_PORT` | `80` | Container ingress target ports. The real images listen on **8080**; this is open item P-1 and flipping all four closes it |
 | `DATA_API_APP_NAME` | `<prefix>-data-api-<env>-ca` | Overrides the derived container app name in `app-data-api-ci.yml` |
 | `MCP_ENDPOINT_PATH` | `/mcp` | Path the MCP server serves Streamable HTTP on |
+| `MLS_ALERT_EMAIL` | none | Email receiver for the L6 security action group (F17: Key Vault access-denied and SQL failed-login alerts). Without it the action group deploys with **zero receivers** — the two scheduledQueryRules still evaluate and fire, but nobody is notified; layer-06-platform.yml's deploy step prints a loud warning when this is unset |
 
 ### C9b — the `demo` and `verify` environments' secrets, and why each one exists
 

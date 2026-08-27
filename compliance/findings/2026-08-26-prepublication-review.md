@@ -778,17 +778,28 @@ and third-party samples both use for denied/failed requests — the vault holds 
 Line secret and `mcp-auth-token`) and an Azure SQL failed-login spike
 (`SQLSecurityAuditEvents`, `succeeded_s == "false"`, a field confirmed against
 independent published KQL examples against the Entra-only server F13's workload grants
-authenticate through). Both rules map directly to the access-pattern findings this
-branch closed (F1 unauthenticated data-api, F2 inert MCP auth gate, F3 fail-open Direct
-Line token) generalised to the estate's two real credential-and-data surfaces. A third,
-cost/usage-spike rule — the fourth class this task's own scope-discipline guidance
-named — was deliberately not duplicated either: Task 17/F15 already added `Forecasted`
-budget notifications for exactly that gap, and a second, KQL-approximated mechanism
-would be redundant against an existing, purpose-built one. Both rules evaluate every 15
-minutes, the cheapest scheduled-query-rule frequency tier (sub-5-minute tiers cost
-several times more per published per-tier price lists); combined cost is on the order of
-a dollar or two per month, comfortably inside the $200/30-day credit and the workspace's
-`dailyQuotaGb: '1'` ingestion cap.
+authenticate through). Both rules are named verbatim by this finding's own Fix text
+("Key Vault access-denied spikes, SQL failed-login spikes") and that is their
+justification — **not** detection coverage of F1, F2 or F3, a claim an earlier pass of
+this closure wrongly made and a review round caught. F1/F2/F3 are app-layer
+authentication bypasses: an unauthenticated caller reaches the app, and the app's own
+already-privileged managed identity then talks to Key Vault and SQL successfully, with
+no access-denied event and no failed login anywhere in that path — the platform sees a
+legitimate identity doing legitimate things, so neither rule would ever have fired for
+that exploit class. What these two rules actually detect is narrower and different in
+kind: probing or misconfiguration against Key Vault and Azure SQL directly (an
+unexpected denial, an unexpected failed login), generalising F9's collection to the two
+surfaces that hold the estate's real credentials and its Entra-only workload auth. A
+third, cost/usage-spike rule — the fourth class this task's own scope-discipline
+guidance named — was deliberately not duplicated either: Task 17/F15 already added
+`Forecasted` budget notifications for exactly that gap, and a second, KQL-approximated
+mechanism would be redundant against an existing, purpose-built one. Both rules
+evaluate every 15 minutes; Azure's scheduled-query-rule cost boundary sits at 5
+minutes — any interval at or above it is flat-priced, and only sub-5-minute
+frequencies cost materially more (per published per-tier price lists) — so 15 minutes
+sits inside that flat band rather than at some specially cheap point within it;
+combined cost is on the order of a dollar or two per month, comfortably inside the
+$200/30-day credit and the workspace's `dailyQuotaGb: '1'` ingestion cap.
 
 On the routing correction: `scripts/bootstrap/03-budget.ps1` gains an optional
 `-ActionGroupResourceId` parameter (empty by default) that adds the new action group to

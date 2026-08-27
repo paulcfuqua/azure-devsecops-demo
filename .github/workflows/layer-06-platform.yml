@@ -124,6 +124,11 @@ jobs:
       # Set to `recover` in the demo environment when replaying against a
       # soft-deleted vault (kill/rebuild — see the L6 playbook rollback note).
       KEY_VAULT_CREATE_MODE: ${{ vars.KEY_VAULT_CREATE_MODE }}
+      # F17 (compliance/findings/2026-08-26-prepublication-review.md#f17, Task 19):
+      # email receiver for the L6 security action group. Optional — see the
+      # "Warn if the security action group has no email receiver" step below for
+      # what leaving it unset costs.
+      MLS_ALERT_EMAIL: ${{ vars.MLS_ALERT_EMAIL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -208,6 +213,25 @@ jobs:
             }' l6-manifest.json
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Warn if the security action group has no email receiver
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # F17: the L6 security action group (Key Vault access-denied + SQL
+          # failed-login alerts, infra/bicep/platform/main.bicep) deploys with
+          # emailReceivers: [] when MLS_ALERT_EMAIL is unset. The two
+          # scheduledQueryRules still evaluate and fire every 15 minutes either
+          # way -- this warns that they fire into nothing, so the gap cannot
+          # silently persist behind a register that says F17 is closed.
+          if [ -z "${MLS_ALERT_EMAIL:-}" ]; then
+            echo "::warning title=F17 action group has zero receivers::MLS_ALERT_EMAIL is unset. The L6 security action group deployed with emailReceivers: [] -- the Key Vault and SQL alert rules still evaluate and fire, but nobody is notified. Set MLS_ALERT_EMAIL as a demo-environment variable (docs/runbooks/g0-bootstrap.md, Optional tuning) and re-run this workflow to fix."
+            {
+              echo "### ⚠ F17 action group has zero receivers"
+              echo
+              echo "\`MLS_ALERT_EMAIL\` is unset — the security action group deployed with no email receiver. Alert rules still fire; nobody is notified. See \`docs/runbooks/g0-bootstrap.md\` § Optional tuning."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
 
       - name: Confirm the vault is provisioned and holds no LLM secret
         if: ${{ !inputs.dry_run }}

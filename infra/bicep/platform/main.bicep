@@ -435,10 +435,8 @@ module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
 // the second half of F9 -- collection versus reaction. F9/Task 13 (above) wired
 // diagnosticSettings for Key Vault and the SQL database to the Log Analytics
 // workspace; nothing was subscribed to any of it. Two rules, not a monitoring suite
-// (this task's own scope-discipline instruction) -- both map directly to the
-// access-pattern findings this branch closed (F1 unauthenticated data-api, F2 inert
-// MCP auth gate, F3 fail-open Direct Line token) generalised to the estate's two real
-// credential-and-data surfaces:
+// (this task's own scope-discipline instruction), both named verbatim by F17's own
+// Fix text ("Key Vault access-denied spikes, SQL failed-login spikes"):
 //   - Key Vault AuditEvent denied-result spike: the vault holds the Direct Line
 //     secret and mcp-auth-token (F9's own comment above); httpStatusCode_d >= 300 in
 //     the AzureDiagnostics table (the destination diagnosticSettings uses by default
@@ -449,6 +447,18 @@ module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
 //     the field the auditSettings block above (isAzureMonitorTargetEnabled) actually
 //     populates, against the Entra-only server F13's workload grants authenticate
 //     through.
+//
+// NOT covered by either rule, and worth being explicit about rather than implying
+// broader coverage: F1 (unauthenticated data-api), F2 (inert MCP auth gate) and F3
+// (fail-open Direct Line token) are app-layer authentication bypasses -- an
+// unauthenticated caller reaches the app, and the app's OWN already-privileged
+// managed identity then talks to Key Vault and SQL successfully. There is no
+// access-denied event and no failed login in that path; the platform sees a
+// legitimate identity doing legitimate things, so neither rule would ever fire for
+// it. These two rules detect probing/misconfiguration against Key Vault and SQL
+// directly (an unexpected denial, an unexpected failed login) -- a different,
+// narrower class of signal than F1-F3's exploit mechanics, justified on its own
+// terms by F17's Fix text, not by a claim of covering F1-F3.
 //
 // Deliberately NOT added, despite being the brief's own suggestion: a third rule for
 // Container Apps restart counts. The individual container app resources a meaningful
@@ -464,11 +474,13 @@ module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
 // KQL-approximated cost alert would be redundant noise against an existing,
 // purpose-built mechanism, and an alert nobody tunes is worse than no alert.
 //
-// Both rules evaluate every 15 minutes -- the cheapest scheduled-query-rule frequency
-// tier (sub-5-minute tiers cost several times more; azure.cn's published price list
-// is the clearest public per-tier breakdown) -- against a 15-minute window, costing
-// on the order of a dollar or two per month combined, comfortably inside the
-// $200/30-day credit and the workspace's own 1 GB/day ingestion cap (dailyQuotaGb).
+// Both rules evaluate every 15 minutes. Azure's scheduled-query-rule cost boundary
+// sits at 5 minutes -- any evaluation interval >= 5 minutes is flat-priced; only
+// sub-5-minute frequencies cost materially more (azure.cn's published price list is
+// the clearest public per-tier breakdown). 15 minutes is comfortably inside that
+// flat band, not specially discounted within it, and keeps combined cost on the
+// order of a dollar or two per month against the $200/30-day credit and the
+// workspace's own 1 GB/day ingestion cap (dailyQuotaGb).
 //
 // The action group's email receiver reuses the same sponsor address
 // scripts/bootstrap/03-budget.ps1 already notifies, so cost and security alerting
@@ -506,7 +518,7 @@ module keyVaultDeniedAccessAlert 'br/public:avm/res/insights/scheduled-query-rul
     name: kvDeniedAccessAlertName
     location: location
     tags: tagsPlatform
-    alertDescription: 'F17: Key Vault AuditEvent denied-result spike -- the vault holds the Direct Line secret and mcp-auth-token (F9/F2); unexpected denied responses indicate probing or a misconfigured consumer.'
+    alertDescription: 'F17: Key Vault AuditEvent denied-result spike -- the vault holds the Direct Line secret and mcp-auth-token (F9); unexpected denied responses indicate probing or a misconfigured consumer, not F1-F3-class abuse (those succeed via the app\'s own managed identity and never trip this signal).'
     severity: 2
     enabled: true
     scopes: [logAnalytics.outputs.resourceId]
