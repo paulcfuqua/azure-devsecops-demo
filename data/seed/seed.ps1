@@ -17,10 +17,13 @@
 
     -Target picks which of 2 and 3 run. Step 1 runs for either.
 
-    IDEMPOTENT. A second run against a seeded estate issues reads and nothing else:
-    the SQL half short-circuits when every table already holds its expected row count,
-    the lakehouse half when every Delta table already exists. -Force overrides both
-    (wipe-and-reseed, the L5 playbook's standard remediation).
+    IDEMPOTENT. A second run against a seeded estate re-applies the SQL DDL (free -
+    every statement in data/seed/sql/ is individually guarded) and otherwise issues
+    reads and nothing else: the SQL LOAD short-circuits when every table already holds
+    its expected row count, the lakehouse half when every Delta table already exists.
+    -Force overrides both (wipe-and-reseed, the L5 playbook's standard remediation).
+    -SchemaOnly (-Target sql only, F20) goes one step further: apply the DDL and stop -
+    no row-count read, no dataset requirement at all.
 
     -WhatIf makes no mutating call anywhere - no generator run, no INSERT, no OneLake
     upload, no table load. Prerequisites are still checked, because they are local.
@@ -33,6 +36,16 @@
 
 .PARAMETER Target
     sql | lakehouse | both (default both).
+
+.PARAMETER SchemaOnly
+    F20 (compliance/findings/2026-08-26-prepublication-review.md#f20): apply
+    data/seed/sql/*.sql and stop - no dataset generation, no row-count check, no table
+    load. Valid only with -Target sql. This is the post-L7 invocation that re-applies
+    data/seed/sql/900-contained-users.sql once the data-api identity exists: that
+    statement is idempotent DDL guarded by sys.database_principals, not a data load, so
+    it needs neither the Python generators nor data/generated/ to be present - requiring
+    either would make the post-L7 grant pass depend on a checkout state it has no reason
+    to need.
 
 .PARAMETER SqlServerInstance
     Azure SQL logical server FQDN, e.g. mls-ops-demo-sql.database.windows.net. Comes
@@ -61,6 +74,12 @@
     ./seed.ps1 -Target sql -SqlServerInstance mls-ops-demo-sql.database.windows.net `
         -SqlDatabase mls-ops-demo-db -SqlAccessToken $sql -Confirm:$false
 
+.EXAMPLE
+    # F20 post-L7 grant pass: no -SkipGenerate needed, -SchemaOnly never looks at the dataset.
+    $sql = az account get-access-token --resource https://database.windows.net --query accessToken -o tsv
+    ./seed.ps1 -Target sql -SchemaOnly -SqlServerInstance mls-ops-demo-sql.database.windows.net `
+        -SqlDatabase mls-ops-demo-db -SqlAccessToken $sql -Confirm:$false
+
 .NOTES
     Gate: L5/L6 run only after G1 approval + layer unblock. This script changes no
     capacity state (it neither resumes nor pauses) and creates no Fabric or Azure
@@ -70,6 +89,9 @@
 param(
     [ValidateSet('sql', 'lakehouse', 'both')]
     [string]$Target = 'both',
+
+    # F20: DDL/grants only, no data load. Valid only with -Target sql.
+    [switch]$SchemaOnly,
 
     # ---- Azure SQL (L6) -----------------------------------------------------------
     [string]$SqlServerInstance = '',
@@ -188,6 +210,7 @@ function Invoke-Main {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][ValidateSet('sql', 'lakehouse', 'both')][string]$Target,
+        [switch]$SchemaOnly,
         [Parameter(Mandatory)][string]$SeedRoot,
         [AllowEmptyString()][string]$SqlServerInstance = '',
         [AllowEmptyString()][string]$SqlDatabase = '',
@@ -203,6 +226,10 @@ function Invoke-Main {
         [int]$SqlBatchSize = 250,
         [int]$TimeoutSeconds = 900
     )
+    if ($SchemaOnly -and $Target -ne 'sql') {
+        throw "-SchemaOnly applies data/seed/sql/*.sql only (F20's post-L7 grant pass) - it has no lakehouse equivalent. Pass -Target sql, or drop -SchemaOnly."
+    }
+
     $dataRoot = Join-Path -Path $SeedRoot -ChildPath '..'
     $dataPath = Get-GeneratedDataPath -Path $GeneratedDataPath
     $manifest = Get-SeedManifest -Path (Get-SeedManifestPath -SeedRoot $SeedRoot)
@@ -212,9 +239,18 @@ function Invoke-Main {
     Write-Status "MLS data-plane seed - target '$Target', $tableCount tables, generator seed $(Get-MapValue -InputObject $manifest -Name 'generator_seed')." -Color Cyan
 
     # ---- 1. dataset -----------------------------------------------------------------
-    $generated = Invoke-GeneratorBuild -DataRoot $dataRoot -DataPath $dataPath `
-        -PythonExecutable $PythonExecutable -Manifest $manifest -SkipGenerate:$SkipGenerate `
-        -WhatIf:$WhatIfPreference
+    # -SchemaOnly applies DDL/grants only (F20) - it loads no table, so the dataset is
+    # irrelevant to it. Skipped outright rather than routed through -SkipGenerate: the
+    # post-L7 job that runs this has no Python toolchain and no reason to acquire one.
+    if ($SchemaOnly) {
+        Write-Status '-SchemaOnly: skipping dataset generation - no table will be loaded.' -Color Yellow
+        $generated = $false
+    }
+    else {
+        $generated = Invoke-GeneratorBuild -DataRoot $dataRoot -DataPath $dataPath `
+            -PythonExecutable $PythonExecutable -Manifest $manifest -SkipGenerate:$SkipGenerate `
+            -WhatIf:$WhatIfPreference
+    }
 
     $result = [pscustomobject]@{
         Target    = $Target
@@ -231,7 +267,8 @@ function Invoke-Main {
             -Database $SqlDatabase -AccessToken $SqlAccessToken
         $result.Sql = Invoke-SqlSeed -Connection $connection -Manifest $manifest -DataPath $dataPath `
             -DdlPath (Join-Path -Path $SeedRoot -ChildPath 'sql') -BatchSize $SqlBatchSize `
-            -TimeoutSeconds $TimeoutSeconds -Force:$Force -WhatIf:$WhatIfPreference -Confirm:$false
+            -TimeoutSeconds $TimeoutSeconds -Force:$Force -SchemaOnly:$SchemaOnly `
+            -WhatIf:$WhatIfPreference -Confirm:$false
     }
 
     # ---- 3. Fabric lakehouse (L5 analytical plane) ------------------------------------
@@ -259,7 +296,7 @@ if (-not $env:MLS_SKIP_MAIN) {
     Import-Module (Join-Path -Path $PSScriptRoot -ChildPath 'sql' -AdditionalChildPath 'sql-seed.psm1') -Force
     Import-Module (Join-Path -Path $PSScriptRoot -ChildPath 'lakehouse' -AdditionalChildPath 'lakehouse-seed.psm1') -Force
 
-    Invoke-Main -Target $Target -SeedRoot $PSScriptRoot `
+    Invoke-Main -Target $Target -SchemaOnly:$SchemaOnly -SeedRoot $PSScriptRoot `
         -SqlServerInstance $SqlServerInstance -SqlDatabase $SqlDatabase -SqlAccessToken $SqlAccessToken `
         -Token $Token -OneLakeToken $OneLakeToken -WorkspaceName $WorkspaceName -LakehouseName $LakehouseName `
         -GeneratedDataPath $GeneratedDataPath -PythonExecutable $PythonExecutable `

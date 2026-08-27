@@ -101,9 +101,17 @@ lose or duplicate a row:
 
 ## Idempotency and `-WhatIf`
 
-- **Second run no-ops.** SQL short-circuits when every table already holds exactly its
-  expected count; the lakehouse short-circuits when every Delta table already exists. All
-  DDL is guarded (`IF NOT EXISTS`).
+- **Second run no-ops.** The SQL *load* short-circuits when every table already holds
+  exactly its expected count; the lakehouse short-circuits when every Delta table already
+  exists. All DDL (`sql/*.sql`) is guarded (`IF NOT EXISTS` / `sys.database_principals`)
+  and is **always** re-applied, regardless of the load short-circuit — a DDL-only fix
+  (a grant, an index, a new guarded statement) must land on a replay against an
+  already-seeded estate, not only on a first run.
+- **`-SchemaOnly`** (`-Target sql` only; [F20](../../compliance/findings/2026-08-26-prepublication-review.md#f20))
+  applies the DDL and stops — no row-count read, no table load, and no requirement that
+  `data/generated/` exists. This is the post-L7 invocation that re-applies
+  `sql/900-contained-users.sql` once the data-api identity exists: a grant is DDL, not
+  data, so it needs none of the dataset machinery a reseed does.
 - **`-Force`** wipes and reloads both planes — the L5 playbook's wipe-and-reseed
   remediation.
 - **`-WhatIf`** makes no mutating call anywhere: no generator subprocess, no `INSERT`, no

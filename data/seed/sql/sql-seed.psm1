@@ -22,9 +22,14 @@
       * after each table the loaded count is read back and compared to the manifest's
         expected_rows; a mismatch throws instead of being reported as success.
 
-    IDEMPOTENCY: the DDL is guarded statement by statement, and the load short-circuits
-    when every table already holds exactly its expected row count. A second run is a
-    no-op that issues counts and nothing else.
+    IDEMPOTENCY: the DDL is guarded statement by statement and is ALWAYS (re)applied; the
+    load short-circuits when every table already holds exactly its expected row count. A
+    second run against an already-seeded estate issues the DDL again (free - every
+    statement is a no-op) plus counts, and nothing else.
+
+    -SchemaOnly (F20) goes further: apply the DDL and stop - no row-count probe either.
+    That is the post-L7 grant pass for data/seed/sql/900-contained-users.sql, which needs
+    neither a row count nor data/generated/ to exist. See Invoke-SqlSeed.
 
     -WhatIf: issues NO database calls at all, not even reads. Prerequisites are still
     checked (they are local), and the plan is printed. The alternative - probing row
@@ -263,12 +268,17 @@ function Assert-SqlSeedPrerequisite {
         Everything checked here is local: no connection is opened, so this runs
         identically under -WhatIf. A half-seeded database is the expensive failure; an
         early throw is the cheap one.
+    .PARAMETER SchemaOnly
+        Skip the generated-dataset check (F20: the post-L7 grant pass applies
+        data/seed/sql/*.sql only - no table is loaded, so data/generated/ is
+        irrelevant to it and must not be required). See Invoke-SqlSeed.
     #>
     param(
         [Parameter(Mandatory)]$Connection,
         [Parameter(Mandatory)][string]$DdlPath,
         [Parameter(Mandatory)][string]$DataPath,
-        [Parameter(Mandatory)]$Manifest
+        [Parameter(Mandatory)]$Manifest,
+        [switch]$SchemaOnly
     )
     $server = Get-MapValue -InputObject $Connection -Name 'ServerInstance'
     $database = Get-MapValue -InputObject $Connection -Name 'Database'
@@ -288,7 +298,7 @@ function Assert-SqlSeedPrerequisite {
     if ($ddlFiles.Count -eq 0) {
         throw "DDL directory '$DdlPath' contains no .sql files. Nothing would be created and the load would fail table by table."
     }
-    if (-not (Test-GeneratedDataComplete -Manifest $Manifest -DataPath $DataPath)) {
+    if (-not $SchemaOnly -and -not (Test-GeneratedDataComplete -Manifest $Manifest -DataPath $DataPath)) {
         throw "Generated dataset is missing or incomplete at '$DataPath'. Run ``python -m generators build`` from the repo's data/ directory (seed 20260822), or let data/seed/seed.ps1 run it for you."
     }
     if ([string]::IsNullOrWhiteSpace((Get-MapValue -InputObject $Connection -Name 'AccessToken'))) {
@@ -429,8 +439,23 @@ function Invoke-SqlSeed {
         "second run no-ops" contract. -Force wipes and reloads unconditionally, which is
         the L5 playbook's wipe-and-reseed remediation.
 
+        The DDL in data/seed/sql/ is applied UNCONDITIONALLY, before any of the above -
+        every file there is individually guarded (IF NOT EXISTS / sys.database_principals),
+        so a replay is free, and gating it behind the row-count check would mean a DDL-only
+        fix (a grant, an index, a new guarded statement) never lands on a re-run against an
+        already-seeded estate.
+
         Under -WhatIf no database call is made at all - not even a count. See the module
         header for why.
+    .PARAMETER SchemaOnly
+        F20 (compliance/findings/2026-08-26-prepublication-review.md#f20): apply the DDL
+        and return - no row-count probe, no wipe, no load, and (via
+        Assert-SqlSeedPrerequisite -SchemaOnly) no requirement that data/generated/
+        exists. This is the post-L7 invocation that re-applies
+        data/seed/sql/900-contained-users.sql once the data-api identity exists: that
+        statement is idempotent DDL, not a data load, so it needs none of the machinery
+        a reseed does. Mutually exclusive with -Force in spirit (there is no data to wipe
+        or reload here); -Force is ignored when -SchemaOnly is set.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -440,16 +465,28 @@ function Invoke-SqlSeed {
         [string]$DdlPath = '',
         [int]$BatchSize = 250,
         [int]$TimeoutSeconds = 300,
-        [switch]$Force
+        [switch]$Force,
+        [switch]$SchemaOnly
     )
     if ([string]::IsNullOrWhiteSpace($DdlPath)) { $DdlPath = $PSScriptRoot }
     $loadOrder = @(Get-MapValue -InputObject $Manifest -Name 'load_order')
 
-    Assert-SqlSeedPrerequisite -Connection $Connection -DdlPath $DdlPath -DataPath $DataPath -Manifest $Manifest
+    Assert-SqlSeedPrerequisite -Connection $Connection -DdlPath $DdlPath -DataPath $DataPath -Manifest $Manifest -SchemaOnly:$SchemaOnly
 
     Write-SeedStatus "Azure SQL: $(Get-MapValue -InputObject $Connection -Name 'ServerInstance') / $(Get-MapValue -InputObject $Connection -Name 'Database')" -Color Cyan
     Write-SeedStatus 'Applying DDL (data/seed/sql, filename order = dependency order)...' -Color Cyan
     $applied = @(Install-SeedSchema -Connection $Connection -DdlPath $DdlPath -TimeoutSeconds $TimeoutSeconds)
+
+    if ($SchemaOnly) {
+        Write-SeedStatus "-SchemaOnly: $($applied.Count) DDL file(s) applied; no row-count check and no data load - this mode never touches table data." -Color Green
+        return [pscustomobject]@{
+            AppliedDdl           = $applied
+            Loaded               = @()
+            SkippedAlreadySeeded = $false
+            SchemaOnly           = $true
+            WhatIf               = [bool]$WhatIfPreference
+        }
+    }
 
     if ($WhatIfPreference) {
         Write-SeedStatus "(-WhatIf) Would load $($loadOrder.Count) table(s) in order: $($loadOrder -join ', '). No database call was made." -Color Yellow
@@ -457,6 +494,7 @@ function Invoke-SqlSeed {
             AppliedDdl            = $applied
             Loaded                = @()
             SkippedAlreadySeeded  = $false
+            SchemaOnly            = $false
             WhatIf                = $true
         }
     }
@@ -477,6 +515,7 @@ function Invoke-SqlSeed {
             AppliedDdl           = $applied
             Loaded               = @()
             SkippedAlreadySeeded = $true
+            SchemaOnly           = $false
             WhatIf               = $false
         }
     }
@@ -504,6 +543,7 @@ function Invoke-SqlSeed {
         AppliedDdl           = $applied
         Loaded               = @($loaded)
         SkippedAlreadySeeded = $false
+        SchemaOnly           = $false
         WhatIf               = $false
     }
 }

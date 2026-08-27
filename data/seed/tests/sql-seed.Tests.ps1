@@ -76,10 +76,11 @@ BeforeAll {
     # that does not call ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci
     # fails on any warning.
     function Invoke-SqlSeedForTest {
-        param([switch]$AsWhatIf, [switch]$AsForce)
+        param([switch]$AsWhatIf, [switch]$AsForce, [switch]$AsSchemaOnly, [string]$DataPath)
+        if (-not $DataPath) { $DataPath = Join-Path -Path $TestDrive -ChildPath 'generated' }
         Invoke-SqlSeed -Connection $script:Connection -Manifest $script:TestManifest `
-            -DataPath (Join-Path -Path $TestDrive -ChildPath 'generated') -DdlPath (Join-Path -Path $TestDrive -ChildPath 'ddl') `
-            -Force:$AsForce -WhatIf:$AsWhatIf -Confirm:$false
+            -DataPath $DataPath -DdlPath (Join-Path -Path $TestDrive -ChildPath 'ddl') `
+            -Force:$AsForce -SchemaOnly:$AsSchemaOnly -WhatIf:$AsWhatIf -Confirm:$false
     }
 }
 
@@ -308,6 +309,21 @@ Describe 'Assert-SqlSeedPrerequisite' {
                 -DataPath (Join-Path -Path $TestDrive -ChildPath 'generated') -Manifest $script:TestManifest } | Should -Not -Throw
         Should -Invoke Write-SeedStatus -ModuleName $script:ModuleName -Exactly -Times 1
     }
+
+    It 'requires the generated dataset by default (baseline for the next test)' {
+        Mock Test-GeneratedDataComplete { $false } -ModuleName $script:ModuleName
+        { Assert-SqlSeedPrerequisite -Connection $script:Connection -DdlPath (Join-Path -Path $TestDrive -ChildPath 'ddl') `
+                -DataPath (Join-Path -Path $TestDrive -ChildPath 'generated') -Manifest $script:TestManifest } |
+            Should -Throw '*python -m generators build*'
+    }
+
+    It 'skips the generated-dataset check under -SchemaOnly (F20: DDL/grants need no data)' {
+        Mock Test-GeneratedDataComplete { $false } -ModuleName $script:ModuleName
+        { Assert-SqlSeedPrerequisite -Connection $script:Connection -DdlPath (Join-Path -Path $TestDrive -ChildPath 'ddl') `
+                -DataPath (Join-Path -Path $TestDrive -ChildPath 'generated') -Manifest $script:TestManifest -SchemaOnly } |
+            Should -Not -Throw
+        Should -Invoke Test-GeneratedDataComplete -ModuleName $script:ModuleName -Exactly -Times 0
+    }
 }
 
 Describe 'Install-SeedSchema' {
@@ -493,6 +509,48 @@ Describe 'Invoke-SqlSeed' {
             Should -Invoke Clear-SeedTable -ModuleName $script:ModuleName -Exactly -Times 1 -ParameterFilter {
                 @($TableName) -join ',' -eq 'launches,vehicles'
             }
+        }
+    }
+
+    Context '-SchemaOnly (F20: second run on an already-seeded estate must still reach the grant)' {
+        BeforeEach {
+            # Every table already holds its expected row count - the exact state a
+            # post-L7 re-invocation finds after L6's seed has run. If -SchemaOnly ever
+            # regressed into consulting row counts (the short-circuit this finding is
+            # named for), this mock turns that into a hard failure instead of a silent
+            # pass, because a real Azure SQL connection would throw here too.
+            Mock Get-SeedTableRowCount { throw 'must not probe row counts under -SchemaOnly' } -ModuleName $script:ModuleName
+            Mock Install-SeedSchema { @('000_first.sql', '900-contained-users.sql') } -ModuleName $script:ModuleName
+        }
+
+        It 'applies the DDL - including the grant file - without consulting row counts at all' {
+            $result = Invoke-SqlSeedForTest -AsSchemaOnly
+            $result.AppliedDdl | Should -Contain '900-contained-users.sql'
+            $result.SchemaOnly | Should -BeTrue
+            Should -Invoke Install-SeedSchema -ModuleName $script:ModuleName -Exactly -Times 1
+            Should -Invoke Get-SeedTableRowCount -ModuleName $script:ModuleName -Exactly -Times 0
+        }
+
+        It 'never wipes or loads table data' {
+            Invoke-SqlSeedForTest -AsSchemaOnly | Out-Null
+            Should -Invoke Clear-SeedTable -ModuleName $script:ModuleName -Exactly -Times 0
+            Should -Invoke Import-SeedTable -ModuleName $script:ModuleName -Exactly -Times 0
+        }
+
+        It 'does not require data/generated/ to exist' {
+            # A path that cannot possibly hold a complete dataset - if Assert-
+            # SqlSeedPrerequisite's real (unmocked) dataset check ran, this would throw.
+            { Invoke-SqlSeedForTest -AsSchemaOnly -DataPath (Join-Path -Path $TestDrive -ChildPath 'does-not-exist') } |
+                Should -Not -Throw
+            Should -Invoke Assert-SqlSeedPrerequisite -ModuleName $script:ModuleName -Exactly -Times 1 -ParameterFilter {
+                $SchemaOnly -eq $true
+            }
+        }
+
+        It 'reports an empty Loaded list and SkippedAlreadySeeded false - this is not the same outcome as the load short-circuit' {
+            $result = Invoke-SqlSeedForTest -AsSchemaOnly
+            @($result.Loaded).Count | Should -Be 0
+            $result.SkippedAlreadySeeded | Should -BeFalse
         }
     }
 

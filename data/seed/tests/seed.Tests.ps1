@@ -36,9 +36,10 @@ BeforeAll {
         param(
             [string]$Target = 'both',
             [switch]$AsWhatIf,
-            [switch]$AsSkipGenerate
+            [switch]$AsSkipGenerate,
+            [switch]$AsSchemaOnly
         )
-        Invoke-Main -Target $Target -SeedRoot $script:FakeSeedRoot `
+        Invoke-Main -Target $Target -SchemaOnly:$AsSchemaOnly -SeedRoot $script:FakeSeedRoot `
             -SqlServerInstance 'srv' -SqlDatabase 'db' -SqlAccessToken 'tok-sql' `
             -Token 'tok-fabric' -OneLakeToken 'tok-onelake' `
             -SkipGenerate:$AsSkipGenerate -WhatIf:$AsWhatIf
@@ -178,6 +179,41 @@ Describe 'seed.ps1' {
             Invoke-SeedForTest -Target 'both' -AsWhatIf | Out-Null
             Should -Invoke Invoke-SqlSeed -Exactly -Times 1 -ParameterFilter { $WhatIf -eq $true }
             Should -Invoke Invoke-LakehouseSeed -Exactly -Times 1 -ParameterFilter { $WhatIf -eq $true }
+        }
+    }
+
+    Context '-SchemaOnly (F20: post-L7 grant pass needs no dataset)' {
+        It 'skips dataset generation entirely, even when the dataset is missing' {
+            Mock Test-GeneratedDataComplete { $false }
+            $result = Invoke-SeedForTest -Target 'sql' -AsSchemaOnly
+            $result.Generated | Should -BeFalse
+            Should -Invoke Test-GeneratedDataComplete -Exactly -Times 0
+            Should -Invoke Invoke-GeneratorProcess -Exactly -Times 0
+        }
+
+        It 'needs no -SkipGenerate - -SchemaOnly alone skips the dataset, dataset or not' {
+            Mock Test-GeneratedDataComplete { $false }
+            { Invoke-SeedForTest -Target 'sql' -AsSchemaOnly } | Should -Not -Throw
+        }
+
+        It 'forwards -SchemaOnly to Invoke-SqlSeed' {
+            Invoke-SeedForTest -Target 'sql' -AsSchemaOnly | Out-Null
+            Should -Invoke Invoke-SqlSeed -Exactly -Times 1 -ParameterFilter { $SchemaOnly -eq $true }
+        }
+
+        It 'does not forward -SchemaOnly when it was not requested' {
+            Invoke-SeedForTest -Target 'sql' | Out-Null
+            Should -Invoke Invoke-SqlSeed -Exactly -Times 1 -ParameterFilter { $SchemaOnly -eq $false }
+        }
+
+        It 'rejects -Target lakehouse - there is no lakehouse DDL step' {
+            { Invoke-SeedForTest -Target 'lakehouse' -AsSchemaOnly } | Should -Throw '*-SchemaOnly*'
+            Should -Invoke Invoke-LakehouseSeed -Exactly -Times 0
+            Should -Invoke Invoke-SqlSeed -Exactly -Times 0
+        }
+
+        It 'rejects -Target both - the lakehouse half has no schema-only mode' {
+            { Invoke-SeedForTest -Target 'both' -AsSchemaOnly } | Should -Throw '*-SchemaOnly*'
         }
     }
 }

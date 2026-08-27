@@ -292,6 +292,81 @@ jobs:
           fi
 
       # ---------------------------------------------------------------------
+      # F20 (compliance/findings/2026-08-26-prepublication-review.md#f20): L6's
+      # single `seed.ps1 -Target sql` pass (layer-06-platform.yml) runs before
+      # this layer creates the data-api identity, so
+      # data/seed/sql/900-contained-users.sql's CREATE USER / ALTER ROLE
+      # statements can't resolve the Entra principal yet and are guarded to log
+      # "pending L7" rather than abort the rest of L6's schema seed (see that
+      # file's header). Re-running the SQL seed now that the identity exists —
+      # just created by the "Deploy the apps" step above — is what actually
+      # completes the grant.
+      #
+      # -SchemaOnly (not a plain re-invocation, and not -Force): a plain
+      # `-Target sql` re-run DOES reach Install-SeedSchema (it applies the DDL
+      # unconditionally, before the row-count check), but Assert-SqlSeedPrerequisite
+      # also requires data/generated/ to be complete, and this job has no Python
+      # toolchain to build it — so a plain re-run would throw before the grant
+      # ever applied. -SchemaOnly skips dataset generation and that check
+      # entirely: it applies data/seed/sql/*.sql (every file there is guarded —
+      # IF NOT EXISTS / sys.database_principals — so this is a no-op on replay)
+      # and touches no table data: no row-count probe, no wipe, no reload. That
+      # is also why this is not `-Force`: -Force means wipe-and-reload, which
+      # would re-load all ten operational tables against Azure SQL serverless
+      # for one idempotent grant — unnecessary auto-resume and runtime against
+      # the sponsor's 30-day credit.
+      #
+      # The server/database are resolved directly from Azure (mls-github-deployer
+      # is already the server's Entra admin, from L6) rather than by plumbing
+      # L6's deployment outputs across a workflow boundary — same reasoning as
+      # the verify job's Log Analytics customer-id lookup below. Warns and skips,
+      # rather than failing the deploy, when no server is found: a standalone L7
+      # dispatch ahead of L6 has nothing to grant against yet, and a standard
+      # infra-up.yml pass (L6 before L7) never hits this path.
+      - name: Apply the SQL contained-database user now that the identity exists (F20)
+        if: ${{ !inputs.dry_run }}
+        shell: pwsh
+        env:
+          RG_PLATFORM: ${{ steps.names.outputs.rg-platform }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $serverName = az sql server list --resource-group $env:RG_PLATFORM --query '[0].name' -o tsv
+          if (-not $serverName) {
+            Write-Host "::warning title=No Azure SQL server found::Could not find an Azure SQL logical server in $env:RG_PLATFORM. Skipping the F20 post-L7 grant pass (data/seed/sql/900-contained-users.sql) - L6 has probably not deployed yet on a standalone L7 run. A standard infra-up.yml pass runs L6 first and will not hit this."
+            exit 0
+          }
+
+          $sqlFqdn = az sql server show --resource-group $env:RG_PLATFORM --name $serverName --query fullyQualifiedDomainName -o tsv
+          $sqlDb = az sql db list --resource-group $env:RG_PLATFORM --server $serverName --query "[?name!='master'].name | [0]" -o tsv
+          if (-not $sqlFqdn -or -not $sqlDb) {
+            Write-Host "::warning title=Azure SQL database not found::Found server $serverName in $env:RG_PLATFORM but could not resolve its operational database. Skipping the F20 post-L7 grant pass."
+            exit 0
+          }
+
+          # SqlServer 22+ is required for Invoke-Sqlcmd -AccessToken (Entra-only
+          # auth is enforced on the server; no SQL password exists to fall back
+          # on - CLAUDE.md hard rule 5). Same module L6 installs for the same reason.
+          Install-Module SqlServer -Force -Scope CurrentUser -MinimumVersion 22.0.0 -AllowClobber
+
+          $sqlToken = az account get-access-token `
+            --resource https://database.windows.net --query accessToken -o tsv
+          if (-not $sqlToken) {
+            Write-Host '::error title=Token acquisition failed::Could not mint an Azure SQL access token for the F20 grant pass.'
+            exit 1
+          }
+
+          ./data/seed/seed.ps1 `
+            -Target sql `
+            -SchemaOnly `
+            -SqlServerInstance $sqlFqdn `
+            -SqlDatabase $sqlDb `
+            -SqlAccessToken $sqlToken `
+            -Confirm:$false
+
+          Write-Host "F20: contained-database user grant pass applied against ${sqlFqdn}/${sqlDb}."
+
+      # ---------------------------------------------------------------------
       # The V7.1 deploy manifest, in the exact shape the audit reads:
       #   {"apps":[{"name":"<container app>","imageDigest":"<sha256:...>"}]}
       #
