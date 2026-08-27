@@ -828,7 +828,7 @@ contributor (see `compliance/assessment/SI-4.json`, `compliance/assessment/IR-4.
 - **Confidence:** CONFIRMED
 - **Controls:** CM-6 (NIST SP 800-53 Rev 5 — tailored out of 800-171)
 - **Closed by:** Task 20
-- **Status:** GAP
+- **Status:** CLOSED
 
 **Where:** `infra/purview/labels.ps1` — `Initialize-SensitivityLabel` (`:85-116`) calls
 only `New-Label` (`:111`, create path) and `Set-Label` (`:104`, drift-update path);
@@ -865,6 +865,47 @@ four labels to the demo user/group scope `L04.md` already names; extend
 `verification/layer-04-audit.ps1` with a V4.3 criterion asserting the policy exists and is
 scoped as expected; author `infra/purview/auto-label-design.md` or drop the `L04.md`
 reference to it.
+
+**Closed (Task 20):** the controller's ruling on this task found the brief under-scoped
+it — a third defect of the identical shape (`L04.md` asserting behaviour `labels.ps1`
+never implemented) sat one section below the one the brief named. `L04.md:57-60` claimed
+the `mls-operations` auto-label policy was "applied by the same script where the AIP-P2
+entitlement is present (checked at runtime)"; `labels.ps1` had no auto-label function and
+no entitlement check anywhere. All three defects are closed together, since fixing the
+brief's two while leaving the third standing would have reproduced F18's own shape inside
+the file F18 exists to fix. **(1) Policy publish:** `labels.ps1` gains
+`Get-LabelPolicyScope` (the four demo groups `infra/entra/manifest.json` names —
+`mls-flight-operations`, `mls-security-team`, `mls-finance`, `mls-executives`) and
+`Initialize-LabelPolicy`, wired into `Invoke-Main` — create-if-absent via
+`New-LabelPolicy`, update-in-place on label-list or scope drift via `Set-LabelPolicy`'s
+`Add`/`RemoveLabel` and `Add`/`RemoveExchangeLocation` parameters, same shape as
+`Initialize-SensitivityLabel`, gated by `-WhatIf` the same way. **(2)
+`auto-label-design.md`:** authored, design-only, recording what a real Fabric-native
+implementation would need and why this one doesn't attempt it (see (3)). **(3) The
+auto-label claim:** corrected in `L04.md` rather than implemented — the claim was wrong
+independent of licensing. `labels.ps1`'s only authenticated surface is a Security &
+Compliance PowerShell session; the cmdlets that actually apply auto-labeling
+(`New-AutoSensitivityLabelPolicy`/`Set-AutoSensitivityLabelPolicy`) scope only to
+Exchange/SharePoint/OneDrive/Teams locations, none of which is a Fabric workspace, so
+even a perfect AIP-P2 entitlement check would have nothing to gate: there is no "same
+script" apply path to build. Implementing a fake runtime check against a mechanism that
+doesn't reach Fabric would have been a second, self-inflicted instance of the same
+defect this finding closes, so `L04.md`'s Deploy procedure step 2 and Failure mode 4 now
+say this plainly instead. `verification/layer-04-audit.ps1` gains a **V4.3** criterion
+(`Test-LabelPolicyScope`, read-only — `Get-LabelPolicy`, the `mls-verifier` View-Only
+Configuration role's `Get-Label` counterpart) asserting the policy exists with exactly
+the four labels and exactly the four demo groups; it is supplementary, not a
+master-plan criterion, documented in `L04.md`'s Validation cycle but deliberately not
+added to `docs/runbooks/layers/README.md`'s 43-row traceability table or
+`.github/README.md`'s per-script summary (same convention CP-9's V6.5 already uses).
+TDD: 9 new/updated assertions in `infra/purview/tests/labels.Tests.ps1` and 5 in
+`verification/tests/layer-04-audit.Tests.ps1` — policy publish, idempotent replay,
+label-drift and scope-drift update-in-place in both add/remove directions, `-WhatIf`
+making no mutating policy calls, V4.3 PASS/FAIL on missing policy / missing group /
+extra group / missing label, and V4.1 staying independent of a V4.3 failure — all
+failed against the pre-fix files (mutation-checked: reverted, confirmed RED, restored);
+all pass after the fix. CM-6 closes outright — F18 was its sole contributor (see
+`compliance/assessment/CM-6.json`).
 
 ---
 

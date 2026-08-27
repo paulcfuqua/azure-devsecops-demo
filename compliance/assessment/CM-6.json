@@ -3,20 +3,24 @@
   "applicability": "applicable",
   "criteria": [],
   "assertion": {
-    "status": "GAP",
+    "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f18"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-26",
-    "rationale": "F18: infra/purview/labels.ps1's Initialize-SensitivityLabel (lines 85-116) calls only New-Label and Set-Label - no New-LabelPolicy, Set-LabelPolicy, or publish/scope cmdlet appears anywhere in the file or its test. docs/runbooks/layers/L04.md:53 documents 'publishes the label policy scoping the labels to the demo users' groups' as a deploy step that runs; it does not exist in code. verification/layer-04-audit.ps1's V4.1/V4.2 criteria (Test-LabelTaxonomy, Test-LabelPersistence) check label existence and GUID survival only - a grep for LabelPolicy in that file returns zero matches, so even the Verifier's independent audit reports L4 healthy while the labels are unpublished. CM-6 is tailored out of NIST SP 800-171, but establishing and enforcing configuration settings - here, the tenant configuration that would actually apply the label taxonomy - is a CMMC-probed 800-53 family. A label with no policy scoping it to any user or group cannot be applied to content and triggers no protection action: it is a taxonomy, not a control."
+    "rationale": "F18 (Task 20): infra/purview/labels.ps1's Initialize-SensitivityLabel created the four-label taxonomy but Invoke-Main never published a policy scoping it to anyone - a label nobody can apply enforces nothing. labels.ps1 now also defines Get-LabelPolicyScope (the four demo groups infra/entra/manifest.json names - mls-flight-operations, mls-security-team, mls-finance, mls-executives) and Initialize-LabelPolicy, wired into Invoke-Main, which publishes the single policy mls-demo-label-policy via New-LabelPolicy and updates it in place on drift (AddLabel/RemoveLabel/AddExchangeLocation/RemoveExchangeLocation) via Set-LabelPolicy - same create-if-absent/update-on-drift shape as Initialize-SensitivityLabel, gated by -WhatIf the same way. The controller's ruling on this task found a THIRD defect of the identical shape inside L04.md itself, beyond the brief's two: L04.md:57-60 claimed the mls-operations auto-label policy was 'applied by the same script where the AIP-P2 entitlement is present (checked at runtime)' - labels.ps1 had no auto-label function and no entitlement check at all, and closing the policy-publish half while leaving that claim standing would have reproduced F18's own defect shape in the very file being fixed. Decision on that third defect: corrected L04.md rather than implementing a runtime check, because the claim was wrong independent of licensing - labels.ps1's only authenticated surface is an S&C PowerShell session, and the cmdlets that apply auto-labeling (New-AutoSensitivityLabelPolicy/Set-AutoSensitivityLabelPolicy) scope only to Exchange/SharePoint/OneDrive/Teams locations, none of which is a Fabric workspace; there is no 'same script' apply path to build regardless of the AIP-P2 entitlement. infra/purview/auto-label-design.md is now authored as a design-only document recording this reasoning and what a real Fabric-native implementation would need. verification/layer-04-audit.ps1 gains a V4.3 criterion (Test-LabelPolicyScope) - read-only (Get-LabelPolicy, the mls-verifier View-Only Configuration role's Get-Label counterpart) - asserting the policy exists with exactly the four labels and exactly the four demo groups; it is supplementary, not a master-plan criterion, so (same convention as CP-9's V6.5) it is documented in L04.md's Validation cycle but not added to docs/runbooks/layers/README.md's 43-row traceability table or .github/README.md's per-script V-range summary, which stays V4.1-V4.2 intentionally. TDD: 9 new/updated assertions in infra/purview/tests/labels.Tests.ps1 (policy publish, idempotent replay, label-drift and scope-drift update-in-place in both directions, -WhatIf no-mutate) and 5 new/updated assertions in verification/tests/layer-04-audit.Tests.ps1 (V4.3 present on an all-pass run, FAIL on missing policy / missing group / extra group / missing label, V4.1 staying independent of a V4.3 failure) all failed against the pre-fix labels.ps1/layer-04-audit.ps1 (mutation-checked: reverted each file to its pre-fix content, confirmed every new test went RED, restored); all pass after the fix. CM-6 is tailored out of NIST SP 800-171 but is exactly what CMMC assessors probe next; F18 was its sole contributor (checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites CM-6), and with F18 closed this control closes outright."
   },
-  "recommendation": "Add a New-LabelPolicy/Set-LabelPolicy step to labels.ps1 publishing the four labels to the demo user/group scope L04.md already names. Extend verification/layer-04-audit.ps1 with a V4.3 criterion asserting the policy exists and is scoped as expected. Author infra/purview/auto-label-design.md or drop the L04.md reference to it.",
-  "gapSeverity": "medium",
+  "recommendation": "None outstanding for this control. A regression here -- the Initialize-LabelPolicy call removed from Invoke-Main without replacement, V4.3 deleted from verification/layer-04-audit.ps1 without replacement, or labels.ps1's Get-LabelPolicyScope silently narrowed to fewer than the four demo groups L04.md names -- would reopen it. If a future contributor builds a real Fabric-native auto-label apply path (infra/purview/auto-label-design.md describes what that needs), that is new scope, not a reopening of this control.",
+  "gapSeverity": "none",
   "references": [
-    "infra/purview/labels.ps1:85-116",
-    "docs/runbooks/layers/L04.md:51-54",
-    "verification/layer-04-audit.ps1:65-95",
-    "verification/layer-04-audit.ps1:97-120"
+    "infra/purview/labels.ps1",
+    "infra/purview/auto-label-design.md",
+    "infra/purview/tests/labels.Tests.ps1",
+    "verification/layer-04-audit.ps1",
+    "verification/MlsAudit.psm1",
+    "verification/tests/layer-04-audit.Tests.ps1",
+    "docs/runbooks/layers/L04.md",
+    ".superpowers/sdd/2026-08-26-security-remediation/task-20-report.md"
   ]
 }

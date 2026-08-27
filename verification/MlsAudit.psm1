@@ -600,6 +600,25 @@ function Get-MlsLabel {
     return @(Get-Label)
 }
 
+function Get-MlsLabelPolicy {
+    <#
+    .SYNOPSIS
+        Get-LabelPolicy over the read-only S&C session (V4.3) - read-only, same as
+        Get-Label: mls-verifier's View-Only Configuration role can read policies, not
+        write them. Returns $null when the named policy does not exist, same shape as
+        labels.ps1's own Get-ExistingLabelPolicy, rather than letting the cmdlet's
+        not-found error surface as a thrown exception.
+    #>
+    param([Parameter(Mandatory)][string]$Identity)
+    Assert-MlsCommand -Name 'Get-LabelPolicy' -Hint 'Connect a Security & Compliance session first (Connect-MlsCompliance).'
+    try {
+        return Get-LabelPolicy -Identity $Identity -ErrorAction Stop
+    }
+    catch {
+        return $null
+    }
+}
+
 function Invoke-MlsMcpToolCatalog {
     <#
     .SYNOPSIS
@@ -1268,6 +1287,7 @@ Export-ModuleMember -Function @(
     'Invoke-MlsSqlQuery',
     'Connect-MlsCompliance',
     'Get-MlsLabel',
+    'Get-MlsLabelPolicy',
     'Invoke-MlsMcpToolCatalog',
     'Invoke-MlsLocalCommand',
     'Invoke-MlsChildAudit',

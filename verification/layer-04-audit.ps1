@@ -16,6 +16,14 @@
     -Checkpoint 'post-down' and again with -Checkpoint 'post-up'. Any GUID delta after
     down.ps1 means the teardown path touched tenant objects - stop-the-line.
 
+    V4.3 is a supplementary criterion, NOT in the master plan's 43-row list (same
+    convention as V6.5 / CP-9): the label policy that scopes the taxonomy to the demo
+    groups exists and is scoped as L04.md:53 describes. Added closing F18 - a label
+    with no published policy cannot be applied to anything and enforces nothing, and
+    V4.1/V4.2 only ever checked label existence, so that gap was invisible to this
+    audit until now. L04.md's own Failure mode 5 already anticipated this exact
+    supplementary check (`Get-LabelPolicy | Select -Expand ExchangeLocation`).
+
     The S&C session is read-only: mls-verifier holds Exchange.ManageAsApp with the
     View-Only Configuration role (L04.md Preconditions), so Get-Label works and nothing
     else does.
@@ -32,7 +40,9 @@ param(
     [string]$LabelGuidPath,
     [ValidateSet('layer', 'post-down', 'post-up')][string]$Checkpoint = 'layer',
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    [string]$ExpectedLabelPolicy = 'mls-demo-label-policy',
+    [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
 )
 
 Set-StrictMode -Version Latest
@@ -120,6 +130,41 @@ function Test-LabelPersistence {
         -Detail 'Any delta post-down.ps1 means the teardown path touched tenant objects - a critical defect in down.ps1, stop-the-line (L04.md V4.2).' -Final
 }
 
+function Test-LabelPolicyScope {
+    <#
+        V4.3 - supplementary, not a master-plan criterion (L04.md's Validation cycle
+        section and README.md's traceability-table header both say so explicitly - same
+        convention CP-9's V6.5 uses). The policy named by $PolicyName exists and
+        publishes exactly $ExpectedLabel, scoped to exactly $ExpectedScope. This is the
+        check L04.md's own Failure mode 5 already promised
+        (`Get-LabelPolicy | Select -Expand ExchangeLocation`) and is what makes F18's
+        fix auditable: V4.1 only ever proved the labels exist, never that anyone could
+        apply them.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$PolicyName,
+        [Parameter(Mandatory)][string[]]$ExpectedLabel,
+        [Parameter(Mandatory)][string[]]$ExpectedScope
+    )
+    $policy = Get-MlsLabelPolicy -Identity $PolicyName
+    if ($null -eq $policy) {
+        return New-MlsCheckResult -Passed $false `
+            -Observed "label policy '$PolicyName' not found" `
+            -Detail 'A published policy is what actually lets anyone apply a label - without it the four labels are directory objects with no protection action (L04.md Deploy procedure step 1; F18).'
+    }
+    $actualLabel = @(Get-MlsProperty -InputObject $policy -Name 'Labels')
+    $actualScope = @(Get-MlsProperty -InputObject $policy -Name 'ExchangeLocation')
+    $labelComparison = Test-MlsSetEquality -Actual $actualLabel -Expected $ExpectedLabel
+    $scopeComparison = Test-MlsSetEquality -Actual $actualScope -Expected $ExpectedScope
+    $describe = "Labels=[$($actualLabel -join ', ')] ExchangeLocation=[$($actualScope -join ', ')]"
+    if (-not $labelComparison.Equal -or -not $scopeComparison.Equal) {
+        return New-MlsCheckResult -Passed $false -Observed $describe `
+            -Detail ("label policy scoping error (L04.md Failure mode 5): labels missing [$($labelComparison.Missing -join ', ')] extra [$($labelComparison.Extra -join ', ')]; " +
+                "scope missing [$($scopeComparison.Missing -join ', ')] extra [$($scopeComparison.Extra -join ', ')]")
+    }
+    return New-MlsCheckResult -Passed $true -Observed $describe
+}
+
 function Invoke-Main {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
         Justification = 'Every parameter is consumed inside the criterion scriptblocks; PSSA cannot see through scriptblock closures.')]
@@ -132,7 +177,9 @@ function Invoke-Main {
         [string]$Checkpoint = 'layer',
         [string]$ReportRoot,
         [switch]$NoRetry,
-        [switch]$SkipConnect
+        [switch]$SkipConnect,
+        [string]$ExpectedLabelPolicy = 'mls-demo-label-policy',
+        [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     $organizationName = Resolve-MlsInput -Name 'Organization' -Value $Organization `
@@ -170,6 +217,12 @@ function Invoke-Main {
         -Expected 'same 4 labels, same GUIDs as label-guids.json, at every checkpoint' -NoRetry `
         -Test { Test-LabelPersistence -ExpectedLabel $ExpectedLabel -Baseline $baseline -Checkpoint $Checkpoint } | Out-Null
 
+    Invoke-MlsCriterion -Context $context -Id 'V4.3' `
+        -Description "Label policy exists, publishing the taxonomy to the demo groups (supplementary - L04.md Failure mode 5, F18)" `
+        -Command "Connect-IPPSSession -AppId <mls-verifier> -Organization $organizationName -CertificateThumbprint <thumbprint>`nGet-LabelPolicy -Identity '$ExpectedLabelPolicy' | Select-Object Labels, ExchangeLocation" `
+        -Expected "policy '$ExpectedLabelPolicy' exists; Labels == [$($ExpectedLabel -join ', ')]; ExchangeLocation == [$($ExpectedLabelPolicyScope -join ', ')]" `
+        -Test { Test-LabelPolicyScope -PolicyName $ExpectedLabelPolicy -ExpectedLabel $ExpectedLabel -ExpectedScope $ExpectedLabelPolicyScope } | Out-Null
+
     return $context
 }
 
@@ -177,7 +230,8 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -Organization $Organization -VerifierAppId $VerifierAppId `
             -CertificateThumbprint $CertificateThumbprint -ExpectedLabel $ExpectedLabel `
-            -LabelGuidPath $LabelGuidPath -Checkpoint $Checkpoint -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -LabelGuidPath $LabelGuidPath -Checkpoint $Checkpoint -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -ExpectedLabelPolicy $ExpectedLabelPolicy -ExpectedLabelPolicyScope $ExpectedLabelPolicyScope
     }
     catch {
         Write-MlsStatus -Message "layer-04-audit could not start: $($_.Exception.Message)" -Color Red

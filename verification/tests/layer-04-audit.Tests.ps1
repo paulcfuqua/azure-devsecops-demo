@@ -52,12 +52,22 @@ Describe 'layer-04-audit' {
                 [pscustomobject]@{ DisplayName = $_; Guid = $script:Baseline[$_] }
             })
         Mock Get-MlsLabel { return $script:Labels }
+
+        # V4.3 default: a policy that matches Invoke-Main's own defaults exactly, so
+        # every pre-existing V4.1/V4.2 test (which doesn't care about the policy at all)
+        # keeps seeing an all-PASS run unless it overrides this mock itself.
+        $script:Policy = [pscustomobject]@{
+            Identity         = 'mls-demo-label-policy'
+            Labels           = @('Public', 'Internal', 'Confidential', 'Export-Controlled')
+            ExchangeLocation = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
+        }
+        Mock Get-MlsLabelPolicy { return $script:Policy }
     }
 
     Context 'all criteria pass' {
-        It 'records V4.1 and V4.2 as PASS against the recorded baseline' {
+        It 'records V4.1, V4.2 and V4.3 as PASS against the recorded baseline' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V4.1', 'V4.2')
+            @($context.Criterion).Id | Should -Be @('V4.1', 'V4.2', 'V4.3')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
             Should -Invoke Connect-MlsCompliance -Exactly -Times 1
@@ -122,10 +132,10 @@ Describe 'layer-04-audit' {
     }
 
     Context 'a check that throws' {
-        It 'records V4.1 as FAIL when Get-Label errors, and still records V4.2' {
+        It 'records V4.1 as FAIL when Get-Label errors, and still records V4.2 and V4.3' {
             Mock Get-MlsLabel { throw 'Connect-IPPSSession: The term Get-Label is not recognized (no S&C session).' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 2
+            @($context.Criterion).Count | Should -Be 3
             (Get-Row -Context $context -Id 'V4.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V4.1').Observed | Should -BeLike '*no S&C session*'
         }
@@ -145,6 +155,49 @@ Describe 'layer-04-audit' {
             $row.Detail | Should -BeLike '*label-guids.json*'
             (Get-Row -Context $context -Id 'V4.1').Status | Should -Be 'PASS'
             (Get-Row -Context $context -Id 'V4.1').Detail | Should -BeLike '*first-run record*'
+        }
+    }
+
+    Context 'V4.3 - label policy exists and is scoped to the demo groups (F18)' {
+        It 'fails when no policy has been published at all' {
+            Mock Get-MlsLabelPolicy { return $null }
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V4.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*not found*'
+            # A missing policy must not drag V4.1 (label existence) down with it - they
+            # are independent criteria checking independent objects.
+            (Get-Row -Context $context -Id 'V4.1').Status | Should -Be 'PASS'
+            Get-MlsExitCode -Context $context | Should -Be 1
+        }
+
+        It 'fails when the published policy is missing one of the demo groups' {
+            $script:Policy.ExchangeLocation = @('mls-flight-operations', 'mls-security-team', 'mls-finance')
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V4.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*scoping error*mls-executives*'
+        }
+
+        It 'fails when the published policy is scoped to a group nobody asked for' {
+            $script:Policy.ExchangeLocation = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives', 'mls-contractors')
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V4.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*extra*mls-contractors*'
+        }
+
+        It 'fails when the published policy does not name one of the four labels' {
+            $script:Policy.Labels = @('Public', 'Internal', 'Confidential')
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V4.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*labels missing*Export-Controlled*'
+        }
+
+        It 'is not in the master-plan traceability convention - documented as supplementary' {
+            $context = Invoke-AuditForTest
+            (Get-Row -Context $context -Id 'V4.3').Description | Should -BeLike '*supplementary*'
         }
     }
 }
