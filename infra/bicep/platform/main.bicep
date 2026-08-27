@@ -362,9 +362,14 @@ module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
     accessTier: 'Hot'
     allowBlobPublicAccess: false
     // [derived] Entra/RBAC-only data plane: Cost Management exports write via
-    // the service's identity (Storage Blob Data Contributor granted by the
-    // layer-06 workflow when it creates the export definition), so shared keys
-    // stay off (L6 playbook failure mode 3 assumes the RBAC path).
+    // the export's own system-assigned identity. F15 (Task 17,
+    // compliance/findings/2026-08-26-prepublication-review.md#f15): the
+    // `az costmanagement` CLI extension has no --identity-type flag and pins an API
+    // version that hard-requires shared keys, so layer-06-platform.yml creates the
+    // export via `az rest` (api-version 2023-08-01, `identity: {type: SystemAssigned}`
+    // in the body) and grants that identity's principalId Storage Blob Data
+    // Contributor, scoped to the cost-exports container below, once the PUT returns it.
+    // Shared keys stay off either way (L6 playbook failure mode 3 assumes the RBAC path).
     allowSharedKeyAccess: false
     minimumTlsVersion: 'TLS1_2'
     // F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13):

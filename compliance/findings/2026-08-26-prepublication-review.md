@@ -584,7 +584,7 @@ plan's Task 16 outcome note are F14's only closure record, same as F15's will be
 - **Confidence:** CONFIRMED
 - **Controls:** none — no 800-171 control (cost control)
 - **Closed by:** Task 17
-- **Status:** GAP
+- **Status:** CLOSED
 
 Three defects:
 
@@ -608,6 +608,30 @@ Three defects:
 **Note:** this finding maps to no NIST SP 800-171 control — it is a cost-control finding,
 not a CUI-protection gap. It is tracked here, and in the findings table, so it does not
 fall through the gap between the security and compliance framings.
+
+**Closed (Task 17):** all three defects fixed. (1) `layer-06-platform.yml` now writes to
+`cost-exports`, matching `infra/bicep/platform/main.bicep` and the V6.3 audit's default
+container name — one container, not two. (2) The grant is real and targets a real
+identity: `az costmanagement export create`/`update` has no `--identity-type` flag, and
+the costmanagement CLI extension pins API version 2020-06-01, which hard-requires the
+destination storage account's shared keys to be enabled
+(github.com/Azure/azure-cli/issues/32912) — it would 400 outright against this account's
+`allowSharedKeyAccess: false`, so the Bicep comment's claim was unreachable as written,
+not merely unimplemented. The fix creates the export via `az rest` against the Exports
+REST API directly (api-version 2023-08-01), which supports both RBAC-only storage and an
+explicit `identity: { type: SystemAssigned }` request in the PUT body; the response
+returns that identity's `principalId` synchronously, and the workflow grants it Storage
+Blob Data Contributor — scoped to the `cost-exports` container, not the whole account —
+via an idempotent `az role assignment create` keyed on the `principalId` (never a
+resourceId or clientId, the same caution Task 12 left behind). (3) `Forecasted`
+notifications at 50% and 80% now run alongside the existing `Actual` ones at 50/80/100%
+in `scripts/bootstrap/03-budget.ps1` — additive, not a replacement, since Actual is still
+the ground truth once its 8-24h lag clears.
+`scripts/bootstrap/tests/03-budget.Tests.ps1` is a regression guard for the third fix; it
+fails against the pre-fix script (every notification `Actual`) and passes against the
+fixed one. F13's table entry for "Cost Management service -> Storage Blob Data
+Contributor" is correspondingly DONE; F13 itself stays OPEN on F19 alone (see
+`compliance/assessment/3.1.1.json`, `3.1.2.json`, `3.1.5.json`).
 
 ---
 

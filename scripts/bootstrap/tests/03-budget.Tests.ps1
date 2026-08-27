@@ -21,6 +21,15 @@ BeforeAll {
                 contactEmails = @($Email)
             }
         }
+        foreach ($threshold in @(50, 80)) {
+            $notifications["Forecasted_GreaterThan_${threshold}_Percent"] = [pscustomobject]@{
+                enabled       = $true
+                operator      = 'GreaterThan'
+                threshold     = $threshold
+                thresholdType = 'Forecasted'
+                contactEmails = @($Email)
+            }
+        }
         return [pscustomobject]@{
             name       = 'mls-monthly-budget'
             properties = [pscustomobject]@{
@@ -82,6 +91,24 @@ Describe '03-budget' {
             }
         }
 
+        It 'alerts on forecast as well as actual spend' {
+            # F15 (compliance/findings/2026-08-26-prepublication-review.md#f15): Actual-cost
+            # data lags 8-24h, longer than it takes to burn a $200 credit against a
+            # wallet-facing endpoint. Forecasted notifications close that gap.
+            $body = Get-DesiredBudgetBody -Amount 75 -Email 'x@y.z'
+            ($body.properties.notifications.Values | Where-Object thresholdType -eq 'Forecasted') |
+                Should -Not -BeNullOrEmpty
+        }
+
+        It 'keeps the actual-spend notifications alongside the forecasted ones' {
+            # Forecasted alerts supplement Actual; they must never replace them.
+            $body = Get-DesiredBudgetBody -Amount 75 -Email 'x@y.z'
+            $actual = @($body.properties.notifications.Values | Where-Object thresholdType -eq 'Actual')
+            $forecasted = @($body.properties.notifications.Values | Where-Object thresholdType -eq 'Forecasted')
+            $actual.Count | Should -Be 3
+            $forecasted.Count | Should -Be 2
+        }
+
         It 'starts the budget period on the first day of the current month (UTC)' {
             Invoke-BudgetForTest | Out-Null
             # ConvertFrom-Json parses ISO strings to [datetime]; normalize back to UTC.
@@ -124,6 +151,16 @@ Describe '03-budget' {
         It 'updates when a notification threshold is missing' {
             $budget = New-MatchingBudget
             $budget.properties.notifications.PSObject.Properties.Remove('Actual_GreaterThan_80_Percent')
+            $script:ExistingBudget = $budget
+            Invoke-BudgetForTest | Out-Null
+            Should -Invoke Invoke-AzCli -Exactly -Times 1 -ParameterFilter {
+                ($Arguments -join ' ') -like 'rest --method put*'
+            }
+        }
+
+        It 'updates when a forecasted notification threshold is missing' {
+            $budget = New-MatchingBudget
+            $budget.properties.notifications.PSObject.Properties.Remove('Forecasted_GreaterThan_80_Percent')
             $script:ExistingBudget = $budget
             Invoke-BudgetForTest | Out-Null
             Should -Invoke Invoke-AzCli -Exactly -Times 1 -ParameterFilter {

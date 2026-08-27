@@ -232,25 +232,92 @@ jobs:
           # Subscription-scope configuration, not a resource of the template
           # (L06 playbook step 3). Removed again by infra-down.yml so it never
           # points at deleted storage.
+          #
+          # F15 (compliance/findings/2026-08-26-prepublication-review.md#f15, Task 17):
+          # `az costmanagement export create/update` has no --identity-type flag, and the
+          # costmanagement CLI extension pins API version 2020-06-01, which hard-requires
+          # the destination storage account's shared keys to be enabled
+          # (github.com/Azure/azure-cli/issues/32912) — it 400s outright against this
+          # account, which has allowSharedKeyAccess: false (platform/main.bicep). The fix
+          # is not just "add a role assignment": the export itself must be created via the
+          # Exports REST API directly (`az rest`, api-version 2023-08-01+), which supports
+          # both `identity: { type: SystemAssigned }` in the request body and RBAC-only
+          # storage. The container name below is `cost-exports` — matching
+          # infra/bicep/platform/main.bicep's container and the V6.3 audit
+          # (verification/layer-06-audit.ps1), not the `costexports` this step used to
+          # write to, which was simply a different, audit-unseen container.
           storage_id="$(jq -r '.costExportStorageResourceId.value // empty' l6-manifest.json)"
           if [ -z "${storage_id}" ]; then
             echo "::notice title=Cost export not wired::costExportStorageResourceId was not in the deployment outputs."
             exit 0
           fi
           export_name="${PREFIX}-cost-daily"
-          az costmanagement export create \
-            --name "${export_name}" \
-            --scope "/subscriptions/${AZURE_SUBSCRIPTION_ID}" \
-            --storage-account-id "${storage_id}" \
-            --storage-container costexports \
-            --storage-directory "${RG_OPS}" \
-            --timeframe MonthToDate \
-            --type ActualCost \
-            --recurrence Daily \
-            --recurrence-period from="$(date -u +%Y-%m-%dT00:00:00Z)" to="$(date -u -d '+1 year' +%Y-%m-%dT00:00:00Z)" \
-            --schedule-status Active \
-            --output none
-          echo "Cost Management daily export ${export_name} configured."
+          export_body="$(jq -n \
+            --arg location "${AZURE_LOCATION}" \
+            --arg from "$(date -u +%Y-%m-%dT00:00:00Z)" \
+            --arg to "$(date -u -d '+1 year' +%Y-%m-%dT00:00:00Z)" \
+            --arg storageId "${storage_id}" \
+            --arg rootFolder "${RG_OPS}" \
+            '{
+              identity: { type: "SystemAssigned" },
+              location: $location,
+              properties: {
+                schedule: {
+                  status: "Active",
+                  recurrence: "Daily",
+                  recurrencePeriod: { from: $from, to: $to }
+                },
+                format: "Csv",
+                deliveryInfo: {
+                  destination: {
+                    resourceId: $storageId,
+                    container: "cost-exports",
+                    rootFolderPath: $rootFolder
+                  }
+                },
+                definition: {
+                  type: "ActualCost",
+                  timeframe: "MonthToDate",
+                  dataSet: { granularity: "Daily" }
+                }
+              }
+            }')"
+          export_url="https://management.azure.com/subscriptions/${AZURE_SUBSCRIPTION_ID}/providers/Microsoft.CostManagement/exports/${export_name}?api-version=2023-08-01"
+          export_response="$(az rest --method put --url "${export_url}" --body "${export_body}" --output json)"
+          echo "Cost Management daily export ${export_name} configured (container: cost-exports)."
+
+          # The managed identity above is provisioned by the Cost Management service as a
+          # side effect of the PUT, and its principalId comes back in the same response —
+          # there is no separate "create the identity" call. Role assignments target the
+          # principalId (the AAD object ID), never a resourceId or clientId (Task 12's own
+          # caution, repeated here because it is just as easy to get wrong a second time).
+          principal_id="$(echo "${export_response}" | jq -r '.identity.principalId // empty')"
+          if [ -z "${principal_id}" ]; then
+            echo "::error title=Cost export has no identity::PUT ${export_url} did not return identity.principalId. Cannot grant Storage Blob Data Contributor without a principal to grant it to."
+            exit 1
+          fi
+
+          # Scoped to the container, not the whole storage account — the narrowest scope
+          # Storage Blob Data Contributor can bind to that still lets the export write.
+          # Idempotent create-if-absent on replay (CLAUDE.md): `az role assignment create`
+          # is not safe to call twice unconditionally, so check first.
+          container_scope="${storage_id}/blobServices/default/containers/cost-exports"
+          existing_assignment="$(az role assignment list \
+            --assignee-object-id "${principal_id}" \
+            --role "Storage Blob Data Contributor" \
+            --scope "${container_scope}" \
+            --query '[0].id' --output tsv 2>/dev/null || true)"
+          if [ -z "${existing_assignment}" ]; then
+            az role assignment create \
+              --assignee-object-id "${principal_id}" \
+              --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Contributor" \
+              --scope "${container_scope}" \
+              --output none
+            echo "Granted Storage Blob Data Contributor to the cost-export identity (${principal_id}), scoped to the cost-exports container."
+          else
+            echo "Storage Blob Data Contributor already granted to the cost-export identity — no change."
+          fi
 
       - name: Wire the subscription Activity Log to Log Analytics
         if: ${{ !inputs.dry_run }}

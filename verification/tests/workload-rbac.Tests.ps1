@@ -17,11 +17,16 @@
 # failure mode the GUID-with-comment ruling (role name in a comment next to
 # the roleDefinitionId literal) was meant to avoid, not a loophole to reuse:
 #
-#   Cost Management service -> Storage Blob Data Contributor: owned by
-#   Task 17 (F15) — the export's identity is created by
-#   .github/workflows/layer-06-platform.yml's `az costmanagement export
-#   create` step (once that step requests one), not by Bicep. There is no
-#   principalId available to infra/bicep/apps/main.bicep to grant.
+#   Cost Management service -> Storage Blob Data Contributor: landed by
+#   Task 17 (F15, CLOSED) but still not assertable here — the export's
+#   identity is created by .github/workflows/layer-06-platform.yml's `az
+#   rest` PUT against the Exports REST API (requesting `identity: {type:
+#   SystemAssigned}` explicitly, since the `az costmanagement` CLI has no
+#   --identity-type flag), and the grant is an `az role assignment create`
+#   in that same workflow, scoped to the cost-exports container by a
+#   principalId that only exists at deploy time. There is no principalId
+#   available to infra/bicep/apps/main.bicep to grant, in Bicep or in a
+#   static test, because nothing here is a Bicep resource.
 #
 #   cost-ingest -> Storage Blob Data Reader: blocked on F19 — cost-ingest has
 #   no Function App, and therefore no identity, anywhere in this repo's IaC,

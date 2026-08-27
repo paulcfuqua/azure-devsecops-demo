@@ -1,13 +1,23 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    G0 bootstrap step 3 - $75/month Cost Management budget with 50/80/100% email alerts.
+    G0 bootstrap step 3 - $75/month Cost Management budget with 50/80/100% actual and
+    50/80% forecasted email alerts.
 
 .DESCRIPTION
     Creates (or updates) a subscription-scope Cost Management budget via `az rest`
     against Microsoft.Consumption/budgets. Alert notifications fire at 50%, 80% and
-    100% of actual spend to the given email. Backstop behind gate G4's cost-anomaly
-    trigger (docs/runbooks/g0-bootstrap.md, step C6).
+    100% of actual spend, AND at 50% and 80% of forecasted spend, all to the given
+    email. Backstop behind gate G4's cost-anomaly trigger (docs/runbooks/g0-bootstrap.md,
+    step C6).
+
+    F15 (compliance/findings/2026-08-26-prepublication-review.md#f15, Task 17): actual-
+    cost notifications alone are not enough backstop for a flood against a wallet-facing
+    endpoint. Cost Management's actual-cost data lags 8-24 hours behind real spend, which
+    is longer than it takes to exhaust a $200 credit; forecasted-spend notifications use a
+    same-day usage projection and fire well inside that window. The two notification sets
+    are additive - forecasted thresholds supplement the actual ones, they do not replace
+    them, since actual spend is still the ground truth once it lands.
 
     Idempotent: if the budget already exists with the desired amount, thresholds and
     contact email, the script no-ops; otherwise it PUTs the desired state (update, not
@@ -40,6 +50,12 @@ $ErrorActionPreference = 'Stop'
 
 $script:BudgetApiVersion = '2023-05-01'
 $script:AlertThresholds = @(50, 80, 100)
+# F15: Forecasted alerts close the 8-24h lag on Actual-only notifications (see the
+# script's .DESCRIPTION). 100% is deliberately excluded here - forecast at 100% is
+# noisy (it fires the moment the month's *projected* total first crosses the budget,
+# often early in the month) and the Actual 100% threshold above already covers the
+# "it happened" case.
+$script:ForecastThresholds = @(50, 80)
 
 # --- plumbing (same contract as 01-root-oidc.ps1) --------------------------------------
 
@@ -128,6 +144,17 @@ function Get-DesiredBudgetBody {
             contactEmails = @($Email)
         }
     }
+    foreach ($threshold in $script:ForecastThresholds) {
+        # F15: additive to, never a replacement for, the Actual notifications above -
+        # Actual data lags 8-24h, Forecasted does not, and both sets stay enabled.
+        $notifications["Forecasted_GreaterThan_${threshold}_Percent"] = [ordered]@{
+            enabled       = $true
+            operator      = 'GreaterThan'
+            threshold     = $threshold
+            thresholdType = 'Forecasted'
+            contactEmails = @($Email)
+        }
+    }
     return [ordered]@{
         properties = [ordered]@{
             category      = 'Cost'
@@ -166,6 +193,14 @@ function Test-BudgetMatchesDesired {
         if ([int]$note.threshold -ne $threshold) { return $false }
         if (@($note.contactEmails) -notcontains $Email) { return $false }
     }
+    foreach ($threshold in $script:ForecastThresholds) {
+        $name = "Forecasted_GreaterThan_${threshold}_Percent"
+        if ($notificationNames -notcontains $name) { return $false }
+        $note = $props.notifications.$name
+        if (-not $note.enabled) { return $false }
+        if ([int]$note.threshold -ne $threshold) { return $false }
+        if (@($note.contactEmails) -notcontains $Email) { return $false }
+    }
     return $true
 }
 
@@ -181,7 +216,7 @@ function Set-Budget {
     $body = Get-DesiredBudgetBody -Amount $Amount -Email $Email
     $payload = New-TempJsonFile -InputObject $body -WhatIf:$false -Confirm:$false
     try {
-        return Invoke-AzMutation -Target $BudgetName -Action "Create/update `$$Amount monthly budget (alerts at $($script:AlertThresholds -join '/')% -> $Email)" -Arguments @(
+        return Invoke-AzMutation -Target $BudgetName -Action "Create/update `$$Amount monthly budget (actual alerts at $($script:AlertThresholds -join '/')%, forecast alerts at $($script:ForecastThresholds -join '/')% -> $Email)" -Arguments @(
             'rest', '--method', 'put', '--url', $url, '--body', "@$payload"
         )
     }
@@ -200,7 +235,7 @@ function Invoke-Main {
     )
     $existing = Get-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName
     if (Test-BudgetMatchesDesired -Existing $existing -Amount $Amount -Email $Email) {
-        Write-Status "Budget '$BudgetName' already matches desired state (`$$Amount/month, alerts 50/80/100% -> $Email) - no action." -Color Green
+        Write-Status "Budget '$BudgetName' already matches desired state (`$$Amount/month, actual alerts 50/80/100% + forecast alerts 50/80% -> $Email) - no action." -Color Green
         return $existing
     }
     if ($existing) {
@@ -208,10 +243,10 @@ function Invoke-Main {
     }
     $result = Set-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName -Amount $Amount -Email $Email
     if ($result) {
-        Write-Status "Budget '$BudgetName' set: `$$Amount/month with alerts at 50/80/100% to $Email." -Color Green
+        Write-Status "Budget '$BudgetName' set: `$$Amount/month with actual alerts at 50/80/100% and forecast alerts at 50/80% to $Email." -Color Green
     }
     else {
-        Write-Status "(-WhatIf) Would set budget '$BudgetName': `$$Amount/month, alerts at 50/80/100% to $Email." -Color Yellow
+        Write-Status "(-WhatIf) Would set budget '$BudgetName': `$$Amount/month, actual alerts at 50/80/100% and forecast alerts at 50/80% to $Email." -Color Yellow
     }
     return $result
 }
