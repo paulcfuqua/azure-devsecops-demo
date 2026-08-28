@@ -1,0 +1,53 @@
+# Code owners for meridian-launch-systems / azure-devsecops-demo
+#
+# GitHub requests a review from the owner of every path a pull request touches.
+# Paired with branch protection requiring review, this is the control that stops
+# a workflow, a role grant or a compliance record changing without the person
+# accountable for it seeing the diff.
+#
+# NIST SP 800-171 Rev 2 3.4.3 ("track, review, approve or disapprove, and log
+# changes to organizational systems") and 3.1.5 (least privilege) both lean on
+# this being real rather than aspirational.
+#
+# Ordering matters: the LAST matching pattern wins, so the broad default comes
+# first and the sensitive paths override it.
+
+# Everything, unless a rule below is more specific.
+*                                   @paulcfuqua
+
+# ---------------------------------------------------------------------------
+# The paths where an unreviewed change does the most damage.
+# ---------------------------------------------------------------------------
+
+# CI/CD. A workflow change can mint an OIDC token, push an image, or write to
+# the default branch. This is the highest-value target in the repository.
+/.github/workflows/                 @paulcfuqua
+/.github/actions/                   @paulcfuqua
+/.github/CODEOWNERS                 @paulcfuqua
+
+# Infrastructure as code. Ingress, identity, role assignments and policy all
+# live here; so does every "who can reach what" decision in the estate.
+/infra/                             @paulcfuqua
+
+# Identity and tenant-level objects. Entra users, groups, app registrations and
+# Conditional Access, plus the three G3 teardown scripts that delete them.
+/infra/entra/                       @paulcfuqua
+/infra/purview/                     @paulcfuqua
+/infra/policy/                      @paulcfuqua
+
+# Bootstrap. OIDC federation, the budget, and the Fabric capacity - the scripts
+# that run before any gate exists to catch them.
+/scripts/bootstrap/                 @paulcfuqua
+
+# The compliance register and the platform that renders it. A change here does
+# not alter the estate, but it alters what the estate CLAIMS about itself, which
+# is the one thing this repository exists to keep honest.
+/compliance/                        @paulcfuqua
+
+# The Verifier. Its audits are the authoritative test for whether a layer is
+# done; weakening one is indistinguishable from passing it.
+/verification/                      @paulcfuqua
+
+# Security policy and the findings record.
+/SECURITY.md                        @paulcfuqua
+/CLAUDE.md                          @paulcfuqua
