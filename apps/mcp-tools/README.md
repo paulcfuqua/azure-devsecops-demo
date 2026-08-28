@@ -1,13 +1,14 @@
 # @mls/mcp-tools
 
 The Meridian Launch Systems **MCP tool server** — the tool half of showpiece #1
-(L8). It exposes exactly five read-only operations tools over the Model Context
+(L8). It exposes exactly **six** read-only tools over the Model Context
 Protocol so a **custom Microsoft Copilot Studio agent** can attach to it and
-call them.
+call them: the five operations tools, plus `query_compliance` (added 2026-08-26
+with the compliance platform, L12).
 
 ```
 Copilot Studio agent  ──MCP / Streamable HTTP──▶  POST /mcp  (this service)
-   (all orchestration)                              5 tools, data only
+   (all orchestration)                              6 tools, data only
 ```
 
 There is **no LLM in this package**. Per the sponsor-directed amendment
@@ -24,8 +25,8 @@ nothing else. No Anthropic SDK, no API key, no prompt, no `/ask`.
 | Transport | **Streamable HTTP** (`POST`). SSE is not offered — Copilot Studio dropped SSE support after August 2025. |
 | URL | `https://<container-app-fqdn>/mcp` (local: `http://localhost:8080/mcp`) |
 | Session | **Stateless.** No `Mcp-Session-Id` is issued or required; every POST is self-contained, so the container app can scale to zero and back mid-conversation. `GET`/`DELETE /mcp` answer `405` — there is no server-initiated stream and no session to delete. |
-| Auth | **None inside the app.** The container app is the security boundary: Entra ID / managed identity at the ingress, per the amendment ("Entra ID / managed identity throughout"). The service holds no secret of any kind and issues no token. If the connector needs a header, terminate it at ingress, not here. |
-| Tools | Exactly five (below). `tools/list` returning anything other than five is an audit failure (V8.3). |
+| Auth | **Bearer token, enforced in the app, failing closed at boot** (`src/auth-gate.ts`, finding F2). Ingress is `external` unconditionally — Copilot Studio calls from outside Azure — so the endpoint is reachable by anyone who finds the FQDN, and an ingress-only story was not one. The token is read from a Key Vault secret at deploy time; the server refuses to start without it in **every** backend mode. Local development opts out explicitly via `MCP_ALLOW_UNAUTHENTICATED=true`, which `npm run dev` sets and which announces itself loudly at boot. |
+| Tools | Exactly six (below). `tools/list` returning anything other than those six names is an audit failure (V8.3 — see `docs/runbooks/layers/L08.md`, which explains why the master plan's wording says "five"). |
 | Result shape | Data only — each result is one `text` block containing the adapter's JSON, plus the same payload as `structuredContent.result`. No prose, no UI, no component specs: the agent renders the Adaptive Card. |
 | Errors | A bad query or a failing adapter comes back as an `isError` tool result with the message, not a protocol error, so the agent can correct itself and retry. |
 
@@ -33,10 +34,12 @@ Registering it: Copilot Studio → **Tools → Add a tool → Model Context
 Protocol → connect to an existing MCP server**, pointing at the `/mcp` URL
 ([docs](https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-add-existing-server-to-agent)).
 The Fabric data agent is attached separately as a *knowledge* source for NL2SQL;
-these five are *tools*. If the Fabric preview is unavailable in the region,
-`query_lakehouse_sql` here is the documented fallback for lakehouse questions.
+these six are *tools*. The Copilot Studio tool list refreshes dynamically from the
+server, so the sixth tool needed no re-authoring of the agent. If the Fabric preview
+is unavailable in the region, `query_lakehouse_sql` here is the documented fallback
+for lakehouse questions.
 
-## The five tools
+## The six tools
 
 | Tool | What it answers | Local backend (Phase P) | Cloud backend (L5–L8) |
 | --- | --- | --- | --- |
@@ -45,6 +48,7 @@ these five are *tools*. If the Fabric preview is unavailable in the region,
 | `get_github_security` | open dependency and code-scanning alerts | committed fixture | GitHub Security REST API |
 | `get_defender_posture` | secure score and failing controls | committed fixture | Defender for Cloud (ARM) |
 | `get_cost_series` | daily spend vs budget by cost center | real query over `cost_daily` | Azure Cost Management |
+| `query_compliance` | NIST SP 800-171 control status, provenance and evidence | the committed `compliance/state/state-latest.json`, baked into the image | **the same file** — no cloud/local split; there is no tenant to switch to |
 
 ### Tool descriptions are agent-facing surface area
 
@@ -139,7 +143,7 @@ APPLICATIONINSIGHTS_CONNECTION_STRING=<App Insights>
 ```
 
 The selection is observable on `GET /healthz`, which reports `mode`,
-`sqlDialect` and the implementation class behind each of the five tools — a
+`sqlDialect` and the implementation class behind each of the six tools — a
 `cloud` server still advertising `sqlite` would mean the descriptions and the
 engine had come apart.
 
@@ -190,7 +194,9 @@ independently** from the lakehouse by differently-phrased SQL. A pass means *the
 answer to this question is reachable through the MCP tool surface*. Ranking
 questions ("most", "highest", "lowest") are checked against row 0, so a ranked
 list that merely contains the winner does not pass. It also asserts the surface
-itself: `tools/list` returns exactly five, and all five answer a smoke call.
+itself: `tools/list` matches `ALLOWED_TOOL_NAMES` exactly — in **both** directions, so
+a missing tool fails as loudly as an extra one — and every tool on that list answers a
+smoke call. The expected set is read from the allowlist, never a hardcoded count.
 
 The one documented hardcode is the canonical question — *"Which day of the week
 has the most launches?"* → **Saturday (309)**, the generator's built-in weekday

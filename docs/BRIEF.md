@@ -3,6 +3,48 @@
 > This is the founding brief and the record of decisions already made, as provided by the
 > human sponsor (Paul Fuqua) on 2026-08-22. Treat it as authoritative. Amendments require
 > sponsor sign-off and are recorded in `docs/superpowers/specs/`.
+>
+> **The founding text below is unedited.** Where a later sponsor-approved amendment
+> changes it, the amendment is listed immediately under this box and the original wording
+> is left standing — a decision record that quietly rewrites itself is not a record.
+
+## Amendments in force
+
+| Date | Amendment | What it changes below |
+|---|---|---|
+| 2026-08-24 | [Copilot Studio](superpowers/specs/2026-08-24-amendment-copilot-studio.md) — sponsor-directed | **Stack decisions → Copilot service (showpiece #1)**: the self-hosted LLM service is replaced by a custom **Microsoft Copilot Studio** agent, embedded in the control tower's Ask tab over Direct Line, with tools re-hosted as an **MCP server**. **Showpiece #3**: the authored triage script is replaced by **GitHub Copilot Autofix**. Consequence: there is **no LLM API key anywhere in the system**; the one stored secret is the Direct Line secret in Key Vault. The 2026-08-22 LLM-provider decision is void. |
+| 2026-08-26 | [Self-auditing compliance platform](superpowers/specs/2026-08-26-compliance-platform-design.md) — sponsor-approved design | Adds a **fourth showpiece** and a **twelfth layer**, and displaces nothing. Showpieces 1–3 and layers 1–11 are untouched. See below. |
+
+### The 2026-08-26 amendment, in the brief's own terms
+
+The demo proved it could *fix* a vulnerability (showpiece #3). It could not show that it
+*governs an estate against a standard* — which is the question this audience has to answer
+to their own auditors. Layer 12 adds that: the 110 requirements of **NIST SP 800-171
+Rev 2**, with published mappings onto **800-53 Rev 5**, **CMMC 2.0** and
+**FAR 52.204-21**, rendered on a read-only board (`apps/compliance`, Container Apps Easy
+Auth) from an artifact collected in CI and **committed to this repo**, plus a sixth MCP
+tool (`query_compliance`) so the agent can answer from the same artifact.
+
+It is cheap because most of it was already paid for: `verification/` was already a
+control-assessment engine — 43 criteria, each declaring the command it ran, the value it
+expected and the value it observed, executed by an identity structurally incapable of
+mutation. It was missing one field (which control each criterion evidences) and a surface.
+
+Three constraints on it are non-negotiable, and are the reason it is worth having at all:
+
+1. **Provenance is never blurred.** Every requirement carries `machine-verified`,
+   `asserted`, `declared` or `none`, and `COMPLIANT` is reachable only from a
+   machine-checked criterion. A human's strongest written claim (`CLOSED` — "no known open
+   finding") derives to `PARTIAL`, never to `COMPLIANT`. A tool that blurs those two is
+   worse than no tool: it launders a gap into a green box.
+2. **No blended percentage, ever.** Counts by status and by provenance, and the
+   cross-tabulation of the two. No score, no ratio, no "% compliant".
+3. **The board must be allowed to look bad.** On an estate that has never been deployed it
+   reports **0 COMPLIANT / 95 NOT_ASSESSED of 110**, and says on its own face that nothing
+   has been deployed. That is the deliverable, not a defect to fix before showing anyone.
+
+This adds no gate. It is read-only, needs no credential, and runs pre-tenant — so it
+touches none of principles 1–5 below and none of the five gates.
 
 ## Mission
 
@@ -175,3 +217,9 @@ cost-per-app-over-time as a first-class control tower visual.
 10. Self-healing workflow with seeded vulnerabilities — DevSecOps
 11. Teardown/reinstantiate proof: destroy and rebuild end to end — Platform,
     Verifier-audited
+12. *(2026-08-26 amendment)* Compliance platform: NIST 800-171 catalog, collectors, the
+    committed state artifact, the board behind Easy Auth, and the `query_compliance` MCP
+    tool — DevSecOps + Platform. Playbook: `runbooks/layers/L12.md`. Unlike layers 1–11
+    its collection half needs no tenant and is green today; and unlike layers 1–11 it does
+    **not** yet have a `verification/layer-12-audit.ps1`, which its playbook states
+    plainly rather than implying otherwise.

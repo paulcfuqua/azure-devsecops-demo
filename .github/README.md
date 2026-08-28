@@ -33,15 +33,19 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
     ├── app-launch-ops-ci.yml         # ┐
     ├── app-control-tower-ci.yml      # │ path-filtered per-app CI
     ├── app-mcp-tools-ci.yml          # │
-    ├── app-data-api-ci.yml           # ┘
+    ├── app-data-api-ci.yml           # │
+    ├── app-compliance-ci.yml         # ┘
     ├── vuln-lab-witness.yml          # stamps the heal commit onto the witness app
     ├── codeql.yml                    # ┐
     ├── sbom.yml                      # │ DevSecOps chain (L9)
     ├── zap.yml                       # │
     ├── gitleaks.yml                  # ┘
     ├── self-heal.yml                 # showpiece #3 (L10)
+    ├── compliance.yml                # collects + commits compliance state (L12)
     └── lint-ci.yml                   # the single green-check entry point
 ```
+
+**24 workflows**, 3 composite actions, one Dependabot config.
 
 ## Which workflow belongs to which layer
 
@@ -55,6 +59,8 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
 | `app-control-tower-ci.yml` | L7 | build → test → image → Trivy → GHCR | **Deploy job only** |
 | `app-mcp-tools-ci.yml` | L8 | build → test → tool eval → image → Trivy → GHCR | **Deploy job only** |
 | `app-data-api-ci.yml` | L7 | build → test → image → Trivy → GHCR | **Deploy job only** |
+| `app-compliance-ci.yml` | L7 / L12 | build → test → image → Trivy → **smoke test** → GHCR | **Deploy job only** |
+| `compliance.yml` | L12 | Collects the NIST 800-171 state and commits `compliance/state/state-<date>.json` (push to `main`, nightly 02:17 UTC, dispatch). Two jobs: `collect` holds `contents: read` and does all the work; `commit` holds `contents: write` and installs nothing | **No** — read-only, offline, needs no tenant, green from the first push |
 | `layer-08-copilot-studio.yml` | L8 | Power Platform solution import + agent eval | **Yes** — every job |
 | `layer-09-devsecops.yml` | L9 | GHAS report, Trivy negative tests, release + SBOM, ZAP, Defender toggle | **Yes** — every deploy job |
 | `verify-l1.yml` | L1 | L1 audit, on `workflow_run` after `infra-up` (V1.1 reads that run's conclusion, which is null from inside it) | **Yes** |
@@ -68,7 +74,7 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
 | `layer-04-purview.yml` | L4 | `infra/purview/labels.ps1` — 4-label taxonomy | **Yes**, plus an S&C credential guard |
 | `layer-05-fabric.yml` | L5 | Capacity resume → workspace/lakehouse → generators → seed → pause | **Yes** |
 | `layer-06-platform.yml` | L6 | `infra/bicep/platform` (sub scope), Key Vault secret, cost export | **Yes** |
-| `layer-07-apps.yml` | L7 | `infra/bicep/apps` (RG scope) — the four container apps plus the L10 deployment witness | **Yes** |
+| `layer-07-apps.yml` | L7 | `infra/bicep/apps` (RG scope) — the five serving container apps (`launch-ops`, `control-tower`, `data-api`, `mcp-tools`, `compliance`) plus the L10 deployment witness | **Yes** |
 | `layer-09-devsecops.yml` | L9 | GHAS state report (read-only), `trivy-negative-fail`/`-pass`, SBOM release (calls `sbom.yml`), ZAP baseline (calls `zap.yml`), Defender `Containers` round-trip (**G2**) | **Yes** |
 | `vuln-lab-witness.yml` | L10 | Stamps a heal's merge commit onto `mls-vuln-lab-demo-ca`, rolling the revision V10.1/V10.2's deploy stage reads | **Yes** |
 
@@ -109,7 +115,10 @@ Arming the guards is exactly the L1 deploy procedure
 
 ## Variables and secrets this layer reads
 
-All of these live in the **`demo` GitHub environment**. None is committed
+Most of these live in the **`demo` GitHub environment**; the verifier-related ones must
+be set on **both** `demo` and `verify` with the same value (findings F6/F7 moved every
+`verify` job into its own environment, and GitHub environment variables do not cascade
+between siblings — see `docs/runbooks/g0-bootstrap.md` § C9). None is committed
 (CLAUDE.md hard rule 5).
 
 | Name | Kind | Used by | Notes |
@@ -121,7 +130,8 @@ All of these live in the **`demo` GitHub environment**. None is committed
 | `AZURE_VERIFIER_CLIENT_ID` | variable | every `verify` job | `mls-verifier`; audits never run as the deployer |
 | `SQL_AAD_ADMIN_LOGIN` / `SQL_AAD_ADMIN_OBJECT_ID` | variables | L6 | Entra-only SQL auth; no SQL password exists |
 | `KEY_VAULT_CREATE_MODE` | variable | L6 | set to `recover` when replaying onto a soft-deleted vault |
-| `LAUNCH_OPS_PORT` / `CONTROL_TOWER_PORT` / `MCP_TOOLS_PORT` / `DATA_API_PORT` | variables | L7, app CI | **open item P-1** — set all four to `8080` when real images publish |
+| `LAUNCH_OPS_PORT` / `CONTROL_TOWER_PORT` / `MCP_TOOLS_PORT` / `DATA_API_PORT` / `COMPLIANCE_PORT` | variables | L7, app CI | **open item P-1** — set all five to `8080` when real images publish |
+| `MLS_COMPLIANCE_CLIENT_ID` | variable | L7 (`app-compliance-ci.yml`, `layer-07-apps.yml`) | Entra **application (client) ID** Easy Auth validates compliance-board sign-ins against. **Not a secret** — an OAuth client ID is a public identifier, the same trust class as the tenant/subscription IDs above, and no client secret is configured for the provider. **The app registration does not exist yet**: creating it is the Identity workstream's job (L2–L4). Unset, the template's `'unset'` default makes the ARM deployment fail loudly rather than ship an unpassable auth block |
 | `DATA_API_ORIGIN` | set by L7 on both frontends | L7 | the data-api URL their nginx `/api/` proxy targets; unset leaves `/api` on an unreachable loopback and both dashboards render empty |
 | `STAGING_URL` | variable | `zap.yml` | the L7 `launch-ops` FQDN |
 | `ENTRA_DOMAIN` | variable | L3 | verified tenant domain for UPNs |
@@ -203,39 +213,51 @@ Set once by the human; the workflows do not (and must not) change them.
   `codeql.yml` workflow (L9 failure mode 1). Autofix is unaffected: it works with
   either setup.
 
-## Handoff — audit scripts these workflows expect
+## Handoff — audit scripts these workflows call
 
 Every layer workflow ends with a `verify` job that authenticates as `mls-verifier`
-and calls [`.github/actions/layer-audit`](actions/layer-audit/action.yml). **None of
-these scripts exists yet** — they are the Verifier's deliverable. A missing script is
-a NOTICE, never a failure: the layer deploys, and the summary says plainly that
-nothing independently audited it.
+and calls [`.github/actions/layer-audit`](actions/layer-audit/action.yml). A missing
+script is a NOTICE, never a failure: the layer deploys, and the summary says plainly
+that nothing independently audited it.
 
-| Expected script | Called by | Criteria it must cover |
+> **All of them now exist** (Phase Q, 2026-08-25). An earlier revision of this section
+> said "none of these scripts exists yet — they are the Verifier's deliverable", which
+> stopped being true when the eleven audits landed and their Pester suites went green.
+> The defensive NOTICE path is still real, and still the right behaviour if a script is
+> ever removed; it is simply not the state of this repository.
+
+| Script | Called by | Criteria it covers |
 |---|---|---|
-| `verification/layer-01-audit.ps1` | (Verifier, out of band) | V1.1–V1.4 — the `oidc-login` job name is the hook |
+| `verification/layer-01-audit.ps1` | `verify-l1.yml`, on `workflow_run` after `infra-up` (V1.1 reads that run's conclusion, which is null from inside it) | V1.1–V1.4 — the `oidc-login` job name is the hook |
 | `verification/layer-02-audit.ps1` | `layer-02-landing-zone.yml` | V2.1–V2.3 |
 | `verification/layer-03-audit.ps1` | `layer-03-entra.yml` | V3.1–V3.4 |
 | `verification/layer-04-audit.ps1` | `layer-04-purview.yml` | V4.1–V4.2 |
 | `verification/layer-05-audit.ps1` | `layer-05-fabric.yml` | V5.x incl. capacity `Paused` |
 | `verification/layer-06-audit.ps1` | `layer-06-platform.yml` | V6.1–V6.4 |
 | `verification/layer-07-audit.ps1` | `layer-07-apps.yml` | V7.1–V7.5 |
-| `verification/layer-09-audit.ps1` | (Verifier, out of band) | V9.1–V9.5 |
-| `verification/layer-10-audit.ps1` | (Verifier, out of band) | V10.1's six-stage trail |
-| `verification/layer-11-audit.ps1` | (Verifier, out of band) | V11.1–V11.5, incl. the down-state half |
+| `verification/layer-08-audit.ps1` | `layer-08-copilot-studio.yml` | V8.1–V8.5, incl. the **six**-name MCP tool allowlist |
+| `verification/layer-09-audit.ps1` | `layer-09-devsecops.yml` | V9.1–V9.5 |
+| `verification/layer-10-audit.ps1` | `self-heal.yml` (its `verify` job) | V10.1's six-stage trail and V10.2's Dependabot trail |
+| `verification/layer-11-audit.ps1` | `infra-down.yml` (down phase); the up phase and wall clock are run out of band by the Verifier | V11.1–V11.5, incl. the down-state half |
 
-Two more scripts are referenced defensively by the deploy paths and also do not exist:
+There is deliberately **no `verification/layer-12-audit.ps1`** for the compliance
+platform, and `docs/runbooks/layers/L12.md` says so plainly rather than implying one:
+L12's criteria are enforced by CI gates today, not by the Verifier against deployed
+state. That is the layer's one missing triplet leg, named rather than hidden.
 
-| Expected script | Called by | Effect while absent |
+Two scripts the deploy paths reference defensively — both of which **do** exist now, and
+whose absence would degrade to a notice rather than a failure:
+
+| Script | Called by | Effect if it were absent |
 |---|---|---|
-| `infra/fabric/teardown-items.ps1` | `infra-down.yml` | Lakehouse items survive teardown (OneLake pennies); notice emitted |
-| `data/seed/*.ps1` | `layer-05-fabric.yml` | Lakehouse is provisioned but not seeded; notice emitted |
+| `infra/fabric/teardown-items.ps1` | `infra-down.yml` | Lakehouse items would survive teardown (OneLake pennies); notice emitted |
+| `data/seed/seed.ps1` | `layer-05-fabric.yml` | Lakehouse provisioned but not seeded; notice emitted |
 
 ## Open items carried in this layer
 
 | # | Where it shows up |
 |---|---|
-| **P-1** | Target ports default to the placeholder `80`. `layer-07-apps.yml` reads `*_PORT` variables with an `80` fallback and flags it in the run summary; each app CI deploy job emits a **warning** if ingress is still on 80 and deliberately does not mutate ingress itself. Set the three variables to `8080` to close it. |
+| **P-1** | Target ports default to the placeholder `80`. `layer-07-apps.yml` reads `*_PORT` variables with an `80` fallback and flags it in the run summary; each app CI deploy job emits a **warning** if ingress is still on 80 and deliberately does not mutate ingress itself. Set all five variables (`LAUNCH_OPS_PORT`, `CONTROL_TOWER_PORT`, `MCP_TOOLS_PORT`, `DATA_API_PORT`, `COMPLIANCE_PORT`) to `8080` to close it. |
 | **P-4** | `lint-ci.yml` installs PSScriptAnalyzer explicitly and then *asserts* `Invoke-ScriptAnalyzer` exists, so the lint step can never silently no-op on a runner that lacks the module. |
 | **P-7** | **Closed.** Every app image still builds with `context: .` (the repo root) and `file: apps/<app>/Dockerfile`, but the extra `npm run build:renderer` prerequisite is gone: `apps/mcp-tools` (which replaced `copilot-svc`) no longer depends on `@mls/spec-renderer`, because nothing in it emits a component spec — the Copilot Studio agent renders Adaptive Cards. |
 | **P-8** | **`apps/directline-token` has no workflow yet.** The amendment's embedded answer surface needs a Direct Line token endpoint (an Azure Function; see `apps/directline-token/README.md`), and nothing here builds, tests or deploys it. Its tests run on Node's built-in runner with no dependencies (`npm test` from that directory), so a CI job is a handful of lines; its deploy belongs with L6/L7, alongside the `DIRECTLINE_SECRET` Key Vault write that replaces the retired `anthropic-api-key` one. |

@@ -509,6 +509,7 @@ has run. Each one is an audit input that cannot be derived from ARM:
 | `MLS_L9_RUN_ID` | `layer-09-devsecops.yml` run ID | V9.2's Trivy negative test | **no longer hand-set** — see below |
 | `MLS_L9_RELEASE_TAG` | release tag carrying the SBOMs | V9.3 | **no longer hand-set** |
 | `MLS_L9_ZAP_RUN_ID` | run ID whose artifact holds the ZAP baseline report | V9.4 | **no longer hand-set** |
+| `MLS_COMPLIANCE_CLIENT_ID` | Entra **application (client) ID** the compliance board's Container Apps Easy Auth validates sign-ins against (`infra/bicep/apps/demo.bicepparam` → `complianceEntraClientId`; passed through by `layer-07-apps.yml` and `app-compliance-ci.yml`) | The compliance board (L12) — nothing else reads it. **Not a secret:** an OAuth client ID is a public identifier, visible in the browser's own redirect URL during login, and the provider is configured with **no client secret at all**. Set it as a *variable*, not a secret | **L3 — but see the box below: the app registration does not exist yet** |
 
 > **The three `MLS_L9_*` values are now produced by the layer run.**
 > `.github/workflows/layer-09-devsecops.yml` exists (2026-08-24) and passes all three to
@@ -519,13 +520,28 @@ has run. Each one is an audit input that cannot be derived from ARM:
 > both V9.2 and V9.4. Leave all three variables unset on the happy path; they survive only
 > as an override for re-verifying an older run by hand.
 
+> **The app registration Easy Auth needs has not been created, by anyone (2026-08-28).**
+> `infra/entra/manifest.json` declares three app registrations — `mls-launch-ops-demo-app`,
+> `mls-control-tower-demo-app`, `mls-mcp-tools-demo-app` — and **no fourth one for the
+> compliance board**. Creating it is the **Identity & Governance workstream's** job (L3),
+> not the compliance layer's and not this runbook's; the L7 template deliberately owns no
+> Entra writes.
+>
+> Until it exists, leave `MLS_COMPLIANCE_CLIENT_ID` unset. The parameter then falls back to
+> the literal `'unset'`, which is not a GUID, so **ARM rejects the deployment outright**
+> rather than shipping an Easy Auth block that nobody could ever pass — a loud failure
+> instead of a board sitting anonymously on the public internet. That is the intended
+> behaviour, and the fix is to create the registration, never to remove `authConfig`.
+> `docs/runbooks/layers/L12.md` § Preconditions carries the same statement for whoever is
+> deploying that layer.
+
 **Optional tuning** (each has a working default, so leave them unset until you need them):
 
 | Variable | Default | Effect |
 |---|---|---|
 | `SQL_AAD_ADMIN_LOGIN` / `SQL_AAD_ADMIN_OBJECT_ID` | none | Entra admin for the L6 SQL server. Without them the server deploys with no Entra administrator |
 | `KEY_VAULT_CREATE_MODE` | `default` | Set to `recover` when replaying against a soft-deleted vault (kill/rebuild) |
-| `LAUNCH_OPS_PORT`, `CONTROL_TOWER_PORT`, `MCP_TOOLS_PORT`, `DATA_API_PORT` | `80` | Container ingress target ports. The real images listen on **8080**; this is open item P-1 and flipping all four closes it |
+| `LAUNCH_OPS_PORT`, `CONTROL_TOWER_PORT`, `MCP_TOOLS_PORT`, `DATA_API_PORT`, `COMPLIANCE_PORT` | `80` | Container ingress target ports. The real images listen on **8080**; this is open item P-1 and flipping all five closes it |
 | `DATA_API_APP_NAME` | `<prefix>-data-api-<env>-ca` | Overrides the derived container app name in `app-data-api-ci.yml` |
 | `MCP_ENDPOINT_PATH` | `/mcp` | Path the MCP server serves Streamable HTTP on |
 | `MLS_ALERT_EMAIL` | none | Email receiver for the L6 security action group (F17: Key Vault access-denied and SQL failed-login alerts). Without it the action group deploys with **zero receivers** — the two scheduledQueryRules still evaluate and fire, but nobody is notified; layer-06-platform.yml's deploy step prints a loud warning when this is unset |

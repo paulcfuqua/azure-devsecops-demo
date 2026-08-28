@@ -8,21 +8,43 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 
 ## Status
 
-**Turn-key. Phase Q complete (2026-08-25)** —
+> ## Nothing here has ever been deployed.
+>
+> No `az login` has ever run on the machine that built this. There is no tenant, no
+> subscription, no resource group, no running container. Every number in this repository
+> was produced by code reading files on a laptop — never by an API answering for a live
+> estate. Read the compliance board below with that in mind: it is the one place where
+> that fact is *load-bearing* rather than a disclaimer.
+
+**Turn-key, and self-auditing.** Phase Q (2026-08-25) made everything tenant-independent
+authored, tested and wired —
 [completion report](verification/reports/phase-q-completion.md), preceded by
-[Phase P](verification/reports/phase-p-completion.md).
+[Phase P](verification/reports/phase-p-completion.md). Two plans have landed since, on
+this branch: a pre-publication security review that closed 24 findings, and the
+**compliance platform** (showpiece #4 below) that renders them against NIST SP 800-171.
 
-Everything that does not require a live tenant is authored, tested and wired: data
-generators and seeding, the SQL schema, the Fabric lakehouse loaders, the renderer
-library, both frontends, the data API, the MCP tool server with real cloud adapters,
-the Copilot Studio agent definition and ALM, OpenTelemetry throughout, the full
-DevSecOps chain, **all 11 Verifier audit scripts wired into their layer workflows**, and
-the `up.ps1` / `down.ps1` fuse. Gates: 597 Pester, 30 pytest, 7 green npm packages,
-PowerShell analyzer at zero across every severity, actionlint clean on 22 workflows,
-every Bicep layer building clean.
+What exists: data generators and seeding, the SQL schema, the Fabric lakehouse loaders,
+the renderer library, three frontends, the data API, the MCP tool server with real cloud
+adapters and six tools, the Copilot Studio agent definition and ALM, OpenTelemetry
+throughout, the full DevSecOps chain, **all 11 Verifier audit scripts wired into their
+layer workflows**, the compliance catalog/collectors/board, and the `up.ps1` / `down.ps1`
+fuse.
 
-**Nothing has been written to Azure** — no `az login` has ever existed on this machine —
-and the public repo has not been published. Both await sponsor go-ahead.
+Gates, measured 2026-08-28 rather than remembered:
+
+| Gate | Result |
+|---|---|
+| Pester (PowerShell 7) over `scripts infra data verification compliance` | **1,172 passed, 0 failed** |
+| `npm test` across 8 workspaces | **952 passed, 0 failed** |
+| `npm run typecheck` across 7 workspaces | **exit 0** |
+| pytest (`data/generators`) | **30 passed** |
+| PSScriptAnalyzer, Error + Warning, over `scripts infra verification data compliance .github` | **0 findings** |
+| actionlint | **clean across all 24 workflows** |
+| `az bicep build` / `build-params` | **3 templates + 3 parameter files, clean** |
+| Golden-question MCP eval (`npm run eval`) | **10/10, tool surface matches the allowlist** |
+
+**Nothing has been written to Azure**, and the public repo has not been published. Both
+await sponsor go-ahead.
 
 **Architecture amendment, 2026-08-24 (sponsor-directed):** all runtime LLM work moves
 inside the Microsoft landscape.
@@ -43,11 +65,15 @@ Decisions in force: monorepo, dual E5 trials, Fabric trial capacity first; the
 
 ## Key documents
 
-- [By the numbers](docs/BY-THE-NUMBERS.md) — what it took: files, lines, 1,428 tests
+- [By the numbers](docs/BY-THE-NUMBERS.md) — what it took: files, lines, 2,154 tests
 - [Project brief (decision record)](docs/BRIEF.md)
 - [Design spec + pressure-test findings](docs/superpowers/specs/2026-08-22-azure-devsecops-demo-design.md)
 - [Copilot Studio amendment (in force)](docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md)
 - [G1 master plan](docs/superpowers/plans/2026-08-22-g1-master-plan.md)
+- [Compliance platform design](docs/superpowers/specs/2026-08-26-compliance-platform-design.md)
+  and [`compliance/README.md`](compliance/README.md) — showpiece #4's vocabulary, and the
+  rules that stop it overclaiming
+- [Layer playbooks L01–L12](docs/runbooks/layers/) · [demo script](docs/runbooks/demo-script.md)
 - [Working agreements for all agents](CLAUDE.md)
 
 ## Run locally
@@ -66,8 +92,12 @@ npm install
 npm run dev:launch-ops
 npm run dev:control-tower
 
-# 4. Run the MCP tool server and exercise the five tools against local data
+# 4. Run the MCP tool server and exercise its six tools against local data
 npm run dev:mcp-tools
+
+# 5. Collect the compliance state and run the board (http://localhost:5175)
+pwsh compliance/Invoke-MlsCompliance.ps1
+npm run dev --workspace apps/compliance
 ```
 
 `launch-ops` reads `data/generated/*.json`; `control-tower` reads committed feed
@@ -81,23 +111,25 @@ local data; set `LOCAL_DATA=1` to force it for a production build, or
 showpiece #1's *agent* is **cloud-only**: Microsoft Copilot Studio has no local runtime,
 so the agent cannot be started, tested, or demoed on a laptop. It requires the tenant, a
 Power Platform environment, and a published agent. What remains locally runnable is
-everything around it — both frontends, the shared renderer, and the **MCP tool layer**
-with its five tools and their tests, which is where the copilot's data access actually
+everything around it — all three frontends (including the compliance board), the shared
+renderer, and the **MCP tool layer**
+with its six tools and their tests, which is where the copilot's data access actually
 lives. The golden-question eval suite runs locally against the MCP tools and only against
 the deployed agent once it exists. This is a real capability the previous design had and
 this one does not; it is recorded as open item P-8 in the
 [Phase P plan](docs/superpowers/plans/2026-08-22-phase-p-pre-tenant-scaffold.md).
 
-## The three showpieces
+## The four showpieces
 
 1. **Copilot — a custom Microsoft Copilot Studio agent** answering cross-domain
    natural-language questions, embedded in the control tower's **Ask** tab over Direct
    Line and replying in **Adaptive Cards** (declarative JSON UI, never generated code).
    Its knowledge is a **Fabric data agent** over the lakehouse (preview integration, and
    it needs a paid F2 capacity — there is a documented tools-only fallback); its tools are
-   the five ops/sec/cost tools re-hosted as an **MCP server** on Container Apps. The
-   agent is a Power Platform solution that lives in this repo and deploys by pipeline —
-   edit it in a browser and the auditor fails the layer.
+   the five ops/sec/cost tools re-hosted as an **MCP server** on Container Apps, plus a
+   sixth, `query_compliance`, that reads showpiece #4's artifact. The agent is a Power
+   Platform solution that lives in this repo and deploys by pipeline — edit it in a
+   browser and the auditor fails the layer.
 2. **Control tower** — Dev / Sec / Ops posture on Well-Architected pillars, fed by live
    Azure, GitHub, and Defender APIs plus cost exports in the lakehouse. Now also the host
    for showpiece #1.
@@ -105,6 +137,58 @@ this one does not; it is recorded as open item P-8 in the
    the code fix (Dependabot writes the dependency ones) → patch PR → CI gauntlet →
    auto-merge on green → deploy → finding closed. Both healers are GitHub platform
    features, free on a public repo; we wrote neither. The PR trail is the demo.
+4. **Self-auditing compliance platform** — the whole estate assessed against **NIST SP
+   800-171 Rev 2**, and through published mappings against **800-53 Rev 5**, **CMMC 2.0**
+   and **FAR 52.204-21**, on a board that is deliberately, verifiably not green. See
+   below; it displaces nothing — showpieces 1–3 are unchanged, and the design spec's own
+   case for building it was that
+   [most of it was already paid for](docs/superpowers/specs/2026-08-26-compliance-platform-design.md):
+   the `verification/` suite was already a control-assessment engine missing one field.
+
+### Showpiece #4 in detail — why an honest board is the product
+
+Showpiece #3 proves this repo can *fix* a vulnerability. Showpiece #4 proves it can
+*govern an estate against a standard* — the question the audience has to answer to their
+own auditors.
+
+**What the board says right now, on an estate that has never been deployed:**
+
+| | COMPLIANT | PARTIAL | GAP | INCONCLUSIVE | NOT_APPLICABLE | NOT_ASSESSED |
+|---|---|---|---|---|---|---|
+| **of 110 requirements** | **0** | 12 | 3 | 0 | 0 | **95** |
+
+Plus four out-of-catalog rows keyed on 800-53 control ids the 800-171 catalog has no
+requirement for, counted separately so the 110 stays arithmetic.
+
+**A compliance dashboard that showed green here would be worthless.** Nothing has been
+deployed, so nothing could have been observed; the only controls with any status at all
+are the fifteen of those 110 a human wrote an assertion about, and every one of those renders as
+`asserted`, never `machine-verified`. That is the whole product:
+
+- **`COMPLIANT` is unreachable from a human claim.** The register's strongest word is
+  `CLOSED`, meaning *no known open finding stands against this control* — weaker than
+  *the control is met*. `Get-MlsControlStatus` maps it to `PARTIAL`, because deriving
+  `COMPLIANT` from it would launder the weaker claim into the stronger one. Both halves
+  of that invariant are property-tested; neither can be broken without a test going red.
+- **Provenance is set by which code path fired**, never read from an input field, so no
+  record can ask to be called machine-verified.
+- **There is no percentage anywhere.** No score, no ratio, no "% compliant". Counts by
+  status, counts by provenance, and the cross-tabulation of the two — because a figure
+  blending verified and asserted controls is exactly the number someone would quote to
+  an auditor and exactly the number that would be wrong. CI greps the emitted bytes to
+  keep it that way.
+- **The board says what it could not see.** Each of the five collectors renders its own
+  limitation verbatim, including the one that matters most: *"Nothing in this estate has
+  been deployed, so there are no reports to read."*
+- **The history is a git history.** `.github/workflows/compliance.yml` commits a dated
+  snapshot on every run, so `git log compliance/state/` answers when the estate became
+  compliant and when it regressed. There is exactly **one** snapshot today, and the trend
+  view says so in those words rather than drawing a flat line.
+
+Read [`compliance/README.md`](compliance/README.md) for the two vocabularies — what a
+human may assert, and what the platform will derive from it — and
+[`docs/runbooks/layers/L12.md`](docs/runbooks/layers/L12.md) for the layer playbook,
+including a plain statement of which leg of its deploy/teardown/audit triplet is missing.
 
 ## Security and license
 

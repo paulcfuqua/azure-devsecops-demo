@@ -11,8 +11,13 @@
             committed solution exactly, and its published state is current.
       V8.2  Eval suite passes >= 9/10 against the deployed agent, with each answer's
             number independently re-derived by the Verifier from the lakehouse.
-      V8.3  No tool invoked outside the five-tool allowlist and the agent declares exactly
-            those five.
+      V8.3  No tool invoked outside the tool allowlist and the agent declares exactly
+            those tools. The master plan wrote "five-tool allowlist" in 2026-08-22, when
+            there were five; the 2026-08-26 compliance-platform design added a sixth,
+            query_compliance (apps/mcp-tools/tests/allowlist.test.ts pins the server at
+            exactly six). The criterion is unchanged - no tool outside the DECLARED
+            allowlist - so -AllowedTool below carries six names, and a deployed server
+            advertising the old five would now fail this criterion for being short.
       V8.4  Every visual answer is an Adaptive Card payload that validates against the
             pinned Adaptive Cards schema; zero HTML/JS/JSX in any response.
       V8.5  p95 latency < 20 s.
@@ -40,9 +45,13 @@ param(
     [string]$SolutionPath,
     [string]$EvalResultPath,
     [string]$McpServerUrl,
+    # The allowlist the deployed MCP server must advertise, exactly. Kept in step with
+    # apps/mcp-tools/src/tools/index.ts; query_compliance is the sixth (compliance-platform
+    # design 2026-08-26 section 5.3). Test-ToolAllowlist below compares as a SET, so a name
+    # missing here fails the criterion just as loudly as an extra one on the server.
     [string[]]$AllowedTool = @(
         'query_lakehouse_sql', 'query_log_analytics', 'get_github_security',
-        'get_defender_posture', 'get_cost_series'
+        'get_defender_posture', 'get_cost_series', 'query_compliance'
     ),
     [string]$AdaptiveCardVersion = '1.5',
     [double]$LatencyBudgetSeconds = 20,
@@ -433,7 +442,7 @@ function Invoke-Main {
         -Test { Test-EvalSuite -Artifact $artifact -PassBar $EvalPassBar -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V8.3' -Control @('3.1.2', '3.4.6') `
-        -Description 'No tool invoked outside the five-tool allowlist and the agent declares exactly those five' `
+        -Description "No tool invoked outside the $($AllowedTool.Count)-tool allowlist and the agent declares exactly those $($AllowedTool.Count) (master plan wrote 'five-tool'; query_compliance was added 2026-08-26)" `
         -Command "runtime: every tool call recorded across every eval question`nstatic: MCP tools/list against the deployed server`nstatic: tool/connector components declared by the unpacked solution" `
         -Expected "runtime filter empty; tools/list returns exactly $($AllowedTool -join ', '); no additional tool, connector, agent flow or knowledge source beyond the MCP connection and (Fabric path) the single connected data agent" -NoRetry `
         -Test { Test-ToolAllowlist -Artifact $artifact -McpServerUrl $serverUrl -AllowedTool $AllowedTool -Committed $committed } | Out-Null

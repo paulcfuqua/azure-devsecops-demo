@@ -2,9 +2,18 @@
 
 One playbook per master-plan layer, `L01.md` … `L11.md` (master-plan L0 is local
 toolchain work covered by `docs/runbooks/g0-bootstrap.md` § A and Phase P Track H —
-it has no cloud state and no layer playbook). Every playbook carries the same eight
-sections: Purpose, Preconditions, Deploy procedure, Validation cycle, Teardown,
-Rollback, Failure modes, Deferred validation.
+it has no cloud state and no layer playbook), plus **`L12.md`**, which is *not* a
+master-plan layer: it covers the compliance platform added by the 2026-08-26
+compliance-platform design and is numbered after L11 rather than folded into L7. Every
+playbook carries the same eight sections: Purpose, Preconditions, Deploy procedure,
+Validation cycle, Teardown, Rollback, Failure modes, Deferred validation.
+
+> **`L12.md` owns none of the 43 criteria below and adds none to them.** Its
+> criteria are `V12.1`–`V12.6`, drawn from
+> `../../superpowers/specs/2026-08-26-compliance-platform-design.md`, and the playbook
+> states plainly that no `verification/layer-12-audit.ps1` exists to execute them — five
+> are enforced by CI gates instead and one cannot be checked until the tenant exists. The
+> traceability rule below is about the master plan and is unaffected either way.
 
 **Traceability rule (Phase P Track D):** every Verify criterion in the master plan's
 L1–L11 sections appears in **exactly one** playbook's Validation cycle, as a numbered
@@ -70,6 +79,16 @@ each playbook.
 | 41 | L11 | Post-up: all layer audits green | `L11.md` § Validation cycle **V11.3** |
 | 42 | L11 | Wall-clock < 60 min | `L11.md` § Validation cycle **V11.4** |
 | 43 | L11 | Run-rate returns to idle profile | `L11.md` § Validation cycle **V11.5** |
+
+> **A note on criterion 29 (V8.3), 2026-08-28.** Its wording is quoted verbatim above and
+> in `L08.md`, as the traceability rule requires — "the five-tool allowlist" was accurate
+> when the master plan was written on 2026-08-22. The MCP server carries **six** tools
+> since `query_compliance` was added on 2026-08-26, and
+> `verification/layer-08-audit.ps1`'s `-AllowedTool` default carries all six. The
+> criterion's substance — nothing runs outside the *declared* allowlist, and the agent
+> declares exactly what is on it — is unchanged; only the count moved, and `L08.md` § V8.3
+> says so in full. The quote is deliberately not rewritten: silently editing a criterion to
+> match a later change is how traceability stops meaning anything.
 
 Companion runbooks: `../demo-script.md` (stage flow),
 `../kill-rebuild.md` (standard cycle + G3 variant), `../g0-bootstrap.md` (human-only

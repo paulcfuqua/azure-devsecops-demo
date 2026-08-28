@@ -84,14 +84,16 @@ on a *standard* rebuild (tenant objects present):
 | 3 | L4 labels (`labels.ps1`) | create-if-absent no-op; GUIDs untouched | ~1 min |
 | 4a | L5 Fabric + seed | **real work**: resume capacity (G2 stated per resume; trial $0), recreate lakehouse `mls_operations`, `python -m generators build` (seed `20260822`), load 10 tables, re-pause | ~20–25 min |
 | 4b | L6 platform Bicep | **real work**: full redeploy into `mls-rg-platform` (+ data/ops RG contents per the Bicep tree); Key Vault recovers from soft-delete; cost export recreated | ~12–18 min |
-| 5 | L7 app CI × 2 | container build + Trivy + deploy (`launch-ops`, `control-tower`) | ~10–15 min |
+| 5 | L7 apps | `layer-07-apps.yml` redeploys the whole `infra/bicep/apps` template into `mls-rg-apps` **by image digest** — five serving container apps (`launch-ops`, `control-tower`, `data-api`, `mcp-tools`, `compliance`) plus the L10 witness. No image is rebuilt: `infra-up.yml` deliberately does not call the per-app CI workflows, because GHCR does not die with the resource groups | ~10–15 min |
 | 6 | L8 MCP tools CI + agent repoint + eval | **real work**: rebuild/deploy `apps/mcp-tools` to ACA; **repoint the surviving Copilot Studio agent at the new MCP FQDN** (the ACA environment's domain suffix changes when the RG is recreated) and, on the paid-F2 path, recreate + republish the Fabric data agent and reattach it; then the golden-question eval over Direct Line (needs capacity resumed — scheduled inside leg 4a's window or its own stated resume) | ~10–14 min |
 | 7 | L9 chain re-verify | config-as-code already in repo; re-assert states (Defender `Free`) | ~2–3 min |
 | — | L10 re-arm | **not in the timed path** — `apps/vuln-lab/reseed.ps1` is demo-prep, run from the pre-demo checklist [derived, per L11 playbook] | — |
 | 8 | Verifier audits L1–L10 | full independent re-audit | ~8–10 min |
 
 [derived] Scheduling: legs 4a and 4b have no mutual dependency and run as parallel
-workflow jobs; legs 5–6 need 4b (ACA env), and leg 6's eval needs 4a (lakehouse).
+workflow jobs; legs 5–6 need 4b (ACA env), and leg 6's eval needs 4a (lakehouse). Leg 5
+brings the compliance board back with everything else — its state artifact was never in
+Azure to lose, so it needs no reseed of any kind (L12).
 The master plan mandates the replay set ("L2–L10 pipelines + seed") and the <60 min
 outcome; the parallelization is the conservative schedule that achieves it.
 

@@ -1,12 +1,13 @@
 # Demo Script — Meridian Launch Systems
 
 The stage flow a presenter follows, end to end: cold open on an empty subscription,
-rebuild kickoff, the three showpieces in order, and the kill demo with the idle-cost
+rebuild kickoff, the four showpieces in order, and the kill demo with the idle-cost
 view. Audience: launch-industry engineering/security/ops leaders — the narrative is
 "the repo is the product; the environment is a build artifact."
 
-Total stage time: **~105 minutes** for the full cold-start proof (Variant A). A
-**~50-minute** condensed variant (B) is noted at the end for slots that cannot absorb
+Total stage time: **~115 minutes** for the full cold-start proof (Variant A) — 105 plus
+the ten-minute compliance segment added with showpiece #4 on 2026-08-26. A
+**~60-minute** condensed variant (B) is noted at the end for slots that cannot absorb
 a live rebuild. All timings are [derived] estimates — the master plan pins only the
 <60-minute rebuild; segment budgets follow from it.
 
@@ -18,6 +19,14 @@ a live rebuild. All timings are [derived] estimates — the master plan pins onl
 > Autofix** (for the code finding) and by **Dependabot** (for the dependency findings),
 > which is a *stronger* line on stage — "we didn't write the healer either." Net stage
 > time is unchanged: the app switch you save, you spend warming the agent.
+
+> **Changed 2026-08-26 (compliance platform).** One segment is **added**, not moved:
+> **Segment 8, showpiece #4** — the NIST SP 800-171 board, drilled into a gap, asked
+> about through the agent, and its collection history shown as a `git log`. Nothing is
+> displaced: segments 1–7 are unchanged and the kill demo and Q&A shift to 9 and 10.
+> The stage direction that matters is that this segment's punchline is a screen that is
+> **mostly not green**, and the presenter has to set that up rather than apologise for
+> it. Budget +10 min (Variant A ~115, Variant B ~60).
 
 ---
 
@@ -35,8 +44,9 @@ Run through in order; every box must be checked before the audience sits down.
 | 6 | **Agent published and answering** | Copilot Studio shows the agent published from the last pipeline import; ask one golden question in the control tower's **Ask** tab (off the record) | Answer + Adaptive Card rendered; note which path is live — Fabric data agent or tools-only |
 | 7 | **All layer audits green** | latest `verification/reports/L*.md` set | All PASS, ≤ 7 days old |
 | 8 | **Budget headroom** | Azure portal → Cost Management → budget `$75/month` | < 80% consumed, no unacknowledged alerts |
-| 9 | **Browser prepped** | tabs: Azure portal (Resource groups + Cost analysis), GitHub Actions, GitHub Security (**Code scanning** and **Dependabot** views), launch-ops URL placeholder tab, control-tower URL placeholder tab (Ask + Dev/Sec/Ops all in this one), Copilot Studio (for the "here's the agent, in a solution, in the repo" beat) | Logged in, MFA done — never authenticate on stage |
+| 9 | **Browser prepped** | tabs: Azure portal (Resource groups + Cost analysis), GitHub Actions, GitHub Security (**Code scanning** and **Dependabot** views), launch-ops URL placeholder tab, control-tower URL placeholder tab (Ask + Dev/Sec/Ops all in this one), Copilot Studio (for the "here's the agent, in a solution, in the repo" beat), compliance-board URL placeholder tab | Logged in, MFA done — never authenticate on stage, with **one deliberate exception: do not pre-authenticate the compliance board.** Its Easy Auth redirect is a beat in Segment 8 |
 | 10 | **Fallback pack** | screenshots of every showpiece state + the last committed `rebuild-proof.md` | On local disk |
+| 11 | **Compliance board serves the current snapshot** | open the board, read its "Collected `<date>` from commit `<short>`" line and compare with `git log -1 --format=%h -- compliance/state/` | The two match. If they differ the image predates the latest collection — re-run `app-compliance-ci.yml`, which is path-filtered on `compliance/state/**` precisely so this cannot happen quietly |
 
 Notes for step 5: re-seed at T-60, not earlier in the week — freshly-open alerts make
 the self-healing segment's timestamps read cleanly ("this alert appeared an hour
@@ -100,7 +110,14 @@ the rebuild's actual pace. Talk track, in order:
    the *exact* row count the generators must produce."
 4. **DevSecOps chain as code (10 min):** `codeql.yml`, Dependabot config, Trivy
    gate, ZAP, SBOM workflow, the Defender toggle script with its G2 cost note.
-5. **Watch the board (remainder):** return to Actions periodically; narrate layers
+5. **The compliance platform's source (3 min, optional — plants Segment 8):** open
+   `compliance/` in the editor: `catalog/nist-800-171r2.json` (110 requirements, reference
+   data, asserts nothing about this estate), `assessment/` (nineteen authored records),
+   `lib/MlsCompliance.psm1` (the pure derivation — no file, no clock, no environment) and
+   `state/state-latest.json` (the committed artifact the board renders). One line to land:
+   "The board you'll see later has no backend. It renders that file, and that file is in
+   git." Skip this if the rebuild is running hot — Segment 8 stands on its own.
+6. **Watch the board (remainder):** return to Actions periodically; narrate layers
    going green; when L7 completes, load `launch-ops` and `control-tower` into the
    placeholder tabs and warm them (one request each — absorbs the scale-from-zero
    cold start off the record). When L8 completes, **warm the agent too**: open the Ask
@@ -223,7 +240,110 @@ and it makes the coverage point.
   refuse some findings), say so and lean on Track B plus the rehearsal screenshots. A
   demo that admits an AI declined is more credible than one that never shows the edge.
 
-## Segment 8 — The kill demo + idle-cost view (8 min)
+## Segment 8 — Showpiece #4: the compliance board that isn't green (10 min)
+
+**Stage picture:** a new browser tab, the compliance board (`mls-compliance-demo-ca`).
+You will be asked to sign in — let the audience watch that happen.
+
+This is the segment that answers the question the room actually has to answer to its own
+auditors, and the only one whose punchline is a **bad-looking screen**. Set that up
+before you open it, in one sentence:
+
+> "Showpiece #3 proved we can fix a vulnerability. This one asks a harder question: can
+>  this estate stand up against a standard? I'm going to show you a compliance dashboard
+>  that is mostly not green, and I'd like you to notice that that's the feature."
+
+**1. Open on the honest board (3 min).** Sign in — "that redirect is Container Apps Easy
+Auth. This board is human-facing, but a NIST control-family board is not something to
+leave anonymously reachable, and the app itself has no auth code: it's a static bundle
+behind a platform gate."
+
+Then land the four numbers, in this order:
+
+- **110 requirements** — NIST SP 800-171 Rev 2, every one of them present. "Nothing is
+  omitted. A requirement nobody has said anything about is on this board as
+  `NOT_ASSESSED`, not missing from it."
+- **95 of the 110 are `NOT_ASSESSED`.** Say why plainly: the register covers only the
+  controls a real pre-publication security review raised findings against.
+- **Zero are `COMPLIANT`.** This is the beat. "Not one. And that is not because this
+  estate is badly built — it's because *nothing here has been deployed*. There is no
+  tenant behind this board today. Watch what it says about itself."
+- Point at the collector panel and read the `verification-suite` line **out loud**:
+  *"Nothing in this estate has been deployed, so there are no reports to read."*
+  "The tool told you the most damaging thing about its own data, on its own front page,
+  without being asked."
+
+Then the line that makes the whole segment land:
+
+> "Every compliance product you've been shown this year was demoed against a
+>  purpose-built happy path. If I ran one of those against this estate it would show you
+>  green boxes, because most of them will render a green box for a control nobody ever
+>  checked. This one structurally cannot."
+
+**2. The provenance cross-tab (2 min).** Show *By provenance and status*. Fifteen
+controls carry a status; all fifteen are `asserted`, none `machine-verified`.
+
+- "`asserted` means a human wrote it down and this platform checked nothing. That is a
+  weaker claim, so it gets a different word, in a different column."
+- "The strongest thing a human is allowed to write in our register is `CLOSED` — *no
+  known open finding stands against this control*. That is not the same as *the control
+  is met*, so it derives to `PARTIAL`, never to `COMPLIANT`. `COMPLIANT` is reachable
+  from a machine-checked criterion and nowhere else. That's a property test, not a
+  code-review convention."
+- If someone asks for the percentage — and someone will — this is the strongest answer
+  in the demo: **"There isn't one, deliberately, anywhere in the artifact or the UI. A
+  single number blending fifteen controls a human asserted with ninety-five nobody
+  looked at is the number you'd put in front of an auditor, and it's the number that
+  would be wrong. Counts by status, counts by provenance, and the cross-tab of the two.
+  That's it."**
+
+**3. Drill into a gap (3 min).** Click a `GAP` row — **`3.1.5` (least privilege)** is the
+best one on stage.
+
+- The detail panel shows the derived status, the provenance, the working the derivation
+  returned (`statusBasis`), the authored recommendation *verbatim*, and the evidence
+  references into `compliance/findings/2026-08-26-prepublication-review.md`.
+- "Every one of those citations is a line in a real finding from a real pre-publication
+  security review of this repository — 24 findings, with severity, `file:line` and the
+  attack path. The compliance record doesn't paraphrase it; it points at it, in git."
+- Flip the framework switcher to **CMMC 2.0** for one beat: "Same 110 records,
+  relabelled. CMMC Level 2 *is* 800-171 Rev 2 — an identity mapping, not a crosswalk we
+  invented. The 800-53 mappings ship as Appendix D of 800-171 itself."
+
+**4. Ask the agent about it (1 min).** Switch to the control tower's **Ask** tab and type:
+
+> "What's our status on NIST 3.1.5, and what would close it?"
+
+- The agent calls `query_compliance` — the sixth tool on the same MCP server — and reads
+  back the **authored** recommendation. "It is not writing compliance advice. It is
+  quoting the record. Confident wrong compliance advice is the worst failure mode
+  available to a system like this, so the tool hands the agent authored text and the
+  agent's instructions tell it not to extrapolate."
+- The answer carries the whole estate's counts alongside the one control, so a narrow
+  question never hides the wider picture.
+
+**5. The trend — and what it honestly shows today (1 min).** Open the **Trend** tab.
+
+- **Say what is actually on the screen.** On a fresh estate it reads: *"One collection so
+  far… A trend needs at least two dated collections to compare against each other — this
+  is one collection, no trend yet, not an empty chart and not an error."* Read it out.
+  "Same discipline as the rest of the board: it would rather tell you it has one data
+  point than draw you a line."
+- Then show where the trend *comes from*, which is the part that survives scrutiny:
+  `git log compliance/state/` in the terminal. "Every collection is a committed JSON
+  artifact in this repository. So 'when did we become compliant, and when did we
+  regress' has a `git log` answer, which is not something most GRC tooling can say. Once
+  the nightly job has run twice this tab draws it — and every transition it draws is a
+  commit you can `git show`."
+- Closing beat: "And when this estate *is* deployed, the numbers here move for exactly
+  one reason: the Verifier's audit reports start landing in the repo and the collectors
+  read them. Deploying doesn't make the board greener. Being auditable does."
+
+**If a segment has to be cut for time, this is not the one to cut.** It is the only one
+whose subject is the audience's own compliance obligation, and the only one that gets
+stronger the more sceptical the room is.
+
+## Segment 9 — The kill demo + idle-cost view (8 min)
 
 **Stage picture:** terminal + portal split.
 
@@ -245,7 +365,7 @@ and it makes the coverage point.
 - Final line: "Everything you watched exists as code. Kill it, rebuild it, audit
   it — under an hour, under five dollars a month at rest."
 
-## Segment 9 — Q&A buffer (10 min)
+## Segment 10 — Q&A buffer (10 min)
 
 Likely questions and where the receipts live:
 
@@ -270,10 +390,30 @@ Likely questions and where the receipts live:
 - *"How do I know the agent team didn't rubber-stamp itself?"* → Verifier's
   separate read-only credential (`mls-verifier`), committed audit reports, and the
   two-failure G4 escalation rule.
+- *"So what percentage compliant are you?"* → **there is no such number, on purpose.**
+  Counts by status and by provenance, and the cross-tab of the two. A figure blending
+  fifteen controls a human asserted with ninety-five nobody has looked at is the number
+  you would quote to an auditor and the number that would be wrong. CI greps the emitted
+  bytes for a score-shaped field and fails the run if one appears
+  (`.github/workflows/compliance.yml`).
+- *"Are you claiming this estate is 800-171 compliant?"* → no, and the board will not let
+  us. Zero controls are `COMPLIANT`, nothing has been deployed, and the strongest word in
+  our register — `CLOSED` — means only *no known open finding stands against this
+  control*, which derives to `PARTIAL`. `compliance/README.md` § **Register vocabulary**
+  is the written contract for that distinction.
+- *"Where did the gaps come from — are they made up?"* → a real pre-publication security
+  review of this repository: 24 findings with severity, confidence, `file:line`, attack
+  path and fix, in `compliance/findings/2026-08-26-prepublication-review.md`. Sixteen of
+  the nineteen register records now assert `CLOSED`; three are still open, and they are
+  the three `GAP` rows on the board.
+- *"Could I run this against my own estate?"* → the collectors are pluggable and the
+  catalog is reference data, so yes in shape — but read `L12.md` first: it states which
+  leg of its deploy/teardown/audit triplet is missing (there is no
+  `verification/layer-12-audit.ps1` yet), rather than letting you find out later.
 
 ---
 
-## Variant B — condensed (~50 min, no live rebuild)
+## Variant B — condensed (~60 min, no live rebuild)
 
 For short slots: run `up.ps1` before the audience arrives (T-90), verify audits
 green, and replace Segments 2–4 with a 7-minute walkthrough of the committed
@@ -281,12 +421,18 @@ green, and replace Segments 2–4 with a 7-minute walkthrough of the committed
 live wait. Cold open still works: show the *proof report's* down-state audit
 instead of a live empty subscription, or open on the built environment and lead
 with the kill demo, rebuilding after the audience leaves. Segment budget: cold
-open/proof 7, copilot 10, control tower 10, self-heal 10, kill + idle cost 8, Q&A
-5. The full-proof Variant A is the stronger show whenever the slot allows — the
-rebuild wait, narrated well, is the credibility.
+open/proof 7, copilot 10, control tower 10, self-heal 10, compliance 10, kill + idle
+cost 8, Q&A 5. The full-proof Variant A is the stronger show whenever the slot allows —
+the rebuild wait, narrated well, is the credibility.
 
 Two Variant-B-specific notes since the amendment: (a) warm the agent during the T-90
 setup, not on stage — the Ask tab's first question after a rebuild is the slowest of the
 day; (b) arm the self-heal chain at T-90 too, because Autofix generation is asynchronous
 and a condensed slot has no shock absorber to wait in. If the chain has not completed by
 showtime, run Segment 7 off the rehearsal trail and say so.
+
+A third note since 2026-08-26: **Segment 8 is the cheapest segment to run in Variant B**
+and the one to protect if the slot shrinks further. It needs no rebuild, no warm-up and
+no asynchronous chain — the board renders an artifact that was baked into its image at
+build time, so it is as fast on a cold estate as on a warm one. If the slot cannot fit
+both, cut Segment 6 (control tower) to five minutes rather than cutting this.

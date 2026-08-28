@@ -9,8 +9,12 @@
  * A pass means: this answer is reachable through the MCP tool surface. Pass bar
  * 10/10 — there is no model in this loop and therefore no excuse.
  *
- * It also asserts the surface itself: tools/list returns exactly five tools
- * (audit V8.2), and every one of the five answers a smoke call.
+ * It also asserts the surface itself: tools/list returns exactly the allowlist
+ * (audit V8.2), and every tool on it answers a smoke call. The expected set is
+ * ALLOWED_TOOL_NAMES itself, never a hardcoded count -- a literal `5` here went
+ * red the moment the compliance platform added a sixth tool (query_compliance,
+ * 2026-08-26) and made this whole workflow fail for a reason that had nothing to
+ * do with the tool surface being wrong.
  *
  * What it deliberately does NOT measure: whether the deployed Copilot Studio
  * agent picks the right tool and renders the right Adaptive Card. That is
@@ -45,6 +49,7 @@ const SURFACE_CALLS: Array<{ tool: string; arguments: Record<string, unknown> }>
   { tool: "get_github_security", arguments: { alert_type: "all" } },
   { tool: "get_defender_posture", arguments: {} },
   { tool: "get_cost_series", arguments: { cost_center: "Propulsion" } },
+  { tool: "query_compliance", arguments: { control: "3.1.1" } },
 ];
 
 interface McpCallOutcome {
@@ -96,12 +101,25 @@ async function main(): Promise<void> {
   /* ---- the tool surface itself (audit V8.2) ---- */
   const listed = (await client.listTools()).tools.map((t) => t.name).sort();
   const surfaceErrors: string[] = [];
-  if (listed.length !== 5) {
-    surfaceErrors.push(`tools/list returned ${listed.length} tools, expected exactly 5`);
-  }
+  const expected = [...(ALLOWED_TOOL_NAMES as readonly string[])].sort();
+  // Set equality against the allowlist, in both directions: an extra tool is a
+  // governance failure, and a MISSING one is a regression that a bare "no tool off
+  // the allowlist" check would wave through.
   for (const name of listed) {
-    if (!(ALLOWED_TOOL_NAMES as readonly string[]).includes(name)) {
+    if (!expected.includes(name)) {
       surfaceErrors.push(`tools/list advertises a tool off the allowlist: ${name}`);
+    }
+  }
+  for (const name of expected) {
+    if (!listed.includes(name)) {
+      surfaceErrors.push(`tools/list is missing an allowlisted tool: ${name}`);
+    }
+  }
+  // Every allowlisted tool must also get a smoke call, or a tool could be added and
+  // silently never exercised here.
+  for (const name of expected) {
+    if (!SURFACE_CALLS.some((c) => c.tool === name)) {
+      surfaceErrors.push(`no surface smoke call is defined for allowlisted tool: ${name}`);
     }
   }
   const surface = [];

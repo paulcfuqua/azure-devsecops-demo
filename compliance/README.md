@@ -3,8 +3,21 @@
 Durable records for the self-auditing multi-framework compliance platform described in
 [docs/superpowers/specs/2026-08-26-compliance-platform-design.md](../docs/superpowers/specs/2026-08-26-compliance-platform-design.md).
 That spec defines the full system (catalog, collectors, state, the `apps/compliance`
-board, the `query_compliance` MCP tool); this directory is populated incrementally as the
-follow-on implementation plan proceeds.
+board, the `query_compliance` MCP tool). **All of it now exists**: the follow-on
+implementation plan completed on 2026-08-28, and its layer playbook is
+[`docs/runbooks/layers/L12.md`](../docs/runbooks/layers/L12.md) — which also states, in
+its Teardown section, the one leg of the layer's triplet that is still missing (there is
+no `verification/layer-12-audit.ps1`).
+
+This directory holds the collection half. The rendering half is `apps/compliance` (a
+static board behind Container Apps Easy Auth) and the query half is `query_compliance`,
+the sixth tool on `apps/mcp-tools` — both read the artifact emitted here, and neither
+holds a second copy of the logic.
+
+**What the board says on this estate, today: 0 COMPLIANT, 12 PARTIAL, 3 GAP, 0
+INCONCLUSIVE, 0 NOT_APPLICABLE, 95 NOT_ASSESSED of 110**, plus the 4 out-of-catalog rows
+described below. Nothing here has ever been deployed, so nothing could have been
+observed; a green board at this point would mean the platform had invented a claim.
 
 ## What exists today
 
