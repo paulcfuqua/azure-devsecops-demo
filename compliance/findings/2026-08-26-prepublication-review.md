@@ -1130,23 +1130,34 @@ infra/policy/tests` could not even dot-source them) and all pass after. Each
 script's three load-bearing behaviours — the CI refusal, the teardown order, and
 the `-WhatIf` no-mutate guarantee — were mutation-tested individually by neutering
 exactly that one behaviour, confirming the corresponding test (and only that test)
-went red, then restoring the file: 9 mutations total, each isolated to the single
-assertion it targeted. One mutation was not single-point by construction:
-`infra/entra/teardown.ps1` gates every delete through **two** independent
-`ShouldProcess` calls (the `Remove-EntraUser`/`Remove-EntraGroup`/
-`Remove-EntraApplication`/`Remove-CaPolicy` wrapper functions each have their own,
-on top of `Invoke-GraphMutation`'s), so neutering either layer alone left the
-`-WhatIf` no-mutate test green — both layers had to be neutered together before it
-went red. That is disclosed here rather than treated as a clean single-point
-result: the redundancy is deliberate defence-in-depth (it is also what satisfies
-PSScriptAnalyzer's `PSUseShouldProcessForStateChangingFunctions` rule on each
-`Remove-*` wrapper, which has a state-changing verb), but it means a single-point
-regression in just one of the two layers would not be caught by this test suite
-alone — a genuine residual gap, named rather than hidden. PSScriptAnalyzer reports
-zero findings at Error or Warning severity on all three new scripts. Full local
-suite (`Invoke-Pester -Path scripts,infra,data,verification,compliance`): 798
-passed, 0 failed, up from the 769/0 baseline entering this task (the 29-test delta
-matches the three new test files exactly).
+went red, then restoring the file.
+
+An earlier pass of this entry disclosed a residual gap here and justified it
+wrongly; both halves are now resolved rather than merely re-worded.
+`infra/entra/teardown.ps1` used to gate every delete through **two** independent
+`ShouldProcess` calls — one in each `Remove-*` wrapper, on top of
+`Invoke-GraphMutation`'s — so neutering either layer alone left the `-WhatIf`
+no-mutate test green and neither layer was actually covered. The stated reason for
+keeping the redundancy was that the wrapper's `ShouldProcess` **call** is what
+satisfies PSScriptAnalyzer's `PSUseShouldProcessForStateChangingFunctions` rule on
+a state-changing verb. **That was false.** The rule is satisfied by *declaring*
+`SupportsShouldProcess` and delegating to a command that supports it — demonstrated
+by `infra/policy/teardown.ps1`'s own `Remove-PolicyAssignment`,
+`Remove-SubscriptionFromManagementGroup` and `Remove-ManagementGroup`, which
+declare but never call, delegate to `Invoke-AzMutation`, and score zero findings.
+The wrapper-level calls were therefore removed at no analyzer cost, restoring
+single-point mutation detection.
+
+Two mutations that previously escaped the suite now fail it: neutering one
+`ShouldProcess` layer alone (35/0 → 34 passed, 1 failed), and dropping the
+`displayName` filter from a lookup so it resolves an arbitrary tenant object
+(35/0 → 26 passed, 9 failed). The second closes the more serious gap: the suite
+formerly asserted only how *many* objects were deleted, never *which*, which for
+scripts whose entire safety argument is "only what the manifest names" was the
+test class that mattered most. PSScriptAnalyzer reports zero findings at Error or
+Warning severity on all three new scripts **and all three new test files**. Full
+local suite (`Invoke-Pester -Path scripts,infra,data,verification,compliance`):
+817 passed, 0 failed, up from the 769/0 baseline entering this task.
 
 **Stale-claim sweep after the fix:** `docs/runbooks/kill-rebuild.md` § 7 step 1's
 `[derived name, per L04]` marker — the one the brief for this task singled out as

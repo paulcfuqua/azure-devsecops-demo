@@ -132,6 +132,94 @@ Describe 'infra/entra/teardown.ps1' {
             $userDeletes = @($script:DeleteLog | Where-Object { $_ -like 'users/*' })
             $userDeletes.Count | Should -Be $script:UserCount
         }
+
+        It 'deletes the exact object matching each manifest entry''s identity, not merely the right COUNT' {
+            # The missing test class the review named directly: a lookup that
+            # returns an arbitrary object of the right count is indistinguishable
+            # from correct unless something asserts which specific id was deleted
+            # for which specific manifest entry.
+            Invoke-TeardownForTest | Out-Null
+            $manifest = Get-FreshManifest
+            foreach ($policy in $manifest.conditionalAccessPolicies) {
+                $expected = "identity/conditionalAccess/policies/cid-$($policy.displayName)"
+                ($script:DeleteLog -contains $expected) | Should -BeTrue -Because "CA policy '$($policy.displayName)' should be deleted by its own id"
+            }
+            foreach ($app in $manifest.appRegistrations) {
+                $expected = "applications/aid-$($app.displayName)"
+                ($script:DeleteLog -contains $expected) | Should -BeTrue -Because "app registration '$($app.displayName)' should be deleted by its own id"
+            }
+            foreach ($group in $manifest.groups) {
+                $expected = "groups/gid-$($group.displayName)"
+                ($script:DeleteLog -contains $expected) | Should -BeTrue -Because "group '$($group.displayName)' should be deleted by its own id"
+            }
+            foreach ($user in $manifest.users) {
+                $expected = "users/uid-$($user.userPrincipalNamePrefix)"
+                ($script:DeleteLog -contains $expected) | Should -BeTrue -Because "user '$($user.userPrincipalNamePrefix)' should be deleted by its own id"
+            }
+        }
+    }
+
+    Context 'ambiguous display name - refuses rather than deleting an arbitrary match (Important 5)' {
+        It 'Get-CaPolicy throws when two tenant CA policies share the manifest''s displayName' {
+            $decoyName = (Get-FreshManifest).conditionalAccessPolicies[0].displayName
+            $script:ExistingCaPolicies += @{ id = 'cid-decoy-real-tenant-object'; displayName = $decoyName }
+            { Invoke-TeardownForTest } | Should -Throw "*Ambiguous CA policy display name*"
+            Should -Invoke Invoke-GraphApi -Exactly -Times 0 -ParameterFilter { $Method -eq 'DELETE' }
+        }
+
+        It 'Get-EntraGroup throws when two tenant groups share the manifest''s displayName' {
+            $decoyName = (Get-FreshManifest).groups[0].displayName
+            $script:ExistingGroups[$decoyName] = @(
+                @{ id = "gid-$decoyName"; displayName = $decoyName },
+                @{ id = 'gid-decoy-real-tenant-object'; displayName = $decoyName }
+            )
+            { Invoke-TeardownForTest } | Should -Throw "*Ambiguous group display name*"
+        }
+
+        It 'Get-EntraApplication throws when two tenant app registrations share the manifest''s displayName' {
+            $decoyName = (Get-FreshManifest).appRegistrations[0].displayName
+            $script:ExistingApps[$decoyName] = @(
+                @{ id = "aid-$decoyName"; displayName = $decoyName },
+                @{ id = 'aid-decoy-real-tenant-object'; displayName = $decoyName }
+            )
+            { Invoke-TeardownForTest } | Should -Throw "*Ambiguous app registration display name*"
+        }
+    }
+
+    Context 'confirmation (Critical 1 / Important 6)' {
+        It 'Invoke-GraphMutation - the only function that actually calls ShouldProcess - declares ConfirmImpact High' {
+            # ConfirmImpact does not propagate from a caller to a callee: declaring
+            # it only on Invoke-Main (which never calls ShouldProcess itself) left
+            # every destructive call running with no confirmation prompt at all
+            # under the default $ConfirmPreference of 'High'. This is a
+            # metadata/reflection assertion rather than a live-prompt test, because
+            # actually triggering $Host.UI's confirmation prompt in a
+            # non-interactive Pester run would hang or error rather than
+            # demonstrate anything.
+            $attribute = (Get-Item Function:\Invoke-GraphMutation).ScriptBlock.Attributes |
+                Where-Object { $_ -is [System.Management.Automation.CmdletBindingAttribute] }
+            $attribute | Should -Not -BeNullOrEmpty
+            $attribute.SupportsShouldProcess | Should -BeTrue
+            $attribute.ConfirmImpact | Should -Be 'High'
+        }
+
+        It 'Invoke-GraphMutation actually calls $PSCmdlet.ShouldProcess in its body, not merely declaring the attribute' {
+            $source = Get-Content -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'teardown.ps1') -Raw
+            $source | Should -Match '(?s)function Invoke-GraphMutation \{.*?\$PSCmdlet\.ShouldProcess\('
+        }
+
+        It 'none of the four Remove-* wrapper functions calls ShouldProcess itself - confirmation is delegated entirely to Invoke-GraphMutation' {
+            # Guards against reintroducing the redundant second gate an earlier
+            # revision had: each wrapper declared AND called its own ShouldProcess
+            # on top of Invoke-GraphMutation's, which meant neutering either layer
+            # alone left the -WhatIf no-mutate test green - a false sense of
+            # coverage (F23 review, Important 6).
+            $source = Get-Content -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'teardown.ps1') -Raw
+            foreach ($functionName in @('Remove-CaPolicy', 'Remove-EntraApplication', 'Remove-EntraGroup', 'Remove-EntraUser')) {
+                $body = [regex]::Match($source, "(?sm)^function $functionName \{.*?^\}").Value
+                $body | Should -Not -Match '\$PSCmdlet\.ShouldProcess\(' -Because "$functionName should delegate to Invoke-GraphMutation, not gate itself"
+            }
+        }
     }
 
     Context 'empty tenant - idempotent replay' {

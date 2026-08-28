@@ -138,9 +138,13 @@ function Remove-SensitivityLabel {
         real delete or a -WhatIf dry run is read from $WhatIfPreference at the
         Invoke-Main call site, the same reason apply-entra's teardown counterpart
         does - Remove-Label returns nothing useful to tell a real delete from a
-        ShouldProcess decline.
+        ShouldProcess decline. ConfirmImpact is 'High' HERE, on the function that
+        actually calls ShouldProcess - ConfirmImpact does not propagate from a
+        caller to a callee, so declaring it only on Invoke-Main (as an earlier
+        revision did) never triggered the default $ConfirmPreference of 'High'
+        (F23 review, Critical 1).
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param([Parameter(Mandatory)][string]$Name)
     $existing = Get-ExistingLabel -Name $Name
     if (-not $existing) {
@@ -155,9 +159,10 @@ function Remove-SensitivityLabel {
 }
 
 function Remove-PublishedLabelPolicy {
-    <# Delete-if-present the label policy. Returns @{ Name; Existed }. Same shape as
-       Remove-SensitivityLabel. #>
-    [CmdletBinding(SupportsShouldProcess)]
+    <# Delete-if-present the label policy. Returns @{ Name; Existed }. Same shape
+       as Remove-SensitivityLabel, including ConfirmImpact 'High' on this function
+       itself rather than on Invoke-Main - see Remove-SensitivityLabel's note. #>
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param([Parameter(Mandatory)][string]$Name)
     $existing = Get-ExistingLabelPolicy -Name $Name
     if (-not $existing) {

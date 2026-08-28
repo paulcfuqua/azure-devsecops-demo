@@ -152,7 +152,7 @@ this is ever run by the standard cycle.**
 
 Teardown order (reverse-dependency):
 
-1. `infra/purview/teardown.ps1` (F23, Task 25) — label policy, then the 4
+1. `infra/purview/teardown.ps1` — label policy, then the 4
    labels. Consequence: recreated labels get **new GUIDs**;
    `verification/reports/label-guids.json` must be re-baselined in the PR that
    records the G3 approval.

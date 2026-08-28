@@ -111,26 +111,57 @@ function Write-G3Banner {
 # --- az CLI plumbing (same contract as scripts/bootstrap/02-fabric-capacity.ps1) --------
 
 function Invoke-AzCli {
-    <# Single choke point for every `az` call (mocked in tests). Checks
-       $LASTEXITCODE explicitly - pwsh does not throw on a failed native command by
-       default ($PSNativeCommandUseErrorActionPreference is $false). #>
+    <#
+    .SYNOPSIS
+        Single choke point for every `az` call (mocked in tests).
+    .DESCRIPTION
+        Checks $LASTEXITCODE explicitly - pwsh does not throw on a failed native
+        command by default ($PSNativeCommandUseErrorActionPreference is $false).
+
+        -AllowNotFound swallows a failure ONLY when stderr's text looks like "the
+        object does not exist" (the same message-matching -AllowNotFound already
+        uses in infra/entra/teardown.ps1's Invoke-GraphApi). A failure that does
+        NOT look like that - an expired token, throttling, a transient network
+        error, insufficient RBAC - still throws even with -AllowNotFound passed.
+        Treating every nonzero exit as "already absent" (an earlier revision's
+        plain -AllowFailure did exactly that) is F23's own failure mode one layer
+        down: an operator told an object is gone when the call to check it simply
+        failed (F23 review, Important 4).
+    #>
     param(
         [Parameter(Mandatory)][string[]]$Arguments,
-        [switch]$AllowFailure
+        [switch]$AllowNotFound
     )
-    $raw = & az @Arguments 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        if ($AllowFailure) { return $null }
-        throw "az $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $raw = & az @Arguments 2>$stderrPath
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            $errorText = (Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue)
+            if ($AllowNotFound -and $errorText -match '(?i)not\s*found|does not exist|could not be found|no such|ResourceNotFound') {
+                return $null
+            }
+            throw "az $($Arguments -join ' ') failed with exit code ${exitCode}: $errorText"
+        }
+        $text = ($raw | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+        return $text | ConvertFrom-Json
     }
-    $text = ($raw | Out-String).Trim()
-    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
-    return $text | ConvertFrom-Json
+    finally {
+        Remove-Item -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+    }
 }
 
 function Invoke-AzMutation {
-    <# Every mutating `az` call flows through here so -WhatIf gates all writes. #>
-    [CmdletBinding(SupportsShouldProcess)]
+    <#
+        Every mutating `az` call flows through here so -WhatIf gates all writes.
+        ConfirmImpact is 'High' HERE (the function that actually calls
+        ShouldProcess), not on Invoke-Main: ConfirmImpact does not propagate from
+        caller to callee, so declaring it only on Invoke-Main (as an earlier
+        revision did) never triggered the default $ConfirmPreference of 'High'
+        (F23 review, Critical 1).
+    #>
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
         [Parameter(Mandatory)][string]$Target,
         [Parameter(Mandatory)][string]$Action,
@@ -198,7 +229,7 @@ function Get-SubscriptionScope {
 
 function Get-ExistingPolicyAssignment {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Scope)
-    return Invoke-AzCli -AllowFailure -Arguments @('policy', 'assignment', 'show', '--name', $Name, '--scope', $Scope)
+    return Invoke-AzCli -AllowNotFound -Arguments @('policy', 'assignment', 'show', '--name', $Name, '--scope', $Scope)
 }
 
 function Remove-PolicyAssignment {
@@ -225,18 +256,46 @@ function Remove-PolicyAssignment {
 }
 
 function Get-ManagementGroupSubscriptionId {
-    <# Subscription IDs placed directly under the management group. Separated from
-       the removal step so the "is it even placed here" question is answerable
-       without attempting a mutation. #>
+    <#
+    .SYNOPSIS
+        Subscription IDs placed directly under the management group.
+    .DESCRIPTION
+        Separated from the removal step so the "is it even placed here" question
+        is answerable without attempting a mutation.
+
+        Defensive against every null-children shape `az account management-group
+        show --expand` returns for a management group with no children: the
+        `children` key absent entirely, present with a JSON `null` value, or (for a
+        management group that DOES have children) an individual child missing its
+        own `type`/`name` property. Under this script's own Set-StrictMode
+        -Version Latest, a bare `$_.type`/`$_.name` reference throws when the
+        property genuinely does not exist on the object, and `@($null)` produces a
+        one-element array containing `$null` rather than an empty array - either
+        one previously made the SECOND teardown run (or any run after the
+        subscription was already moved) die with an opaque error instead of the
+        documented "nothing to move" no-op (F23 review, Critical 3). Every access
+        below goes through PSObject.Properties rather than a bare dot reference,
+        and a $null child is skipped outright.
+    #>
     param([Parameter(Mandatory)][string]$Name)
-    $mg = Invoke-AzCli -AllowFailure -Arguments @('account', 'management-group', 'show', '--name', $Name, '--expand')
+    $mg = Invoke-AzCli -AllowNotFound -Arguments @('account', 'management-group', 'show', '--name', $Name, '--expand')
     if (-not $mg) { return @() }
-    $children = @($mg.children)
-    return @(
-        $children |
-            Where-Object { "$($_.type)" -like '*managementGroups/subscriptions' } |
-            ForEach-Object { $_.name }
-    )
+
+    $childrenProperty = $mg.PSObject.Properties['children']
+    $children = @()
+    if ($childrenProperty -and $null -ne $childrenProperty.Value) {
+        $children = @($childrenProperty.Value)
+    }
+
+    $subscriptionIds = foreach ($child in $children) {
+        if ($null -eq $child) { continue }
+        $typeProperty = $child.PSObject.Properties['type']
+        if (-not $typeProperty) { continue }
+        if ("$($typeProperty.Value)" -notlike '*managementGroups/subscriptions') { continue }
+        $nameProperty = $child.PSObject.Properties['name']
+        if ($nameProperty) { $nameProperty.Value }
+    }
+    return @($subscriptionIds)
 }
 
 function Remove-SubscriptionFromManagementGroup {
@@ -256,7 +315,7 @@ function Remove-SubscriptionFromManagementGroup {
 
 function Get-ExistingManagementGroup {
     param([Parameter(Mandatory)][string]$Name)
-    return Invoke-AzCli -AllowFailure -Arguments @('account', 'management-group', 'show', '--name', $Name)
+    return Invoke-AzCli -AllowNotFound -Arguments @('account', 'management-group', 'show', '--name', $Name)
 }
 
 function Remove-ManagementGroup {

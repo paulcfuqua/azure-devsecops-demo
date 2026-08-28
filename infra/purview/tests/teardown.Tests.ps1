@@ -165,4 +165,32 @@ Describe 'infra/purview/teardown.ps1' {
             Should -Invoke Remove-LabelPolicy -Exactly -Times 0
         }
     }
+
+    Context 'confirmation (Critical 1)' {
+        It 'Remove-SensitivityLabel and Remove-PublishedLabelPolicy - the only functions that actually call ShouldProcess - declare ConfirmImpact High' {
+            # ConfirmImpact does not propagate from a caller to a callee: declaring
+            # it only on Invoke-Main (which never calls ShouldProcess itself) left
+            # every destructive call running with no confirmation prompt at all
+            # under the default $ConfirmPreference of 'High'. This is a
+            # metadata/reflection assertion rather than a live-prompt test, because
+            # actually triggering $Host.UI's confirmation prompt in a
+            # non-interactive Pester run would hang or error rather than
+            # demonstrate anything.
+            foreach ($functionName in @('Remove-SensitivityLabel', 'Remove-PublishedLabelPolicy')) {
+                $attribute = (Get-Item "Function:\$functionName").ScriptBlock.Attributes |
+                    Where-Object { $_ -is [System.Management.Automation.CmdletBindingAttribute] }
+                $attribute | Should -Not -BeNullOrEmpty -Because "$functionName should declare CmdletBinding"
+                $attribute.SupportsShouldProcess | Should -BeTrue -Because "$functionName should support ShouldProcess"
+                $attribute.ConfirmImpact | Should -Be 'High' -Because "$functionName is the function that actually calls ShouldProcess"
+            }
+        }
+
+        It 'Remove-SensitivityLabel and Remove-PublishedLabelPolicy actually call $PSCmdlet.ShouldProcess in their bodies' {
+            $source = Get-Content -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'teardown.ps1') -Raw
+            foreach ($functionName in @('Remove-SensitivityLabel', 'Remove-PublishedLabelPolicy')) {
+                $body = [regex]::Match($source, "(?sm)^function $functionName \{.*?^\}").Value
+                $body | Should -Match '\$PSCmdlet\.ShouldProcess\(' -Because "$functionName must actually call ShouldProcess, not merely declare it"
+            }
+        }
+    }
 }

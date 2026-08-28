@@ -136,8 +136,15 @@ function Invoke-GraphApi {
 }
 
 function Invoke-GraphMutation {
-    <# Every mutating Graph call flows through here so -WhatIf gates all writes. #>
-    [CmdletBinding(SupportsShouldProcess)]
+    <#
+        Every mutating Graph call flows through here so -WhatIf gates all writes.
+        ConfirmImpact is 'High' HERE (the function that actually calls
+        ShouldProcess), not on Invoke-Main: ConfirmImpact does not propagate from
+        caller to callee, so declaring it only on Invoke-Main (as the original draft
+        did) meant the default $ConfirmPreference of 'High' never triggered a prompt
+        anywhere in the call chain (F23 review, Critical 1).
+    #>
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
         [Parameter(Mandatory)][string]$Target,
         [Parameter(Mandatory)][string]$Action,
@@ -205,27 +212,48 @@ function Get-EntraUser {
 }
 
 function Get-EntraGroup {
+    <#
+        Refuses on an ambiguous match (Count -gt 1) rather than deleting whichever
+        object Graph happens to return first. apply-entra.ps1's identical
+        first-match-wins read is safe there because it only ever decides
+        "don''t recreate" - reversed into a delete, first-match-wins would delete an
+        arbitrary real-tenant object sharing a manifest display name, with no
+        warning (F23 review, Important 5).
+    #>
     param([Parameter(Mandatory)][string]$DisplayName)
     $literal = ConvertTo-ODataLiteral -Value $DisplayName
     $response = Invoke-GraphApi -Method GET -Path "groups?`$filter=displayName eq '$literal'&`$select=id,displayName"
     $found = @(Get-ResponseValue -Response $response)
+    if ($found.Count -gt 1) {
+        throw "Ambiguous group display name '$DisplayName': $($found.Count) tenant objects share it. Refusing to delete an arbitrary match - resolve the duplicate by object ID before re-running this teardown."
+    }
     if ($found.Count -ge 1) { return $found[0] }
     return $null
 }
 
 function Get-EntraApplication {
+    <# Refuses on an ambiguous match - see Get-EntraGroup's note (F23 review,
+       Important 5). #>
     param([Parameter(Mandatory)][string]$DisplayName)
     $literal = ConvertTo-ODataLiteral -Value $DisplayName
     $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName"
     $found = @(Get-ResponseValue -Response $response)
+    if ($found.Count -gt 1) {
+        throw "Ambiguous app registration display name '$DisplayName': $($found.Count) tenant objects share it. Refusing to delete an arbitrary match - resolve the duplicate by object ID before re-running this teardown."
+    }
     if ($found.Count -ge 1) { return $found[0] }
     return $null
 }
 
 function Get-CaPolicy {
+    <# Refuses on an ambiguous match - see Get-EntraGroup's note (F23 review,
+       Important 5). #>
     param([Parameter(Mandatory)][string]$DisplayName)
     $response = Invoke-GraphApi -Method GET -Path 'identity/conditionalAccess/policies'
     $found = @(Get-ResponseValue -Response $response | Where-Object { (Get-Field -Object $_ -Name 'displayName') -eq $DisplayName })
+    if ($found.Count -gt 1) {
+        throw "Ambiguous CA policy display name '$DisplayName': $($found.Count) tenant objects share it. Refusing to delete an arbitrary match - resolve the duplicate by object ID before re-running this teardown."
+    }
     if ($found.Count -ge 1) { return $found[0] }
     return $null
 }
@@ -241,10 +269,18 @@ function Remove-CaPolicy {
         attempt was a real delete or a -WhatIf dry run is read from $WhatIfPreference
         at the Invoke-Main call site, because a successful DELETE and a ShouldProcess
         decline both return $null from Invoke-GraphMutation - there is no object body
-        to tell them apart the way a POST's created-resource response can. This
-        function's own ShouldProcess is what satisfies PSUseShouldProcessForState-
-        ChangingFunctions (it has a "Remove" verb); Invoke-GraphMutation's nested one
-        is what actually stops the Graph call from firing under -WhatIf.
+        to tell them apart the way a POST's created-resource response can.
+
+        This wrapper declares SupportsShouldProcess (satisfying PSScriptAnalyzer's
+        PSUseShouldProcessForStateChangingFunctions on a "Remove" verb) but does NOT
+        call $PSCmdlet.ShouldProcess itself - Invoke-GraphMutation is the single,
+        sole place that gate is evaluated. A prior revision called ShouldProcess
+        here too, "to satisfy the analyzer rule"; that justification was wrong
+        (infra/policy/teardown.ps1's Remove-PolicyAssignment already proved the
+        declare-but-never-call shape alone satisfies the rule) and the redundant
+        second gate made every -WhatIf mutation test in this file pass even when
+        EITHER layer alone was neutered - a false sense of coverage, not a safety
+        feature (F23 review, Important 6).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)]$Policy)
@@ -255,15 +291,16 @@ function Remove-CaPolicy {
         return @{ DisplayName = $displayName; Existed = $false }
     }
     $id = Get-Field -Object $existing -Name 'id'
-    if ($PSCmdlet.ShouldProcess($displayName, 'Delete CA policy')) {
-        Invoke-GraphMutation -Target $displayName -Action 'Delete CA policy' `
-            -Method DELETE -Path "identity/conditionalAccess/policies/$id" | Out-Null
-    }
+    Invoke-GraphMutation -Target $displayName -Action 'Delete CA policy' `
+        -Method DELETE -Path "identity/conditionalAccess/policies/$id" | Out-Null
     return @{ DisplayName = $displayName; Existed = $true }
 }
 
 function Remove-EntraApplication {
-    <# Delete one manifest app registration if it exists. Returns @{ DisplayName; Existed }. #>
+    <# Delete one manifest app registration if it exists. Returns @{ DisplayName;
+       Existed }. SupportsShouldProcess is declared for PSScriptAnalyzer only;
+       Invoke-GraphMutation is the sole ShouldProcess call site (see
+       Remove-CaPolicy's note). #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)]$App)
     $displayName = Get-Field -Object $App -Name 'displayName'
@@ -273,15 +310,16 @@ function Remove-EntraApplication {
         return @{ DisplayName = $displayName; Existed = $false }
     }
     $id = Get-Field -Object $existing -Name 'id'
-    if ($PSCmdlet.ShouldProcess($displayName, 'Delete app registration')) {
-        Invoke-GraphMutation -Target $displayName -Action 'Delete app registration' `
-            -Method DELETE -Path "applications/$id" | Out-Null
-    }
+    Invoke-GraphMutation -Target $displayName -Action 'Delete app registration' `
+        -Method DELETE -Path "applications/$id" | Out-Null
     return @{ DisplayName = $displayName; Existed = $true }
 }
 
 function Remove-EntraGroup {
-    <# Delete one manifest group if it exists. Returns @{ DisplayName; Existed }. #>
+    <# Delete one manifest group if it exists. Returns @{ DisplayName; Existed }.
+       SupportsShouldProcess is declared for PSScriptAnalyzer only;
+       Invoke-GraphMutation is the sole ShouldProcess call site (see
+       Remove-CaPolicy's note). #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)]$Group)
     $displayName = Get-Field -Object $Group -Name 'displayName'
@@ -291,15 +329,16 @@ function Remove-EntraGroup {
         return @{ DisplayName = $displayName; Existed = $false }
     }
     $id = Get-Field -Object $existing -Name 'id'
-    if ($PSCmdlet.ShouldProcess($displayName, 'Delete group')) {
-        Invoke-GraphMutation -Target $displayName -Action 'Delete group' `
-            -Method DELETE -Path "groups/$id" | Out-Null
-    }
+    Invoke-GraphMutation -Target $displayName -Action 'Delete group' `
+        -Method DELETE -Path "groups/$id" | Out-Null
     return @{ DisplayName = $displayName; Existed = $true }
 }
 
 function Remove-EntraUser {
-    <# Delete one manifest user if it exists. Returns @{ Upn; Existed }. #>
+    <# Delete one manifest user if it exists. Returns @{ Upn; Existed }.
+       SupportsShouldProcess is declared for PSScriptAnalyzer only;
+       Invoke-GraphMutation is the sole ShouldProcess call site (see
+       Remove-CaPolicy's note). #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)]$User,
@@ -312,9 +351,7 @@ function Remove-EntraUser {
         return @{ Upn = $upn; Existed = $false }
     }
     $id = Get-Field -Object $existing -Name 'id'
-    if ($PSCmdlet.ShouldProcess($upn, 'Delete user')) {
-        Invoke-GraphMutation -Target $upn -Action 'Delete user' -Method DELETE -Path "users/$id" | Out-Null
-    }
+    Invoke-GraphMutation -Target $upn -Action 'Delete user' -Method DELETE -Path "users/$id" | Out-Null
     return @{ Upn = $upn; Existed = $true }
 }
 
