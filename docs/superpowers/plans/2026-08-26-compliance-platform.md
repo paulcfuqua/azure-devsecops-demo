@@ -19,7 +19,7 @@
 - **An authored assertion may never render as `machine-verified`.** Enforced as a property test in Task 3, not by review discipline. This is the single rule the platform exists to keep.
 - **No single "% compliant" headline figure.** Counts by status *and* provenance only. A blended percentage is the number an adopter would quote to their auditor and the number that would be wrong.
 - **Conventional commits:** `feat:`, `fix:`, `infra:`, `docs:`, `verify:`.
-- **Gate every change on:** Pester (605+), PSScriptAnalyzer 0 at Error/Warning, `npm test` exit 0, pytest 30, `az bicep build` on all Bicep artifacts, `actionlint` clean.
+- **Gate every change on:** Pester (**848 at this plan's start** — raise it, never lower it), PSScriptAnalyzer 0 at Error/Warning, `npm test` exit 0 (868), pytest 30, `az bicep build` on all Bicep artifacts, `actionlint` clean **run bare, the way `lint-ci.yml` runs it** — verifying with `-shellcheck=` disables the check that most recently went red.
 - **Naming:** `mls-<app|role>-<env>-<type>` — the app is `mls-compliance-demo-ca`. Prefix comes from `infra/bicep/naming.bicep`; never hardcode `mls`.
 - **Framework identifiers**, used verbatim as JSON keys everywhere: `nist-800-171r2`, `nist-800-53r5`, `cmmc-2.0`, `far-52.204-21`.
 
