@@ -10,7 +10,25 @@ name: sbom
 #   * release published      -> the same SBOMs are ALSO attached as release assets
 #
 # Syft is version-pinned (L09 failure mode 4: pin the generator and the validator
-# together, and upgrade both deliberately in one PR).
+# together, and upgrade both deliberately in one PR), and anchore/sbom-action is
+# SHA-pinned rather than floating on @v0 (F33).
+#
+# ---------------------------------------------------------------------------
+# WHY TWO JOBS (F30)
+#
+# `generate` runs the code. `attach` holds `contents: write`. This is the rule
+# compliance.yml documents in its own "WHY TWO JOBS" block and this workflow
+# used to break: one job held `contents: write` AND ran `npm ci` plus
+# `npm ci --prefix apps/vuln-lab` — installing packages with KNOWN CVEs and
+# executing their `postinstall` scripts — AND a third-party action, with
+# actions/checkout's `persist-credentials` defaulted true, so `GITHUB_TOKEN`
+# sat in `.git/config` for any of that code to read.
+#
+# So `attach` installs NOTHING: no npm, no third-party action beyond checkout
+# and the artifact download, no repository code. It downloads the documents
+# `generate` produced and calls `gh release upload`. `generate` holds only
+# `contents: read` and checks out with `persist-credentials: false`, so the
+# token is not on disk while untrusted dependency code runs.
 #
 # No tenant dependency — this workflow is live from Phase P and needs no pre-G0
 # guard.
@@ -47,11 +65,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sbom:
+  generate:
     name: generate SPDX SBOMs
     runs-on: ubuntu-latest
+    # READ ONLY. This job resolves and executes third-party dependency code
+    # (npm ci, including apps/vuln-lab's deliberately vulnerable tree and its
+    # postinstall scripts) and runs a third-party action. It must never hold a
+    # write token — see WHY TWO JOBS above.
     permissions:
-      contents: write # required only to attach assets to a published release
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -82,6 +104,10 @@ jobs:
             path: apps/vuln-lab
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Keeps GITHUB_TOKEN out of .git/config while npm ci below executes
+          # third-party install scripts. Nothing in this job pushes.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -97,7 +123,7 @@ jobs:
           npm ci --prefix apps/vuln-lab
 
       - name: Generate the SPDX SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: ${{ matrix.path }}
           format: spdx-json
@@ -118,15 +144,47 @@ jobs:
             echo "- \`${file}\` — ${packages} packages, $(jq -r .spdxVersion "${file}")"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Attach the SBOM to the release
-        if: ${{ github.event_name == 'release' || inputs.release_tag != '' }}
+  attach:
+    name: attach the SBOMs to the release
+    needs: generate
+    runs-on: ubuntu-latest
+    # A release event carries its own tag; a workflow_call from the L9 layer run
+    # names the release it just created. Nothing to attach to otherwise.
+    if: ${{ github.event_name == 'release' || inputs.release_tag != '' }}
+    # The only job with a write token, and the only job that installs nothing:
+    # no npm, no third-party action, no repository code. It moves already-produced
+    # documents onto a release and stops.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          # anchore/sbom-action uploads one artifact per matrix entry, named by
+          # its `artifact-name`. A glob pattern collects all of them into one
+          # directory without this job needing to know the matrix.
+          pattern: sbom-*.spdx.json
+          path: sboms
+          merge-multiple: true
+
+      - name: Upload every SBOM as a release asset
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A release event carries its own tag; a workflow_call from the L9 layer run
-          # names the release it just created.
           TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
-          SBOM_FILE: sbom-${{ matrix.name }}.spdx.json
+          # gh needs the repository when the workspace is not a git checkout,
+          # and this job deliberately does not check the repository out.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh release upload "${TAG}" "${SBOM_FILE}" --clobber
-          echo "Attached ${SBOM_FILE} to release ${TAG}."
+          shopt -s nullglob
+          files=(sboms/*.spdx.json)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=No SBOMs to attach::The generate job produced no *.spdx.json artifacts."
+            exit 1
+          fi
+          gh release upload "${TAG}" "${files[@]}" --clobber
+          {
+            echo "### SBOMs attached to \`${TAG}\`"
+            for file in "${files[@]}"; do
+              echo "- \`$(basename "${file}")\`"
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"

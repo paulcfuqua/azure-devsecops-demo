@@ -91,7 +91,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run the ZAP baseline scan
-        uses: zaproxy/action-baseline@v0.14.0
+        uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed # v0.14.0
         with:
           target: ${{ needs.target.outputs.url }}
           # -a includes alpha passive rules; -J writes the JSON report V9.4 parses.
