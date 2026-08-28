@@ -38,3 +38,10 @@ infra/copilot-studio/solution/*.zip
 # around by two separate implementers before being ignored properly.
 testResults.xml
 pester-results.xml
+
+# Agent working notes and transcripts (~3.3 MB). Until now these were excluded
+# only by .superpowers/sdd/.gitignore, one directory down — so moving the
+# directory, adding a sibling under .superpowers/, or a single `git add -f`
+# would have swept every transcript into a public repository. Ignored at the
+# root, where the rule survives a reorganisation.
+.superpowers/

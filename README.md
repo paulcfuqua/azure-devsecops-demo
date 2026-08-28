@@ -6,6 +6,34 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 
 *Meridian Launch Systems* is a fictional company. All data is synthetic.
 
+## Before you deploy this anywhere
+
+> ### Use a dedicated, empty Azure subscription.
+>
+> This is a requirement, not a suggestion. The landing zone (`infra/bicep/landing-zone/`)
+> assigns **subscription-wide DENY policy**: six `require-<tag>` deny rules on resource
+> groups and an `allowed-locations` deny on every resource. Deployed into a subscription
+> that already has workloads, those policies apply to **everything in it**, and the next
+> deployment anyone makes without the six required tags — or into a location outside the
+> allowlist — is refused. The demo also assigns a NIST SP 800-53 R5 initiative and a
+> budget at subscription scope, and `infra-down.yml` deletes four resource groups by name.
+>
+> Two more reasons to keep it separate: the L9 Defender round-trip touches a
+> **subscription-scoped** pricing plan (it now refuses to run if you already have
+> Defender for Containers on — see F31), and `data-api`'s identity is granted **Security
+> Reader across the whole subscription**, so it can read the posture of everything else
+> living there.
+>
+> ### The three dashboards require an Entra sign-in.
+>
+> `launch-ops`, `control-tower` and the compliance board are gated by Container Apps
+> Easy Auth, and the L7 deploy **refuses to run** until you supply an application (client)
+> ID for each (`MLS_LAUNCH_OPS_CLIENT_ID`, `MLS_CONTROL_TOWER_CLIENT_ID`,
+> `MLS_COMPLIANCE_CLIENT_ID`). That is not incidental polish: both frontends proxy
+> `/api/` straight through to `data-api`, so an open dashboard is an open door to that
+> Security Reader grant (finding F25). See
+> [docs/runbooks/g0-bootstrap.md](docs/runbooks/g0-bootstrap.md) § C9.
+
 ## Status
 
 > ## Nothing here has ever been deployed.

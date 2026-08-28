@@ -28,6 +28,19 @@ are **missing/unverified** and block the layer noted.
 > clock and every other trial has slack. The **spending limit stays ON** so the ceiling is
 > enforced by Azure rather than watched by a human. See § B's "30-day master clock".
 
+> **Prerequisite that overrides everything below: use a DEDICATED, EMPTY Azure
+> subscription.** L2 assigns **subscription-wide DENY policy** — six `require-<tag>` deny
+> rules on resource groups and an `allowed-locations` deny on every resource — and those
+> apply to everything already in the subscription, not only to what this demo creates.
+> The next deployment anyone makes into it without the six required tags, or into a
+> location outside the allowlist, is **refused**. L2 also assigns a NIST SP 800-53 R5
+> initiative and a budget at subscription scope; L7 grants `data-api`'s identity
+> **Security Reader across the whole subscription**; L9 touches a subscription-scoped
+> Defender pricing plan (it refuses to run if you already have Defender for Containers
+> on — F31); and `infra-down.yml` deletes four resource groups by name. A fresh
+> pay-as-you-go subscription with nothing else in it is the supported configuration and
+> the one the $200/30-day budget below assumes.
+
 ## A. Local toolchain (agents install these — no action needed from you)
 
 | Item | Status | Notes |
@@ -509,7 +522,9 @@ has run. Each one is an audit input that cannot be derived from ARM:
 | `MLS_L9_RUN_ID` | `layer-09-devsecops.yml` run ID | V9.2's Trivy negative test | **no longer hand-set** — see below |
 | `MLS_L9_RELEASE_TAG` | release tag carrying the SBOMs | V9.3 | **no longer hand-set** |
 | `MLS_L9_ZAP_RUN_ID` | run ID whose artifact holds the ZAP baseline report | V9.4 | **no longer hand-set** |
-| `MLS_COMPLIANCE_CLIENT_ID` | Entra **application (client) ID** the compliance board's Container Apps Easy Auth validates sign-ins against (`infra/bicep/apps/demo.bicepparam` → `complianceEntraClientId`; passed through by `layer-07-apps.yml` and `app-compliance-ci.yml`) | The compliance board (L12) — nothing else reads it. **Not a secret:** an OAuth client ID is a public identifier, visible in the browser's own redirect URL during login, and the provider is configured with **no client secret at all**. Set it as a *variable*, not a secret | **L3 — but see the box below: the app registration does not exist yet** |
+| `MLS_COMPLIANCE_CLIENT_ID` | Entra **application (client) ID** the compliance board's Container Apps Easy Auth validates sign-ins against (`infra/bicep/apps/demo.bicepparam` → `complianceEntraClientId`) | The compliance board (L12). **Not a secret:** an OAuth client ID is a public identifier, visible in the browser's own redirect URL during login, and the provider is configured with **no client secret at all**. Set it as a *variable*, not a secret | **L3 — REQUIRED; L7 refuses to deploy without it** |
+| `MLS_LAUNCH_OPS_CLIENT_ID` | Same, for `launch-ops` (`→ launchOpsEntraClientId`). Registration: `mls-launch-ops-demo-app` | The launch-ops dashboard. Since F25 this app is login-gated: it proxies `/api/` to `data-api`, whose identity holds Security Reader at subscription scope | **L3 — REQUIRED; L7 refuses to deploy without it** |
+| `MLS_CONTROL_TOWER_CLIENT_ID` | Same, for `control-tower` (`→ controlTowerEntraClientId`). Registration: `mls-control-tower-demo-app` | The control tower. This is the app F25 was demonstrated against: `GET /api/feeds/secure-score` returned live Defender posture to anonymous callers | **L3 — REQUIRED; L7 refuses to deploy without it** |
 
 > **The three `MLS_L9_*` values are now produced by the layer run.**
 > `.github/workflows/layer-09-devsecops.yml` exists (2026-08-24) and passes all three to
@@ -520,18 +535,35 @@ has run. Each one is an audit input that cannot be derived from ARM:
 > both V9.2 and V9.4. Leave all three variables unset on the happy path; they survive only
 > as an override for re-verifying an older run by hand.
 
-> **The app registration Easy Auth needs has not been created, by anyone (2026-08-28).**
-> `infra/entra/manifest.json` declares three app registrations — `mls-launch-ops-demo-app`,
-> `mls-control-tower-demo-app`, `mls-mcp-tools-demo-app` — and **no fourth one for the
-> compliance board**. Creating it is the **Identity & Governance workstream's** job (L3),
-> not the compliance layer's and not this runbook's; the L7 template deliberately owns no
-> Entra writes.
+> **All three dashboards are login-gated, and L7 will not deploy without their client
+> IDs (F25/F26, 2026-08-28).**
+> `infra/entra/manifest.json` declares four app registrations — `mls-launch-ops-demo-app`,
+> `mls-control-tower-demo-app`, `mls-mcp-tools-demo-app` and `mls-compliance-demo-app`.
+> Creating them is the **Identity & Governance workstream's** job (L3); the L7 template
+> deliberately owns no Entra writes.
 >
-> Until it exists, leave `MLS_COMPLIANCE_CLIENT_ID` unset. The parameter then falls back to
-> the literal `'unset'`, which is not a GUID, so **ARM rejects the deployment outright**
-> rather than shipping an Easy Auth block that nobody could ever pass — a loud failure
-> instead of a board sitting anonymously on the public internet. That is the intended
-> behaviour, and the fix is to create the registration, never to remove `authConfig`.
+> **What this runbook used to say here was wrong.** It claimed that leaving
+> `MLS_COMPLIANCE_CLIENT_ID` unset made the parameter fall back to the literal `'unset'`,
+> so "ARM rejects the deployment outright". It does not, and never did.
+> `layer-07-apps.yml` passes `${{ vars.MLS_COMPLIANCE_CLIENT_ID }}`, and **an undefined
+> GitHub variable expands to the empty string** — so the environment variable is
+> *set-but-empty*, `readEnvironmentVariable` returns `''`, and the `'unset'` default is
+> never reached. (Confirmed against Bicep CLI 0.46.1: variable unset → `"unset"`;
+> variable set to the empty string → `""`.) The board would have gone up with an Easy
+> Auth block carrying an empty `clientId`.
+>
+> What happens now instead, and it is deliberate belt-and-braces:
+> 1. `layer-07-apps.yml`'s first step **fails the deploy job** if any of
+>    `MLS_LAUNCH_OPS_CLIENT_ID`, `MLS_CONTROL_TOWER_CLIENT_ID` or
+>    `MLS_COMPLIANCE_CLIENT_ID` is unset or empty, naming the ones that are missing.
+> 2. `infra/bicep/apps/main.bicep` ties each app's `ingressExternal` to the *same*
+>    expression as its `authConfig`, so an app with no client ID deploys **internal to
+>    the Container Apps environment** rather than open to the internet. There is no
+>    parameter combination that publishes one of these three apps anonymously.
+>
+> Never work around a failure here by removing `authConfig`: `control-tower` and
+> `launch-ops` proxy `/api/` straight through to `data-api`, whose identity holds
+> **Security Reader at subscription scope** (finding F25).
 > `docs/runbooks/layers/L12.md` § Preconditions carries the same statement for whoever is
 > deploying that layer.
 
@@ -548,12 +580,17 @@ has run. Each one is an audit input that cannot be derived from ARM:
 
 ### C9b — the `demo` and `verify` environments' secrets, and why each one exists
 
-CI still holds **no LLM key and no cloud credential**: everything Azure authenticates by
-OIDC / workload identity federation, and the system's one runtime secret — the Direct Line
-secret — lives in Key Vault and is read from there at run time, never stored here
-(2026-08-24 amendment § 2). The secrets below exist for exactly one reason: **Security &
-Compliance PowerShell has no federated path**, so certificate app-only auth is the only
-way to touch Purview labels unattended. The two verifier-only secrets (`MLS_VERIFIER_CERT_*`,
+CI holds **no LLM key and no cloud credential**: everything Azure authenticates by OIDC /
+workload identity federation (2026-08-24 amendment § 2). It does **not** hold "no secret
+at all" — that claim, which several documents in this repo used to make above this very
+table, was finding **F28**. Six long-lived credentials exist in this system: the four
+below, plus two in Key Vault (the **Direct Line secret**, read at run time and never
+stored here, and `mcp-auth-token`). Each of the four exists because no federated path
+does the job — **Security & Compliance PowerShell has no federated auth**, so certificate
+app-only is the only way to touch Purview labels unattended, and a `GITHUB_TOKEN` push
+does not trigger workflows, which is why the self-heal chain needs a PAT.
+`.github/workflows/gitleaks.yml` prints all six as the rotation list when it finds
+something; if you add a seventh, add it there too. The two verifier-only secrets (`MLS_VERIFIER_CERT_*`,
 `MLS_VERIFIER_GH_TOKEN`) are read inside `verify` jobs, which now run under the `verify`
 environment (2026-08-26 findings F6/F7) — set them with `--env verify`, not `--env demo`;
 `PURVIEW_CERT_BASE64` stays on `demo` since the L4 **deploy** job is unaffected by this fix.
