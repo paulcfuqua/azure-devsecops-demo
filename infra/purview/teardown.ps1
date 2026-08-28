@@ -132,48 +132,55 @@ function Get-ExistingLabelPolicy {
 function Remove-SensitivityLabel {
     <#
     .SYNOPSIS
-        Delete-if-present a single sensitivity label. Returns @{ Name; Existed }.
+        Delete-if-present a single sensitivity label. Returns @{ Name; Existed;
+        Confirmed }.
     .DESCRIPTION
-        Existed tells the caller whether a delete was attempted; whether it was a
-        real delete or a -WhatIf dry run is read from $WhatIfPreference at the
-        Invoke-Main call site, the same reason apply-entra's teardown counterpart
-        does - Remove-Label returns nothing useful to tell a real delete from a
-        ShouldProcess decline. ConfirmImpact is 'High' HERE, on the function that
+        Existed tells the caller whether a delete was attempted; Confirmed - the
+        boolean $PSCmdlet.ShouldProcess itself returned - tells the caller whether
+        that attempt actually proceeded or was declined at the confirmation prompt.
+        Remove-Label returns nothing useful to tell a real delete from a
+        ShouldProcess decline, so Confirmed is the only signal; reading
+        $WhatIfPreference at the Invoke-Main call site instead - as an earlier
+        revision did - conflated "declined" with "deleted", since a decline and a
+        -WhatIf dry run both leave $WhatIfPreference unchanged at $false (F23
+        review, Critical 1 - reporting a declined delete as done is this finding's
+        own namesake defect). ConfirmImpact is 'High' HERE, on the function that
         actually calls ShouldProcess - ConfirmImpact does not propagate from a
         caller to a callee, so declaring it only on Invoke-Main (as an earlier
-        revision did) never triggered the default $ConfirmPreference of 'High'
-        (F23 review, Critical 1).
+        revision did) never triggered the default $ConfirmPreference of 'High'.
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param([Parameter(Mandatory)][string]$Name)
     $existing = Get-ExistingLabel -Name $Name
     if (-not $existing) {
         Write-Status "Label '$Name' already absent - nothing to delete." -Color DarkGray
-        return @{ Name = $Name; Existed = $false }
+        return @{ Name = $Name; Existed = $false; Confirmed = $false }
     }
-    if ($PSCmdlet.ShouldProcess($Name, 'Delete sensitivity label')) {
+    $confirmed = $PSCmdlet.ShouldProcess($Name, 'Delete sensitivity label')
+    if ($confirmed) {
         Remove-Label -Identity $Name | Out-Null
-        return @{ Name = $Name; Existed = $true }
     }
-    return @{ Name = $Name; Existed = $true }
+    return @{ Name = $Name; Existed = $true; Confirmed = $confirmed }
 }
 
 function Remove-PublishedLabelPolicy {
-    <# Delete-if-present the label policy. Returns @{ Name; Existed }. Same shape
-       as Remove-SensitivityLabel, including ConfirmImpact 'High' on this function
-       itself rather than on Invoke-Main - see Remove-SensitivityLabel's note. #>
+    <# Delete-if-present the label policy. Returns @{ Name; Existed; Confirmed }.
+       Same shape as Remove-SensitivityLabel, including ConfirmImpact 'High' on
+       this function itself rather than on Invoke-Main, and Confirmed coming
+       directly from ShouldProcess's own return rather than $WhatIfPreference -
+       see Remove-SensitivityLabel's note (F23 review, Critical 1). #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param([Parameter(Mandatory)][string]$Name)
     $existing = Get-ExistingLabelPolicy -Name $Name
     if (-not $existing) {
         Write-Status "Label policy '$Name' already absent - nothing to delete." -Color DarkGray
-        return @{ Name = $Name; Existed = $false }
+        return @{ Name = $Name; Existed = $false; Confirmed = $false }
     }
-    if ($PSCmdlet.ShouldProcess($Name, 'Delete label policy')) {
+    $confirmed = $PSCmdlet.ShouldProcess($Name, 'Delete label policy')
+    if ($confirmed) {
         Remove-LabelPolicy -Identity $Name | Out-Null
-        return @{ Name = $Name; Existed = $true }
     }
-    return @{ Name = $Name; Existed = $true }
+    return @{ Name = $Name; Existed = $true; Confirmed = $confirmed }
 }
 
 function Invoke-Main {
@@ -193,10 +200,20 @@ function Invoke-Main {
 
     $outcomes = [ordered]@{}
 
+    # Existed means "found"; Confirmed means "ShouldProcess actually let the delete
+    # through" - a declined prompt leaves Existed true but Confirmed false, and
+    # must be reported as Declined, never as Deleted (F23 review, Critical 1).
+    # $WhatIfPreference is checked first so a -WhatIf run still reports WhatIf
+    # rather than Declined - both leave Confirmed false, but only one is a dry run.
+
     # ---- policy first: a label still scoped by a published policy cannot be deleted ----
     $policyResult = Remove-PublishedLabelPolicy -Name $policyName
     if (-not $policyResult.Existed) { $outcomes['LabelPolicy'] = 'NotFound' }
     elseif ($WhatIfPreference) { $outcomes['LabelPolicy'] = 'WhatIf' }
+    elseif (-not $policyResult.Confirmed) {
+        $outcomes['LabelPolicy'] = 'Declined'
+        Write-Status "Declined: label policy '$policyName' was NOT deleted." -Color Yellow
+    }
     else {
         $outcomes['LabelPolicy'] = 'Deleted'
         Write-Status "Deleted label policy '$policyName'." -Color Green
@@ -207,6 +224,10 @@ function Invoke-Main {
         $result = Remove-SensitivityLabel -Name $name
         if (-not $result.Existed) { $outcomes[$name] = 'NotFound' }
         elseif ($WhatIfPreference) { $outcomes[$name] = 'WhatIf' }
+        elseif (-not $result.Confirmed) {
+            $outcomes[$name] = 'Declined'
+            Write-Status "Declined: label '$name' was NOT deleted." -Color Yellow
+        }
         else {
             $outcomes[$name] = 'Deleted'
             Write-Status "Deleted label '$name'." -Color Green

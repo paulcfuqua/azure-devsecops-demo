@@ -76,6 +76,20 @@ Describe 'infra/policy/teardown.ps1 - Invoke-AzCli native exit-code handling' {
             Should -Throw '*refresh token has expired*'
     }
 
+    It 'STILL THROWS on SubscriptionNotFound even with -AllowNotFound passed, rather than reporting the looked-up object absent (Important 4)' {
+        # The exact failure mode the review named: "(SubscriptionNotFound) The
+        # subscription '...' could not be found." textually matches the generic
+        # not-found regex ("could not be found"), so a stale or typo'd
+        # -SubscriptionId / $env:AZURE_SUBSCRIPTION_ID used to make the NIST
+        # assignment look-up report NistOutcome='NotFound' - "already absent" -
+        # when the real problem is that the SCOPE itself could not be resolved and
+        # the assignment's actual existence was never checked at all.
+        $script:MlsTestAzExitCode = 1
+        $script:MlsTestAzStderr = "ERROR: (SubscriptionNotFound) The subscription '00000000-0000-0000-0000-000000000000' could not be found."
+        { Invoke-AzCli -Arguments @('policy', 'assignment', 'show') -AllowNotFound } |
+            Should -Throw '*SubscriptionNotFound*'
+    }
+
     It 'parses JSON output on success ($LASTEXITCODE 0)' {
         $script:MlsTestAzExitCode = 0
         $script:MlsTestAzOutput = '{"name":"require-env"}'
@@ -309,6 +323,28 @@ Describe 'infra/policy/teardown.ps1 - Invoke-Main' {
             Should -Invoke Invoke-AzCli -Exactly -Times 0 -ParameterFilter {
                 ($Arguments -join ' ') -match 'delete|remove'
             }
+        }
+    }
+
+    Context 'subscription cannot be resolved (Important 4)' {
+        It 'throws rather than reporting the NIST assignment NotFound when the subscription itself cannot be found' {
+            # Stands in for what the real (unmocked) Invoke-AzCli now does given a
+            # "(SubscriptionNotFound) The subscription '...' could not be found."
+            # stderr at the NIST assignment's subscription scope: it throws instead
+            # of returning $null, because the earlier, unqualified -AllowNotFound
+            # regex swallowed that message as "policy assignment already absent"
+            # (F23 review, Important 4). A stale/typo'd -SubscriptionId must fail
+            # loudly, not report NistOutcome='NotFound' as if the teardown had
+            # confirmed the assignment itself was gone.
+            Mock Invoke-AzCli {
+                $joined = $Arguments -join ' '
+                if ($joined -like "policy assignment show*--scope /subscriptions/$script:SubId*") {
+                    throw "az policy assignment show failed with exit code 1: ERROR: (SubscriptionNotFound) The subscription '$script:SubId' could not be found."
+                }
+                if ($joined -like 'policy assignment show*') { return [pscustomobject]@{ name = $Arguments[$Arguments.IndexOf('--name') + 1] } }
+                return $null
+            }
+            { Invoke-TeardownForTest } | Should -Throw '*SubscriptionNotFound*'
         }
     }
 

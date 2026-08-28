@@ -193,4 +193,56 @@ Describe 'infra/purview/teardown.ps1' {
             }
         }
     }
+
+    Context 'declined confirmation is reported as Declined, never Deleted (Critical 1)' {
+        # The review's repro on this script: with every prompt declined, all five
+        # outcomes still printed "Deleted ..." while zero Remove-Label /
+        # Remove-LabelPolicy calls fired. The bug was that the Remove-* wrappers
+        # reported success on BOTH ShouldProcess branches and Invoke-Main inferred
+        # the outcome from $WhatIfPreference - which is $false for a declined
+        # prompt exactly as it is for a real delete.
+        #
+        # These two removers call $PSCmdlet.ShouldProcess directly rather than
+        # routing through a mockable mutation helper, and -Confirm:$false (used by
+        # every other context here, so the suite never blocks on a live prompt)
+        # forces ShouldProcess to return $true. Mocking the removers to return the
+        # declined shape is therefore the only non-interactive way to exercise
+        # Invoke-Main's reporting for this path.
+        It 'reports every category as Declined, not Deleted, when every prompt is declined' {
+            Mock Remove-PublishedLabelPolicy { @{ Name = $Name; Existed = $true; Confirmed = $false } }
+            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $false } }
+
+            $outcomes = Invoke-TeardownForTest
+
+            $values = @($outcomes.PSObject.Properties | ForEach-Object { $_.Value })
+            $values | Should -Not -Contain 'Deleted' -Because 'a declined prompt deleted nothing'
+            @($values | Where-Object { $_ -eq 'Declined' }).Count |
+                Should -Be 5 -Because 'the label policy plus all four labels were declined'
+        }
+
+        It 'still reports Deleted when the prompt is confirmed - the guard is not simply hard-coded' {
+            Mock Remove-PublishedLabelPolicy { @{ Name = $Name; Existed = $true; Confirmed = $true } }
+            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $true } }
+
+            $outcomes = Invoke-TeardownForTest
+
+            $values = @($outcomes.PSObject.Properties | ForEach-Object { $_.Value })
+            $values | Should -Not -Contain 'Declined'
+            @($values | Where-Object { $_ -eq 'Deleted' }).Count | Should -Be 5
+        }
+
+        It 'a declined delete is distinguished from a dry run - -WhatIf reports WhatIf, not Declined' {
+            # Both leave Confirmed $false; only one is a dry run. Conflating them
+            # would make a -WhatIf rehearsal look like a refused teardown.
+            Mock Remove-PublishedLabelPolicy { @{ Name = $Name; Existed = $true; Confirmed = $false } }
+            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $false } }
+
+            $outcomes = Invoke-Main -WhatIf
+
+            $values = @($outcomes.PSObject.Properties | ForEach-Object { $_.Value })
+            $values | Should -Not -Contain 'Declined'
+            @($values | Where-Object { $_ -eq 'WhatIf' }).Count | Should -Be 5
+        }
+    }
+
 }

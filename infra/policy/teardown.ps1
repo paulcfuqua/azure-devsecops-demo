@@ -127,6 +127,19 @@ function Invoke-AzCli {
         plain -AllowFailure did exactly that) is F23's own failure mode one layer
         down: an operator told an object is gone when the call to check it simply
         failed (F23 review, Important 4).
+
+        One more shape is excluded even though it textually matches "could not be
+        found": a failure whose error CODE names the SCOPE as missing
+        (`SubscriptionNotFound`, `InvalidSubscriptionId`) rather than the object
+        being looked up. `az policy assignment show --scope /subscriptions/<id>
+        ...` against a typo'd or stale -SubscriptionId / $env:AZURE_SUBSCRIPTION_ID
+        fails with "(SubscriptionNotFound) The subscription '<id>' could not be
+        found." - which the old, unqualified regex swallowed as "policy assignment
+        already absent", so Invoke-Main reported the NIST assignment NotFound
+        (already gone) when the real problem was that the subscription itself
+        could not be resolved and the assignment's actual state was never checked
+        at all (F23 review, Important 4 - the same "reported gone when it might not
+        be" shape F23 itself closes).
     #>
     param(
         [Parameter(Mandatory)][string[]]$Arguments,
@@ -138,7 +151,8 @@ function Invoke-AzCli {
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
             $errorText = (Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue)
-            if ($AllowNotFound -and $errorText -match '(?i)not\s*found|does not exist|could not be found|no such|ResourceNotFound') {
+            $scopeUnresolvable = $errorText -match '(?i)SubscriptionNotFound|InvalidSubscriptionId'
+            if ($AllowNotFound -and -not $scopeUnresolvable -and $errorText -match '(?i)not\s*found|does not exist|could not be found|no such|ResourceNotFound') {
                 return $null
             }
             throw "az $($Arguments -join ' ') failed with exit code ${exitCode}: $errorText"
@@ -160,6 +174,14 @@ function Invoke-AzMutation {
         caller to callee, so declaring it only on Invoke-Main (as an earlier
         revision did) never triggered the default $ConfirmPreference of 'High'
         (F23 review, Critical 1).
+
+        Returns @{ Confirmed; Response }, not just the raw `az` output. A
+        successful delete (`az policy assignment delete` etc. print nothing) and a
+        declined ShouldProcess both hand the caller nothing to tell them apart -
+        returning the boolean ShouldProcess itself produced is the only signal that
+        distinguishes "the human said no" from "it deleted cleanly" (F23 review,
+        Critical 1 - reporting a declined delete as done is this finding's own
+        namesake defect).
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
@@ -167,10 +189,12 @@ function Invoke-AzMutation {
         [Parameter(Mandatory)][string]$Action,
         [Parameter(Mandatory)][string[]]$Arguments
     )
-    if ($PSCmdlet.ShouldProcess($Target, $Action)) {
-        return Invoke-AzCli -Arguments $Arguments
+    $confirmed = $PSCmdlet.ShouldProcess($Target, $Action)
+    $response = $null
+    if ($confirmed) {
+        $response = Invoke-AzCli -Arguments $Arguments
     }
-    return $null
+    return @{ Confirmed = $confirmed; Response = $response }
 }
 
 # --- naming (single source: infra/bicep/naming.bicep) -----------------------------------
@@ -235,24 +259,28 @@ function Get-ExistingPolicyAssignment {
 function Remove-PolicyAssignment {
     <#
     .SYNOPSIS
-        Delete-if-present one policy assignment. Returns @{ Name; Existed }.
+        Delete-if-present one policy assignment. Returns @{ Name; Existed; Confirmed }.
     .DESCRIPTION
-        Existed tells the caller whether a delete was attempted; whether it was a
-        real delete or a -WhatIf dry run is read from $WhatIfPreference at the
-        Invoke-Main call site - `az policy assignment delete` prints nothing on
-        success, the same ambiguity apply-entra's DELETE calls have.
+        Existed tells the caller whether a delete was attempted; Confirmed - taken
+        directly from Invoke-AzMutation's own ShouldProcess return value - tells the
+        caller whether that attempt actually proceeded or was declined at the
+        confirmation prompt. `az policy assignment delete` prints nothing on
+        success, the same ambiguity apply-entra's DELETE calls have, so Confirmed is
+        the only way to tell a real delete from a decline; reading $WhatIfPreference
+        at the Invoke-Main call site instead - as an earlier revision did -
+        conflated "declined" with "deleted" (F23 review, Critical 1).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Scope)
     $existing = Get-ExistingPolicyAssignment -Name $Name -Scope $Scope
     if (-not $existing) {
         Write-Status "Policy assignment '$Name' already absent - nothing to delete." -Color DarkGray
-        return @{ Name = $Name; Existed = $false }
+        return @{ Name = $Name; Existed = $false; Confirmed = $false }
     }
-    Invoke-AzMutation -Target $Name -Action 'Delete policy assignment' -Arguments @(
+    $mutation = Invoke-AzMutation -Target $Name -Action 'Delete policy assignment' -Arguments @(
         'policy', 'assignment', 'delete', '--name', $Name, '--scope', $Scope
-    ) | Out-Null
-    return @{ Name = $Name; Existed = $true }
+    )
+    return @{ Name = $Name; Existed = $true; Confirmed = $mutation.Confirmed }
 }
 
 function Get-ManagementGroupSubscriptionId {
@@ -299,18 +327,21 @@ function Get-ManagementGroupSubscriptionId {
 }
 
 function Remove-SubscriptionFromManagementGroup {
-    <# Move the subscription back to the tenant root. Returns @{ SubscriptionId; Existed }. #>
+    <# Move the subscription back to the tenant root. Returns @{ SubscriptionId;
+       Existed; Confirmed } - Confirmed comes from Invoke-AzMutation's own
+       ShouldProcess return, not $WhatIfPreference (F23 review, Critical 1; see
+       Remove-PolicyAssignment's note). #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][string]$ManagementGroupName, [Parameter(Mandatory)][string]$SubscriptionId)
     $placed = @(Get-ManagementGroupSubscriptionId -Name $ManagementGroupName)
     if ($placed -notcontains $SubscriptionId) {
         Write-Status "Subscription '$SubscriptionId' is not under management group '$ManagementGroupName' - nothing to move." -Color DarkGray
-        return @{ SubscriptionId = $SubscriptionId; Existed = $false }
+        return @{ SubscriptionId = $SubscriptionId; Existed = $false; Confirmed = $false }
     }
-    Invoke-AzMutation -Target $SubscriptionId -Action "Move subscription back to tenant root (remove from '$ManagementGroupName')" -Arguments @(
+    $mutation = Invoke-AzMutation -Target $SubscriptionId -Action "Move subscription back to tenant root (remove from '$ManagementGroupName')" -Arguments @(
         'account', 'management-group', 'subscription', 'remove', '--name', $ManagementGroupName, '--subscription', $SubscriptionId
-    ) | Out-Null
-    return @{ SubscriptionId = $SubscriptionId; Existed = $true }
+    )
+    return @{ SubscriptionId = $SubscriptionId; Existed = $true; Confirmed = $mutation.Confirmed }
 }
 
 function Get-ExistingManagementGroup {
@@ -319,18 +350,21 @@ function Get-ExistingManagementGroup {
 }
 
 function Remove-ManagementGroup {
-    <# Delete-if-present the management group itself. Returns @{ Name; Existed }. #>
+    <# Delete-if-present the management group itself. Returns @{ Name; Existed;
+       Confirmed } - Confirmed comes from Invoke-AzMutation's own ShouldProcess
+       return, not $WhatIfPreference (F23 review, Critical 1; see
+       Remove-PolicyAssignment's note). #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][string]$Name)
     $existing = Get-ExistingManagementGroup -Name $Name
     if (-not $existing) {
         Write-Status "Management group '$Name' already absent - nothing to delete." -Color DarkGray
-        return @{ Name = $Name; Existed = $false }
+        return @{ Name = $Name; Existed = $false; Confirmed = $false }
     }
-    Invoke-AzMutation -Target $Name -Action 'Delete management group' -Arguments @(
+    $mutation = Invoke-AzMutation -Target $Name -Action 'Delete management group' -Arguments @(
         'account', 'management-group', 'delete', '--name', $Name
-    ) | Out-Null
-    return @{ Name = $Name; Existed = $true }
+    )
+    return @{ Name = $Name; Existed = $true; Confirmed = $mutation.Confirmed }
 }
 
 # --- main ----------------------------------------------------------------------------------
@@ -360,18 +394,26 @@ function Invoke-Main {
         -Consequence "Deletes a tenant-level governance guardrail; rebuilding management group '$mgName' and re-placing the subscription restarts policy-assignment propagation, and policy compliance data resets."
 
     $summary = [ordered]@{
-        AssignmentsDeleted = 0; AssignmentsNotFound = 0
+        AssignmentsDeleted = 0; AssignmentsDeclined = 0; AssignmentsNotFound = 0
         NistOutcome = ''
         SubscriptionOutcome = ''
         ManagementGroupOutcome = ''
         SkippedInWhatIf = 0
     }
 
+    # Existed means "found"; Confirmed means "ShouldProcess actually let the delete
+    # through" - a declined prompt leaves Existed true but Confirmed false, and must
+    # be counted as Declined, never as Deleted (F23 review, Critical 1).
+    # $WhatIfPreference is checked first so a -WhatIf run still reports WhatIf/
+    # SkippedInWhatIf rather than Declined - both leave Confirmed false, but only one
+    # of them is a dry run.
+
     # ---- 1: tag + allowed-locations policy assignments -----------------------------------
     foreach ($name in $assignmentNames) {
         $result = Remove-PolicyAssignment -Name $name -Scope $mgScope
         if (-not $result.Existed) { $summary.AssignmentsNotFound++ }
         elseif ($WhatIfPreference) { $summary.SkippedInWhatIf++ }
+        elseif (-not $result.Confirmed) { $summary.AssignmentsDeclined++; Write-Status "Declined: policy assignment '$name' was NOT deleted." -Color Yellow }
         else { $summary.AssignmentsDeleted++; Write-Status "Deleted policy assignment '$name'." -Color Green }
     }
 
@@ -386,6 +428,7 @@ function Invoke-Main {
         $nistResult = Remove-PolicyAssignment -Name $nistName -Scope $nistScope
         if (-not $nistResult.Existed) { $summary.NistOutcome = 'NotFound' }
         elseif ($WhatIfPreference) { $summary.NistOutcome = 'WhatIf'; $summary.SkippedInWhatIf++ }
+        elseif (-not $nistResult.Confirmed) { $summary.NistOutcome = 'Declined'; Write-Status "Declined: NIST initiative assignment '$nistName' was NOT deleted." -Color Yellow }
         else { $summary.NistOutcome = 'Deleted'; Write-Status "Deleted NIST initiative assignment '$nistName'." -Color Green }
     }
 
@@ -398,6 +441,7 @@ function Invoke-Main {
         $subResult = Remove-SubscriptionFromManagementGroup -ManagementGroupName $mgName -SubscriptionId $effectiveSubscriptionId
         if (-not $subResult.Existed) { $summary.SubscriptionOutcome = 'NotFound' }
         elseif ($WhatIfPreference) { $summary.SubscriptionOutcome = 'WhatIf'; $summary.SkippedInWhatIf++ }
+        elseif (-not $subResult.Confirmed) { $summary.SubscriptionOutcome = 'Declined'; Write-Status "Declined: subscription '$effectiveSubscriptionId' was NOT moved back to tenant root." -Color Yellow }
         else { $summary.SubscriptionOutcome = 'Deleted'; Write-Status "Moved subscription '$effectiveSubscriptionId' back to tenant root." -Color Green }
     }
 
@@ -405,6 +449,7 @@ function Invoke-Main {
     $mgResult = Remove-ManagementGroup -Name $mgName
     if (-not $mgResult.Existed) { $summary.ManagementGroupOutcome = 'NotFound' }
     elseif ($WhatIfPreference) { $summary.ManagementGroupOutcome = 'WhatIf'; $summary.SkippedInWhatIf++ }
+    elseif (-not $mgResult.Confirmed) { $summary.ManagementGroupOutcome = 'Declined'; Write-Status "Declined: management group '$mgName' was NOT deleted." -Color Yellow }
     else { $summary.ManagementGroupOutcome = 'Deleted'; Write-Status "Deleted management group '$mgName'." -Color Green }
 
     $summaryObject = [pscustomobject]$summary

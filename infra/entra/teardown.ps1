@@ -143,6 +143,13 @@ function Invoke-GraphMutation {
         caller to callee, so declaring it only on Invoke-Main (as the original draft
         did) meant the default $ConfirmPreference of 'High' never triggered a prompt
         anywhere in the call chain (F23 review, Critical 1).
+
+        Returns @{ Confirmed; Response }, not just the raw Graph response. A
+        successful DELETE and a declined ShouldProcess both hand the caller no
+        response body to tell them apart by - returning the boolean ShouldProcess
+        itself produced is the only way a caller can distinguish "the human said
+        no" from "it deleted cleanly" (F23 review, Critical 1 - the fix for the
+        finding's own namesake defect: reporting a declined delete as done).
     #>
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
@@ -152,10 +159,12 @@ function Invoke-GraphMutation {
         [Parameter(Mandatory)][string]$Path,
         $Body = $null
     )
-    if ($PSCmdlet.ShouldProcess($Target, $Action)) {
-        return Invoke-GraphApi -Method $Method -Path $Path -Body $Body -AllowNotFound
+    $confirmed = $PSCmdlet.ShouldProcess($Target, $Action)
+    $response = $null
+    if ($confirmed) {
+        $response = Invoke-GraphApi -Method $Method -Path $Path -Body $Body -AllowNotFound
     }
-    return $null
+    return @{ Confirmed = $confirmed; Response = $response }
 }
 
 # --- safe accessors (Graph returns hashtables; the manifest is PSCustomObject) ---------
@@ -258,18 +267,71 @@ function Get-CaPolicy {
     return $null
 }
 
+# --- pre-flight resolution (refuse before touching the tenant, not partway through) ----
+
+function Resolve-ManifestForTeardown {
+    <#
+    .SYNOPSIS
+        Resolves every manifest-listed CA policy, app registration, group and user
+        BEFORE any deletion begins.
+    .DESCRIPTION
+        Get-CaPolicy / Get-EntraApplication / Get-EntraGroup already throw on an
+        ambiguous (Count -gt 1) match against a live tenant object sharing a
+        manifest display name. Before this pre-flight pass existed, that check ran
+        per-lookup, INSIDE the same reverse-dependency loop that deletes: a
+        duplicate display name on, say, the third group correctly refused the run,
+        but only after the 2 CA policies and 3 app registrations ahead of it in
+        manifest order had already been deleted for real - an ambiguity the script
+        itself detected stopped it one category too late (F23 review, Minor 6).
+        Calling every lookup here, once, before Invoke-Main's deletion loops run at
+        all, means an ambiguous manifest refuses the ENTIRE run with zero deletes of
+        any kind, CA policies included, rather than whichever categories happened to
+        sort earlier than the duplicate.
+
+        Users are resolved here too even though Get-EntraUser has no ambiguity case
+        (a UPN lookup is unique by construction, not a displayName filter that can
+        match more than one tenant object) - the manifest is validated as a whole
+        up front, not piecemeal by category.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Policies,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Apps,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Groups,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Users,
+        [Parameter(Mandatory)][string]$Domain
+    )
+    foreach ($policy in $Policies) {
+        Get-CaPolicy -DisplayName (Get-Field -Object $policy -Name 'displayName') | Out-Null
+    }
+    foreach ($app in $Apps) {
+        Get-EntraApplication -DisplayName (Get-Field -Object $app -Name 'displayName') | Out-Null
+    }
+    foreach ($group in $Groups) {
+        Get-EntraGroup -DisplayName (Get-Field -Object $group -Name 'displayName') | Out-Null
+    }
+    foreach ($user in $Users) {
+        $upn = "$(Get-Field -Object $user -Name 'userPrincipalNamePrefix')@$Domain"
+        Get-EntraUser -Upn $upn | Out-Null
+    }
+}
+
 # --- delete-if-present (mirror of apply-entra.ps1's create-if-absent shape, reversed) ---
 
 function Remove-CaPolicy {
     <#
     .SYNOPSIS
-        Delete one manifest CA policy if it exists. Returns @{ DisplayName; Existed }.
+        Delete one manifest CA policy if it exists. Returns @{ DisplayName; Existed;
+        Confirmed }.
     .DESCRIPTION
-        Existed tells the caller whether a delete was attempted at all; whether that
-        attempt was a real delete or a -WhatIf dry run is read from $WhatIfPreference
-        at the Invoke-Main call site, because a successful DELETE and a ShouldProcess
-        decline both return $null from Invoke-GraphMutation - there is no object body
-        to tell them apart the way a POST's created-resource response can.
+        Existed tells the caller whether a delete was attempted at all; Confirmed -
+        taken directly from Invoke-GraphMutation's own ShouldProcess return value -
+        tells the caller whether that attempt actually proceeded or was declined at
+        the confirmation prompt. A successful DELETE and a ShouldProcess decline
+        both hand back no Graph response body to tell them apart (there is no
+        object body the way a POST's created-resource response has), so Confirmed
+        is the only signal; reading $WhatIfPreference at the Invoke-Main call site
+        instead - as an earlier revision did - conflated "declined" with "deleted",
+        since both leave $WhatIfPreference $false (F23 review, Critical 1).
 
         This wrapper declares SupportsShouldProcess (satisfying PSScriptAnalyzer's
         PSUseShouldProcessForStateChangingFunctions on a "Remove" verb) but does NOT
@@ -288,57 +350,61 @@ function Remove-CaPolicy {
     $existing = Get-CaPolicy -DisplayName $displayName
     if (-not $existing) {
         Write-Status "CA policy '$displayName' already absent - nothing to delete." -Color DarkGray
-        return @{ DisplayName = $displayName; Existed = $false }
+        return @{ DisplayName = $displayName; Existed = $false; Confirmed = $false }
     }
     $id = Get-Field -Object $existing -Name 'id'
-    Invoke-GraphMutation -Target $displayName -Action 'Delete CA policy' `
-        -Method DELETE -Path "identity/conditionalAccess/policies/$id" | Out-Null
-    return @{ DisplayName = $displayName; Existed = $true }
+    $mutation = Invoke-GraphMutation -Target $displayName -Action 'Delete CA policy' `
+        -Method DELETE -Path "identity/conditionalAccess/policies/$id"
+    return @{ DisplayName = $displayName; Existed = $true; Confirmed = $mutation.Confirmed }
 }
 
 function Remove-EntraApplication {
     <# Delete one manifest app registration if it exists. Returns @{ DisplayName;
-       Existed }. SupportsShouldProcess is declared for PSScriptAnalyzer only;
-       Invoke-GraphMutation is the sole ShouldProcess call site (see
-       Remove-CaPolicy's note). #>
+       Existed; Confirmed } - see Remove-CaPolicy's note on why Confirmed comes
+       from Invoke-GraphMutation's own ShouldProcess return, not $WhatIfPreference
+       (F23 review, Critical 1). SupportsShouldProcess is declared for
+       PSScriptAnalyzer only; Invoke-GraphMutation is the sole ShouldProcess call
+       site. #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)]$App)
     $displayName = Get-Field -Object $App -Name 'displayName'
     $existing = Get-EntraApplication -DisplayName $displayName
     if (-not $existing) {
         Write-Status "App registration '$displayName' already absent - nothing to delete." -Color DarkGray
-        return @{ DisplayName = $displayName; Existed = $false }
+        return @{ DisplayName = $displayName; Existed = $false; Confirmed = $false }
     }
     $id = Get-Field -Object $existing -Name 'id'
-    Invoke-GraphMutation -Target $displayName -Action 'Delete app registration' `
-        -Method DELETE -Path "applications/$id" | Out-Null
-    return @{ DisplayName = $displayName; Existed = $true }
+    $mutation = Invoke-GraphMutation -Target $displayName -Action 'Delete app registration' `
+        -Method DELETE -Path "applications/$id"
+    return @{ DisplayName = $displayName; Existed = $true; Confirmed = $mutation.Confirmed }
 }
 
 function Remove-EntraGroup {
-    <# Delete one manifest group if it exists. Returns @{ DisplayName; Existed }.
-       SupportsShouldProcess is declared for PSScriptAnalyzer only;
-       Invoke-GraphMutation is the sole ShouldProcess call site (see
-       Remove-CaPolicy's note). #>
+    <# Delete one manifest group if it exists. Returns @{ DisplayName; Existed;
+       Confirmed } - see Remove-CaPolicy's note on why Confirmed comes from
+       Invoke-GraphMutation's own ShouldProcess return, not $WhatIfPreference (F23
+       review, Critical 1). SupportsShouldProcess is declared for PSScriptAnalyzer
+       only; Invoke-GraphMutation is the sole ShouldProcess call site. #>
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)]$Group)
     $displayName = Get-Field -Object $Group -Name 'displayName'
     $existing = Get-EntraGroup -DisplayName $displayName
     if (-not $existing) {
         Write-Status "Group '$displayName' already absent - nothing to delete." -Color DarkGray
-        return @{ DisplayName = $displayName; Existed = $false }
+        return @{ DisplayName = $displayName; Existed = $false; Confirmed = $false }
     }
     $id = Get-Field -Object $existing -Name 'id'
-    Invoke-GraphMutation -Target $displayName -Action 'Delete group' `
-        -Method DELETE -Path "groups/$id" | Out-Null
-    return @{ DisplayName = $displayName; Existed = $true }
+    $mutation = Invoke-GraphMutation -Target $displayName -Action 'Delete group' `
+        -Method DELETE -Path "groups/$id"
+    return @{ DisplayName = $displayName; Existed = $true; Confirmed = $mutation.Confirmed }
 }
 
 function Remove-EntraUser {
-    <# Delete one manifest user if it exists. Returns @{ Upn; Existed }.
+    <# Delete one manifest user if it exists. Returns @{ Upn; Existed; Confirmed } -
+       see Remove-CaPolicy's note on why Confirmed comes from Invoke-GraphMutation's
+       own ShouldProcess return, not $WhatIfPreference (F23 review, Critical 1).
        SupportsShouldProcess is declared for PSScriptAnalyzer only;
-       Invoke-GraphMutation is the sole ShouldProcess call site (see
-       Remove-CaPolicy's note). #>
+       Invoke-GraphMutation is the sole ShouldProcess call site. #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)]$User,
@@ -348,11 +414,11 @@ function Remove-EntraUser {
     $existing = Get-EntraUser -Upn $upn
     if (-not $existing) {
         Write-Status "User '$upn' already absent - nothing to delete." -Color DarkGray
-        return @{ Upn = $upn; Existed = $false }
+        return @{ Upn = $upn; Existed = $false; Confirmed = $false }
     }
     $id = Get-Field -Object $existing -Name 'id'
-    Invoke-GraphMutation -Target $upn -Action 'Delete user' -Method DELETE -Path "users/$id" | Out-Null
-    return @{ Upn = $upn; Existed = $true }
+    $mutation = Invoke-GraphMutation -Target $upn -Action 'Delete user' -Method DELETE -Path "users/$id"
+    return @{ Upn = $upn; Existed = $true; Confirmed = $mutation.Confirmed }
 }
 
 # --- main --------------------------------------------------------------------------------
@@ -379,24 +445,35 @@ function Invoke-Main {
     $apps = @(Get-Field -Object $manifest -Name 'appRegistrations')
     $policies = @(Get-Field -Object $manifest -Name 'conditionalAccessPolicies')
 
+    # Refuse on an ambiguous manifest BEFORE any deletion runs, not partway through
+    # the reverse-dependency loop below (F23 review, Minor 6).
+    Resolve-ManifestForTeardown -Policies $policies -Apps $apps -Groups $groups -Users $users -Domain $effectiveDomain
+
     Write-G3Banner `
         -Scope "infra/entra/manifest.json (domain '$effectiveDomain'): $($policies.Count) CA polic(y/ies), $($apps.Count) app registration(s), $($groups.Count) group(s), $($users.Count) user(s)." `
         -Consequence 'Every deleted object''s Entra ID is invalidated permanently and license-propagation clocks restart. A rebuild after this teardown carries the honest 2-3 hour SLA (docs/runbooks/kill-rebuild.md section 7), not the standard cycle''s under-60-minute claim.'
 
     $summary = [ordered]@{
-        CaDeleted = 0; CaNotFound = 0
-        AppsDeleted = 0; AppsNotFound = 0
-        GroupsDeleted = 0; GroupsNotFound = 0
-        UsersDeleted = 0; UsersNotFound = 0
+        CaDeleted = 0; CaDeclined = 0; CaNotFound = 0
+        AppsDeleted = 0; AppsDeclined = 0; AppsNotFound = 0
+        GroupsDeleted = 0; GroupsDeclined = 0; GroupsNotFound = 0
+        UsersDeleted = 0; UsersDeclined = 0; UsersNotFound = 0
         SkippedInWhatIf = 0
     }
 
     # ---- reverse-dependency order: CA policies -> app registrations -> groups -> users ----
+    # Existed means "found in the tenant"; Confirmed means "ShouldProcess actually
+    # let the delete through" - a declined prompt leaves Existed true but Confirmed
+    # false, and must be counted as Declined, never as Deleted (F23 review,
+    # Critical 1). $WhatIfPreference is checked first so a -WhatIf run still reports
+    # SkippedInWhatIf rather than Declined - both leave Confirmed false, but only
+    # one of them is a dry run.
 
     foreach ($policy in $policies) {
         $result = Remove-CaPolicy -Policy $policy
         if (-not $result.Existed) { $summary.CaNotFound++ }
         elseif ($WhatIfPreference) { $summary.SkippedInWhatIf++ }
+        elseif (-not $result.Confirmed) { $summary.CaDeclined++; Write-Status "Declined: CA policy '$($result.DisplayName)' was NOT deleted." -Color Yellow }
         else { $summary.CaDeleted++; Write-Status "Deleted CA policy '$($result.DisplayName)'." -Color Green }
     }
 
@@ -404,6 +481,7 @@ function Invoke-Main {
         $result = Remove-EntraApplication -App $app
         if (-not $result.Existed) { $summary.AppsNotFound++ }
         elseif ($WhatIfPreference) { $summary.SkippedInWhatIf++ }
+        elseif (-not $result.Confirmed) { $summary.AppsDeclined++; Write-Status "Declined: app registration '$($result.DisplayName)' was NOT deleted." -Color Yellow }
         else { $summary.AppsDeleted++; Write-Status "Deleted app registration '$($result.DisplayName)'." -Color Green }
     }
 
@@ -411,6 +489,7 @@ function Invoke-Main {
         $result = Remove-EntraGroup -Group $group
         if (-not $result.Existed) { $summary.GroupsNotFound++ }
         elseif ($WhatIfPreference) { $summary.SkippedInWhatIf++ }
+        elseif (-not $result.Confirmed) { $summary.GroupsDeclined++; Write-Status "Declined: group '$($result.DisplayName)' was NOT deleted." -Color Yellow }
         else { $summary.GroupsDeleted++; Write-Status "Deleted group '$($result.DisplayName)'." -Color Green }
     }
 
@@ -418,6 +497,7 @@ function Invoke-Main {
         $result = Remove-EntraUser -User $user -Domain $effectiveDomain
         if (-not $result.Existed) { $summary.UsersNotFound++ }
         elseif ($WhatIfPreference) { $summary.SkippedInWhatIf++ }
+        elseif (-not $result.Confirmed) { $summary.UsersDeclined++; Write-Status "Declined: user '$($result.Upn)' was NOT deleted." -Color Yellow }
         else { $summary.UsersDeleted++; Write-Status "Deleted user '$($result.Upn)'." -Color Green }
     }
 

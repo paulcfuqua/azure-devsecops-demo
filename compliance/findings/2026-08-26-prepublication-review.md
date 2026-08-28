@@ -1107,9 +1107,19 @@ scope), then moves the subscription back to the tenant root, then deletes MG `ml
 — in that order, because a management group with a child subscription will not
 delete.
 
-Every script carries the same safety contract: `Invoke-Main` declares
-`[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]`, so `-WhatIf`
-enumerates without deleting and confirmation is required by default; a G3 banner
+Every script carries the same safety contract. `-WhatIf` enumerates without
+deleting, and confirmation is required by default — but **the function that
+carries `ConfirmImpact = 'High'` has to be the one that actually calls
+`$PSCmdlet.ShouldProcess`**, not `Invoke-Main`. `ConfirmImpact` does not
+propagate from a caller to a callee, so an earlier revision that declared it only
+on `Invoke-Main` prompted for nothing at all and deleted everything silently
+(F23 review, Critical 1). It now sits on the callers of `ShouldProcess` itself:
+`Invoke-GraphMutation` and the four `Remove-*` wrappers in the Entra script,
+`Invoke-AzMutation` and its three wrappers in the policy script, and
+`Remove-SensitivityLabel` / `Remove-PublishedLabelPolicy` in the Purview script.
+Measured both ways: stripping the attribute from `Invoke-Main` changes nothing,
+while stripping it from the `ShouldProcess`-calling function restores the silent
+delete. A maintainer "tidying up" the callee attribute would reintroduce the bug; a G3 banner
 (naming the gate, the exact scope being deleted, and the irreversible consequence —
 new label GUIDs, invalidated Entra object IDs, reset policy-compliance data) prints
 before any destructive call; each refuses to run when `$env:GITHUB_ACTIONS -eq
@@ -1119,13 +1129,13 @@ informational no-op on every path, never a terminating error; and each ends with
 the repo's `if (-not $env:MLS_SKIP_MAIN) { Invoke-Main ... }` guard so Pester can
 dot-source it without executing anything.
 
-TDD: 29 new assertions across three new test files — `infra/entra/tests/
-teardown.Tests.ps1` (8), `infra/purview/tests/teardown.Tests.ps1` (9), and
-`infra/policy/tests/teardown.Tests.ps1` (12, including three direct unit tests of
+TDD: 60 assertions across three new test files — `infra/entra/tests/
+teardown.Tests.ps1` (22), `infra/purview/tests/teardown.Tests.ps1` (14), and
+`infra/policy/tests/teardown.Tests.ps1` (24, including three direct unit tests of
 `Invoke-AzCli`'s own `$LASTEXITCODE` handling against a local `az` stand-in
 function, since the script otherwise has no seam to prove a native-command failure
-is actually checked rather than silently ignored). All 29 failed before the three
-scripts existed (`Invoke-Pester infra/purview/tests,infra/entra/tests,
+is actually checked rather than silently ignored). The original 29 all failed
+before the three scripts existed (`Invoke-Pester infra/purview/tests,infra/entra/tests,
 infra/policy/tests` could not even dot-source them) and all pass after. Each
 script's three load-bearing behaviours — the CI refusal, the teardown order, and
 the `-WhatIf` no-mutate guarantee — were mutation-tested individually by neutering
@@ -1161,7 +1171,10 @@ local suite (`Invoke-Pester -Path scripts,infra,data,verification,compliance`):
 
 **Stale-claim sweep after the fix:** `docs/runbooks/kill-rebuild.md` § 7 step 1's
 `[derived name, per L04]` marker — the one the brief for this task singled out as
-"now wrong" — is corrected to `(F23, Task 25)`. A repo-wide grep for every other
+"now wrong" — is **removed**, leaving the step as a plain instruction to run
+`infra/purview/teardown.ps1`. An interim revision replaced it with a
+`(F23, Task 25)` citation; that read as changelog metadata inside a numbered
+operator procedure, so it was dropped rather than kept. A repo-wide grep for every other
 instance of a teardown-script path paired with a non-existence claim
 (`does not exist|missing|never written|derived name`, across every `.md`, `.yml`,
 `.ps1` and `.bicep` file) turned up exactly one more hit:

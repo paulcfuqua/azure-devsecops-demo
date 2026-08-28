@@ -176,6 +176,23 @@ Describe 'infra/entra/teardown.ps1' {
             { Invoke-TeardownForTest } | Should -Throw "*Ambiguous group display name*"
         }
 
+        It 'a duplicate GROUP display name causes zero deletes, including the CA policies and app registrations that sort earlier (Minor 6)' {
+            # Before the pre-flight pass existed, ambiguity was caught inside each
+            # lookup AS the reverse-dependency loop reached it: a duplicate group
+            # name correctly refused the run, but only after the 2 CA policies and 3
+            # app registrations ahead of groups in manifest order had already been
+            # deleted for real. Resolving every manifest lookup up front, before any
+            # deletion loop runs at all, means the refusal now happens before ANY
+            # category is touched.
+            $decoyName = (Get-FreshManifest).groups[0].displayName
+            $script:ExistingGroups[$decoyName] = @(
+                @{ id = "gid-$decoyName"; displayName = $decoyName },
+                @{ id = 'gid-decoy-real-tenant-object'; displayName = $decoyName }
+            )
+            { Invoke-TeardownForTest } | Should -Throw "*Ambiguous group display name*"
+            Should -Invoke Invoke-GraphApi -Exactly -Times 0 -ParameterFilter { $Method -eq 'DELETE' }
+        }
+
         It 'Get-EntraApplication throws when two tenant app registrations share the manifest''s displayName' {
             $decoyName = (Get-FreshManifest).appRegistrations[0].displayName
             $script:ExistingApps[$decoyName] = @(
@@ -232,6 +249,68 @@ Describe 'infra/entra/teardown.ps1' {
             $summary.AppsNotFound | Should -Be $script:AppCount
             $summary.GroupsNotFound | Should -Be $script:GroupCount
             $summary.UsersNotFound | Should -Be $script:UserCount
+            Should -Invoke Invoke-GraphApi -Exactly -Times 0 -ParameterFilter { $Method -eq 'DELETE' }
+        }
+    }
+
+    Context 'declined confirmation is reported as Declined, never Deleted (Critical 1)' {
+        # The review's own repro: answering 'n' to all 14 prompts printed "Deleted
+        # CA policy '...'" x14 and a summary claiming CaDeleted=2 AppsDeleted=3
+        # GroupsDeleted=4 UsersDeleted=5, while zero Graph DELETE calls actually
+        # fired. The bug was that every Remove-* wrapper returned Existed=$true on
+        # BOTH ShouldProcess branches, and Invoke-Main inferred "deleted" from
+        # $WhatIfPreference (which is $false for a declined prompt, same as a real
+        # delete) rather than from what ShouldProcess itself decided. -Confirm:$false
+        # (used by every OTHER context in this file, to avoid a live prompt hanging
+        # the suite) makes ShouldProcess always return $true, so it cannot exercise
+        # this path at all - mocking Invoke-GraphMutation's own Confirmed return is
+        # the only non-interactive way to simulate a declined prompt.
+        BeforeEach {
+            Mock Invoke-GraphMutation { @{ Confirmed = $false; Response = $null } }
+        }
+
+        It 'Remove-CaPolicy reports Existed=$true but Confirmed=$false, not a delete' {
+            $policy = (Get-FreshManifest).conditionalAccessPolicies[0]
+            $result = Remove-CaPolicy -Policy $policy -Confirm:$false
+            $result.Existed | Should -BeTrue
+            $result.Confirmed | Should -BeFalse
+        }
+
+        It 'Remove-EntraApplication reports Existed=$true but Confirmed=$false, not a delete' {
+            $app = (Get-FreshManifest).appRegistrations[0]
+            $result = Remove-EntraApplication -App $app -Confirm:$false
+            $result.Existed | Should -BeTrue
+            $result.Confirmed | Should -BeFalse
+        }
+
+        It 'Remove-EntraGroup reports Existed=$true but Confirmed=$false, not a delete' {
+            $group = (Get-FreshManifest).groups[0]
+            $result = Remove-EntraGroup -Group $group -Confirm:$false
+            $result.Existed | Should -BeTrue
+            $result.Confirmed | Should -BeFalse
+        }
+
+        It 'Remove-EntraUser reports Existed=$true but Confirmed=$false, not a delete' {
+            $user = (Get-FreshManifest).users[0]
+            $result = Remove-EntraUser -User $user -Domain 'mls.example' -Confirm:$false
+            $result.Existed | Should -BeTrue
+            $result.Confirmed | Should -BeFalse
+        }
+
+        It 'Invoke-Main reports every category as Declined, never Deleted, when every prompt is declined - the review''s exact scenario' {
+            $summary = Invoke-TeardownForTest
+            $summary.CaDeleted | Should -Be 0
+            $summary.AppsDeleted | Should -Be 0
+            $summary.GroupsDeleted | Should -Be 0
+            $summary.UsersDeleted | Should -Be 0
+            $summary.CaDeclined | Should -Be $script:CaCount
+            $summary.AppsDeclined | Should -Be $script:AppCount
+            $summary.GroupsDeclined | Should -Be $script:GroupCount
+            $summary.UsersDeclined | Should -Be $script:UserCount
+        }
+
+        It 'fires zero real Graph DELETE calls when every confirmation is declined' {
+            Invoke-TeardownForTest | Out-Null
             Should -Invoke Invoke-GraphApi -Exactly -Times 0 -ParameterFilter { $Method -eq 'DELETE' }
         }
     }
