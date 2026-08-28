@@ -15,6 +15,7 @@
     "apps/mcp-tools",
     "apps/directline-token",
     "apps/cost-ingest",
+    "apps/compliance",
     "apps/shared/*"
   ],
   "scripts": {

@@ -1,0 +1,77 @@
+# Static serve for the compliance SPA on port 8080 (ACA ingress target).
+#
+# This is an nginx TEMPLATE, not a finished config. The nginx:alpine entrypoint
+# runs envsubst over /etc/nginx/templates/*.template and writes the result to
+# /etc/nginx/conf.d/, substituting only variables that are actually defined in
+# the environment — so nginx's own $uri / $host are left untouched.
+#
+# NO API PROXY: unlike control-tower and launch-ops, this app has no backend
+# (design spec section 5.1). The catalog and every compliance/state/*.json
+# snapshot are baked into the JS bundle at build time (see the Dockerfile and
+# src/main.tsx) — there is nothing for the browser to fetch at runtime, and
+# so no DATA_API_ORIGIN and no /api/ location.
+#
+# CSP, following the pattern the remediation plan's Task 14 established on
+# control-tower/launch-ops, narrowed for an app with no backend and no
+# Direct Line / Application Insights integration to allowlist:
+#   - script-src 'self'          only this app's own built JS
+#   - style-src 'self' 'unsafe-inline'
+#                                 Fluent UI v9 (Griffel) injects its CSS-in-JS
+#                                 via <style> tags with no nonce wired up;
+#                                 default-src alone does not cover style-src.
+#                                 Verified by the same method Task 14 used:
+#                                 building this app and loading it under this
+#                                 exact policy.
+#   - img-src 'self' data:       data: for the inline favicon only
+#   - connect-src 'self'         nothing is fetched at runtime today; kept as
+#                                 a same-origin default rather than 'none' so
+#                                 a future same-origin XHR is not a silent CSP
+#                                 violation that looks like a network bug
+#   - frame-ancestors 'none'; base-uri 'none'
+#
+# add_header does not merge across nesting levels: a location block that sets
+# its own add_header (below, /assets/ sets Cache-Control) stops inheriting the
+# server-level ones. So the security headers are repeated in that location too,
+# rather than relying on inheritance and silently losing them on hashed assets.
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+
+    # Liveness endpoint for ACA probes and V7.1. The content-hash marker is
+    # MLS_IMAGE_DIGEST, substituted here by the same envsubst pass and set on the
+    # container app by Task 13's deploy. V7.1 compares it against the imageDigest
+    # the deploy run recorded, which is what binds "endpoint is up" to "endpoint
+    # serves the audited build" — a 200 alone does not satisfy the criterion. Its
+    # image default is the literal "unset", so a container deployed outside that
+    # path says so instead of pretending.
+    location = /healthz {
+        default_type text/plain;
+        return 200 "ok ${MLS_IMAGE_DIGEST}\n";
+    }
+
+    # Hashed build assets are immutable. Repeats the security headers set
+    # above: this location's own add_header for Cache-Control means it no
+    # longer inherits the server block's add_header directives.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy no-referrer always;
+        try_files $uri =404;
+    }
+
+    # SPA fallback.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
