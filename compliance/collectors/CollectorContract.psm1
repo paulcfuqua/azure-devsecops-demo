@@ -246,6 +246,19 @@ function New-MlsEvidence {
         field that lets a human judge whether the criterion-to-control mapping is honest
         (spec section 6.1), so a record without it carries no defensible claim and this
         function refuses to build one.
+    .PARAMETER Criterion
+        The Verifier criterion id this record came from, e.g. 'V3.3'. Optional, because
+        evidence comes in two shapes and only one of them has a criterion:
+          * CRITERION-SCOPED - produced by the verification-suite collector from a layer
+            audit row. Task 3's Get-MlsControlStatus matches these against an
+            assessment's declared `criteria` list BY THIS FIELD, so a record without it
+            can never satisfy a declared criterion however well its control matches.
+          * CONTROL-SCOPED - produced by the repo-static, github-security, azure-policy
+            and manual collectors, which observe a control directly and have no criterion
+            to name. These carry $null here.
+        It lives in the contract rather than being bolted on by each collector because
+        two other tasks already depend on reading it: Task 5's tests select on
+        `.criterion`, and Task 3's derivation joins on it.
     .PARAMETER Artifact
         The committed report or file this record came from, when there is one. Optional.
     .OUTPUTS
@@ -261,11 +274,13 @@ function New-MlsEvidence {
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Source,
         [Parameter(Mandatory)][ValidateSet('pass', 'fail', 'inconclusive')][string]$Status,
         [Parameter(Mandatory)][AllowEmptyString()][string]$Observed,
+        [AllowNull()][AllowEmptyString()][string]$Criterion = $null,
         [AllowNull()][AllowEmptyString()][string]$Artifact = $null
     )
 
     $candidate = [pscustomobject]@{
         control     = $Control
+        criterion   = if ([string]::IsNullOrWhiteSpace($Criterion)) { $null } else { $Criterion.Trim() }
         source      = $Source
         status      = $Status
         observed    = $Observed

@@ -223,3 +223,54 @@ Describe 'collector isolation' {
         Should -Invoke Invoke-MlsGit -Exactly -Times 1
     }
 }
+
+Describe 'evidence carries the criterion id Task 3 joins on' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..' 'collectors' 'CollectorContract.psm1') -Force
+        Import-Module (Join-Path $PSScriptRoot '..' 'lib' 'MlsCompliance.psm1') -Force
+    }
+
+    It 'carries a criterion when the record came from a Verifier criterion' {
+        $record = New-MlsEvidence -Control '3.5.3' -Source 'verification-suite' `
+            -Status 'fail' -Observed 'CA policies are report-only' -Criterion 'V3.3'
+        $record.criterion | Should -Be 'V3.3'
+    }
+
+    It 'leaves criterion null for control-scoped evidence that has no criterion' {
+        # repo-static, github-security, azure-policy and manual observe a control
+        # directly. Inventing a criterion id for them would be a false join key.
+        $record = New-MlsEvidence -Control '3.5.3' -Source 'repo-static' `
+            -Status 'pass' -Observed 'SECURITY.md documents the reporting path'
+        $record.criterion | Should -BeNullOrEmpty
+    }
+
+    It 'a criterion-scoped record actually satisfies a declared criterion in the derivation' {
+        # The join this field exists for, tested end to end rather than assumed. Before
+        # -Criterion existed, a collector record could never match a declared criterion,
+        # so every machine-verified path was unreachable no matter what the collectors
+        # emitted.
+        $record = New-MlsEvidence -Control '3.5.3' -Source 'verification-suite' `
+            -Status 'pass' -Observed 'both policies enforced' -Criterion 'V3.3'
+
+        $result = Get-MlsControlStatus -Requirement @{ id = '3.5.3' } `
+            -Assessment @{ applicability = 'applicable'; criteria = @('V3.3') } `
+            -Evidence @($record)
+
+        $result.Status | Should -Be 'COMPLIANT'
+        $result.Provenance | Should -Be 'machine-verified'
+    }
+
+    It 'a control-scoped record cannot satisfy a declared criterion' {
+        # Matching on control alone would let repo-static evidence silently satisfy a
+        # criterion it never ran.
+        $record = New-MlsEvidence -Control '3.5.3' -Source 'repo-static' `
+            -Status 'pass' -Observed 'documented in the runbook'
+
+        $result = Get-MlsControlStatus -Requirement @{ id = '3.5.3' } `
+            -Assessment @{ applicability = 'applicable'; criteria = @('V3.3') } `
+            -Evidence @($record)
+
+        $result.Status | Should -Be 'INCONCLUSIVE'
+        $result.Provenance | Should -Be 'none' -Because 'nothing matched the declared criterion'
+    }
+}
