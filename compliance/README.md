@@ -21,18 +21,22 @@ follow-on implementation plan proceeds.
   into this document. Six findings (F14, F15, F19, F20, F21, F22) map to no 800-171 control
   and are recorded here only, not as assessment files, so they don't fall through the
   gap between the security and compliance framings.
+- **`catalog/`** — the full 110-requirement NIST SP 800-171 Rev 2 catalog with its mappings
+  to 800-53 Rev 5, CMMC 2.0 and FAR 52.204-21, in the schema from spec §3.1. This is
+  **authored reference data**: it carries no status field and asserts nothing about this
+  estate. See [`catalog/README.md`](catalog/README.md) for its sources and for the four
+  places its content is an editorial decision rather than a straight transcription. The
+  control ids used in `assessment/` are not yet validated against it; that join arrives
+  with the derivation function.
 - **`tests/register.Tests.ps1`** — Pester 6 tests asserting the register's structural
   integrity: an assessment file exists for every control the findings table cites, every
   file is valid JSON with the required fields, no `not-applicable` control lacks a
   justification, and every assertion cites at least one piece of evidence.
+- **`tests/catalog.Tests.ps1`** — Pester 6 tests asserting the catalog's counts, numbering
+  and mapping shape, so a partial transcription cannot pass for a complete framework.
 
 ## What does not exist yet
 
-- **`catalog/`** — the full 110-requirement NIST SP 800-171 Rev 2 catalog with framework
-  mappings (800-53 Rev 5, CMMC 2.0, FAR 52.204-21). Building this is Task 1 of the
-  compliance-platform implementation plan; until it lands, the control IDs in
-  `assessment/` are used verbatim from the review and are not yet validated against a
-  catalog.
 - **`state/`** — collector-emitted, CI-committed snapshots joining the catalog and
   assessment records against live evidence (`verification/` reports, repo statics, GHAS
   posture, policy compliance state). Nothing here is machine-verified yet; every record
