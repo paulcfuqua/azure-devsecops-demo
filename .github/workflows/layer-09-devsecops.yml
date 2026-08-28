@@ -58,9 +58,18 @@ name: layer-09-devsecops
 # that was never enabled proves nothing. Enabling raises the run rate by ~USD
 # 0.29/day prorated for the minutes the round-trip takes. The Orchestrator files
 # the gate before this workflow runs (L09.md Preconditions); this workflow states
-# the delta and — critically — disables in an `always()` step, so a failure
-# between enable and disable cannot leave the plan on. `defender_toggle: false`
+# the delta and — critically — restores in an `always()` step, so a failure
+# between enable and restore cannot leave the plan on. `defender_toggle: false`
 # skips the whole thing, at the cost of V9.5.
+#
+# RESTORE-WHAT-YOU-FOUND, NOT DISABLE-UNCONDITIONALLY (F31). `defender_toggle`
+# defaults TRUE, and this workflow used to end by disabling the plan whatever it
+# had found — described in the summary as "a spend DECREASE, so no gate applies".
+# For an adopter whose subscription already ran Defender for Containers, that is
+# a paid security control silently switched off by a demo. The job now reads the
+# incoming tier first: if it is anything but `Free` the job REFUSES and changes
+# nothing, and the disable step only fires when this run is the one that enabled
+# the plan. "It costs less afterwards" is not the same as "it is safe".
 #
 # Pre-G0 guard: all Azure-facing jobs are gated on the `demo` environment
 # variables. The GitHub-only jobs (GHAS report, Trivy negative test, SBOM
@@ -84,8 +93,10 @@ on:
         default: ''
       defender_toggle:
         description: >-
-          Run the G2-gated Defender Containers enable -> assert -> disable round-trip.
-          Turning it off leaves V9.5 unprovable, which the audit reports as a FAIL.
+          Run the G2-gated Defender Containers enable -> assert -> restore round-trip.
+          The job refuses if the plan is already enabled on this subscription, so it
+          can never disable a control it did not turn on (F31). Turning this off
+          leaves V9.5 unprovable, which the audit reports as a FAIL.
         type: boolean
         required: false
         default: true
@@ -107,7 +118,7 @@ on:
         required: false
         default: ''
       defender_toggle:
-        description: Run the G2-gated Defender Containers round-trip (V9.5 needs it).
+        description: Run the G2-gated Defender Containers round-trip (V9.5 needs it). Refuses if the plan is already on (F31).
         type: boolean
         required: false
         default: true
@@ -307,7 +318,7 @@ jobs:
       - name: Trivy must reject the seeded CRITICAL
         id: scan
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           image-ref: mls-trivy-negative:seeded
           format: table
@@ -317,7 +328,7 @@ jobs:
           exit-code: '1'
 
       - name: Record what Trivy actually found
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           image-ref: mls-trivy-negative:seeded
           format: json
@@ -397,7 +408,7 @@ jobs:
           docker build --tag mls-trivy-negative:pinned "${work}"
 
       - name: Trivy must accept the pinned rebuild
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           image-ref: mls-trivy-negative:pinned
           format: table
@@ -513,6 +524,38 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # F31. Read the plan BEFORE touching it, and remember what was there.
+      # `defender_toggle` defaults true, so an adopter who already runs Defender
+      # for Containers used to have this job switch a PAID SECURITY CONTROL OFF
+      # at the end of every L9 run — reported in the summary as "a spend
+      # DECREASE, so no gate applies", which is true about cost and wrong about
+      # everything else. This job restores what it found: it only disables a
+      # plan it enabled itself.
+      - name: Record the plan's incoming state
+        id: incoming
+        run: |
+          set -euo pipefail
+          tier="$(az security pricing show --name "${DEFENDER_PLAN}" --query pricingTier --output tsv)"
+          echo "tier=${tier}" >> "${GITHUB_OUTPUT}"
+          echo "Incoming pricingTier for ${DEFENDER_PLAN}: ${tier}"
+
+      - name: Refuse to run against a subscription that already has the plan on
+        if: ${{ steps.incoming.outputs.tier != 'Free' }}
+        run: |
+          set -euo pipefail
+          echo "::error title=Defender plan already enabled::${DEFENDER_PLAN} reads '${{ steps.incoming.outputs.tier }}', not 'Free'. This job exists to demonstrate an enable/disable round-trip and will NOT disable a plan it did not enable."
+          {
+            echo "### L9 Defender round-trip — refused"
+            echo
+            echo "\`${DEFENDER_PLAN}\` was already **${{ steps.incoming.outputs.tier }}** on this"
+            echo "subscription. Turning it off at the end of this run would remove a paid"
+            echo "security control this estate did not pay for and does not own (F31)."
+            echo
+            echo "Re-run with \`defender_toggle: false\` to skip the round-trip. The rest of"
+            echo "L9 is unaffected."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit 1
+
       - name: State the G2 delta
         run: |
           set -euo pipefail
@@ -520,9 +563,10 @@ jobs:
             echo "### L9 Defender round-trip (G2)"
             echo
             echo "- plan: **${DEFENDER_PLAN}** (subscription scope)"
+            echo "- incoming state: \`${{ steps.incoming.outputs.tier }}\` (\`Free\` is the ARM representation of Off)"
             echo "- stated delta: **~USD 0.29/day, prorated** while the plan reads \`Standard\`"
             echo "- duration: minutes — enable, assert, disable"
-            echo "- the disable step runs unconditionally, even if the assert fails"
+            echo "- the disable step runs whenever THIS RUN enabled the plan, even if the assert fails"
             echo "- Foundational CSPM stays on and is free (spec F10); untouched here"
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -545,27 +589,30 @@ jobs:
           fi
 
       # always(): if the assert above failed, the plan may still be enabled, and an
-      # enabled plan bills. Gated only on the login having succeeded, because without
-      # it there is no session to disable through.
-      - name: Disable the plan (spend decrease, no gate)
-        if: ${{ always() && steps.login.outcome == 'success' }}
+      # enabled plan bills. Gated on the login having succeeded, because without it
+      # there is no session to disable through — AND on the incoming state having
+      # been Free, so this only ever restores what it found (F31). If the plan was
+      # already on, the refusal step above stopped the job before anything was
+      # enabled, and this step must not fire.
+      - name: Restore the plan to the state this run found it in
+        if: ${{ always() && steps.login.outcome == 'success' && steps.incoming.outputs.tier == 'Free' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           ./scripts/defender/toggle-containers-plan.ps1 -Disable `
             -SubscriptionId $env:AZURE_SUBSCRIPTION_ID -PlanName $env:DEFENDER_PLAN -Confirm:$false
 
-      - name: Assert the plan is left Off
-        if: ${{ always() && steps.login.outcome == 'success' }}
+      - name: Assert the plan is left as it was found
+        if: ${{ always() && steps.login.outcome == 'success' && steps.incoming.outputs.tier == 'Free' }}
         run: |
           set -euo pipefail
           tier="$(az security pricing show --name "${DEFENDER_PLAN}" --query pricingTier --output tsv)"
           echo "pricingTier=${tier}"
           {
-            echo "- closing state: \`${tier}\` (\`Free\` is the ARM representation of Off)"
+            echo "- closing state: \`${tier}\` (\`Free\` is the ARM representation of Off) — matching the incoming state"
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "${tier}" != "Free" ]; then
-            echo "::error title=Defender left enabled::${DEFENDER_PLAN} reads '${tier}'. This is a cost leak (L09 failure mode 2). Disable immediately: pwsh scripts/defender/toggle-containers-plan.ps1 -Disable"
+            echo "::error title=Defender left enabled::${DEFENDER_PLAN} reads '${tier}' but this run found it 'Free'. This is a cost leak (L09 failure mode 2). Disable immediately: pwsh scripts/defender/toggle-containers-plan.ps1 -Disable"
             exit 1
           fi
 
