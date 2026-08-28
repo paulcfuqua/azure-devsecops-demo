@@ -102,13 +102,16 @@
     Two rules make that structural rather than a matter of collector discipline:
 
       1. -Status accepts only the literal words `pass`, `fail` or `inconclusive`
-         (case-sensitively) - never `skip`, `pending`, or anything else a criterion
-         runner might use for "did not run". A collector that read a SKIPPED or PENDING
-         criterion and wants to be honest about it must simply not call New-MlsEvidence
-         for that criterion at all; the contract will not launder the attempt into a
-         record if it tries, because there is no accepted status word for "did not run".
-         This is what Task 3's carried-forward finding asked for: evidence emission
-         gated on a genuine PASS/FAIL, never on a criterion that did not run.
+         (case-sensitively) - the literal words `skip` and `pending` themselves are
+         refused, so nobody invents a fourth status. A collector that read a SKIPPED or
+         PENDING criterion reports it as `inconclusive` - never omitted, and never
+         `pass`. Omitting it would actually be LESS honest: under Task 3's derivation
+         (Get-MlsControlStatus) a claimed criterion with no matching evidence record
+         renders INCONCLUSIVE with provenance 'none' ("we have no idea"), while an
+         inconclusive record renders the same status with provenance 'machine-verified'
+         and an Observed line saying exactly why the criterion did not resolve - strictly
+         more informative, no less honest. What must never happen, and what this rule
+         exists to block, is a SKIPPED or PENDING criterion surfacing as `pass`.
       2. -Observed is mandatory and, after trimming whitespace, must be non-empty.
          Observed is the field that lets a human judge whether a criterion-to-control
          mapping is honest (spec section 6.1); a record without it is not evidence of
@@ -206,8 +209,8 @@ function Get-MlsEvidenceProblem {
     $status = Get-MlsProperty -InputObject $Record -Name 'status'
     if (-not ($script:MlsEvidenceStatus -ccontains "$status")) {
         $problem.Add("'status' is '$status'; it must be exactly one of $($script:MlsEvidenceStatus -join ', ') " +
-            "- a collector must never default an absent or unrecognised status, and never report 'skip' or " +
-            "'pending' as evidence (a criterion that did not run is not evidence of anything)")
+            "- a collector must never default an absent or unrecognised status, and must report a SKIPPED or " +
+            "PENDING criterion as 'inconclusive', never the literal word 'skip' or 'pending' and never 'pass'")
     }
 
     $observed = Get-MlsEvidenceText (Get-MlsProperty -InputObject $Record -Name 'observed')
@@ -238,9 +241,12 @@ function New-MlsEvidence {
     .PARAMETER Source
         The collector that produced this record, e.g. 'verification-suite'.
     .PARAMETER Status
-        pass | fail | inconclusive - the only three words a criterion that genuinely ran
-        can honestly report. There is no accepted word for "did not run"; a collector
-        reading a SKIPPED or PENDING criterion must not call this function for it at all.
+        pass | fail | inconclusive - the only three literal words accepted; `skip` and
+        `pending` are refused so nobody invents a fourth status. A collector reading a
+        SKIPPED or PENDING criterion reports it as `inconclusive` - that is the honest
+        word for "ran, but did not resolve to pass or fail" - never omitted and never
+        `pass`. See the module header (EVIDENCE MUST NEVER STAND FOR AN ABSENCE OF
+        OBSERVATION) for why silence is less honest than an inconclusive record here.
     .PARAMETER Observed
         What was actually seen, in plain language. Mandatory and non-blank: it is the
         field that lets a human judge whether the criterion-to-control mapping is honest

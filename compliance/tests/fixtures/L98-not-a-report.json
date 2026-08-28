@@ -1,0 +1,6 @@
+{
+  "layer": 98,
+  "layerId": "L98",
+  "title": "Valid JSON, but not a layer-audit report shape - no criteria array at all",
+  "notAReportField": true
+}
