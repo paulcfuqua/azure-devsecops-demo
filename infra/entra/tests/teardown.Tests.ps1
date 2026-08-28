@@ -204,6 +204,21 @@ Describe 'infra/entra/teardown.ps1' {
     }
 
     Context 'confirmation (Critical 1 / Important 6)' {
+        # Placed in THIS context on purpose: the 'declined confirmation' context
+        # below mocks Invoke-GraphMutation, so an assertion living there would
+        # exercise the mock and pass even against a hardcoded Confirmed = $true.
+        # Verified by mutation: hardcoding it turns this test red only from here.
+        It 'Invoke-GraphMutation derives Confirmed from ShouldProcess - not hardcoded (real function, deliberately not mocked here)' {
+            # Every other test in this context mocks Invoke-GraphMutation, which
+            # replaces the layer that does the deriving - so a hardcoded
+            # Confirmed = $true would ship green. This one calls the REAL helper;
+            # -WhatIf is a genuine, non-interactive way to make ShouldProcess
+            # return $false (F23 re-review, Important 1).
+            $result = Invoke-GraphMutation -Target 'probe' -Action 'Delete probe' -Method DELETE -Path 'users/probe-id' -WhatIf
+            $result.Confirmed | Should -BeFalse -Because 'ShouldProcess returns false under -WhatIf'
+            $result.Response | Should -BeNullOrEmpty -Because 'a declined mutation must not call Graph at all'
+        }
+
         It 'Invoke-GraphMutation - the only function that actually calls ShouldProcess - declares ConfirmImpact High' {
             # ConfirmImpact does not propagate from a caller to a callee: declaring
             # it only on Invoke-Main (which never calls ShouldProcess itself) left

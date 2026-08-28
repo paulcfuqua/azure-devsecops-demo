@@ -118,6 +118,19 @@ Describe 'infra/policy/teardown.ps1 - confirmation (Critical 1)' {
         $source | Should -Match '(?s)function Invoke-AzMutation \{.*?\$PSCmdlet\.ShouldProcess\('
     }
 
+    It 'Invoke-AzMutation derives Confirmed from ShouldProcess - not hardcoded' {
+        # The two assertions above are reflection/source checks; this one runs the
+        # real function. Without it, hardcoding Confirmed = $true would reintroduce
+        # Critical 1 (a declined delete reported as done) with the suite green
+        # (F23 re-review, Important 1). -WhatIf is a genuine, non-interactive way
+        # to make ShouldProcess return $false.
+        Mock Invoke-AzCli { throw 'Invoke-AzCli must not be reached when ShouldProcess declines' }
+        $result = Invoke-AzMutation -Target 'probe' -Action 'Delete probe' -Arguments @('policy', 'assignment', 'delete', '--name', 'probe') -WhatIf
+        $result.Confirmed | Should -BeFalse -Because 'ShouldProcess returns false under -WhatIf'
+        $result.Response | Should -BeNullOrEmpty -Because 'a declined mutation must not shell out to az at all'
+        Should -Invoke Invoke-AzCli -Exactly -Times 0
+    }
+
     It 'Invoke-Main itself does NOT call ShouldProcess - confirmation is delegated entirely to Invoke-AzMutation' {
         # Guards against a future edit re-introducing a second, redundant gate the
         # way infra/entra/teardown.ps1's wrapper functions once did (Important 6) -
@@ -257,6 +270,23 @@ Describe 'infra/policy/teardown.ps1 - Invoke-Main' {
     }
 
     Context 'everything exists - full teardown' {
+        It 'reports a declined delete as Declined, never Deleted - the re-review''s exact scenario' {
+            # This script had NO decline coverage at all before the F23 re-review
+            # (Important 1): deleting Invoke-Main's Declined branches shipped green
+            # against the whole suite. Everything still "exists" via this block's
+            # Invoke-AzCli harness; only the ShouldProcess answer changes.
+            Mock Invoke-AzMutation { @{ Confirmed = $false; Response = $null } }
+
+            $summary = Invoke-TeardownForTest
+
+            $summary.AssignmentsDeleted | Should -Be 0 -Because 'every prompt was declined'
+            $summary.AssignmentsDeclined | Should -Be $script:AssignmentNames.Count
+            $summary.NistOutcome | Should -Be 'Declined'
+            $summary.SubscriptionOutcome | Should -Be 'Declined'
+            $summary.ManagementGroupOutcome | Should -Be 'Declined'
+            $script:CallLog | Should -BeNullOrEmpty -Because 'a declined delete must not shell out to az'
+        }
+
         It 'deletes every tag/location assignment, the NIST assignment, moves the subscription, then deletes the MG' {
             $summary = Invoke-TeardownForTest
             $summary.AssignmentsDeleted | Should -Be $script:AssignmentNames.Count

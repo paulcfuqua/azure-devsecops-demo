@@ -1113,10 +1113,12 @@ carries `ConfirmImpact = 'High'` has to be the one that actually calls
 `$PSCmdlet.ShouldProcess`**, not `Invoke-Main`. `ConfirmImpact` does not
 propagate from a caller to a callee, so an earlier revision that declared it only
 on `Invoke-Main` prompted for nothing at all and deleted everything silently
-(F23 review, Critical 1). It now sits on the callers of `ShouldProcess` itself:
-`Invoke-GraphMutation` and the four `Remove-*` wrappers in the Entra script,
-`Invoke-AzMutation` and its three wrappers in the policy script, and
-`Remove-SensitivityLabel` / `Remove-PublishedLabelPolicy` in the Purview script.
+(F23 review, Critical 1). It now sits on exactly the four functions that call `ShouldProcess`:
+`Invoke-GraphMutation` (Entra), `Invoke-AzMutation` (policy), and
+`Remove-SensitivityLabel` / `Remove-PublishedLabelPolicy` (Purview). The Entra and
+policy `Remove-*` wrappers only *declare* `SupportsShouldProcess` and delegate —
+which is what satisfies the analyzer — so they run at the default `ConfirmImpact`
+of Medium and deliberately carry no attribute of their own.
 Measured both ways: stripping the attribute from `Invoke-Main` changes nothing,
 while stripping it from the `ShouldProcess`-calling function restores the silent
 delete. A maintainer "tidying up" the callee attribute would reintroduce the bug; a G3 banner
@@ -1129,9 +1131,9 @@ informational no-op on every path, never a terminating error; and each ends with
 the repo's `if (-not $env:MLS_SKIP_MAIN) { Invoke-Main ... }` guard so Pester can
 dot-source it without executing anything.
 
-TDD: 60 assertions across three new test files — `infra/entra/tests/
-teardown.Tests.ps1` (22), `infra/purview/tests/teardown.Tests.ps1` (14), and
-`infra/policy/tests/teardown.Tests.ps1` (24, including three direct unit tests of
+TDD: 64 assertions across three new test files — `infra/entra/tests/
+teardown.Tests.ps1` (23), `infra/purview/tests/teardown.Tests.ps1` (15), and
+`infra/policy/tests/teardown.Tests.ps1` (26, including three direct unit tests of
 `Invoke-AzCli`'s own `$LASTEXITCODE` handling against a local `az` stand-in
 function, since the script otherwise has no seam to prove a native-command failure
 is actually checked rather than silently ignored). The original 29 all failed
@@ -1158,16 +1160,21 @@ declare but never call, delegate to `Invoke-AzMutation`, and score zero findings
 The wrapper-level calls were therefore removed at no analyzer cost, restoring
 single-point mutation detection.
 
-Two mutations that previously escaped the suite now fail it: neutering one
-`ShouldProcess` layer alone (35/0 → 34 passed, 1 failed), and dropping the
-`displayName` filter from a lookup so it resolves an arbitrary tenant object
-(35/0 → 26 passed, 9 failed). The second closes the more serious gap: the suite
-formerly asserted only how *many* objects were deleted, never *which*, which for
-scripts whose entire safety argument is "only what the manifest names" was the
-test class that mattered most. PSScriptAnalyzer reports zero findings at Error or
+Mutations that previously escaped the suite now fail it. Neutering one
+`ShouldProcess` layer alone, and dropping the `displayName` filter from a lookup so
+it resolves an arbitrary tenant object, both go red — the second closes the more
+serious gap, because the suite formerly asserted only how *many* objects were
+deleted, never *which*, which for scripts whose entire safety argument is "only
+what the manifest names" was the test class that mattered most. A later re-review
+found one more that still escaped: hardcoding `Confirmed = $true` in a mutation
+helper reintroduced the declined-reported-as-deleted defect while every suite
+stayed green, because each decline test mocked the layer doing the deriving. Each
+script now exercises the real helper through `-WhatIf` — a genuine, non-interactive
+way to make `ShouldProcess` return `$false` — and that mutation is caught in all
+three (entra 42/1, Purview 31/1, policy 25/1, against 43/32/26 green). PSScriptAnalyzer reports zero findings at Error or
 Warning severity on all three new scripts **and all three new test files**. Full
 local suite (`Invoke-Pester -Path scripts,infra,data,verification,compliance`):
-817 passed, 0 failed, up from the 769/0 baseline entering this task.
+833 passed, 0 failed, up from the 769/0 baseline entering this task.
 
 **Stale-claim sweep after the fix:** `docs/runbooks/kill-rebuild.md` § 7 step 1's
 `[derived name, per L04]` marker — the one the brief for this task singled out as

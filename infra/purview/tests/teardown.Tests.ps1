@@ -205,9 +205,15 @@ Describe 'infra/purview/teardown.ps1' {
         # These two removers call $PSCmdlet.ShouldProcess directly rather than
         # routing through a mockable mutation helper, and -Confirm:$false (used by
         # every other context here, so the suite never blocks on a live prompt)
-        # forces ShouldProcess to return $true. Mocking the removers to return the
-        # declined shape is therefore the only non-interactive way to exercise
-        # Invoke-Main's reporting for this path.
+        # forces ShouldProcess to return $true. Mocking the removers is how the
+        # tests below drive Invoke-Main's REPORTING logic.
+        #
+        # That mocking replaces the layer under test for the derivation itself, so
+        # it proves nothing about whether a remover actually derives Confirmed from
+        # ShouldProcess - a remover hardcoding Confirmed = $true would ship green
+        # (F23 re-review, Important 1). The final test in this context closes that
+        # by exercising the REAL removers: -WhatIf is a genuine, non-interactive way
+        # to make ShouldProcess return $false.
         It 'reports every category as Declined, not Deleted, when every prompt is declined' {
             Mock Remove-PublishedLabelPolicy { @{ Name = $Name; Existed = $true; Confirmed = $false } }
             Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $false } }
@@ -229,6 +235,22 @@ Describe 'infra/purview/teardown.ps1' {
             $values = @($outcomes.PSObject.Properties | ForEach-Object { $_.Value })
             $values | Should -Not -Contain 'Declined'
             @($values | Where-Object { $_ -eq 'Deleted' }).Count | Should -Be 5
+        }
+
+        It 'the real removers derive Confirmed from ShouldProcess - not hardcoded (no mocks of the removers)' {
+            # Deliberately does NOT mock Remove-SensitivityLabel /
+            # Remove-PublishedLabelPolicy: this is the one assertion in the file
+            # that would catch a remover hardcoding Confirmed = $true.
+            $policyResult = Remove-PublishedLabelPolicy -Name $script:ExpectedPolicyName -WhatIf
+            $policyResult.Existed | Should -BeTrue -Because 'the policy is mocked as present'
+            $policyResult.Confirmed | Should -BeFalse -Because 'ShouldProcess returns false under -WhatIf'
+
+            $labelResult = Remove-SensitivityLabel -Name $script:ExpectedNames[0] -WhatIf
+            $labelResult.Existed | Should -BeTrue
+            $labelResult.Confirmed | Should -BeFalse
+
+            Should -Invoke Remove-Label -Exactly -Times 0
+            Should -Invoke Remove-LabelPolicy -Exactly -Times 0
         }
 
         It 'a declined delete is distinguished from a dry run - -WhatIf reports WhatIf, not Declined' {
