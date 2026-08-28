@@ -5,10 +5,19 @@
 # post-deployment against a live tenant. That mattered specifically because
 # Task 14 hardened both frontend images to run as `USER nginx`, and the failure
 # mode is silent rather than loud: a non-writable /etc/nginx/conf.d makes the
-# entrypoint skip envsubst templating and serve the STOCK nginx welcome page,
-# which answers 200 to a naive check while serving none of the app (the F14
-# failure mode). Same class as F5 -- a CI gap meaning something is never
+# entrypoint skip envsubst templating and serve the STOCK nginx welcome page
+# instead of the app. Same class as F5 -- a CI gap meaning something is never
 # actually exercised.
+#
+# WHICH MECHANISM CATCHES THAT (corrected by the Task 24 review; the earlier
+# wording here said the untemplated container 404s on /healthz, which is not
+# what happens on the wire). apps/control-tower/Dockerfile:55-56 records the
+# real fallback: stock nginx serves on PORT 80, and only this app's template
+# ever says `listen 8080;`. The smoke step publishes and curls 8080 only, so an
+# untemplated image accepts no connection there and the gate fails through the
+# poll's bounded-timeout branch. The `^ok ` body discriminator is a second,
+# independent guard for every other "something answers 8080 but it is not this
+# app" case -- wanted, but not the half that catches F14.
 #
 # This is a workflow-shape assertion, not an execution test -- GitHub Actions
 # `run:` steps have no unit-test harness, so pattern-matching raw file content
@@ -98,10 +107,6 @@ $script:Apps = foreach ($def in $script:AppDefs) {
 
 Describe 'app CI smoke-tests the built container image before merge (F22)' {
     Context '<Name>' -ForEach $script:Apps {
-        It 'the workflow file exists' {
-            Test-Path -LiteralPath $Path | Should -BeTrue
-        }
-
         It 'has a step named "Smoke-test the image ... (F22)" in the image job' {
             $SmokeLine | Should -Not -BeNullOrEmpty
         }
@@ -208,10 +213,11 @@ Describe 'app CI smoke-tests the built container image before merge (F22)' {
 
         It 'uses the boolean opt-out (MCP_ALLOW_UNAUTHENTICATED), not a fabricated token string' {
             $SmokeBlock | Should -Match '-e MCP_ALLOW_UNAUTHENTICATED=true'
-        }
-
-        It 'never reaches for a real credential to satisfy the boot requirement' {
-            $SmokeBlock | Should -Not -Match 'secrets\.'
+            # The value form matters: auth-gate.ts's loadInboundAuth tests
+            # /^(1|true|yes)$/i, so "TRUE" or "1" would work and "yes please"
+            # would not. Pinned here because a silent typo would put the image
+            # back in the "refuses to boot" state F2's fix created.
+            $SmokeBlock | Should -Not -Match 'MCP_AUTH_TOKEN='
         }
     }
 

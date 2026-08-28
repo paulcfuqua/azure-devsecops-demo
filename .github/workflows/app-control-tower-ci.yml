@@ -191,11 +191,18 @@ jobs:
           # docker-entrypoint.sh skips the envsubst pass over *.template
           # (20-envsubst-on-templates.sh checks `[ -w "$output_dir" ]` and
           # no-ops rather than erroring) and nginx falls back to the STOCK
-          # "Welcome to nginx!" config baked into nginx:1.27-alpine. That
-          # config answers 200 on "/" -- a check against "/" alone would see a
-          # "healthy" container and prove nothing -- but it has no "/healthz"
-          # location at all, so checking /healthz AND the app's own "ok "
-          # body prefix is what actually tells the two apart.
+          # "Welcome to nginx!" config baked into nginx:1.27-alpine.
+          #
+          # WHICH HALF OF THIS CHECK CATCHES THAT (corrected by the Task 24
+          # review; the earlier wording claimed a 404 on /healthz). Per this
+          # app's Dockerfile, stock nginx serves on PORT 80 -- only our
+          # template ever says `listen 8080;`. We publish and curl 8080 only,
+          # so an untemplated image accepts no connection at all and the poll
+          # below fails on its bounded timeout. That timeout branch is the
+          # load-bearing one for the F14 regression. The "ok " body-prefix
+          # assertion is an independent second guard, covering every other
+          # "something answers 8080 but it is not this app" case that a bare
+          # 200 would wave through.
           #
           # Placed after the Trivy CRITICAL gate (a vulnerable image is never
           # even started) and before "Log in to GHCR" (no registry credential
@@ -215,7 +222,7 @@ jobs:
 
           host_port="$(docker port "${container_id}" 8080/tcp | awk -F: '{print $NF}' | head -n1)"
           if [ -z "${host_port}" ]; then
-            echo "::error::control-tower container never published port 8080 -- it likely exited immediately"
+            echo "::error::control-tower: docker port reported no host mapping for 8080. Usually this means the container is already gone (an image whose entrypoint exits immediately); a container that starts but never binds 8080 normally fails the poll below instead."
             docker logs "${container_id}" 2>&1 || true
             exit 1
           fi
@@ -240,7 +247,7 @@ jobs:
 
           echo "GET /healthz -> ${status}: ${body}"
           if [ "${status}" != "200" ] || ! printf '%s' "${body}" | grep -Eq '^ok '; then
-            echo "::error::control-tower /healthz did not return the app's own payload (status ${status}, body: ${body}) -- this is the F14 failure mode: the stock nginx page instead of this app"
+            echo "::error::control-tower answered on 8080 but /healthz did not return this app's own payload (status ${status}, body: ${body}) -- something is serving that port and it is not this app. Note the F14 untemplated-nginx case does NOT land here: stock nginx serves on port 80, so that regression fails the poll above with no connection at all."
             docker logs "${container_id}" 2>&1 || true
             exit 1
           fi

@@ -230,7 +230,7 @@ jobs:
 
           host_port="$(docker port "${container_id}" 8080/tcp | awk -F: '{print $NF}' | head -n1)"
           if [ -z "${host_port}" ]; then
-            echo "::error::mcp-tools container never published port 8080 -- it likely exited immediately"
+            echo "::error::mcp-tools: docker port reported no host mapping for 8080. Usually this means the container is already gone (an image whose entrypoint exits immediately); a container that starts but never binds 8080 normally fails the poll below instead."
             docker logs "${container_id}" 2>&1 || true
             exit 1
           fi
