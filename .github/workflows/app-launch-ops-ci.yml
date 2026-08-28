@@ -3,7 +3,8 @@ name: app-launch-ops-ci
 # =============================================================================
 # Path-filtered CI for apps/launch-ops (L7).
 # Playbook: docs/runbooks/layers/L07.md
-# build -> test -> container build -> Trivy (fail on CRITICAL) -> GHCR push
+# build -> test -> container build -> Trivy (fail on CRITICAL) -> smoke-test
+#       (F22: docker run + /healthz) -> GHCR push
 #       -> deploy to ACA via OIDC (guarded on the demo environment).
 #
 # ---------------------------------------------------------------------------
@@ -179,6 +180,72 @@ jobs:
         with:
           sarif_file: trivy-launch-ops.sarif
           category: trivy-launch-ops
+
+      - name: Smoke-test the image — boot it and check its own /healthz (F22)
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          set -euo pipefail
+          # F22: CI built and Trivy-scanned this image but never started it, so
+          # Task 14's USER-nginx hardening had no proof the entrypoint actually
+          # serves THIS app. The failure mode is silent, not loud: if
+          # /etc/nginx/conf.d is not writable by `nginx`, the base image's
+          # docker-entrypoint.sh skips the envsubst pass over *.template
+          # (20-envsubst-on-templates.sh checks `[ -w "$output_dir" ]` and
+          # no-ops rather than erroring) and nginx falls back to the STOCK
+          # "Welcome to nginx!" config baked into nginx:1.27-alpine. That
+          # config answers 200 on "/" -- a check against "/" alone would see a
+          # "healthy" container and prove nothing -- but it has no "/healthz"
+          # location at all, so checking /healthz AND the app's own "ok "
+          # body prefix is what actually tells the two apart.
+          #
+          # Placed after the Trivy CRITICAL gate (a vulnerable image is never
+          # even started) and before "Log in to GHCR" (no registry credential
+          # has entered the job's environment yet). The brief's other placement
+          # rule -- no job holding packages:write or id-token:write -- cannot be
+          # honoured to the letter: this `image` job builds AND pushes, so it
+          # holds packages:write (and security-events:write) by construction,
+          # same as every app-*-ci.yml image job. This is the closest safe
+          # position inside the only job that has the built image loaded (see
+          # the Task 24 report for the full ruling).
+          container_id="$(docker run -d -p 127.0.0.1::8080 "${IMAGE}")"
+          cleanup() {
+            docker stop "${container_id}" >/dev/null 2>&1 || true
+            docker rm "${container_id}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          host_port="$(docker port "${container_id}" 8080/tcp | awk -F: '{print $NF}' | head -n1)"
+          if [ -z "${host_port}" ]; then
+            echo "::error::launch-ops container never published port 8080 -- it likely exited immediately"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+          url="http://127.0.0.1:${host_port}/healthz"
+          status=""
+          body=""
+          for _ in $(seq 1 30); do
+            if raw="$(curl -s --max-time 3 -w '\n%{http_code}' "${url}")"; then
+              status="${raw##*$'\n'}"
+              body="${raw%$'\n'*}"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "${status}" ]; then
+            echo "::error::launch-ops never accepted a connection on :8080/healthz within 60s"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+          echo "GET /healthz -> ${status}: ${body}"
+          if [ "${status}" != "200" ] || ! printf '%s' "${body}" | grep -Eq '^ok '; then
+            echo "::error::launch-ops /healthz did not return the app's own payload (status ${status}, body: ${body}) -- this is the F14 failure mode: the stock nginx page instead of this app"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
 
       - name: Log in to GHCR
         if: ${{ github.event_name != 'pull_request' }}

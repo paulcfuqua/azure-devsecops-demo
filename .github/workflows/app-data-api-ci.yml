@@ -7,7 +7,8 @@ name: app-data-api-ci
 #
 # build -> test (route/shape parity with BOTH frontends' ApiProvider, allowlist,
 #          row caps, error shapes, mocked cloud adapters)
-#       -> container build -> Trivy (fail on CRITICAL) -> GHCR push
+#       -> container build -> Trivy (fail on CRITICAL) -> smoke-test
+#       (F22: docker run + /healthz) -> GHCR push
 #       -> deploy to ACA via OIDC (guarded on the demo environment).
 #
 # This service answers what apps/launch-ops and apps/control-tower already
@@ -199,6 +200,74 @@ jobs:
         with:
           sarif_file: trivy-data-api.sarif
           category: trivy-data-api
+
+      - name: Smoke-test the image — boot it and check its own /healthz (F22)
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          set -euo pipefail
+          # F22: CI built and Trivy-scanned this image but never started it.
+          # data-api boots in MLS_DATA_BACKENDS=local mode (config.ts's default
+          # when the var is unset) with no environment at all: LocalTablesBackend
+          # only reads data/generated/*.json lazily per table request, and
+          # /healthz never touches it, so the process comes up and answers
+          # /healthz with no setup here.
+          #
+          # Placed after the Trivy CRITICAL gate (a vulnerable image is never
+          # even started) and before "Log in to GHCR" (no registry credential
+          # has entered the job's environment yet). The brief's other placement
+          # rule -- no job holding packages:write or id-token:write -- cannot be
+          # honoured to the letter: this `image` job builds AND pushes, so it
+          # holds packages:write (and security-events:write) by construction,
+          # same as every app-*-ci.yml image job. This is the closest safe
+          # position inside the only job that has the built image loaded (see
+          # the Task 24 report for the full ruling).
+          container_id="$(docker run -d -p 127.0.0.1::8080 "${IMAGE}")"
+          cleanup() {
+            docker stop "${container_id}" >/dev/null 2>&1 || true
+            docker rm "${container_id}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          host_port="$(docker port "${container_id}" 8080/tcp | awk -F: '{print $NF}' | head -n1)"
+          if [ -z "${host_port}" ]; then
+            echo "::error::data-api container never published port 8080 -- it likely exited immediately"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+          url="http://127.0.0.1:${host_port}/healthz"
+          status=""
+          body=""
+          for _ in $(seq 1 30); do
+            if raw="$(curl -s --max-time 3 -w '\n%{http_code}' "${url}")"; then
+              status="${raw##*$'\n'}"
+              body="${raw%$'\n'*}"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "${status}" ]; then
+            echo "::error::data-api never accepted a connection on :8080/healthz within 60s"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+          echo "GET /healthz -> ${status}: ${body}"
+          if [ "${status}" != "200" ]; then
+            echo "::error::data-api /healthz returned HTTP ${status} (body: ${body})"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+          # The app-own discriminator (not the stock anything -- this image has
+          # no nginx fallback, but the contract is the same idea as the two
+          # frontends': the payload must be the app's, not a default).
+          if ! printf '%s' "${body}" | jq -e '.service == "data-api"' >/dev/null 2>&1; then
+            echo "::error::data-api /healthz did not report the app's own payload (expected .service == \"data-api\", got: ${body})"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
 
       - name: Log in to GHCR
         if: ${{ github.event_name != 'pull_request' }}

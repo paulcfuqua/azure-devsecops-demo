@@ -6,7 +6,8 @@ name: app-mcp-tools-ci
 # Amendment in force: docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md
 #
 # build -> test (MCP client handshake + tool allowlist) -> tool eval
-#       -> container build -> Trivy (fail on CRITICAL) -> GHCR push
+#       -> container build -> Trivy (fail on CRITICAL) -> smoke-test
+#       (F22: docker run + /healthz) -> GHCR push
 #       -> deploy to ACA via OIDC (guarded on the demo environment).
 #
 # This package is the MCP tool server the Copilot Studio agent attaches to. It
@@ -194,6 +195,77 @@ jobs:
         with:
           sarif_file: trivy-mcp-tools.sarif
           category: trivy-mcp-tools
+
+      - name: Smoke-test the image — boot it and check its own /healthz (F22)
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          set -euo pipefail
+          # F22: CI built and Trivy-scanned this image but never started it.
+          # mcp-tools REFUSES TO BOOT without MCP_AUTH_TOKEN unless explicitly
+          # told to run open (F2's fix -- see src/auth-gate.ts::loadInboundAuth,
+          # which throws at startup in every mode otherwise, not just cloud). A
+          # plain `docker run` of this image would exit immediately and look
+          # like an image defect rather than a missing setting.
+          # MCP_ALLOW_UNAUTHENTICATED is a boolean opt-out, NOT a token: it
+          # authenticates nothing, and /healthz is unauthenticated at the
+          # ingress regardless (the gate is scoped to the MCP_PATH route only)
+          # -- it exists purely so this smoke test's container can start.
+          #
+          # Placed after the Trivy CRITICAL gate (a vulnerable image is never
+          # even started) and before "Log in to GHCR" (no registry credential
+          # has entered the job's environment yet). The brief's other placement
+          # rule -- no job holding packages:write or id-token:write -- cannot be
+          # honoured to the letter: this `image` job builds AND pushes, so it
+          # holds packages:write (and security-events:write) by construction,
+          # same as every app-*-ci.yml image job. This is the closest safe
+          # position inside the only job that has the built image loaded (see
+          # the Task 24 report for the full ruling).
+          container_id="$(docker run -d -p 127.0.0.1::8080 -e MCP_ALLOW_UNAUTHENTICATED=true "${IMAGE}")"
+          cleanup() {
+            docker stop "${container_id}" >/dev/null 2>&1 || true
+            docker rm "${container_id}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          host_port="$(docker port "${container_id}" 8080/tcp | awk -F: '{print $NF}' | head -n1)"
+          if [ -z "${host_port}" ]; then
+            echo "::error::mcp-tools container never published port 8080 -- it likely exited immediately"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+          url="http://127.0.0.1:${host_port}/healthz"
+          status=""
+          body=""
+          for _ in $(seq 1 30); do
+            if raw="$(curl -s --max-time 3 -w '\n%{http_code}' "${url}")"; then
+              status="${raw##*$'\n'}"
+              body="${raw%$'\n'*}"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "${status}" ]; then
+            echo "::error::mcp-tools never accepted a connection on :8080/healthz within 60s"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+          echo "GET /healthz -> ${status}: ${body}"
+          if [ "${status}" != "200" ]; then
+            echo "::error::mcp-tools /healthz returned HTTP ${status} (body: ${body})"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+          # mcp-tools' /healthz has no "service" field (unlike data-api's) --
+          # .ok and .transport are its own discriminators.
+          if ! printf '%s' "${body}" | jq -e '.ok == true and .transport == "streamable-http"' >/dev/null 2>&1; then
+            echo "::error::mcp-tools /healthz did not report the app's own payload (expected .ok == true and .transport == \"streamable-http\", got: ${body})"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
 
       - name: Log in to GHCR
         if: ${{ github.event_name != 'pull_request' }}
