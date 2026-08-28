@@ -129,3 +129,48 @@ Describe 'the 800-171 catalog' {
         }
     }
 }
+
+Describe 'the catalog''s 800-53 mappings are well-formed control identifiers' {
+    # A shape check, not a correctness check - deliberately. No test in this file
+    # can know whether 3.3.4 should map to SI-4 or AU-6; that is what the README's
+    # provenance section and the review that checks it against Appendix D are for.
+    # But a reviewer demonstrated that a fabricated identifier ("ZZ-99") shipped
+    # green through the entire suite, and that much IS mechanically checkable.
+    BeforeAll {
+        # The 20 NIST SP 800-53 Rev 5 control families.
+        $script:Rev5Families = @(
+            'AC', 'AT', 'AU', 'CA', 'CM', 'CP', 'IA', 'IR', 'MA', 'MP',
+            'PE', 'PL', 'PM', 'PS', 'PT', 'RA', 'SA', 'SC', 'SI', 'SR'
+        )
+    }
+
+    It 'every 800-53 mapping matches the published identifier format' {
+        foreach ($r in $script:Catalog.requirements) {
+            foreach ($control in @($r.mappings.'nist-800-53r5')) {
+                $control | Should -Match '^[A-Z]{2}-\d{1,2}(\(\d{1,2}\))?$' -Because "requirement $($r.id) maps to '$control'"
+            }
+        }
+    }
+
+    It 'every 800-53 mapping names a real Rev 5 control family' {
+        foreach ($r in $script:Catalog.requirements) {
+            foreach ($control in @($r.mappings.'nist-800-53r5')) {
+                $family = $control.Substring(0, 2)
+                $family | Should -BeIn $script:Rev5Families -Because "requirement $($r.id) maps to '$control', whose family must be one of the 20 Rev 5 families"
+            }
+        }
+    }
+
+    It 'family 3.8''s basic requirements all carry the merged Appendix D row' {
+        # Table D-8's basic block is ONE merged requirement cell spanning 3.8.1-3.8.3
+        # against three control sub-cells. Recorded one-row-each in an earlier
+        # revision; corrected on review from the PDF's own cell geometry. This is the
+        # only family where applying the merged-row rule changes the answer, so it is
+        # the only one worth pinning explicitly.
+        foreach ($id in '3.8.1', '3.8.2', '3.8.3') {
+            $requirement = $script:Catalog.requirements | Where-Object { $_.id -eq $id }
+            @($requirement.mappings.'nist-800-53r5') |
+                Should -Be @('MP-2', 'MP-4', 'MP-6') -Because "$id shares Table D-8's merged basic row"
+        }
+    }
+}

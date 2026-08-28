@@ -10,9 +10,18 @@
       "familyName": "Access Control",
       "title": "Limit system access to authorized users, processes acting on behalf of authorized users, and devices (including other systems).",
       "mappings": {
-        "nist-800-53r5": ["AC-2", "AC-3", "AC-17"],
-        "cmmc-2.0": ["L1-3.1.1", "L2-3.1.1"],
-        "far-52.204-21": ["52.204-21(b)(1)(i)"]
+        "nist-800-53r5": [
+          "AC-2",
+          "AC-3",
+          "AC-17"
+        ],
+        "cmmc-2.0": [
+          "L1-3.1.1",
+          "L2-3.1.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(i)"
+        ]
       }
     },
     {
@@ -21,9 +30,18 @@
       "familyName": "Access Control",
       "title": "Limit system access to the types of transactions and functions that authorized users are permitted to execute.",
       "mappings": {
-        "nist-800-53r5": ["AC-2", "AC-3", "AC-17"],
-        "cmmc-2.0": ["L1-3.1.2", "L2-3.1.2"],
-        "far-52.204-21": ["52.204-21(b)(1)(ii)"]
+        "nist-800-53r5": [
+          "AC-2",
+          "AC-3",
+          "AC-17"
+        ],
+        "cmmc-2.0": [
+          "L1-3.1.2",
+          "L2-3.1.2"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(ii)"
+        ]
       }
     },
     {
@@ -32,8 +50,12 @@
       "familyName": "Access Control",
       "title": "Control the flow of CUI in accordance with approved authorizations.",
       "mappings": {
-        "nist-800-53r5": ["AC-4"],
-        "cmmc-2.0": ["L2-3.1.3"],
+        "nist-800-53r5": [
+          "AC-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -43,8 +65,12 @@
       "familyName": "Access Control",
       "title": "Separate the duties of individuals to reduce the risk of malevolent activity without collusion.",
       "mappings": {
-        "nist-800-53r5": ["AC-5"],
-        "cmmc-2.0": ["L2-3.1.4"],
+        "nist-800-53r5": [
+          "AC-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.4"
+        ],
         "far-52.204-21": []
       }
     },
@@ -54,8 +80,14 @@
       "familyName": "Access Control",
       "title": "Employ the principle of least privilege, including for specific security functions and privileged accounts.",
       "mappings": {
-        "nist-800-53r5": ["AC-6", "AC-6(1)", "AC-6(5)"],
-        "cmmc-2.0": ["L2-3.1.5"],
+        "nist-800-53r5": [
+          "AC-6",
+          "AC-6(1)",
+          "AC-6(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.5"
+        ],
         "far-52.204-21": []
       }
     },
@@ -65,8 +97,12 @@
       "familyName": "Access Control",
       "title": "Use non-privileged accounts or roles when accessing nonsecurity functions.",
       "mappings": {
-        "nist-800-53r5": ["AC-6(2)"],
-        "cmmc-2.0": ["L2-3.1.6"],
+        "nist-800-53r5": [
+          "AC-6(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -76,8 +112,13 @@
       "familyName": "Access Control",
       "title": "Prevent non-privileged users from executing privileged functions and capture the execution of such functions in audit logs.",
       "mappings": {
-        "nist-800-53r5": ["AC-6(9)", "AC-6(10)"],
-        "cmmc-2.0": ["L2-3.1.7"],
+        "nist-800-53r5": [
+          "AC-6(9)",
+          "AC-6(10)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.7"
+        ],
         "far-52.204-21": []
       }
     },
@@ -87,8 +128,12 @@
       "familyName": "Access Control",
       "title": "Limit unsuccessful logon attempts.",
       "mappings": {
-        "nist-800-53r5": ["AC-7"],
-        "cmmc-2.0": ["L2-3.1.8"],
+        "nist-800-53r5": [
+          "AC-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.8"
+        ],
         "far-52.204-21": []
       }
     },
@@ -98,8 +143,12 @@
       "familyName": "Access Control",
       "title": "Provide privacy and security notices consistent with applicable CUI rules.",
       "mappings": {
-        "nist-800-53r5": ["AC-8"],
-        "cmmc-2.0": ["L2-3.1.9"],
+        "nist-800-53r5": [
+          "AC-8"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.9"
+        ],
         "far-52.204-21": []
       }
     },
@@ -109,8 +158,13 @@
       "familyName": "Access Control",
       "title": "Use session lock with pattern-hiding displays to prevent access and viewing of data after a period of inactivity.",
       "mappings": {
-        "nist-800-53r5": ["AC-11", "AC-11(1)"],
-        "cmmc-2.0": ["L2-3.1.10"],
+        "nist-800-53r5": [
+          "AC-11",
+          "AC-11(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.10"
+        ],
         "far-52.204-21": []
       }
     },
@@ -120,8 +174,12 @@
       "familyName": "Access Control",
       "title": "Terminate (automatically) a user session after a defined condition.",
       "mappings": {
-        "nist-800-53r5": ["AC-12"],
-        "cmmc-2.0": ["L2-3.1.11"],
+        "nist-800-53r5": [
+          "AC-12"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.11"
+        ],
         "far-52.204-21": []
       }
     },
@@ -131,8 +189,12 @@
       "familyName": "Access Control",
       "title": "Monitor and control remote access sessions.",
       "mappings": {
-        "nist-800-53r5": ["AC-17(1)"],
-        "cmmc-2.0": ["L2-3.1.12"],
+        "nist-800-53r5": [
+          "AC-17(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.12"
+        ],
         "far-52.204-21": []
       }
     },
@@ -142,8 +204,12 @@
       "familyName": "Access Control",
       "title": "Employ cryptographic mechanisms to protect the confidentiality of remote access sessions.",
       "mappings": {
-        "nist-800-53r5": ["AC-17(2)"],
-        "cmmc-2.0": ["L2-3.1.13"],
+        "nist-800-53r5": [
+          "AC-17(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.13"
+        ],
         "far-52.204-21": []
       }
     },
@@ -153,8 +219,12 @@
       "familyName": "Access Control",
       "title": "Route remote access via managed access control points.",
       "mappings": {
-        "nist-800-53r5": ["AC-17(3)"],
-        "cmmc-2.0": ["L2-3.1.14"],
+        "nist-800-53r5": [
+          "AC-17(3)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.14"
+        ],
         "far-52.204-21": []
       }
     },
@@ -164,8 +234,12 @@
       "familyName": "Access Control",
       "title": "Authorize remote execution of privileged commands and remote access to security-relevant information.",
       "mappings": {
-        "nist-800-53r5": ["AC-17(4)"],
-        "cmmc-2.0": ["L2-3.1.15"],
+        "nist-800-53r5": [
+          "AC-17(4)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.15"
+        ],
         "far-52.204-21": []
       }
     },
@@ -175,8 +249,12 @@
       "familyName": "Access Control",
       "title": "Authorize wireless access prior to allowing such connections.",
       "mappings": {
-        "nist-800-53r5": ["AC-18"],
-        "cmmc-2.0": ["L2-3.1.16"],
+        "nist-800-53r5": [
+          "AC-18"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.16"
+        ],
         "far-52.204-21": []
       }
     },
@@ -186,8 +264,12 @@
       "familyName": "Access Control",
       "title": "Protect wireless access using authentication and encryption.",
       "mappings": {
-        "nist-800-53r5": ["AC-18(1)"],
-        "cmmc-2.0": ["L2-3.1.17"],
+        "nist-800-53r5": [
+          "AC-18(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.17"
+        ],
         "far-52.204-21": []
       }
     },
@@ -197,8 +279,12 @@
       "familyName": "Access Control",
       "title": "Control connection of mobile devices.",
       "mappings": {
-        "nist-800-53r5": ["AC-19"],
-        "cmmc-2.0": ["L2-3.1.18"],
+        "nist-800-53r5": [
+          "AC-19"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.18"
+        ],
         "far-52.204-21": []
       }
     },
@@ -208,8 +294,12 @@
       "familyName": "Access Control",
       "title": "Encrypt CUI on mobile devices and mobile computing platforms.",
       "mappings": {
-        "nist-800-53r5": ["AC-19(5)"],
-        "cmmc-2.0": ["L2-3.1.19"],
+        "nist-800-53r5": [
+          "AC-19(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.19"
+        ],
         "far-52.204-21": []
       }
     },
@@ -219,9 +309,17 @@
       "familyName": "Access Control",
       "title": "Verify and control/limit connections to and use of external systems.",
       "mappings": {
-        "nist-800-53r5": ["AC-20", "AC-20(1)"],
-        "cmmc-2.0": ["L1-3.1.20", "L2-3.1.20"],
-        "far-52.204-21": ["52.204-21(b)(1)(iii)"]
+        "nist-800-53r5": [
+          "AC-20",
+          "AC-20(1)"
+        ],
+        "cmmc-2.0": [
+          "L1-3.1.20",
+          "L2-3.1.20"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(iii)"
+        ]
       }
     },
     {
@@ -230,8 +328,12 @@
       "familyName": "Access Control",
       "title": "Limit use of portable storage devices on external systems.",
       "mappings": {
-        "nist-800-53r5": ["AC-20(2)"],
-        "cmmc-2.0": ["L2-3.1.21"],
+        "nist-800-53r5": [
+          "AC-20(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.21"
+        ],
         "far-52.204-21": []
       }
     },
@@ -241,9 +343,16 @@
       "familyName": "Access Control",
       "title": "Control CUI posted or processed on publicly accessible systems.",
       "mappings": {
-        "nist-800-53r5": ["AC-22"],
-        "cmmc-2.0": ["L1-3.1.22", "L2-3.1.22"],
-        "far-52.204-21": ["52.204-21(b)(1)(iv)"]
+        "nist-800-53r5": [
+          "AC-22"
+        ],
+        "cmmc-2.0": [
+          "L1-3.1.22",
+          "L2-3.1.22"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(iv)"
+        ]
       }
     },
     {
@@ -252,8 +361,13 @@
       "familyName": "Awareness and Training",
       "title": "Ensure that managers, systems administrators, and users of organizational systems are made aware of the security risks associated with their activities and of the applicable policies, standards, and procedures related to the security of those systems.",
       "mappings": {
-        "nist-800-53r5": ["AT-2", "AT-3"],
-        "cmmc-2.0": ["L2-3.2.1"],
+        "nist-800-53r5": [
+          "AT-2",
+          "AT-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.2.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -263,8 +377,13 @@
       "familyName": "Awareness and Training",
       "title": "Ensure that personnel are trained to carry out their assigned information security-related duties and responsibilities.",
       "mappings": {
-        "nist-800-53r5": ["AT-2", "AT-3"],
-        "cmmc-2.0": ["L2-3.2.2"],
+        "nist-800-53r5": [
+          "AT-2",
+          "AT-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.2.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -274,8 +393,12 @@
       "familyName": "Awareness and Training",
       "title": "Provide security awareness training on recognizing and reporting potential indicators of insider threat.",
       "mappings": {
-        "nist-800-53r5": ["AT-2(2)"],
-        "cmmc-2.0": ["L2-3.2.3"],
+        "nist-800-53r5": [
+          "AT-2(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.2.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -285,8 +408,17 @@
       "familyName": "Audit and Accountability",
       "title": "Create and retain system audit logs and records to the extent needed to enable the monitoring, analysis, investigation, and reporting of unlawful or unauthorized system activity.",
       "mappings": {
-        "nist-800-53r5": ["AU-2", "AU-3", "AU-3(1)", "AU-6", "AU-11", "AU-12"],
-        "cmmc-2.0": ["L2-3.3.1"],
+        "nist-800-53r5": [
+          "AU-2",
+          "AU-3",
+          "AU-3(1)",
+          "AU-6",
+          "AU-11",
+          "AU-12"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -296,8 +428,17 @@
       "familyName": "Audit and Accountability",
       "title": "Ensure that the actions of individual system users can be uniquely traced to those users, so they can be held accountable for their actions.",
       "mappings": {
-        "nist-800-53r5": ["AU-2", "AU-3", "AU-3(1)", "AU-6", "AU-11", "AU-12"],
-        "cmmc-2.0": ["L2-3.3.2"],
+        "nist-800-53r5": [
+          "AU-2",
+          "AU-3",
+          "AU-3(1)",
+          "AU-6",
+          "AU-11",
+          "AU-12"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -307,8 +448,12 @@
       "familyName": "Audit and Accountability",
       "title": "Review and update logged events.",
       "mappings": {
-        "nist-800-53r5": ["AU-2"],
-        "cmmc-2.0": ["L2-3.3.3"],
+        "nist-800-53r5": [
+          "AU-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -318,8 +463,12 @@
       "familyName": "Audit and Accountability",
       "title": "Alert in the event of an audit logging process failure.",
       "mappings": {
-        "nist-800-53r5": ["AU-5"],
-        "cmmc-2.0": ["L2-3.3.4"],
+        "nist-800-53r5": [
+          "AU-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.4"
+        ],
         "far-52.204-21": []
       }
     },
@@ -329,8 +478,12 @@
       "familyName": "Audit and Accountability",
       "title": "Correlate audit record review, analysis, and reporting processes for investigation and response to indications of unlawful, unauthorized, suspicious, or unusual activity.",
       "mappings": {
-        "nist-800-53r5": ["AU-6(3)"],
-        "cmmc-2.0": ["L2-3.3.5"],
+        "nist-800-53r5": [
+          "AU-6(3)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.5"
+        ],
         "far-52.204-21": []
       }
     },
@@ -340,8 +493,12 @@
       "familyName": "Audit and Accountability",
       "title": "Provide audit record reduction and report generation to support on-demand analysis and reporting.",
       "mappings": {
-        "nist-800-53r5": ["AU-7"],
-        "cmmc-2.0": ["L2-3.3.6"],
+        "nist-800-53r5": [
+          "AU-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -351,8 +508,13 @@
       "familyName": "Audit and Accountability",
       "title": "Provide a system capability that compares and synchronizes internal system clocks with an authoritative source to generate time stamps for audit records.",
       "mappings": {
-        "nist-800-53r5": ["AU-8", "SC-45(1)"],
-        "cmmc-2.0": ["L2-3.3.7"],
+        "nist-800-53r5": [
+          "AU-8",
+          "SC-45(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.7"
+        ],
         "far-52.204-21": []
       }
     },
@@ -362,8 +524,12 @@
       "familyName": "Audit and Accountability",
       "title": "Protect audit information and audit logging tools from unauthorized access, modification, and deletion.",
       "mappings": {
-        "nist-800-53r5": ["AU-9"],
-        "cmmc-2.0": ["L2-3.3.8"],
+        "nist-800-53r5": [
+          "AU-9"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.8"
+        ],
         "far-52.204-21": []
       }
     },
@@ -373,8 +539,12 @@
       "familyName": "Audit and Accountability",
       "title": "Limit management of audit logging functionality to a subset of privileged users.",
       "mappings": {
-        "nist-800-53r5": ["AU-9(4)"],
-        "cmmc-2.0": ["L2-3.3.9"],
+        "nist-800-53r5": [
+          "AU-9(4)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.9"
+        ],
         "far-52.204-21": []
       }
     },
@@ -384,8 +554,15 @@
       "familyName": "Configuration Management",
       "title": "Establish and maintain baseline configurations and inventories of organizational systems (including hardware, software, firmware, and documentation) throughout the respective system development life cycles.",
       "mappings": {
-        "nist-800-53r5": ["CM-2", "CM-6", "CM-8", "CM-8(1)"],
-        "cmmc-2.0": ["L2-3.4.1"],
+        "nist-800-53r5": [
+          "CM-2",
+          "CM-6",
+          "CM-8",
+          "CM-8(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -395,8 +572,15 @@
       "familyName": "Configuration Management",
       "title": "Establish and enforce security configuration settings for information technology products employed in organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["CM-2", "CM-6", "CM-8", "CM-8(1)"],
-        "cmmc-2.0": ["L2-3.4.2"],
+        "nist-800-53r5": [
+          "CM-2",
+          "CM-6",
+          "CM-8",
+          "CM-8(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -406,8 +590,12 @@
       "familyName": "Configuration Management",
       "title": "Track, review, approve or disapprove, and log changes to organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["CM-3"],
-        "cmmc-2.0": ["L2-3.4.3"],
+        "nist-800-53r5": [
+          "CM-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -417,8 +605,12 @@
       "familyName": "Configuration Management",
       "title": "Analyze the security impact of changes prior to implementation.",
       "mappings": {
-        "nist-800-53r5": ["CM-4"],
-        "cmmc-2.0": ["L2-3.4.4"],
+        "nist-800-53r5": [
+          "CM-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.4"
+        ],
         "far-52.204-21": []
       }
     },
@@ -428,8 +620,12 @@
       "familyName": "Configuration Management",
       "title": "Define, document, approve, and enforce physical and logical access restrictions associated with changes to organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["CM-5"],
-        "cmmc-2.0": ["L2-3.4.5"],
+        "nist-800-53r5": [
+          "CM-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.5"
+        ],
         "far-52.204-21": []
       }
     },
@@ -439,8 +635,12 @@
       "familyName": "Configuration Management",
       "title": "Employ the principle of least functionality by configuring organizational systems to provide only essential capabilities.",
       "mappings": {
-        "nist-800-53r5": ["CM-7"],
-        "cmmc-2.0": ["L2-3.4.6"],
+        "nist-800-53r5": [
+          "CM-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -450,8 +650,13 @@
       "familyName": "Configuration Management",
       "title": "Restrict, disable, or prevent the use of nonessential programs, functions, ports, protocols, and services.",
       "mappings": {
-        "nist-800-53r5": ["CM-7(1)", "CM-7(2)"],
-        "cmmc-2.0": ["L2-3.4.7"],
+        "nist-800-53r5": [
+          "CM-7(1)",
+          "CM-7(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.7"
+        ],
         "far-52.204-21": []
       }
     },
@@ -461,8 +666,13 @@
       "familyName": "Configuration Management",
       "title": "Apply deny-by-exception (blacklisting) policy to prevent the use of unauthorized software or deny-all, permit-by-exception (whitelisting) policy to allow the execution of authorized software.",
       "mappings": {
-        "nist-800-53r5": ["CM-7(4)", "CM-7(5)"],
-        "cmmc-2.0": ["L2-3.4.8"],
+        "nist-800-53r5": [
+          "CM-7(4)",
+          "CM-7(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.8"
+        ],
         "far-52.204-21": []
       }
     },
@@ -472,8 +682,12 @@
       "familyName": "Configuration Management",
       "title": "Control and monitor user-installed software.",
       "mappings": {
-        "nist-800-53r5": ["CM-11"],
-        "cmmc-2.0": ["L2-3.4.9"],
+        "nist-800-53r5": [
+          "CM-11"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.9"
+        ],
         "far-52.204-21": []
       }
     },
@@ -483,9 +697,18 @@
       "familyName": "Identification and Authentication",
       "title": "Identify system users, processes acting on behalf of users, and devices.",
       "mappings": {
-        "nist-800-53r5": ["IA-2", "IA-3", "IA-5"],
-        "cmmc-2.0": ["L1-3.5.1", "L2-3.5.1"],
-        "far-52.204-21": ["52.204-21(b)(1)(v)"]
+        "nist-800-53r5": [
+          "IA-2",
+          "IA-3",
+          "IA-5"
+        ],
+        "cmmc-2.0": [
+          "L1-3.5.1",
+          "L2-3.5.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(v)"
+        ]
       }
     },
     {
@@ -494,9 +717,18 @@
       "familyName": "Identification and Authentication",
       "title": "Authenticate (or verify) the identities of users, processes, or devices, as a prerequisite to allowing access to organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["IA-2", "IA-3", "IA-5"],
-        "cmmc-2.0": ["L1-3.5.2", "L2-3.5.2"],
-        "far-52.204-21": ["52.204-21(b)(1)(vi)"]
+        "nist-800-53r5": [
+          "IA-2",
+          "IA-3",
+          "IA-5"
+        ],
+        "cmmc-2.0": [
+          "L1-3.5.2",
+          "L2-3.5.2"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(vi)"
+        ]
       }
     },
     {
@@ -505,8 +737,13 @@
       "familyName": "Identification and Authentication",
       "title": "Use multifactor authentication for local and network access to privileged accounts and for network access to non-privileged accounts.",
       "mappings": {
-        "nist-800-53r5": ["IA-2(1)", "IA-2(2)"],
-        "cmmc-2.0": ["L2-3.5.3"],
+        "nist-800-53r5": [
+          "IA-2(1)",
+          "IA-2(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -516,8 +753,12 @@
       "familyName": "Identification and Authentication",
       "title": "Employ replay-resistant authentication mechanisms for network access to privileged and non-privileged accounts.",
       "mappings": {
-        "nist-800-53r5": ["IA-2(8)"],
-        "cmmc-2.0": ["L2-3.5.4"],
+        "nist-800-53r5": [
+          "IA-2(8)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.4"
+        ],
         "far-52.204-21": []
       }
     },
@@ -527,8 +768,12 @@
       "familyName": "Identification and Authentication",
       "title": "Prevent reuse of identifiers for a defined period.",
       "mappings": {
-        "nist-800-53r5": ["IA-4"],
-        "cmmc-2.0": ["L2-3.5.5"],
+        "nist-800-53r5": [
+          "IA-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.5"
+        ],
         "far-52.204-21": []
       }
     },
@@ -538,8 +783,12 @@
       "familyName": "Identification and Authentication",
       "title": "Disable identifiers after a defined period of inactivity.",
       "mappings": {
-        "nist-800-53r5": ["IA-4"],
-        "cmmc-2.0": ["L2-3.5.6"],
+        "nist-800-53r5": [
+          "IA-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -549,8 +798,12 @@
       "familyName": "Identification and Authentication",
       "title": "Enforce a minimum password complexity and change of characters when new passwords are created.",
       "mappings": {
-        "nist-800-53r5": ["IA-5(1)"],
-        "cmmc-2.0": ["L2-3.5.7"],
+        "nist-800-53r5": [
+          "IA-5(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.7"
+        ],
         "far-52.204-21": []
       }
     },
@@ -560,8 +813,12 @@
       "familyName": "Identification and Authentication",
       "title": "Prohibit password reuse for a specified number of generations.",
       "mappings": {
-        "nist-800-53r5": ["IA-5(1)"],
-        "cmmc-2.0": ["L2-3.5.8"],
+        "nist-800-53r5": [
+          "IA-5(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.8"
+        ],
         "far-52.204-21": []
       }
     },
@@ -571,8 +828,12 @@
       "familyName": "Identification and Authentication",
       "title": "Allow temporary password use for system logons with an immediate change to a permanent password.",
       "mappings": {
-        "nist-800-53r5": ["IA-5(1)"],
-        "cmmc-2.0": ["L2-3.5.9"],
+        "nist-800-53r5": [
+          "IA-5(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.9"
+        ],
         "far-52.204-21": []
       }
     },
@@ -582,8 +843,12 @@
       "familyName": "Identification and Authentication",
       "title": "Store and transmit only cryptographically-protected passwords.",
       "mappings": {
-        "nist-800-53r5": ["IA-5(1)"],
-        "cmmc-2.0": ["L2-3.5.10"],
+        "nist-800-53r5": [
+          "IA-5(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.10"
+        ],
         "far-52.204-21": []
       }
     },
@@ -593,8 +858,12 @@
       "familyName": "Identification and Authentication",
       "title": "Obscure feedback of authentication information.",
       "mappings": {
-        "nist-800-53r5": ["IA-6"],
-        "cmmc-2.0": ["L2-3.5.11"],
+        "nist-800-53r5": [
+          "IA-6"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.11"
+        ],
         "far-52.204-21": []
       }
     },
@@ -604,8 +873,16 @@
       "familyName": "Incident Response",
       "title": "Establish an operational incident-handling capability for organizational systems that includes preparation, detection, analysis, containment, recovery, and user response activities.",
       "mappings": {
-        "nist-800-53r5": ["IR-2", "IR-4", "IR-5", "IR-6", "IR-7"],
-        "cmmc-2.0": ["L2-3.6.1"],
+        "nist-800-53r5": [
+          "IR-2",
+          "IR-4",
+          "IR-5",
+          "IR-6",
+          "IR-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.6.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -615,8 +892,16 @@
       "familyName": "Incident Response",
       "title": "Track, document, and report incidents to designated officials and/or authorities both internal and external to the organization.",
       "mappings": {
-        "nist-800-53r5": ["IR-2", "IR-4", "IR-5", "IR-6", "IR-7"],
-        "cmmc-2.0": ["L2-3.6.2"],
+        "nist-800-53r5": [
+          "IR-2",
+          "IR-4",
+          "IR-5",
+          "IR-6",
+          "IR-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.6.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -626,8 +911,12 @@
       "familyName": "Incident Response",
       "title": "Test the organizational incident response capability.",
       "mappings": {
-        "nist-800-53r5": ["IR-3"],
-        "cmmc-2.0": ["L2-3.6.3"],
+        "nist-800-53r5": [
+          "IR-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.6.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -637,8 +926,15 @@
       "familyName": "Maintenance",
       "title": "Perform maintenance on organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["MA-2", "MA-3", "MA-3(1)", "MA-3(2)"],
-        "cmmc-2.0": ["L2-3.7.1"],
+        "nist-800-53r5": [
+          "MA-2",
+          "MA-3",
+          "MA-3(1)",
+          "MA-3(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -648,8 +944,15 @@
       "familyName": "Maintenance",
       "title": "Provide controls on the tools, techniques, mechanisms, and personnel used to conduct system maintenance.",
       "mappings": {
-        "nist-800-53r5": ["MA-2", "MA-3", "MA-3(1)", "MA-3(2)"],
-        "cmmc-2.0": ["L2-3.7.2"],
+        "nist-800-53r5": [
+          "MA-2",
+          "MA-3",
+          "MA-3(1)",
+          "MA-3(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -659,8 +962,12 @@
       "familyName": "Maintenance",
       "title": "Ensure equipment removed for off-site maintenance is sanitized of any CUI.",
       "mappings": {
-        "nist-800-53r5": ["MA-2"],
-        "cmmc-2.0": ["L2-3.7.3"],
+        "nist-800-53r5": [
+          "MA-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -670,8 +977,12 @@
       "familyName": "Maintenance",
       "title": "Check media containing diagnostic and test programs for malicious code before the media are used in organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["MA-3(2)"],
-        "cmmc-2.0": ["L2-3.7.4"],
+        "nist-800-53r5": [
+          "MA-3(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.4"
+        ],
         "far-52.204-21": []
       }
     },
@@ -681,8 +992,12 @@
       "familyName": "Maintenance",
       "title": "Require multifactor authentication to establish nonlocal maintenance sessions via external network connections and terminate such connections when nonlocal maintenance is complete.",
       "mappings": {
-        "nist-800-53r5": ["MA-4"],
-        "cmmc-2.0": ["L2-3.7.5"],
+        "nist-800-53r5": [
+          "MA-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.5"
+        ],
         "far-52.204-21": []
       }
     },
@@ -692,8 +1007,12 @@
       "familyName": "Maintenance",
       "title": "Supervise the maintenance activities of maintenance personnel without required access authorization.",
       "mappings": {
-        "nist-800-53r5": ["MA-5"],
-        "cmmc-2.0": ["L2-3.7.6"],
+        "nist-800-53r5": [
+          "MA-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -703,8 +1022,14 @@
       "familyName": "Media Protection",
       "title": "Protect (i.e., physically control and securely store) system media containing CUI, both paper and digital.",
       "mappings": {
-        "nist-800-53r5": ["MP-2"],
-        "cmmc-2.0": ["L2-3.8.1"],
+        "nist-800-53r5": [
+          "MP-2",
+          "MP-4",
+          "MP-6"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -714,8 +1039,14 @@
       "familyName": "Media Protection",
       "title": "Limit access to CUI on system media to authorized users.",
       "mappings": {
-        "nist-800-53r5": ["MP-4"],
-        "cmmc-2.0": ["L2-3.8.2"],
+        "nist-800-53r5": [
+          "MP-2",
+          "MP-4",
+          "MP-6"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -725,9 +1056,18 @@
       "familyName": "Media Protection",
       "title": "Sanitize or destroy system media containing CUI before disposal or release for reuse.",
       "mappings": {
-        "nist-800-53r5": ["MP-6"],
-        "cmmc-2.0": ["L1-3.8.3", "L2-3.8.3"],
-        "far-52.204-21": ["52.204-21(b)(1)(vii)"]
+        "nist-800-53r5": [
+          "MP-2",
+          "MP-4",
+          "MP-6"
+        ],
+        "cmmc-2.0": [
+          "L1-3.8.3",
+          "L2-3.8.3"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(vii)"
+        ]
       }
     },
     {
@@ -736,8 +1076,12 @@
       "familyName": "Media Protection",
       "title": "Mark media with necessary CUI markings and distribution limitations.",
       "mappings": {
-        "nist-800-53r5": ["MP-3"],
-        "cmmc-2.0": ["L2-3.8.4"],
+        "nist-800-53r5": [
+          "MP-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.4"
+        ],
         "far-52.204-21": []
       }
     },
@@ -747,8 +1091,12 @@
       "familyName": "Media Protection",
       "title": "Control access to media containing CUI and maintain accountability for media during transport outside of controlled areas.",
       "mappings": {
-        "nist-800-53r5": ["MP-5"],
-        "cmmc-2.0": ["L2-3.8.5"],
+        "nist-800-53r5": [
+          "MP-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.5"
+        ],
         "far-52.204-21": []
       }
     },
@@ -758,8 +1106,12 @@
       "familyName": "Media Protection",
       "title": "Implement cryptographic mechanisms to protect the confidentiality of CUI stored on digital media during transport unless otherwise protected by alternative physical safeguards.",
       "mappings": {
-        "nist-800-53r5": ["SC-28(1)"],
-        "cmmc-2.0": ["L2-3.8.6"],
+        "nist-800-53r5": [
+          "SC-28(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -769,8 +1121,12 @@
       "familyName": "Media Protection",
       "title": "Control the use of removable media on system components.",
       "mappings": {
-        "nist-800-53r5": ["MP-7"],
-        "cmmc-2.0": ["L2-3.8.7"],
+        "nist-800-53r5": [
+          "MP-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.7"
+        ],
         "far-52.204-21": []
       }
     },
@@ -780,8 +1136,12 @@
       "familyName": "Media Protection",
       "title": "Prohibit the use of portable storage devices when such devices have no identifiable owner.",
       "mappings": {
-        "nist-800-53r5": ["MP-7"],
-        "cmmc-2.0": ["L2-3.8.8"],
+        "nist-800-53r5": [
+          "MP-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.8"
+        ],
         "far-52.204-21": []
       }
     },
@@ -791,8 +1151,12 @@
       "familyName": "Media Protection",
       "title": "Protect the confidentiality of backup CUI at storage locations.",
       "mappings": {
-        "nist-800-53r5": ["CP-9"],
-        "cmmc-2.0": ["L2-3.8.9"],
+        "nist-800-53r5": [
+          "CP-9"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.9"
+        ],
         "far-52.204-21": []
       }
     },
@@ -802,8 +1166,14 @@
       "familyName": "Personnel Security",
       "title": "Screen individuals prior to authorizing access to organizational systems containing CUI.",
       "mappings": {
-        "nist-800-53r5": ["PS-3", "PS-4", "PS-5"],
-        "cmmc-2.0": ["L2-3.9.1"],
+        "nist-800-53r5": [
+          "PS-3",
+          "PS-4",
+          "PS-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.9.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -813,8 +1183,14 @@
       "familyName": "Personnel Security",
       "title": "Ensure that organizational systems containing CUI are protected during and after personnel actions such as terminations and transfers.",
       "mappings": {
-        "nist-800-53r5": ["PS-3", "PS-4", "PS-5"],
-        "cmmc-2.0": ["L2-3.9.2"],
+        "nist-800-53r5": [
+          "PS-3",
+          "PS-4",
+          "PS-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.9.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -824,9 +1200,19 @@
       "familyName": "Physical Protection",
       "title": "Limit physical access to organizational systems, equipment, and the respective operating environments to authorized individuals.",
       "mappings": {
-        "nist-800-53r5": ["PE-2", "PE-4", "PE-5", "PE-6"],
-        "cmmc-2.0": ["L1-3.10.1", "L2-3.10.1"],
-        "far-52.204-21": ["52.204-21(b)(1)(viii)"]
+        "nist-800-53r5": [
+          "PE-2",
+          "PE-4",
+          "PE-5",
+          "PE-6"
+        ],
+        "cmmc-2.0": [
+          "L1-3.10.1",
+          "L2-3.10.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(viii)"
+        ]
       }
     },
     {
@@ -835,8 +1221,15 @@
       "familyName": "Physical Protection",
       "title": "Protect and monitor the physical facility and support infrastructure for organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["PE-2", "PE-4", "PE-5", "PE-6"],
-        "cmmc-2.0": ["L2-3.10.2"],
+        "nist-800-53r5": [
+          "PE-2",
+          "PE-4",
+          "PE-5",
+          "PE-6"
+        ],
+        "cmmc-2.0": [
+          "L2-3.10.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -846,9 +1239,16 @@
       "familyName": "Physical Protection",
       "title": "Escort visitors and monitor visitor activity.",
       "mappings": {
-        "nist-800-53r5": ["PE-3"],
-        "cmmc-2.0": ["L1-3.10.3", "L2-3.10.3"],
-        "far-52.204-21": ["52.204-21(b)(1)(ix)"]
+        "nist-800-53r5": [
+          "PE-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.10.3",
+          "L2-3.10.3"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(ix)"
+        ]
       }
     },
     {
@@ -857,9 +1257,16 @@
       "familyName": "Physical Protection",
       "title": "Maintain audit logs of physical access.",
       "mappings": {
-        "nist-800-53r5": ["PE-3"],
-        "cmmc-2.0": ["L1-3.10.4", "L2-3.10.4"],
-        "far-52.204-21": ["52.204-21(b)(1)(ix)"]
+        "nist-800-53r5": [
+          "PE-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.10.4",
+          "L2-3.10.4"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(ix)"
+        ]
       }
     },
     {
@@ -868,9 +1275,16 @@
       "familyName": "Physical Protection",
       "title": "Control and manage physical access devices.",
       "mappings": {
-        "nist-800-53r5": ["PE-3"],
-        "cmmc-2.0": ["L1-3.10.5", "L2-3.10.5"],
-        "far-52.204-21": ["52.204-21(b)(1)(ix)"]
+        "nist-800-53r5": [
+          "PE-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.10.5",
+          "L2-3.10.5"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(ix)"
+        ]
       }
     },
     {
@@ -879,8 +1293,12 @@
       "familyName": "Physical Protection",
       "title": "Enforce safeguarding measures for CUI at alternate work sites.",
       "mappings": {
-        "nist-800-53r5": ["PE-17"],
-        "cmmc-2.0": ["L2-3.10.6"],
+        "nist-800-53r5": [
+          "PE-17"
+        ],
+        "cmmc-2.0": [
+          "L2-3.10.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -890,8 +1308,12 @@
       "familyName": "Risk Assessment",
       "title": "Periodically assess the risk to organizational operations (including mission, functions, image, or reputation), organizational assets, and individuals, resulting from the operation of organizational systems and the associated processing, storage, or transmission of CUI.",
       "mappings": {
-        "nist-800-53r5": ["RA-3"],
-        "cmmc-2.0": ["L2-3.11.1"],
+        "nist-800-53r5": [
+          "RA-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.11.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -901,8 +1323,13 @@
       "familyName": "Risk Assessment",
       "title": "Scan for vulnerabilities in organizational systems and applications periodically and when new vulnerabilities affecting those systems and applications are identified.",
       "mappings": {
-        "nist-800-53r5": ["RA-5", "RA-5(5)"],
-        "cmmc-2.0": ["L2-3.11.2"],
+        "nist-800-53r5": [
+          "RA-5",
+          "RA-5(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.11.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -912,8 +1339,12 @@
       "familyName": "Risk Assessment",
       "title": "Remediate vulnerabilities in accordance with risk assessments.",
       "mappings": {
-        "nist-800-53r5": ["RA-5"],
-        "cmmc-2.0": ["L2-3.11.3"],
+        "nist-800-53r5": [
+          "RA-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.11.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -923,8 +1354,15 @@
       "familyName": "Security Assessment",
       "title": "Periodically assess the security controls in organizational systems to determine if the controls are effective in their application.",
       "mappings": {
-        "nist-800-53r5": ["CA-2", "CA-5", "CA-7", "PL-2"],
-        "cmmc-2.0": ["L2-3.12.1"],
+        "nist-800-53r5": [
+          "CA-2",
+          "CA-5",
+          "CA-7",
+          "PL-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.12.1"
+        ],
         "far-52.204-21": []
       }
     },
@@ -934,8 +1372,15 @@
       "familyName": "Security Assessment",
       "title": "Develop and implement plans of action designed to correct deficiencies and reduce or eliminate vulnerabilities in organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["CA-2", "CA-5", "CA-7", "PL-2"],
-        "cmmc-2.0": ["L2-3.12.2"],
+        "nist-800-53r5": [
+          "CA-2",
+          "CA-5",
+          "CA-7",
+          "PL-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.12.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -945,8 +1390,15 @@
       "familyName": "Security Assessment",
       "title": "Monitor security controls on an ongoing basis to ensure the continued effectiveness of the controls.",
       "mappings": {
-        "nist-800-53r5": ["CA-2", "CA-5", "CA-7", "PL-2"],
-        "cmmc-2.0": ["L2-3.12.3"],
+        "nist-800-53r5": [
+          "CA-2",
+          "CA-5",
+          "CA-7",
+          "PL-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.12.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -956,8 +1408,15 @@
       "familyName": "Security Assessment",
       "title": "Develop, document, and periodically update system security plans that describe system boundaries, system environments of operation, how security requirements are implemented, and the relationships with or connections to other systems.",
       "mappings": {
-        "nist-800-53r5": ["CA-2", "CA-5", "CA-7", "PL-2"],
-        "cmmc-2.0": ["L2-3.12.4"],
+        "nist-800-53r5": [
+          "CA-2",
+          "CA-5",
+          "CA-7",
+          "PL-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.12.4"
+        ],
         "far-52.204-21": []
       }
     },
@@ -967,9 +1426,17 @@
       "familyName": "System and Communications Protection",
       "title": "Monitor, control, and protect communications (i.e., information transmitted or received by organizational systems) at the external boundaries and key internal boundaries of organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["SC-7", "SA-8"],
-        "cmmc-2.0": ["L1-3.13.1", "L2-3.13.1"],
-        "far-52.204-21": ["52.204-21(b)(1)(x)"]
+        "nist-800-53r5": [
+          "SC-7",
+          "SA-8"
+        ],
+        "cmmc-2.0": [
+          "L1-3.13.1",
+          "L2-3.13.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(x)"
+        ]
       }
     },
     {
@@ -978,8 +1445,13 @@
       "familyName": "System and Communications Protection",
       "title": "Employ architectural designs, software development techniques, and systems engineering principles that promote effective information security within organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["SC-7", "SA-8"],
-        "cmmc-2.0": ["L2-3.13.2"],
+        "nist-800-53r5": [
+          "SC-7",
+          "SA-8"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.2"
+        ],
         "far-52.204-21": []
       }
     },
@@ -989,8 +1461,12 @@
       "familyName": "System and Communications Protection",
       "title": "Separate user functionality from system management functionality.",
       "mappings": {
-        "nist-800-53r5": ["SC-2"],
-        "cmmc-2.0": ["L2-3.13.3"],
+        "nist-800-53r5": [
+          "SC-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1000,8 +1476,12 @@
       "familyName": "System and Communications Protection",
       "title": "Prevent unauthorized and unintended information transfer via shared system resources.",
       "mappings": {
-        "nist-800-53r5": ["SC-4"],
-        "cmmc-2.0": ["L2-3.13.4"],
+        "nist-800-53r5": [
+          "SC-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.4"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1011,9 +1491,16 @@
       "familyName": "System and Communications Protection",
       "title": "Implement subnetworks for publicly accessible system components that are physically or logically separated from internal networks.",
       "mappings": {
-        "nist-800-53r5": ["SC-7"],
-        "cmmc-2.0": ["L1-3.13.5", "L2-3.13.5"],
-        "far-52.204-21": ["52.204-21(b)(1)(xi)"]
+        "nist-800-53r5": [
+          "SC-7"
+        ],
+        "cmmc-2.0": [
+          "L1-3.13.5",
+          "L2-3.13.5"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xi)"
+        ]
       }
     },
     {
@@ -1022,8 +1509,12 @@
       "familyName": "System and Communications Protection",
       "title": "Deny network communications traffic by default and allow network communications traffic by exception (i.e., deny all, permit by exception).",
       "mappings": {
-        "nist-800-53r5": ["SC-7(5)"],
-        "cmmc-2.0": ["L2-3.13.6"],
+        "nist-800-53r5": [
+          "SC-7(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1033,8 +1524,12 @@
       "familyName": "System and Communications Protection",
       "title": "Prevent remote devices from simultaneously establishing non-remote connections with organizational systems and communicating via some other connection to resources in external networks (i.e., split tunneling).",
       "mappings": {
-        "nist-800-53r5": ["SC-7(7)"],
-        "cmmc-2.0": ["L2-3.13.7"],
+        "nist-800-53r5": [
+          "SC-7(7)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.7"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1044,8 +1539,13 @@
       "familyName": "System and Communications Protection",
       "title": "Implement cryptographic mechanisms to prevent unauthorized disclosure of CUI during transmission unless otherwise protected by alternative physical safeguards.",
       "mappings": {
-        "nist-800-53r5": ["SC-8", "SC-8(1)"],
-        "cmmc-2.0": ["L2-3.13.8"],
+        "nist-800-53r5": [
+          "SC-8",
+          "SC-8(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.8"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1055,8 +1555,12 @@
       "familyName": "System and Communications Protection",
       "title": "Terminate network connections associated with communications sessions at the end of the sessions or after a defined period of inactivity.",
       "mappings": {
-        "nist-800-53r5": ["SC-10"],
-        "cmmc-2.0": ["L2-3.13.9"],
+        "nist-800-53r5": [
+          "SC-10"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.9"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1066,8 +1570,12 @@
       "familyName": "System and Communications Protection",
       "title": "Establish and manage cryptographic keys for cryptography employed in organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["SC-12"],
-        "cmmc-2.0": ["L2-3.13.10"],
+        "nist-800-53r5": [
+          "SC-12"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.10"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1077,8 +1585,12 @@
       "familyName": "System and Communications Protection",
       "title": "Employ FIPS-validated cryptography when used to protect the confidentiality of CUI.",
       "mappings": {
-        "nist-800-53r5": ["SC-13"],
-        "cmmc-2.0": ["L2-3.13.11"],
+        "nist-800-53r5": [
+          "SC-13"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.11"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1088,8 +1600,12 @@
       "familyName": "System and Communications Protection",
       "title": "Prohibit remote activation of collaborative computing devices and provide indication of devices in use to users present at the device.",
       "mappings": {
-        "nist-800-53r5": ["SC-15"],
-        "cmmc-2.0": ["L2-3.13.12"],
+        "nist-800-53r5": [
+          "SC-15"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.12"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1099,8 +1615,12 @@
       "familyName": "System and Communications Protection",
       "title": "Control and monitor the use of mobile code.",
       "mappings": {
-        "nist-800-53r5": ["SC-18"],
-        "cmmc-2.0": ["L2-3.13.13"],
+        "nist-800-53r5": [
+          "SC-18"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.13"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1110,8 +1630,12 @@
       "familyName": "System and Communications Protection",
       "title": "Control and monitor the use of Voice over Internet Protocol (VoIP) technologies.",
       "mappings": {
-        "nist-800-53r5": ["SC-7"],
-        "cmmc-2.0": ["L2-3.13.14"],
+        "nist-800-53r5": [
+          "SC-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.14"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1121,8 +1645,12 @@
       "familyName": "System and Communications Protection",
       "title": "Protect the authenticity of communications sessions.",
       "mappings": {
-        "nist-800-53r5": ["SC-23"],
-        "cmmc-2.0": ["L2-3.13.15"],
+        "nist-800-53r5": [
+          "SC-23"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.15"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1132,8 +1660,12 @@
       "familyName": "System and Communications Protection",
       "title": "Protect the confidentiality of CUI at rest.",
       "mappings": {
-        "nist-800-53r5": ["SC-28"],
-        "cmmc-2.0": ["L2-3.13.16"],
+        "nist-800-53r5": [
+          "SC-28"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.16"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1143,9 +1675,18 @@
       "familyName": "System and Information Integrity",
       "title": "Identify, report, and correct system flaws in a timely manner.",
       "mappings": {
-        "nist-800-53r5": ["SI-2", "SI-3", "SI-5"],
-        "cmmc-2.0": ["L1-3.14.1", "L2-3.14.1"],
-        "far-52.204-21": ["52.204-21(b)(1)(xii)"]
+        "nist-800-53r5": [
+          "SI-2",
+          "SI-3",
+          "SI-5"
+        ],
+        "cmmc-2.0": [
+          "L1-3.14.1",
+          "L2-3.14.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xii)"
+        ]
       }
     },
     {
@@ -1154,9 +1695,18 @@
       "familyName": "System and Information Integrity",
       "title": "Provide protection from malicious code at designated locations within organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["SI-2", "SI-3", "SI-5"],
-        "cmmc-2.0": ["L1-3.14.2", "L2-3.14.2"],
-        "far-52.204-21": ["52.204-21(b)(1)(xiii)"]
+        "nist-800-53r5": [
+          "SI-2",
+          "SI-3",
+          "SI-5"
+        ],
+        "cmmc-2.0": [
+          "L1-3.14.2",
+          "L2-3.14.2"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xiii)"
+        ]
       }
     },
     {
@@ -1165,8 +1715,14 @@
       "familyName": "System and Information Integrity",
       "title": "Monitor system security alerts and advisories and take action in response.",
       "mappings": {
-        "nist-800-53r5": ["SI-2", "SI-3", "SI-5"],
-        "cmmc-2.0": ["L2-3.14.3"],
+        "nist-800-53r5": [
+          "SI-2",
+          "SI-3",
+          "SI-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.14.3"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1176,9 +1732,16 @@
       "familyName": "System and Information Integrity",
       "title": "Update malicious code protection mechanisms when new releases are available.",
       "mappings": {
-        "nist-800-53r5": ["SI-3"],
-        "cmmc-2.0": ["L1-3.14.4", "L2-3.14.4"],
-        "far-52.204-21": ["52.204-21(b)(1)(xiv)"]
+        "nist-800-53r5": [
+          "SI-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.14.4",
+          "L2-3.14.4"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xiv)"
+        ]
       }
     },
     {
@@ -1187,9 +1750,16 @@
       "familyName": "System and Information Integrity",
       "title": "Perform periodic scans of organizational systems and real-time scans of files from external sources as files are downloaded, opened, or executed.",
       "mappings": {
-        "nist-800-53r5": ["SI-3"],
-        "cmmc-2.0": ["L1-3.14.5", "L2-3.14.5"],
-        "far-52.204-21": ["52.204-21(b)(1)(xv)"]
+        "nist-800-53r5": [
+          "SI-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.14.5",
+          "L2-3.14.5"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xv)"
+        ]
       }
     },
     {
@@ -1198,8 +1768,13 @@
       "familyName": "System and Information Integrity",
       "title": "Monitor organizational systems, including inbound and outbound communications traffic, to detect attacks and indicators of potential attacks.",
       "mappings": {
-        "nist-800-53r5": ["SI-4", "SI-4(4)"],
-        "cmmc-2.0": ["L2-3.14.6"],
+        "nist-800-53r5": [
+          "SI-4",
+          "SI-4(4)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.14.6"
+        ],
         "far-52.204-21": []
       }
     },
@@ -1209,8 +1784,12 @@
       "familyName": "System and Information Integrity",
       "title": "Identify unauthorized use of organizational systems.",
       "mappings": {
-        "nist-800-53r5": ["SI-4"],
-        "cmmc-2.0": ["L2-3.14.7"],
+        "nist-800-53r5": [
+          "SI-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.14.7"
+        ],
         "far-52.204-21": []
       }
     }

@@ -121,7 +121,7 @@ Describe 'the 800-171 catalog' {
         }
     }
 
-    It 'marks exactly the 15 FAR basic safeguards for CMMC Level 1' {
+    It 'marks exactly the 17 CMMC Level 1 requirements, against 15 FAR clauses' {
         $l1 = @($script:Catalog.requirements | Where-Object { @($_.mappings.'far-52.204-21').Count -gt 0 })
         $l1.Count | Should -Be 15
     }
@@ -135,7 +135,7 @@ Expected: FAIL — the catalog file does not exist.
 
 - [ ] **Step 3: Author the catalog**
 
-Transcribe all 110 requirements from NIST SP 800-171 Rev 2, with the Appendix D mappings to 800-53 Rev 5. CMMC L2 is mechanical (`L2-<id>` for each). CMMC L1 is the 15 FAR 52.204-21 basic safeguards — mark those requirements with their `far-52.204-21` clause reference.
+Transcribe all 110 requirements from NIST SP 800-171 Rev 2, with the Appendix D mappings to 800-53 Rev 5. CMMC L2 is mechanical (`L2-<id>` for each). CMMC L1 is FAR 52.204-21(b)(1)(i)-(xv) — fifteen clauses, but clause (ix) covers 3.10.3, 3.10.4 and 3.10.5, so **seventeen requirements** carry a Level 1 practice. Mark those seventeen with their `far-52.204-21` clause reference.
 
 Write `compliance/catalog/README.md` recording the source documents and revision, so a reader knows what the transcription is *of* and can re-verify it.
 
@@ -152,7 +152,7 @@ git commit -m "feat(compliance): NIST 800-171 Rev 2 catalog with 800-53 and CMMC
 
 All 110 requirements across 14 families, each carrying its Appendix D
 mapping to 800-53 Rev 5 and its identical CMMC 2.0 L2 practice, with the
-15 FAR 52.204-21 basic safeguards marked for CMMC L1. Tests assert the
+17 requirements marked for CMMC L1, against 15 FAR 52.204-21 clauses. Tests assert the
 per-family counts so a partial transcription cannot render as a high
 compliance score."
 ```
@@ -862,9 +862,9 @@ it("relabels the same records under a CMMC view", () => {
   expect(screen.getByTestId("control-3.5.3")).toHaveTextContent("L2-3.5.3");
 });
 
-it("shows only the 15 L1 practices in the CMMC Level 1 view", () => {
+it("shows only the 17 L1 practices in the CMMC Level 1 view", () => {
   render(<Board state={fixtureState} catalog={fixtureCatalog} framework="far-52.204-21" />);
-  expect(screen.getAllByTestId(/^control-/)).toHaveLength(15);
+  expect(screen.getAllByTestId(/^control-/)).toHaveLength(17);
 });
 ```
 

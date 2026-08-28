@@ -59,7 +59,25 @@ and a framework filter — not to be quoted to an assessor.
 | `cmmc-2.0` Level 2 practices | CMMC 2.0 Level 2 is exactly the 110 requirements of 800-171 Rev. 2, so `L2-<id>` is an identity mapping generated mechanically for every requirement |
 | `cmmc-2.0` Level 1 practices and `far-52.204-21` clauses | FAR 52.204-21(b)(1)(i) through (xv), the basic safeguarding requirements |
 
+**Reading the `far-52.204-21` mapping.** The key is present on **all 110** requirements; the
+93 that are not Level 1 carry an **empty array**. Membership is therefore a *non-empty
+value*, never key presence. A consumer that tests `'far-52.204-21' in mappings` will render
+all 110 requirements in a Level 1 view. Test the array's length.
+
+**Level 1 is 17 requirements against 15 FAR clauses.** FAR 52.204-21(b)(1) has fifteen
+clauses (i)-(xv), but clause (ix) covers three requirements -- 3.10.3, 3.10.4 and 3.10.5 --
+so seventeen requirements carry a Level 1 practice. Both numbers are correct and they answer
+different questions; quoting "15 requirements" would drop two real practices.
+
 Primary source PDF: <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-171r2.pdf>
+
+**Revision 2 is a withdrawn publication.** NIST withdrew SP 800-171 Rev. 2 on
+**14 May 2024**, superseded by Revision 3. This catalog targets Rev. 2 deliberately, and it
+is the correct choice for this estate: CMMC 2.0 and 32 CFR 170 assess against Rev. 2, so a
+Rev. 3 catalog would not match what an assessor scores. But a provenance section whose whole
+purpose is honesty has to say the standard is withdrawn rather than let a reader assume it is
+current. A future move to Rev. 3 is a re-transcription, not an edit: Rev. 3 restructures the
+families and changes the requirement count.
 
 Requirement text was extracted from that PDF rather than retyped, then the Appendix D
 mappings were cross-checked requirement by requirement against a second transcription of
@@ -105,12 +123,18 @@ exist in Rev. 5:
 | 3.5.4 | IA-2(8), IA-2(9) | IA-2(8) | IA-2(9) withdrawn; incorporated into IA-2(8) |
 | 3.8.6 | MP-5(4) | SC-28(1) | MP-5(4) withdrawn; incorporated into SC-28(1) |
 | 3.8.8 | MP-7(1) | MP-7 | MP-7(1) withdrawn; incorporated into MP-7 |
-| 3.13.14 | SC-19 | SC-7 | SC-19 withdrawn; incorporated into SC-7 |
+| 3.13.14 | SC-19 | SC-7 | SC-19 withdrawn with **no successor** -- Rev. 5's disposition reads *"Technology-specific; addressed as any other technology or protocol."* `SC-7` is an **editorial choice by this catalog**, not a NIST mapping |
 
-**These seven rows are the least certain content in the file.** The withdrawals are
-documented in 800-53 Rev. 5, but choosing the successor is a judgment, and 3.8.6 in
-particular moves from a media-transport control to a data-at-rest one. Verify these seven
-against 800-53 Rev. 5 Appendix A before relying on them.
+**Six of these seven are NIST's own dispositions, quoted verbatim from Rev. 5's
+withdrawal text** -- including 3.8.6, where Rev. 5 states outright `[Withdrawn:
+Incorporated into SC-28(1).]`. An earlier revision of this README flagged 3.8.6 as the
+weakest of the seven because a media-transport requirement landing on a data-at-rest
+control reads oddly. That discomfort is real but it is NIST's, not this catalog's: 3.8.6
+is the *best*-evidenced substitution here, not the worst.
+
+**The one that is genuinely this catalog's own judgment is 3.13.14.** SC-19 was withdrawn
+with no successor at all, so `SC-7` is an editorial choice with no NIST basis. Treat that
+row differently from the other six.
 
 ### 3. Basic requirements share one Appendix D row
 
@@ -124,22 +148,36 @@ source does list.
 The consequence is that these mappings are deliberately coarse. 3.12.4 (system security
 plans) carries `CA-2, CA-5, CA-7, PL-2`, not `PL-2` alone; 3.13.2 (security engineering
 principles) carries `SC-7, SA-8`, not `SA-8` alone. The requirements affected are the basic
-requirements of families 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.9, 3.10, 3.12, 3.13 and 3.14.
-Family 3.8 lists its basic requirements one row each in the source and is recorded that
-way; family 3.11 has a single basic requirement, so the question does not arise.
+requirements of families 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, **3.8**, 3.9, 3.10, 3.12,
+3.13 and 3.14. Family 3.11 has a single basic requirement, so the question does not arise.
 
-Some *derived* requirements share a row too — 3.5.7 through 3.5.10 against IA-5(1), 3.10.3
-through 3.10.5 against PE-3, 3.14.4 and 3.14.5 against SI-3 — but each of those rows lists
-one control, so the same rule produces no ambiguity. Every other derived requirement has
+Family 3.8 was recorded one-row-each in an earlier revision of this catalog and corrected
+on review. Table D-8's basic block is a single merged requirement cell spanning 3.8.1,
+3.8.2 and 3.8.3 against three control sub-cells, confirmed from the PDF's own table cell
+geometry rather than from text extraction, which cannot distinguish a merged cell from
+three rows. All three therefore carry `MP-2, MP-4, MP-6`. It was the only family where
+this catalog departed from its own merged-row rule, and the only one where applying the
+rule changes the answer.
+
+Some *derived* requirements share a control too — 3.5.7 through 3.5.10 against IA-5(1),
+3.10.3 through 3.10.5 against PE-3, 3.14.4 and 3.14.5 against SI-3. (Strictly, 3.10.3-3.10.5
+are three separate requirement cells against a single merged PE-3 control cell, rather than
+one shared row; the resulting mapping is the same.) Each lists one control, so the same rule
+produces no ambiguity. Every other derived requirement has
 its own row and is recorded individually.
 
-### 4. 3.8.1 and 3.8.2 read counterintuitively
+### 4. A note on what review caught here
 
-Appendix D Table D-8 pairs **3.8.1** ("protect — physically control and securely store —
-system media") with **MP-2 Media Access**, and **3.8.2** ("limit access to CUI on system
-media") with **MP-4 Media Storage**. Read against the control titles, those look swapped.
-They are recorded as the table has them. If a reviewer concludes the table's own row
-alignment is being misread here, 3.8.1 → MP-4 and 3.8.2 → MP-2 is the alternative.
+An earlier revision of this section recorded 3.8.1 and 3.8.2 as "reading counterintuitively"
+-- 3.8.1 against MP-2 *Media Access* and 3.8.2 against MP-4 *Media Storage* look swapped
+against the control titles. That anomaly does not exist. It was the symptom of reading Table
+D-8's merged basic block as three separate rows (see section 3). Under the correct reading
+all three basic requirements carry the same list and there is nothing to be swapped.
+
+It is recorded here rather than deleted because the reasoning is worth keeping: the entry
+was flagged as suspicious precisely because it did not make sense, and that flag is what led
+a reviewer to check the table geometry and find the real error. Noticing that something reads
+wrong is useful even when the diagnosis is not.
 
 ## Counts
 
