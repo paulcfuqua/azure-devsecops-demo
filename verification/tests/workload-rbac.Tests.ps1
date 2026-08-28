@@ -1,8 +1,9 @@
 ﻿# =============================================================================
 # F13 (compliance/findings/2026-08-26-prepublication-review.md#f13, Task 12):
 # the repo contained zero role assignments for its workload identities. This
-# guards the five of F13's seven documented grants this layer can actually
-# express in code:
+# guards the seven of F13's grants this layer can actually express in code
+# (F13 documents seven in total; the two listed as NOT asserted below are a
+# different thing - they have no principalId available to a static test):
 #
 #   data-api  -> SQL contained-database user   (data/seed/sql/900-contained-users.sql)
 #   data-api  -> Fabric workspace Viewer        (infra/fabric/provision-workspace.ps1 + fabric-api.psm1)
@@ -238,8 +239,10 @@ Describe 'F24: data-api is granted the Fabric workspace Viewer role after L7 cre
     BeforeAll {
         function Get-JobBody {
             param([string]$JobName, [string]$Source)
-            if ($Source -notmatch "(?ms)^  $JobName`:?
-(.*?)(?=^  \w\S*:?
+            if ($Source -notmatch "(?ms)^  $JobName`:
+?
+(.*?)(?=^  \w\S*:
+?
 |\z)") {
                 throw "Could not isolate job '$JobName' in layer-07-apps.yml."
             }
@@ -248,7 +251,8 @@ Describe 'F24: data-api is granted the Fabric workspace Viewer role after L7 cre
         function Get-StepBody {
             param([string]$StepName, [string]$JobBody)
             $escaped = [regex]::Escape($StepName)
-            if ($JobBody -notmatch "(?ms)^\s{6}- name: $escaped?
+            if ($JobBody -notmatch "(?ms)^\s{6}- name: $escaped
+?
 (.*?)(?=^\s{6}- name:|\z)") {
                 throw "Could not isolate step '$StepName' in its job body."
             }
@@ -274,14 +278,20 @@ Describe 'F24: data-api is granted the Fabric workspace Viewer role after L7 cre
     It 'grants Viewer only - never a broader workspace role' {
         # provision-workspace.ps1 hardcodes Viewer for both principals; assert this
         # step does not reach for anything wider.
-        $script:F24Step | Should -Not -Match '(?i)(Admin|Member|Contributor)'
+        $script:F24Step | Should -Not -Match '(?i)\b(Admin|Member|Contributor)\b'
     }
 
     It 'resolves the identity''s principal (object) id, not its client id' {
         # The Fabric roleAssignments API takes the object id; clientId is what the
         # container app consumes and would silently grant nothing.
-        $script:F24Step | Should -Match 'principalId'
-        $script:F24Step | Should -Not -Match '--query .clientId'
+        # Assert the value that is PASSED, not merely that the word appears: the
+        # JMESPath projection names both keys, so a bare 'principalId' match is
+        # satisfied even by `{name:name, principalId:clientId}` - which would hand
+        # the container-app client id to the Fabric roleAssignments API, the exact
+        # failure this test exists to prevent.
+        $script:F24Step | Should -Match 'principalId:principalId'
+        $script:F24Step | Should -Not -Match 'principalId:\s*clientId'
+        $script:F24Step | Should -Match '\$principalId\s*=\s*\$ids\[0\]\.principalId'
     }
 
     It 'refuses when more than one data-api identity matches, rather than granting to an arbitrary one' {

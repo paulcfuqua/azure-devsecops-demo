@@ -31,8 +31,9 @@
  * sets it explicitly from `mcpToolsBackendMode`, whose default is `local`), so
  * `local` is the mode that actually ships. An earlier revision of this comment
  * said the variable was set nowhere; Task 5 set it, and the conclusion is
- * unchanged either way -- what matters is that the shipped mode is not `cloud`. A gate that only armed itself in `cloud` mode was inert in
- * production (finding F2). Running open is still possible but has to be
+ * unchanged either way -- what matters is that the shipped mode is not `cloud`.
+ * A gate that only armed itself in `cloud` mode was inert in production
+ * (finding F2). Running open is still possible but has to be
  * *chosen*, explicitly, via MCP_ALLOW_UNAUTHENTICATED — and it announces
  * itself loudly at boot.
  *

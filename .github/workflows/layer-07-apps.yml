@@ -551,8 +551,17 @@ jobs:
 
           # Reuses the script rather than re-implementing the grant: it already
           # checks Get-FabricWorkspaceRoleAssignment before POSTing, so a replay is
-          # a no-op, and it is create-if-absent for the workspace and lakehouse it
-          # touches on the way past.
+          # a no-op.
+          #
+          # KNOWN SIDE EFFECT, stated rather than buried: provision-workspace.ps1 is
+          # create-if-absent for the workspace and lakehouse as well as the grant. On
+          # the normal path this is inert - infra-up.yml runs L5 first, so both
+          # already exist and the script reuses them. But a STANDALONE layer-07
+          # dispatch, on a tenant where FABRIC_CAPACITY_ID is set and L5 has never
+          # run, will create the 'mls-operations' workspace and lakehouse from here.
+          # They are the same artifacts L5 would have created, so this is recoverable
+          # rather than divergent, but L7 provisioning L5's artifacts is surprising
+          # and is called out in docs/runbooks/layers/L07.md.
           ./infra/fabric/provision-workspace.ps1 `
             -Token $token `
             -CapacityId $env:FABRIC_CAPACITY_ID `
@@ -571,6 +580,7 @@ jobs:
             echo
             echo "The post-L7 Fabric workspace Viewer grant for \`data-api\` did not apply. The deployment itself succeeded and this does not block the Verifier, but \`data-api\` in cloud mode will 403 on every lakehouse read until the grant lands."
             echo
+            # shellcheck disable=SC2016  # backticks are markdown code-span syntax; no expansion wanted
             echo 'Apply it by hand: `infra/fabric/provision-workspace.ps1 -Token <fabric-token> -CapacityId <id> -DataApiPrincipalId <principalId>`'
           } >> "${GITHUB_STEP_SUMMARY}"
 

@@ -58,8 +58,10 @@ param(
     # F13 (Task 12): object ID of the data-api user-assigned identity
     # (infra/bicep/apps/main.bicep's dataApiIdentity.outputs.principalId). Empty by
     # default so calling this script at L5 - before L7 creates that identity - is
-    # unchanged; a caller (today, none - this is the capability, not yet the wiring)
-    # passes it AFTER L7 to grant the workspace Viewer role idempotently.
+    # unchanged. WIRED as of F24: layer-07-apps.yml's post-deploy step resolves the
+    # identity's principal id and passes it here, after L7 has created it. Until
+    # then this parameter had no caller at all, which was F24 itself - the
+    # capability existed and the invocation did not.
     [string]$DataApiPrincipalId = '',
 
     # F21: object ID of the mls-verifier service principal (layer-05-fabric.yml's
@@ -139,11 +141,16 @@ function Invoke-Main {
 
     # ---- workspace Viewer grants (F13 data-api, Task 12; F21 mls-verifier) ---------
     # Each entry is empty by default (see the -DataApiPrincipalId / -VerifierPrincipalId
-    # parameter headers) so this is a no-op until a caller passes a principal - at L5,
-    # before L7 creates the data-api identity, DataApiPrincipalId stays unset; nothing
-    # today wires it (that wiring is a separate task). VerifierPrincipalId IS wired, by
-    # layer-05-fabric.yml's deploy job, because the L5 Verifier audit depends on it
-    # (F21). Role is always Viewer for every entry - read-only, never broader.
+    # parameter headers) so this is a no-op until a caller passes a principal. Both
+    # are wired now, from the layer each principal actually exists at:
+    #   * VerifierPrincipalId - layer-05-fabric.yml's deploy job (F21), because the
+    #     L5 Verifier audit depends on it.
+    #   * DataApiPrincipalId  - layer-07-apps.yml's post-deploy step (F24). It cannot
+    #     be passed at L5: L5 runs before L7 creates the data-api identity, which is
+    #     why this parameter sat with no caller at all until F24 - the same ordering
+    #     problem F20 describes for the SQL grant.
+    # A caller that passes neither still gets the workspace and lakehouse, unchanged.
+    # Role is always Viewer for every entry - read-only, never broader.
     foreach ($grant in @(
             [pscustomobject]@{ Label = 'data-api identity'; PrincipalId = $DataApiPrincipalId }
             [pscustomobject]@{ Label = 'mls-verifier'; PrincipalId = $VerifierPrincipalId }
