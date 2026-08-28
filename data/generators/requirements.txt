@@ -1,2 +1,2 @@
 # Test-only dependency; the generator itself is pure Python stdlib.
-pytest>=8
+pytest>=9.1.1
