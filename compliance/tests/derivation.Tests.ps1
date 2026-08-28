@@ -431,7 +431,7 @@ Describe 'failing closed on unrecognised input' {
         $r.Provenance | Should -Not -Be 'machine-verified'
     }
 
-    It 'does not mistake an assertion citing only blanks for one carrying evidence' -ForEach @(
+    It 'does not mistake an assertion citing only blanks for one carrying evidence: <Label>' -ForEach @(
         @{ Label = 'one null';        Citations = @($null) }
         @{ Label = 'nulls and blanks'; Citations = @($null, '', '   ') }
         @{ Label = 'a lone blank';    Citations = @('  ') }
@@ -632,5 +632,43 @@ Describe 'the real remediation register' {
         $expectedGap     | Should -BeGreaterThan 0
         $actualPartial   | Should -Be $expectedPartial
         $actualGap       | Should -Be $expectedGap
+    }
+}
+
+Describe 'provenance answers how we know, not how we intended to know' {
+    BeforeAll { Import-Module (Join-Path $PSScriptRoot '..' 'lib' 'MlsCompliance.psm1') -Force }
+
+    It 'claims machine-verified only when at least one claimed criterion matched a record' {
+        # A control declaring criteria that no collector produced anything for used to
+        # derive INCONCLUSIVE / machine-verified. Nothing was machine-verified. Left as
+        # it was, a collector outage that emitted zero records would still have counted
+        # every such control as machine-verified in the board's provenance totals.
+        $result = Get-MlsControlStatus -Requirement @{ id = '3.5.3' } `
+            -Assessment @{ applicability = 'applicable'; criteria = @('V3.3') } -Evidence @()
+
+        $result.Status | Should -Be 'INCONCLUSIVE'
+        $result.Provenance | Should -Be 'none' -Because 'no record was collected, so no machine verified anything'
+    }
+
+    It 'still claims machine-verified when only some claimed criteria were collected' {
+        # Partial collection is genuine machine evidence; the gap is already visible as a
+        # 'missing' row in Observed, so the provenance need not be downgraded.
+        $result = Get-MlsControlStatus -Requirement @{ id = '3.5.3' } `
+            -Assessment @{ applicability = 'applicable'; criteria = @('V3.3', 'V3.4') } `
+            -Evidence @(@{ criterion = 'V3.3'; status = 'pass' })
+
+        $result.Status | Should -Be 'INCONCLUSIVE'
+        $result.Provenance | Should -Be 'machine-verified'
+        @($result.Observed | Where-Object { $_.Outcome -eq 'missing' }).Count |
+            Should -Be 1 -Because 'the uncollected criterion stays visible'
+    }
+
+    It 'a fully collected passing set is still COMPLIANT / machine-verified' {
+        $result = Get-MlsControlStatus -Requirement @{ id = '3.5.3' } `
+            -Assessment @{ applicability = 'applicable'; criteria = @('V3.3') } `
+            -Evidence @(@{ criterion = 'V3.3'; status = 'pass' })
+
+        $result.Status | Should -Be 'COMPLIANT'
+        $result.Provenance | Should -Be 'machine-verified'
     }
 }

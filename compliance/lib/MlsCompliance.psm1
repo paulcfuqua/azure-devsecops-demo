@@ -160,7 +160,7 @@ function Get-MlsComplianceField {
     # inner elements - both of which silently change what the derivation sees.
     if ($null -eq $InputObject) { return $null }
     if ($InputObject -is [System.Collections.IDictionary]) {
-        if ($InputObject.Contains($Name)) { return , $InputObject[$Name] }
+        if ((@($InputObject.Keys) -contains $Name)) { return , $InputObject[$Name] }
         return $null
     }
     # A scalar where an object was expected is malformed input, not a field bag.
@@ -365,6 +365,7 @@ function Get-MlsControlStatus {
     if ($criteria.Count -gt 0) {
         $observations = @()
         $worst = 'pass'
+        $anyRecordMatched = $false
 
         foreach ($entry in $criteria) {
             $criterionId = Get-MlsComplianceText $entry
@@ -389,6 +390,10 @@ function Get-MlsControlStatus {
                 continue
             }
 
+            # At least one claimed criterion resolved to a real collected record, so a
+            # machine did verify something here. See the provenance decision below.
+            $anyRecordMatched = $true
+
             foreach ($record in $matched) {
                 $outcome = ConvertTo-MlsComplianceOutcome (
                     Get-MlsComplianceField -InputObject $record -Name 'status')
@@ -411,7 +416,15 @@ function Get-MlsControlStatus {
             'pass' { 'COMPLIANT' }
             default { 'INCONCLUSIVE' }
         }
-        return New-MlsComplianceResult -Status $status -Provenance 'machine-verified' -Observed $observations
+
+        # Provenance answers "how do we know", not "how did we intend to know". If not a
+        # single claimed criterion resolved to a collected record, no machine verified
+        # anything and the honest answer is 'none' - otherwise a collector outage that
+        # produced nothing would still count these controls as machine-verified in Task 8's
+        # byProvenance totals (F23 review, Important 1). One matched record is enough to
+        # earn 'machine-verified'; the missing ones are already visible in Observed.
+        $provenance = if ($anyRecordMatched) { 'machine-verified' } else { 'none' }
+        return New-MlsComplianceResult -Status $status -Provenance $provenance -Observed $observations
     }
 
     # --- 5. Assertion-driven: authored, and never able to reach COMPLIANT ---------------

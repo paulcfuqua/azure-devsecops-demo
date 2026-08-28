@@ -94,7 +94,7 @@ jobs:
           Get-Module -ListAvailable PSScriptAnalyzer, Pester, SqlServer |
             Select-Object Name, Version | Format-Table
 
-      - name: Analyse scripts/, infra/ and verification/
+      - name: Analyse every PowerShell file CI owns
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
