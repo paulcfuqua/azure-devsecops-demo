@@ -21,10 +21,24 @@ describe("ControlDetail", () => {
     render(<ControlDetail control="3.1.1" state={fixtureState} catalog={fixtureCatalog} />);
     const control = fixtureState.controls.find((c) => c.control === "3.1.1")!;
     expect(control.statusBasis.length).toBeGreaterThan(0); // sanity
-    // `detail` and the control's own `observed` summary happen to carry the
-    // same string for this control, so both a status-basis row and the
-    // top-level summary render it -- getAllByText, not getByText.
-    expect(screen.getAllByText(control.statusBasis[0]!.detail).length).toBeGreaterThan(0);
+    const basis = control.statusBasis[0]!;
+
+    // Scoped to the actual Status basis section's own record container, not
+    // to text anywhere on the page: `basis.detail` happens to be byte-
+    // identical to the control's own top-level `observed` summary for every
+    // authored control, and that summary renders on its own line regardless
+    // of whether the Status basis section exists at all -- a reviewer found
+    // an earlier version of this test stayed green even with the entire
+    // Status basis section deleted, because it only checked that the text
+    // appeared *somewhere*. Scoping into `status-basis-record` means
+    // deleting that section removes the element this test queries for,
+    // which fails the query outright rather than silently passing.
+    const basisRecords = screen.getAllByTestId("status-basis-record");
+    expect(basisRecords.length).toBe(control.statusBasis.length);
+    const firstRecord = basisRecords[0]!;
+    expect(within(firstRecord).getByText(basis.kind)).toBeInTheDocument();
+    expect(within(firstRecord).getByText(basis.detail)).toBeInTheDocument();
+    expect(within(firstRecord).getByText(new RegExp(`source: ${basis.source}`))).toBeInTheDocument();
   });
 
   it("shows the recommendation for a gap", () => {
@@ -81,6 +95,38 @@ describe("ControlDetail", () => {
       expect(screen.getByText(record.observed)).toBeInTheDocument();
     }
     // The suppression is visible, not silent: a merge note says how many.
+    expect(screen.getByTestId("merged-duplicate-note")).toHaveTextContent("1");
+  });
+
+  it("does not list a duplicatesStatusBasis record as independent evidence even from the (today, always empty) evidence array", () => {
+    // The emitter only ever sets duplicatesStatusBasis on supportingEvidence
+    // records today, so this scenario cannot occur in the real artifact --
+    // but types.ts states the rule unconditionally on the shared
+    // EvidenceRecord type, and ControlDetail.tsx now filters both arrays
+    // rather than relying on that emitter invariant holding forever.
+    const mutated = cloneState();
+    const target = mutated.controls.find((c) => c.control === "3.1.1")!;
+    // Isolated to just this scenario: 3.1.1 also carries a real, pre-existing
+    // duplicatesStatusBasis record in supportingEvidence (see the earlier
+    // test), which would otherwise add its own count to the merge note.
+    target.supportingEvidence = [];
+    target.evidence = [
+      {
+        source: "manual",
+        criterion: null,
+        status: "fail",
+        observed: "SYNTHETIC duplicate evidence record for this test only.",
+        artifact: null,
+        collectedAt: null,
+        participatedInStatus: true,
+        duplicatesStatusBasis: true,
+      },
+    ];
+
+    render(<ControlDetail control="3.1.1" state={mutated} catalog={fixtureCatalog} />);
+    expect(
+      screen.queryByText("SYNTHETIC duplicate evidence record for this test only."),
+    ).toBeNull();
     expect(screen.getByTestId("merged-duplicate-note")).toHaveTextContent("1");
   });
 

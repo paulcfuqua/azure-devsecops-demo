@@ -162,11 +162,6 @@ export function App({ state, catalog, history = [] }: AppProps): JSX.Element {
             {state.frameworkName}. Counts by status and provenance only —
             never a blended percentage, score or ratio.
           </Text>
-          <Text size={200}>
-            Collected {state.collectedAt} from commit {state.commitShort} (
-            {state.workingTreeClean ? "clean tree" : "tree had uncommitted changes"}
-            ).
-          </Text>
         </header>
         <TabList selectedValue={view} onTabSelect={onTabSelect} style={{ padding: "0 1rem" }}>
           {VIEW_IDS.map((id) => (
@@ -179,8 +174,9 @@ export function App({ state, catalog, history = [] }: AppProps): JSX.Element {
         <footer className={styles.footer}>
           <Text size={200}>
             Synthetic data — Meridian Launch Systems is fictional.{" "}
-            {state.collectors.length} collectors ran; see state.collectors for
-            each one's limitation.
+            {state.collectors.length} collectors ran; each one&apos;s status and
+            limitation is listed on the board tab, not just in the underlying
+            JSON.
           </Text>
         </footer>
       </div>

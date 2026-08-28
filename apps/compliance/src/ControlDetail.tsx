@@ -91,7 +91,7 @@ function ArtifactRef({ path }: { path: string }): JSX.Element {
 function StatusBasisRow({ record }: { record: StatusBasisRecord }): JSX.Element {
   const styles = useStyles();
   return (
-    <div className={styles.record}>
+    <div className={styles.record} data-testid="status-basis-record">
       <Text weight="semibold">{record.kind}</Text>
       {/* Authored prose -- text via JSX interpolation only, never
        * dangerouslySetInnerHTML, never keyword-matched for colour. */}
@@ -135,10 +135,17 @@ export function ControlDetail({ control, state, catalog }: ControlDetailProps): 
     // transcription of the same authored assertion `statusBasis` already
     // shows -- listing them again as independent evidence would
     // double-count one human claim as two. They are visibly merged into
-    // the status basis via the note below, never listed in the
-    // supportingEvidence section as their own record.
+    // the status basis via the note below, never listed as their own
+    // record in EITHER evidence section. Today the emitter only ever sets
+    // this flag on `supportingEvidence` (non-participating) records, never
+    // on `evidence` (participating ones) -- but types.ts states the rule
+    // unconditionally on the shared `EvidenceRecord` type, so both arrays
+    // are filtered the same way rather than relying on that emitter
+    // invariant holding forever.
+    const evidenceRecords = row.evidence.filter((e) => !e.duplicatesStatusBasis);
     const supporting = row.supportingEvidence.filter((e) => !e.duplicatesStatusBasis);
-    const mergedCount = row.supportingEvidence.length - supporting.length;
+    const mergedCount =
+      row.evidence.length - evidenceRecords.length + (row.supportingEvidence.length - supporting.length);
 
     return (
       <div className={styles.panel} data-testid="control-detail">
@@ -164,12 +171,12 @@ export function ControlDetail({ control, state, catalog }: ControlDetailProps): 
         )}
 
         <Title3 as="h3">Evidence</Title3>
-        {row.evidence.length === 0 ? (
+        {evidenceRecords.length === 0 ? (
           <Text size={200} className={styles.recordMeta}>
             No collected record participated in this control&apos;s status.
           </Text>
         ) : (
-          row.evidence.map((record, i) => <EvidenceRow key={i} record={record} />)
+          evidenceRecords.map((record, i) => <EvidenceRow key={i} record={record} />)
         )}
 
         <Title3 as="h3">Supporting evidence</Title3>

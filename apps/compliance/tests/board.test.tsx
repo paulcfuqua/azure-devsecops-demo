@@ -115,6 +115,94 @@ describe("Board", () => {
     expect(clicks).toEqual(["3.1.1"]);
   });
 
+  it("clicking an out-of-catalog row also invokes onSelectControl with its own id", () => {
+    const clicks: string[] = [];
+    render(
+      <Board
+        state={fixtureState}
+        catalog={fixtureCatalog}
+        framework="nist-800-171r2"
+        onSelectControl={(control) => clicks.push(control)}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("out-of-catalog-CP-9"));
+    expect(clicks).toEqual(["CP-9"]);
+  });
+
+  it("makes the never-deployed fact impossible to miss, sourced from the verification-suite collector's own limitation", () => {
+    const { container } = render(
+      <Board state={fixtureState} catalog={fixtureCatalog} framework="nist-800-171r2" />,
+    );
+    const verificationSuite = fixtureState.collectors.find((c) => c.name === "verification-suite")!;
+    expect(verificationSuite.limitation).toMatch(/deployed/i); // sanity: today's real text says so
+    const banner = screen.getByTestId("deployment-banner");
+    expect(banner).toHaveTextContent(/deployed/i);
+    expect(banner).toHaveTextContent(verificationSuite.limitation);
+    // The word appears on the rendered board at all -- the reviewer's own
+    // check ("grepped the whole rendered board, 'deployed' appears zero
+    // times") is the thing this test exists to keep from regressing.
+    expect(container.textContent ?? "").toMatch(/deployed/i);
+  });
+
+  it("renders every collector's status, record count and limitation -- not just a pointer to JSON", () => {
+    render(<Board state={fixtureState} catalog={fixtureCatalog} framework="nist-800-171r2" />);
+    for (const collector of fixtureState.collectors) {
+      const row = screen.getByTestId(`collector-${collector.name}`);
+      expect(row).toHaveTextContent(collector.name);
+      expect(row).toHaveTextContent(collector.status);
+      expect(row).toHaveTextContent(collector.limitation);
+      expect(within(row).getByTestId("collector-status")).toHaveTextContent(collector.status);
+    }
+    // A healthy run says so, explicitly.
+    expect(fixtureState.collectors.every((c) => c.status === "ok")).toBe(true); // sanity
+    expect(screen.getByTestId("collector-summary")).toHaveTextContent(/all 5 collectors ran/i);
+  });
+
+  it("visibly flags a failed collector -- a half-failed run must not render identically to a healthy one", () => {
+    const mutated = cloneState();
+    const okBadgeBefore = (() => {
+      const { unmount } = render(
+        <Board state={fixtureState} catalog={fixtureCatalog} framework="nist-800-171r2" />,
+      );
+      const el = within(screen.getByTestId("collector-manual")).getByTestId("collector-status");
+      const cls = el.className;
+      unmount();
+      return cls;
+    })();
+
+    mutated.collectors[0]!.status = "failed";
+    mutated.collectors[0]!.error = "SYNTHETIC: collector threw for this test only.";
+    render(<Board state={mutated} catalog={fixtureCatalog} framework="nist-800-171r2" />);
+
+    expect(screen.getByTestId("collector-summary")).toHaveTextContent(
+      `1 of ${mutated.collectors.length} collectors failed`,
+    );
+    const failedRow = screen.getByTestId(`collector-${mutated.collectors[0]!.name}`);
+    expect(within(failedRow).getByTestId("collector-error")).toHaveTextContent(
+      "SYNTHETIC: collector threw for this test only.",
+    );
+    // Distinct colour from a healthy collector's badge, not just different text.
+    const failedBadge = within(failedRow).getByTestId("collector-status");
+    expect(failedBadge.className).not.toBe(okBadgeBefore);
+  });
+
+  it("renders assessmentProblems when present", () => {
+    const mutated = cloneState();
+    mutated.assessmentProblems = [
+      { file: "compliance/assessment/broken.json", problem: "SYNTHETIC: invalid JSON for this test." },
+    ];
+    render(<Board state={mutated} catalog={fixtureCatalog} framework="nist-800-171r2" />);
+    const panel = screen.getByTestId("assessment-problems");
+    expect(panel).toHaveTextContent("compliance/assessment/broken.json");
+    expect(panel).toHaveTextContent("SYNTHETIC: invalid JSON for this test.");
+  });
+
+  it("does not render an assessment-problems section when there are none (the real, common case)", () => {
+    expect(fixtureState.assessmentProblems).toEqual([]); // sanity
+    render(<Board state={fixtureState} catalog={fixtureCatalog} framework="nist-800-171r2" />);
+    expect(screen.queryByTestId("assessment-problems")).toBeNull();
+  });
+
   it("renders a control's observed text as text, not markup", () => {
     const mutated = cloneState();
     const target = mutated.controls.find((c) => c.control === "3.1.1")!;

@@ -1,6 +1,6 @@
 import { Text, Title3, makeStyles, tokens } from "@fluentui/react-components";
 import { useMemo } from "react";
-import type { ComplianceState, ControlStatus } from "./types";
+import type { ComplianceState, ControlStatus, StatusCounts } from "./types";
 import { STATUS_KEYS } from "./types";
 
 const useStyles = makeStyles({
@@ -106,6 +106,30 @@ function computeTransitions(history: ComplianceState[]): Transition[] {
   return transitions;
 }
 
+function emptyStatusCounts(): StatusCounts {
+  return {
+    COMPLIANT: 0,
+    PARTIAL: 0,
+    GAP: 0,
+    INCONCLUSIVE: 0,
+    NOT_APPLICABLE: 0,
+    NOT_ASSESSED: 0,
+  };
+}
+
+/** Tallies status counts directly from `snapshot.controls` rather than
+ * trusting `snapshot.summary.byStatus` -- the two should always agree for a
+ * real emitted artifact, but a test fixture (or any future producer of a
+ * ComplianceState) that mutates `controls[].status` without also updating
+ * the separately-maintained `summary` object would otherwise plot identical
+ * counts for two collections that actually differ. Single source of truth:
+ * the same array `computeTransitions` below already reads. */
+function tallyByStatus(controls: ComplianceState["controls"]): StatusCounts {
+  const counts = emptyStatusCounts();
+  for (const control of controls) counts[control.status] += 1;
+  return counts;
+}
+
 function SnapshotTable({ history }: { history: ComplianceState[] }): JSX.Element {
   const styles = useStyles();
   return (
@@ -121,14 +145,17 @@ function SnapshotTable({ history }: { history: ComplianceState[] }): JSX.Element
         </tr>
       </thead>
       <tbody>
-        {history.map((snapshot) => (
-          <tr key={snapshot.collectedAt}>
-            <th scope="row">{snapshot.collectedAt}</th>
-            {STATUS_KEYS.map((status) => (
-              <td key={status}>{snapshot.summary.byStatus[status]}</td>
-            ))}
-          </tr>
-        ))}
+        {history.map((snapshot) => {
+          const counts = tallyByStatus(snapshot.controls);
+          return (
+            <tr key={snapshot.collectedAt}>
+              <th scope="row">{snapshot.collectedAt}</th>
+              {STATUS_KEYS.map((status) => (
+                <td key={status}>{counts[status]}</td>
+              ))}
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

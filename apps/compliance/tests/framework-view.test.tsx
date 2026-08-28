@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Board } from "../src/Board";
 import { FrameworkSwitcher } from "../src/FrameworkSwitcher";
@@ -41,6 +41,52 @@ describe("Board framework views (relabel/filter the same 110 records, no second 
     // out-of-catalog section, never inside this family/requirement row.
     expect(screen.getByTestId("out-of-catalog-CP-9")).toBeInTheDocument();
     expect(screen.queryByTestId("control-CP-9")).toBeNull();
+  });
+
+  it("the headline and cross-tab denominators match what's actually visible under a filtered framework", () => {
+    // Measured directly from the real artifact: far-52.204-21's 17 CMMC
+    // Level 1 practices break down 12 NOT_ASSESSED / 3 PARTIAL / 2 GAP, all
+    // 5 non-NOT_ASSESSED rows "asserted" (none machine-verified).
+    render(<Board state={fixtureState} catalog={fixtureCatalog} framework="far-52.204-21" />);
+
+    // The headline's "N of M" no longer reads the fixed 110 -- it reads 17,
+    // and NOT_ASSESSED among those 17 is 12, not the unfiltered 95.
+    expect(screen.getByText(/12 of 17/)).toBeInTheDocument();
+    expect(screen.queryByText(/95 of 110/)).toBeNull();
+
+    // The cross-tab's cells sum to 17, not 110: asserted covers the 3
+    // PARTIAL + 2 GAP rows, "none" covers the 12 NOT_ASSESSED rows, and
+    // every other cell (including machine-verified, entirely) is zero.
+    const table = screen.getByRole("table", { name: /provenance and status/i });
+    const assertedRow = within(table).getByText("asserted").closest("tr")!;
+    const assertedCells = within(assertedRow)
+      .getAllByRole("cell")
+      .map((cell) => Number(cell.textContent));
+    // STATUS_KEYS order: COMPLIANT, PARTIAL, GAP, INCONCLUSIVE, NOT_APPLICABLE, NOT_ASSESSED
+    expect(assertedCells).toEqual([0, 3, 2, 0, 0, 0]);
+    const noneRow = within(table).getByText("none").closest("tr")!;
+    const noneCells = within(noneRow)
+      .getAllByRole("cell")
+      .map((cell) => Number(cell.textContent));
+    expect(noneCells).toEqual([0, 0, 0, 0, 0, 12]);
+    const allCellsAcrossTable = within(table)
+      .getAllByRole("cell")
+      .map((cell) => Number(cell.textContent));
+    const total = allCellsAcrossTable.reduce((sum, n) => sum + n, 0);
+    expect(total).toBe(17);
+
+    // And the active framework is named explicitly, disambiguating the
+    // denominator for anyone who reads the number without the context above
+    // (it appears in both the headline and the cross-tab's own intro text).
+    expect(screen.getAllByText(/FAR 52\.204-21/).length).toBeGreaterThan(0);
+  });
+
+  it("the native nist-800-171r2 view keeps the artifact's own committed summary as its denominator, unrecomputed", () => {
+    render(<Board state={fixtureState} catalog={fixtureCatalog} framework="nist-800-171r2" />);
+    const { NOT_ASSESSED } = fixtureState.summary.byStatus;
+    expect(
+      screen.getByText(new RegExp(`${NOT_ASSESSED} of ${fixtureState.summary.totalRequirements}`)),
+    ).toBeInTheDocument();
   });
 
   it("a control with no mapping under a framework is not shown with an empty label -- it is filtered out entirely", () => {

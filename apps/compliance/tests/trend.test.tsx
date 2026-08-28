@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Trend } from "../src/Trend";
 import { cloneState, fixtureState } from "./fixtures";
@@ -45,23 +45,56 @@ describe("Trend — single real collection", () => {
 /** Two dated snapshots with a manufactured regression: 3.3.1 is PARTIAL in
  * the real fixture today, so the newer copy is forced to GAP (worse) to
  * exercise the "names the date a control regressed" behaviour the real,
- * single-collection artifact cannot exercise on its own. */
+ * single-collection artifact cannot exercise on its own.
+ *
+ * `summary.byStatus`/`byProvenanceAndStatus` are updated alongside
+ * `controls[].status` so the fixture stays internally consistent -- a
+ * reviewer found the original version of this fixture mutated only the
+ * control, leaving `summary` (a separately-maintained field on the same
+ * object) stale, which would have silently plotted identical counts for
+ * both dates had Trend.tsx trusted `summary` instead of recomputing from
+ * `controls` directly (see Trend.tsx's `tallyByStatus`). Both are fixed
+ * here: Trend.tsx no longer trusts `summary` for its table, and this
+ * fixture no longer produces an inconsistent `ComplianceState` regardless. */
 function twoPointHistory(): [ComplianceState, ComplianceState] {
   const older = withCollectedAt("2026-08-20");
   const newer = withCollectedAt("2026-08-26");
   const target = newer.controls.find((c) => c.control === "3.3.1")!;
-  if (target.status !== "PARTIAL") {
-    throw new Error("fixture assumption changed: 3.3.1 is no longer PARTIAL in the real artifact");
+  if (target.status !== "PARTIAL" || target.provenance !== "asserted") {
+    throw new Error(
+      "fixture assumption changed: 3.3.1 is no longer PARTIAL/asserted in the real artifact",
+    );
   }
   target.status = "GAP";
+  newer.summary.byStatus.PARTIAL -= 1;
+  newer.summary.byStatus.GAP += 1;
+  newer.summary.byProvenanceAndStatus.asserted.PARTIAL -= 1;
+  newer.summary.byProvenanceAndStatus.asserted.GAP += 1;
   return [older, newer];
 }
 
 describe("Trend — synthetic two-point history", () => {
-  it("plots status counts across committed state artifacts", () => {
+  it("plots status counts across committed state artifacts, and the two dates actually differ", () => {
     const [older, newer] = twoPointHistory();
     render(<Trend history={[older, newer]} />);
-    expect(screen.getByTestId("trend-chart")).toBeInTheDocument();
+    const chart = screen.getByTestId("trend-chart");
+    expect(chart).toBeInTheDocument();
+
+    // Scoped to each date's own row, not just "the chart contains some
+    // numbers somewhere" -- a chart that plotted the same (stale) counts
+    // for both dates despite the regression below would pass a looser
+    // assertion. Column order is STATUS_KEYS: COMPLIANT, PARTIAL, GAP, ...
+    const olderRow = within(chart).getByText(older.collectedAt).closest("tr")!;
+    const newerRow = within(chart).getByText(newer.collectedAt).closest("tr")!;
+    const olderCells = within(olderRow)
+      .getAllByRole("cell")
+      .map((cell) => Number(cell.textContent));
+    const newerCells = within(newerRow)
+      .getAllByRole("cell")
+      .map((cell) => Number(cell.textContent));
+    expect(olderCells).not.toEqual(newerCells);
+    expect(olderCells[1]).toBe(newerCells[1]! + 1); // PARTIAL: one higher before the regression
+    expect(olderCells[2]).toBe(newerCells[2]! - 1); // GAP: one lower before the regression
   });
 
   it("names the date a control regressed", () => {

@@ -3,8 +3,10 @@ import type { FrameworkId } from "./types";
 
 /** Human labels for the four framework ids the catalog's `mappings` key on.
  * Reference data, not a resource name -- CLAUDE.md's naming rule is about
- * Azure resource names (`mls-<app>-<env>-<type>`), not UI copy. */
-const FRAMEWORK_LABELS: Record<FrameworkId, string> = {
+ * Azure resource names (`mls-<app>-<env>-<type>`), not UI copy. Exported so
+ * Board.tsx can name the active framework in its headline/cross-tab when a
+ * filtered view is in effect (single source of truth for the label text). */
+export const FRAMEWORK_LABELS: Record<FrameworkId, string> = {
   "nist-800-171r2": "NIST SP 800-171 Rev 2",
   "nist-800-53r5": "NIST SP 800-53 Rev 5 (mapped)",
   "cmmc-2.0": "CMMC 2.0",

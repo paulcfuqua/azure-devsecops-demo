@@ -145,6 +145,15 @@ export interface CollectorReport {
   error: string | null;
 }
 
+/** A row in `assessmentProblems`: a file the emitter could not parse (e.g.
+ * a malformed assessment JSON), or the assessment root missing entirely.
+ * `problem` is authored/generated prose -- same rendering rules as
+ * `observed`: text via JSX interpolation, never dangerouslySetInnerHTML. */
+export interface AssessmentProblem {
+  file: string;
+  problem: string;
+}
+
 /** Framework ids the catalog's `mappings` object keys on, plus the primary
  * framework the state artifact was collected against. Task 11's
  * FrameworkSwitcher relabels the same 110 rows under one of these. */
@@ -165,7 +174,7 @@ export interface ComplianceState {
   notes: Record<string, string>;
   summary: ComplianceSummary;
   collectors: CollectorReport[];
-  assessmentProblems: unknown[];
+  assessmentProblems: AssessmentProblem[];
   controls: ControlRow[];
   outOfCatalogControls: OutOfCatalogControlRow[];
 }
