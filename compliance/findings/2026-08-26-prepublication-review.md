@@ -44,8 +44,9 @@ their evidence and carry the same status.
 | [F20](#f20) | data-api's contained-user grant is expressed but never applies | medium | CONFIRMED | — (availability) | Task 22 |
 | [F21](#f21) | mls-verifier's documented Fabric workspace Viewer grant does not exist | high | CONFIRMED | — (availability — breaks the Verifier's sign-off gate) | Task 21 |
 | [F22](#f22) | Container images never smoke-tested in CI | medium | CONFIRMED | — (availability) | Task 24 |
+| [F23](#f23) | Three G3 full-tenant teardown scripts the runbooks instruct operators to run did not exist | high | CONFIRMED | CM-6 | Task 25 |
 
-F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason.
+F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
 ---
 
@@ -1016,6 +1017,167 @@ The `^ok ` discriminator is therefore not the mechanism that catches *this* regr
 mcp-tools also needed a boot-time accommodation unrelated to F22 itself: `apps/mcp-tools/src/auth-gate.ts`'s `loadInboundAuth` (F2's fix, Tasks 4–5) throws at startup in every mode unless `MCP_AUTH_TOKEN` or `MCP_ALLOW_UNAUTHENTICATED` is set, because the container app's ingress is external regardless of backend mode. A bare `docker run` of that image exits immediately and would look like an image defect rather than a missing setting. The smoke step passes `-e MCP_ALLOW_UNAUTHENTICATED=true` — a boolean opt-out, not a token, authenticating nothing, and `/healthz` is unauthenticated at the ingress regardless since the gate is scoped to the `/mcp` route only. The other three images needed no environment at all to boot: control-tower and launch-ops default `DATA_API_ORIGIN` and `MLS_IMAGE_DIGEST` in their Dockerfiles, and data-api defaults `MLS_DATA_BACKENDS` to `local` (`src/config.ts`) with `LocalTablesBackend` reading `data/generated/*.json` lazily per request rather than at boot, so `/healthz` answers before any table route would ever be called.
 
 Covered by `verification/tests/app-ci-smoke-test.Tests.ps1` — a workflow-shape assertion (GitHub Actions `run:` steps have no unit-test harness, same approach as `no-secret-outputs.Tests.ps1` and `self-heal-selection.Tests.ps1`), since the runtime behaviour itself cannot execute without a Docker daemon, unavailable on this dev host. Placement is asserted by **line-number comparison** (the smoke step's line strictly between the Trivy gate's and `Log in to GHCR`'s, and strictly before the push step's), not mere substring presence, across all four workflows; per-app discriminator payloads, the bounded retry loop, the `docker logs`-before-every-`exit 1` invariant, the EXIT-trap cleanup, the absence of `continue-on-error`, and the absence of any credential/mount in the step are each asserted directly against the extracted step body. Five behaviours were mutation-tested one at a time against the real workflow files (placement after `Log in to GHCR`, the F14 discriminator regex, the EXIT-trap cleanup, an added `continue-on-error: true`, and the mcp-tools auth opt-out) — each neutering flipped exactly the expected assertion(s) red and nothing else, confirmed by re-running the suite and then restoring the file to its pre-mutation content before the real commit. Not claimed: this has never been exercised against a live Docker daemon or a live tenant — no container was actually started to build or verify this fix, per this branch's constraints — so the smoke step's own correctness rests on code reading, the step order other app-*-ci.yml jobs already establish, and the route handlers' source, not an end-to-end CI run.
+
+---
+
+## F23
+
+**Three G3 full-tenant teardown scripts the runbooks instruct operators to run did not exist**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED
+- **Controls:** CM-6 (NIST SP 800-53 Rev 5 — tailored out of 800-171, the same control F18 maps to)
+- **Closed by:** Task 25
+- **Status:** CLOSED
+
+**Where:** `docs/runbooks/kill-rebuild.md` § 7 is a NUMBERED OPERATOR PROCEDURE for G3
+full-tenant teardown / handback. Steps 1, 2 and 4 instructed a human to run
+`infra/purview/teardown.ps1`, `infra/entra/teardown.ps1` and
+`infra/policy/teardown.ps1`, in that order. `docs/runbooks/layers/L02.md:129`,
+`L03.md:184` and `L04.md:148` each carried the matching per-layer Teardown-section
+claim. Step 1 self-labelled its path `[derived name, per L04]` — the runbook's own
+author flagged the path as a guess rather than a path it had verified, and never
+followed up.
+
+**Verified absent, not merely undocumented:** before this task, none of the three
+paths existed anywhere in the tree. `infra/fabric/teardown-items.ps1` was the ONLY
+teardown script ever written for any layer. `infra/entra/` had an apply script
+(`apply-entra.ps1`) and a manifest but no teardown counterpart; `infra/purview/`
+had `labels.ps1` (create/update only) and no teardown counterpart; `infra/policy/`
+did not exist as a directory at all, because **L2 has no apply script either** — it
+deploys `infra/bicep/landing-zone/main.bicep` straight from a GitHub Actions step
+(`az deployment mg create` in `layer-02-landing-zone.yml`), so L2 was missing two
+legs of CLAUDE.md's triplet, not one.
+
+**Found while:** reviewing Task 20's closure of F18 (the sibling CM-6 gap:
+sensitivity labels published nowhere). The reviewer first flagged
+`infra/purview/teardown.ps1` specifically, as missing. The controller then ran a
+repo-wide teardown census rather than accepting a single-file fix, and the census
+surfaced two more absent scripts with the identical shape, both referenced by the
+same runbook section.
+
+**Every workflow reference to these three paths was a comment, not an executed
+step** — `layer-02-landing-zone.yml:12`, `layer-03-entra.yml:10`, and the
+commentary in `infra/purview/labels.ps1`'s own header all NAME the path without
+ever invoking it — so no pipeline crashed and nothing in CI surfaced the gap. The
+exposure is purely operational: an operator performing a real tenant handback, by
+following `kill-rebuild.md` § 7 exactly as written, would hit file-not-found on
+step 1, and either halt (leaving steps 2–5 undone) or skip ahead past the failure
+(leaving the same objects in place while believing the procedure completed). Either
+way, the documented outcome — tenant wiped clean for handback — does not occur.
+Per `infra/entra/manifest.json` and `infra/bicep/landing-zone/main.bicep`, what
+persists in a tenant whose owner has been told it is gone: 5 users, 4 groups, 3 app
+registrations and 2 Conditional Access policies; the four Purview sensitivity
+labels and their published policy; management group `mls`, its 14 tag/location
+policy assignments, and the NIST SP 800-53 R5 initiative assignment.
+
+**Also a direct CLAUDE.md violation, not only an operational gap:** "Every layer
+ships a `deploy` path, a `teardown` script, a `verification/` audit script. A layer
+without all three is not done." L2, L3 and L4 each failed that rule outright.
+
+**Fix:** author all three scripts, each safe to author without ever touching a
+live tenant (hard rule 1: "Authoring code is always allowed; executing deployments
+is not") — `-WhatIf`-able, confirming by default, refusing to run in CI, and
+idempotent on an already-absent object — plus a Pester suite proving each property
+under mocks.
+
+**Closed (Task 25):** all three scripts now exist, mirroring each layer's own
+access pattern rather than inventing a new one. `infra/entra/teardown.ps1` reuses
+`apply-entra.ps1`'s exact choke points — every Graph call funnels through
+`Invoke-GraphApi`/`Invoke-GraphMutation`, never a `Remove-Mg*` cmdlet — and deletes
+only what `infra/entra/manifest.json` lists, never a wildcard sweep, in
+reverse-dependency order (CA policies, then app registrations, then groups, then
+users). `infra/purview/teardown.ps1` reuses `labels.ps1`'s Security & Compliance
+surface (`Get-Label`, `Get-LabelPolicy`, and the new `Remove-Label`/
+`Remove-LabelPolicy` calls) and removes the published label policy **before** the
+four labels — a label still scoped by a live policy cannot be deleted, so the order
+is load-bearing, not cosmetic. `infra/policy/teardown.ps1` is new ground, since L2
+never had a PowerShell apply script to mirror: it follows the repo's own `az` CLI
+convention instead (the same `Invoke-AzCli`/`Invoke-AzMutation` shape
+`scripts/bootstrap/02-fabric-capacity.ps1` already uses), checks `$LASTEXITCODE`
+explicitly after every `az` call (`$PSNativeCommandUseErrorActionPreference`
+defaults to `$false` in `pwsh`, so a failed native command does not throw on its
+own), resolves management group `mls`'s name from `infra/bicep/naming.bicep`
+exactly the way `scripts/down.ps1`'s `Get-CompanyPrefix` already does rather than
+hardcoding `mls`, and removes in order: the 14 tag/location policy assignments,
+then the NIST SP 800-53 R5 initiative assignment (at **subscription** scope, per
+`main.bicep`'s own comment that the AVM pattern module fans that one assignment out
+to the subscription rather than the management group — the other 14 stay at MG
+scope), then moves the subscription back to the tenant root, then deletes MG `mls`
+— in that order, because a management group with a child subscription will not
+delete.
+
+Every script carries the same safety contract: `Invoke-Main` declares
+`[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]`, so `-WhatIf`
+enumerates without deleting and confirmation is required by default; a G3 banner
+(naming the gate, the exact scope being deleted, and the irreversible consequence —
+new label GUIDs, invalidated Entra object IDs, reset policy-compliance data) prints
+before any destructive call; each refuses to run when `$env:GITHUB_ACTIONS -eq
+'true'` unless `-AllowAutomation` is passed explicitly, and a repo-wide grep
+confirms no workflow anywhere passes that switch; an already-absent object is an
+informational no-op on every path, never a terminating error; and each ends with
+the repo's `if (-not $env:MLS_SKIP_MAIN) { Invoke-Main ... }` guard so Pester can
+dot-source it without executing anything.
+
+TDD: 29 new assertions across three new test files — `infra/entra/tests/
+teardown.Tests.ps1` (8), `infra/purview/tests/teardown.Tests.ps1` (9), and
+`infra/policy/tests/teardown.Tests.ps1` (12, including three direct unit tests of
+`Invoke-AzCli`'s own `$LASTEXITCODE` handling against a local `az` stand-in
+function, since the script otherwise has no seam to prove a native-command failure
+is actually checked rather than silently ignored). All 29 failed before the three
+scripts existed (`Invoke-Pester infra/purview/tests,infra/entra/tests,
+infra/policy/tests` could not even dot-source them) and all pass after. Each
+script's three load-bearing behaviours — the CI refusal, the teardown order, and
+the `-WhatIf` no-mutate guarantee — were mutation-tested individually by neutering
+exactly that one behaviour, confirming the corresponding test (and only that test)
+went red, then restoring the file: 9 mutations total, each isolated to the single
+assertion it targeted. One mutation was not single-point by construction:
+`infra/entra/teardown.ps1` gates every delete through **two** independent
+`ShouldProcess` calls (the `Remove-EntraUser`/`Remove-EntraGroup`/
+`Remove-EntraApplication`/`Remove-CaPolicy` wrapper functions each have their own,
+on top of `Invoke-GraphMutation`'s), so neutering either layer alone left the
+`-WhatIf` no-mutate test green — both layers had to be neutered together before it
+went red. That is disclosed here rather than treated as a clean single-point
+result: the redundancy is deliberate defence-in-depth (it is also what satisfies
+PSScriptAnalyzer's `PSUseShouldProcessForStateChangingFunctions` rule on each
+`Remove-*` wrapper, which has a state-changing verb), but it means a single-point
+regression in just one of the two layers would not be caught by this test suite
+alone — a genuine residual gap, named rather than hidden. PSScriptAnalyzer reports
+zero findings at Error or Warning severity on all three new scripts. Full local
+suite (`Invoke-Pester -Path scripts,infra,data,verification,compliance`): 798
+passed, 0 failed, up from the 769/0 baseline entering this task (the 29-test delta
+matches the three new test files exactly).
+
+**Stale-claim sweep after the fix:** `docs/runbooks/kill-rebuild.md` § 7 step 1's
+`[derived name, per L04]` marker — the one the brief for this task singled out as
+"now wrong" — is corrected to `(F23, Task 25)`. A repo-wide grep for every other
+instance of a teardown-script path paired with a non-existence claim
+(`does not exist|missing|never written|derived name`, across every `.md`, `.yml`,
+`.ps1` and `.bicep` file) turned up exactly one more hit:
+`docs/runbooks/layers/L04.md:148`'s `[derived name — master plan says
+'G3-gated script' without a path; placed beside the apply script per repo
+convention]`. That one is NOT corrected, because it is not the same kind of claim —
+it explains why this documentation chose that particular path (the master plan
+named no path at all for L4's teardown; this doc picked the convention of placing
+it beside the apply script), not that the path is missing, and it remains
+accurate now that the file is real. `L02.md`, `L03.md`, the `layer-02-landing-
+zone.yml` and `layer-03-entra.yml` header comments, and `infra/purview/labels.ps1`'s
+own docstring were all checked directly and already named the correct paths
+without any non-existence claim to begin with.
+
+**Not claimed:** none of the three scripts has ever been run against a live
+tenant, a live management group, or a live Purview session — per this branch's
+constraint (hard rule 1: authoring is always allowed, executing is not), every
+assertion above rests on code reading and the mocked Pester suite, never an
+end-to-end run. `infra/policy/teardown.ps1`'s NIST-assignment subscription-scope
+handling in particular is inferred from `main.bicep`'s own comment describing how
+the AVM pattern module fans that one assignment out, not confirmed against a real
+`az policy assignment show` response.
+
+**CM-6 register note:** this finding's second-contributor effect on
+`compliance/assessment/CM-6.json` (previously recorded with F18 as its sole
+contributor) is recorded in that file directly, not only here — see its
+`rationale` and `evidence` fields, updated in this same commit.
 
 ---
 
