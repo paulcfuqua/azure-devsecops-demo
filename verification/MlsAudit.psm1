@@ -908,7 +908,11 @@ function Invoke-MlsCriterion {
         [switch]$NoRetry,
         [AllowEmptyCollection()][string[]]$Control = @()
     )
-    if ($Control.Count -gt 0) {
+    # $null -ne guard first: [string[]] binds an explicit $null, and .Count on it
+    # throws under Set-StrictMode -Version Latest with a message naming neither the
+    # parameter nor the criterion. Not reachable from the current tree, but a
+    # variable-fed call site is one typo away from it.
+    if ($null -ne $Control -and $Control.Count -gt 0) {
         $validControlId = Get-MlsControlCatalogRequirementId
         foreach ($controlId in $Control) {
             if (-not $validControlId.Contains($controlId)) {

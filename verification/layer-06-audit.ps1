@@ -343,7 +343,12 @@ function Invoke-Main {
             -ExpectedAutoPauseDelay $ExpectedAutoPauseDelay -ExpectedMinCapacity $ExpectedMinCapacity
     } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V6.2' -Control @('3.3.1') `
+    # -Control @(): Test-LogAnalyticsQuery passes on "query succeeded as the
+    # Verifier identity; 0 row(s) returned", and the -Expected text below says so
+    # outright. That demonstrates the Reader identity can reach the workspace, not
+    # that audit records were created or retained, which is what 3.3.1 asks for.
+    # V7.3 carries 3.3.1 instead, because it proves an actual record was captured.
+    Invoke-MlsCriterion -Context $context -Id 'V6.2' -Control @() `
         -Description 'KQL query against LAW succeeds as verifier' `
         -Command "az monitor log-analytics query --workspace <lawCustomerId> --analytics-query 'Heartbeat | take 1' --timespan P1D" `
         -Expected 'a well-formed table result under the mls-verifier login (row content may be empty this early)' `
@@ -394,9 +399,17 @@ function Invoke-Main {
 
     # V6.5 (F16, Task 18 - CP-9) - not a master-plan criterion (see .DESCRIPTION); ARM
     # GET is read-your-writes after deployment success, same retry shape as V6.1.
-    # -Control @(): this criterion evidences 800-53 CP-9 (System Backup) by its own
-    # description above - CP-9 is not one of the 110 NIST SP 800-171 Rev 2 requirements
-    # (800-171 carries no distinct Contingency Planning family), so it cannot map into this
+    # -Control @(): this criterion checks retentionDays and
+    # requestedBackupStorageRedundancy, which are DURABILITY and AVAILABILITY
+    # properties. The nearest 800-171 requirement, 3.8.9, is a CONFIDENTIALITY
+    # requirement - protect the confidentiality of backup CUI - which this criterion
+    # never touches: it makes no encryption or TDE assertion at all. That, not the
+    # framework's shape, is why it maps to nothing.
+    # (An earlier revision of this comment said CP-9 "is not one of the 110 ... so it
+    # cannot map into this" catalog. That was wrong: 3.8.9's own
+    # mappings.nist-800-53r5 carries CP-9, so an 800-53 view already reaches it
+    # through the catalog. The rejection stands on the confidentiality argument.)
+    # The original note, retained because it is still true of this
     # catalog. It is also not 3.8.9 (protect the CONFIDENTIALITY of backup CUI): retention
     # days and storage-redundancy tier are durability/availability properties, not a
     # confidentiality control.

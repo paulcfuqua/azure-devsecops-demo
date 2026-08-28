@@ -270,7 +270,17 @@ function Invoke-Main {
         -Expected "each group's member set equals the manifest's member list exactly (set equality)" `
         -Test { Test-GroupMembership -Manifest $manifest -Domain $tenantDomain } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V3.3' -Control @('3.5.3', '3.5.4') `
+    # -Control @() deliberately, and this is the important case in this file.
+    # This criterion PASSES only when both CA policies are
+    # enabledForReportingButNotEnforced, and Test-ConditionalAccessState raises a
+    # SAFETY FLAG and FAILS if either is actually enabled. So a green V3.3 is
+    # positive evidence that MFA is NOT enforced and legacy auth is NOT blocked -
+    # the inverse of what 3.5.3 (multifactor authentication) and 3.5.4
+    # (replay-resistant mechanisms) require. Mapping it to those would publish a
+    # machine-verified claim that contradicts the assertion that produced it.
+    # Same shape as V9.5, which is empty-mapped for the same reason: a criterion
+    # whose pass condition is "the protection is off" evidences no protection.
+    Invoke-MlsCriterion -Context $context -Id 'V3.3' -Control @() `
         -Description 'CA policy state == enabledForReportingButNotEnforced' `
         -Command 'GET /v1.0/identity/conditionalAccess/policies  # Policy.Read.All, read-only' `
         -Expected 'both manifest CA policies present with State == enabledForReportingButNotEnforced' `

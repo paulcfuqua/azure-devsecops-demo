@@ -100,7 +100,12 @@ Describe 'criterion to control mapping' {
         $used = [System.Collections.Generic.List[string]]::new()
         foreach ($file in $sources) {
             $body = Get-Content $file.FullName -Raw
-            foreach ($match in [regex]::Matches($body, "-Control\s+@\(([^)]*)\)")) {
+            # Two forms, because L11 feeds -Control from a hashtable rather than a
+            # literal: `-Control @('3.1.1')` and `Control = @('3.1.1')`. Matching only
+            # the first left every id in verification/layer-11-audit.ps1's Down-phase
+            # table unchecked - a reviewer mutated one to '9.9.9' and this test did not
+            # fire, catching it only incidentally through unrelated runtime tests.
+            foreach ($match in [regex]::Matches($body, "(?:-Control\s+|Control\s*=\s*)@\(([^)]*)\)")) {
                 foreach ($idMatch in [regex]::Matches($match.Groups[1].Value, "'([^']+)'")) {
                     $used.Add($idMatch.Groups[1].Value)
                 }
