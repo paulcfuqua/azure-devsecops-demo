@@ -107,7 +107,14 @@ jobs:
 
           # 'data' carries the seed loaders (data/seed/*.ps1); omitting it left
           # 10 PowerShell files and 171 tests outside CI entirely.
-          $paths = @('scripts', 'infra', 'verification', 'data', '.github') |
+          #
+          # 'compliance' was omitted the same way and added for the same reason:
+          # compliance/lib/MlsCompliance.psm1 is the compliance platform's
+          # derivation function, and compliance/tests/ holds the property tests for
+          # the honesty invariant - the single rule that platform exists to keep.
+          # Until this line, all of it ran nowhere in CI. A guarantee no gate
+          # enforces is a guarantee in name only.
+          $paths = @('scripts', 'infra', 'verification', 'data', 'compliance', '.github') |
             Where-Object { Test-Path $_ }
           $files = Get-ChildItem -Path $paths -Recurse -Include *.ps1, *.psm1 -File
           Write-Host "Analysing $($files.Count) PowerShell file(s)."
@@ -138,7 +145,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Import-Module Pester -MinimumVersion 5.5.0
           $config = New-PesterConfiguration
-          $config.Run.Path = @('scripts', 'infra', 'data', 'verification') |
+          # 'compliance' carries the catalog, derivation and register suites - see
+          # the note on the analyser paths above for why its omission mattered.
+          $config.Run.Path = @('scripts', 'infra', 'data', 'verification', 'compliance') |
             Where-Object { Test-Path $_ }
           $config.Run.Exit = $true
           $config.Output.Verbosity = 'Detailed'
