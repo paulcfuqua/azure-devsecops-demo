@@ -58,6 +58,7 @@ file to additionally point at for those.
 | [F21](#f21) | mls-verifier's documented Fabric workspace Viewer grant does not exist | high | CONFIRMED | — (availability — breaks the Verifier's sign-off gate) | Task 21 |
 | [F22](#f22) | Container images never smoke-tested in CI | medium | CONFIRMED | — (availability) | Task 24 |
 | [F23](#f23) | Three G3 full-tenant teardown scripts the runbooks instruct operators to run did not exist | high | CONFIRMED | CM-6 | Task 25 |
+| [F24](#f24) | data-api's Fabric workspace Viewer grant expressed but never invoked | high | CONFIRMED | 3.1.1, 3.1.2, 3.1.5 | final branch review |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -499,7 +500,7 @@ an unclosed comment, quote, backtick or bracket. Make nesting dialect-aware.
 - **Controls:** 3.1.1, 3.1.2, 3.1.5
 - **Closed by:** Task 12
 - **Status:** GAP
-- **Open because:** six of seven workload RBAC grants have landed (Task 12, commit 344063b; Task 17, commit 08ff769); the seventh (cost-ingest -> Storage Blob Data Reader) is blocked on F19, which has no Function App or identity to grant it to. See `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.1.5.json`.
+- **Open because:** six of seven workload RBAC grants have now landed. Five landed in Task 12 (commit 344063b) and Task 17 (commit 08ff769); the sixth -- data-api -> Fabric workspace Viewer -- was *expressed but never invoked* until F24 wired it, because `provision-workspace.ps1`'s `-DataApiPrincipalId` parameter had no caller and structurally could not have one at L5. The seventh (cost-ingest -> Storage Blob Data Reader) remains blocked on F19, which has no Function App or identity to grant it to. An earlier revision of this line claimed six had landed while the data-api Fabric grant was still unwired; that was wrong and F24 records it. See `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.1.5.json`.
 
 **Verified:** ZERO `az role assignment` invocations across `.github/`, `scripts/`,
 `infra/`, `data/`. ZERO `roleAssignments:` parameters to any AVM module. The ONLY
@@ -1290,3 +1291,67 @@ admin users goes dark tenant-wide rather than just for one resource. Not fixed h
 there is no cheaper mitigation available than what Task 10 already did to the
 co-located `Application.ReadWrite.All` grant. Tracked as an accepted risk rather than a
 defect; see F8 in the index above, whose fix note first flagged this in passing.
+
+---
+
+<a id="f24"></a>
+## F24
+
+**data-api's Fabric workspace Viewer grant was expressed but never invoked**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED
+- **Controls:** 3.1.1, 3.1.2, 3.1.5 (the same controls F13 maps to -- this is F13's last unlanded grant)
+- **Closed by:** the final whole-branch review, commit `782f573`+1
+- **Status:** CLOSED
+
+**Found while:** the final whole-branch review of this branch, checking the register's
+strongest claims against the tree rather than against itself. F13's entry asserted that
+"six of seven workload RBAC grants have landed". Five had.
+
+**What was wrong:** `infra/fabric/provision-workspace.ps1` has carried a
+`-DataApiPrincipalId` parameter since Task 12, and `compliance/assessment/3.1.1.json`
+described the grant as "wired through provision-workspace.ps1's `-DataApiPrincipalId`
+parameter". Nothing passed it. `git grep DataApiPrincipalId -- .github/` returned a
+single *comment*, and the script's only caller -- `layer-05-fabric.yml` -- passes
+`-VerifierPrincipalId` and never the data-api one. It structurally could not: **L5 runs
+before L7**, so the data-api user-assigned identity does not exist at the moment the
+Fabric provisioning step runs. The script said so itself, at `:59-61` ("a caller (today,
+none -- this is the capability, not yet the wiring) passes it AFTER L7") and at `:144`
+("nothing today wires it (that wiring is a separate task)").
+
+That is the identical ordering problem F20 describes for the SQL contained-user grant,
+and the third instance of the same shape in the same subsystem -- F20, F21, and now
+F24, all "expressed but never invoked", with the first two closed and this one recorded
+nowhere until the final review.
+
+**Impact:** a stranger who clones this repo, runs `infra-up.yml`, and completes G0 item
+C9 (setting `fabricSqlEndpoint`) flips `dataApiMode` to `cloud` in
+`infra/bicep/apps/main.bicep`. `data-api` then connects to the Fabric SQL analytics
+endpoint holding **no workspace role at all** and 403s on every lakehouse read -- the
+demo's core data path, failing days into a 30-day credit, presenting as a mysterious
+runtime error rather than a permissions one. This is verbatim the "dated failure" F13
+warns about.
+
+**Fix:** `.github/workflows/layer-07-apps.yml` gained a post-deploy step that resolves
+the data-api identity's **principal (object) id** -- the id the Fabric `roleAssignments`
+API takes, not the `clientId` the container app consumes -- and calls
+`provision-workspace.ps1 -DataApiPrincipalId`, which checks
+`Get-FabricWorkspaceRoleAssignment` before POSTing and is therefore a no-op on replay.
+Placement and failure posture deliberately mirror Task 22's F20 step: it runs after the
+V7.1 manifest is written and uploaded (those steps carry no `always()`), and it carries
+`continue-on-error` because the `verify` job needs `deploy` to succeed -- an idempotent
+remediation step must not fail a deployment that otherwise worked. Failures are
+annotated and written to the run summary rather than swallowed.
+
+The identity is resolved by shape (`az identity list ... contains(name, 'data-api')`)
+rather than by a hardcoded name, because `naming.bicep` owns the prefix and environment
+(`CLAUDE.md`: never hardcode `mls` elsewhere). Where more than one identity matches, the
+step **refuses** rather than granting a workspace role to an arbitrary principal -- the
+same refusal the G3 teardown scripts make on an ambiguous display name.
+
+**Not claimed:** this has never run against a live tenant. The step, the object-id
+resolution and the grant are verified by code reading and by the workflow-shape
+assertions in `verification/tests/workload-rbac.Tests.ps1`'s `F24:` block, which were
+mutation-tested (dropping `-DataApiPrincipalId`, and dropping `continue-on-error`, each
+turn exactly one assertion red).

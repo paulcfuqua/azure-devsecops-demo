@@ -76,7 +76,7 @@ creation), then:
 
 | Resource | RG | Cost posture |
 |---|---|---|
-| Log Analytics workspace | `mls-rg-platform` | PerGB2018, 30-day retention, 1 GB/day cap |
+| Log Analytics workspace | `mls-rg-platform` | PerGB2018, 90-day retention, 1 GB/day cap |
 | Application Insights (workspace-based) | `mls-rg-platform` | bills only via LAW ingestion |
 | Container Apps environment (wired to LAW) | `mls-rg-platform` | consumption-only; env itself bills $0 |
 | Key Vault (RBAC mode, soft-delete on) — **currently empty** | `mls-rg-platform` | ~$0 |
@@ -178,10 +178,14 @@ Every resource that has an AVM module uses one, pinned to an explicit version.
 | Storage account | `avm/res/storage/storage-account` | 0.33.0 |
 | Key Vault | `avm/res/key-vault/vault` | 0.14.0 |
 | User-assigned identity | `avm/res/managed-identity/user-assigned-identity` | 0.6.0 |
+| Action group (security alerts) | `avm/res/insights/action-group` | 0.3.0 |
+| Scheduled query rules (2) | `avm/res/insights/scheduled-query-rule` | 0.3.0 |
 
 ## Raw resources — and why each one is raw
 
-Only three, each because **no AVM module covers the case**:
+Six, each because **no AVM module covers the case**. This section is the estate's
+inventory of every privileged grant expressed outside AVM, so it is deliberately
+exhaustive -- an omission here is a grant nobody is reviewing:
 
 1. **`Microsoft.Management/managementGroups/subscriptions`**
    (`landing-zone/main.bicep`) — placing the demo subscription under MG `mls`. The
@@ -204,6 +208,29 @@ Only three, each because **no AVM module covers the case**:
 3. **`Microsoft.Insights/components` (`existing`)** (`apps/main.bicep`) — an
    `existing` reference to read the L6 App Insights connection string, not a deployment.
    AVM modules deploy resources; they cannot express an `existing` lookup.
+4. **`Microsoft.Authorization/roleAssignments` at SUBSCRIPTION scope**
+   (`apps/modules/workload-role-assignments.bicep`) — added by Task 12 (finding F13,
+   `compliance/findings/2026-08-26-prepublication-review.md#f13`). Two grants, both
+   read-only and both needed because the data they read is subscription-wide and has no
+   narrower scope to grant at:
+   - **Security Reader** to the `data-api` and `mcp-tools` identities — Defender for
+     Cloud secure score and assessments are subscription-scoped.
+   - **Cost Management Reader** to the `mcp-tools` identity — Cost Management queries
+     are subscription-scoped.
+   AVM's role-assignment pattern module targets a resource or resource group; neither
+   covers a subscription-scoped assignment made from a resource-group deployment.
+5. **`Microsoft.Authorization/roleAssignments` scoped to the Log Analytics workspace**
+   (`apps/modules/log-analytics-reader-role.bicep`) — Log Analytics Reader for both app
+   identities, so the control tower can query the workspace L6 created. Cross-resource-
+   group scope, which the AVM workspace module's own `roleAssignments` parameter cannot
+   express from this deployment.
+6. **`Microsoft.Authorization/roleAssignments` for Monitoring Metrics Publisher**
+   (`apps/modules/monitoring-metrics-publisher-role.bicep`) — lets the apps emit custom
+   metrics to their own App Insights component, which lives in another resource group.
+
+Four `existing` lookups (`apps/main.bicep`) read L6 resources this deployment does not
+own — the App Insights component above, the Log Analytics workspace, the Key Vault, and
+the SQL server. `existing` is a read, not a grant, and creates nothing.
 
 ## `[derived]` decisions
 
@@ -240,7 +267,7 @@ reversible by changing one parameter or one line of `naming.bicep`.
 
 **Tags**
 
-- **[derived] Tag defaults:** `costCenter=demo`, `owner=paulcfuqua`,
+- **[derived] Tag defaults:** `costCenter=demo`, `owner=mls-demo`,
   `dataClassification=internal` (synthetic data only, CLAUDE.md rule 4). `managedBy` is
   hardcoded to `iac` inside the tag builder — it is the only permitted value.
 - **[derived] The `app` tag value follows the role segment** of each resource's name, so
@@ -248,8 +275,9 @@ reversible by changing one parameter or one line of `naming.bicep`.
 
 **Cost posture**
 
-- **[derived] LAW retention 30 days + 1 GB/day ingestion cap.** Retention beyond 31 days
-  bills; the cap is a runaway-ingest guard protecting the idle-cost model. Raising either
+- **[derived] LAW retention 90 days + 1 GB/day ingestion cap.** Raised from 30 by Task 13
+  (finding F9) for DFARS 90-day log preservation. Retention beyond 31 days
+  bills, so this is a deliberate, priced choice rather than a default; the cap is a runaway-ingest guard protecting the idle-cost model. Raising either
   is a spend-profile change (G2).
 - **[derived] SQL max capacity 2 vCores, 32 GiB, no zone redundancy**; auto-pause 60 min
   and min 0.5 vCore are pinned by the master plan, not derived.

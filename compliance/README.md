@@ -10,17 +10,17 @@ follow-on implementation plan proceeds.
 
 - **`assessment/`** — one `<control-id>.json` per NIST SP 800-171 control that the
   2026-08-26 pre-publication security review found a gap against, in the schema from
-  spec §3.2. Every file here currently asserts `status: "GAP"` — nothing in the estate
-  has been remediated yet. This is the **remediation register**: the first
+  spec §3.2. Each file asserts a `status` (see **Register vocabulary** below). As of the
+  2026-08-26 remediation branch, 16 of 19 assert `CLOSED` and the rest remain `GAP`. This is the **remediation register**: the first
   implementation task against the compliance-platform spec (§8, item 1), not part of the
   spec itself.
 - **`findings/2026-08-26-prepublication-review.md`** — the narrative record of the
-  15 findings behind that register: severity, confidence, `file:line`, the concrete
+  24 findings behind that register (F1-F24): severity, confidence, `file:line`, the concrete
   attack path, impact (including cost where relevant), and the fix. Each
   `compliance/assessment/*.json` file's `assertion.evidence` cites one or more anchors
-  into this document. Two findings (F14, F15 — availability and cost) map to no
-  800-171 control and are recorded here only, not as assessment files, so they don't
-  fall through the gap between the security and compliance framings.
+  into this document. Six findings (F14, F15, F19, F20, F21, F22) map to no 800-171 control
+  and are recorded here only, not as assessment files, so they don't fall through the
+  gap between the security and compliance framings.
 - **`tests/register.Tests.ps1`** — Pester 6 tests asserting the register's structural
   integrity: an assessment file exists for every control the findings table cites, every
   file is valid JSON with the required fields, no `not-applicable` control lacks a
@@ -36,9 +36,26 @@ follow-on implementation plan proceeds.
 - **`state/`** — collector-emitted, CI-committed snapshots joining the catalog and
   assessment records against live evidence (`verification/` reports, repo statics, GHAS
   posture, policy compliance state). Nothing here is machine-verified yet; every record
-  in `assessment/` is an authored assertion, which is why every status renders as `GAP`
-  rather than `COMPLIANT` — an authored assertion can never claim machine-verified
-  provenance (spec §3.4).
+  in `assessment/` is an authored assertion, which is why no status ever renders as
+  `COMPLIANT` — an authored assertion can never claim machine-verified provenance
+  (spec §3.4).
+
+## Register vocabulary
+
+The `assertion.status` field takes exactly two values, and the distinction is
+load-bearing:
+
+- **`GAP`** — a known open finding stands against this control.
+- **`CLOSED`** — **no known open finding** stands against it. This is deliberately
+  weaker than "the control is met", and must never be read as such. It says only that
+  every finding this review raised against the control has been addressed; it does not
+  assert that the control is satisfied, that the estate was assessed exhaustively, or
+  that anything was verified against a live tenant.
+- **`COMPLIANT`** — a status this register never asserts, for the reason above. If you
+  see it anywhere in `compliance/`, that is a defect.
+
+`compliance/tests/register.Tests.ps1` enforces that every record's status is one of the
+two permitted values.
 
 ## Why the schema looks the way it does
 

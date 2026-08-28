@@ -470,6 +470,110 @@ jobs:
             echo 'Apply it by hand: `data/seed/seed.ps1 -Target sql -SchemaOnly -SqlServerInstance <fqdn> -SqlDatabase <db> -SqlAccessToken <token>`'
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      # ---------------------------------------------------------------------
+      # F24 (compliance/findings/2026-08-26-prepublication-review.md#f24): the
+      # data-api half of F13's workload RBAC. infra/fabric/provision-workspace.ps1
+      # has carried a -DataApiPrincipalId parameter since Task 12, but nothing ever
+      # passed it: the script's own comment said "a caller (today, none - this is
+      # the capability, not yet the wiring) passes it AFTER L7", and the only
+      # caller, layer-05-fabric.yml, structurally cannot - L5 runs before L7, so
+      # the identity does not exist yet. That is the identical ordering problem
+      # F20 describes for the SQL grant, and this step is its Fabric twin.
+      #
+      # Without it, data-api in cloud mode (which G0 item C9 selects by setting
+      # fabricSqlEndpoint) reaches the Fabric SQL analytics endpoint holding no
+      # workspace role at all and 403s on every lakehouse read - the "dated
+      # failure" F13 itself warns about.
+      #
+      # Placement and failure posture are deliberately identical to the F20 step
+      # above, and for the same two reasons: it runs AFTER the V7.1 manifest is
+      # written and uploaded (those steps carry no always(), so a hard failure
+      # here would skip them), and it carries continue-on-error because `verify`
+      # needs `deploy` to SUCCEED - an idempotent remediation step must not fail a
+      # deployment that otherwise worked. Failures are annotated and summarised
+      # rather than swallowed.
+      #
+      # Skipped, not failed, when FABRIC_CAPACITY_ID is unset: L5 has not run, so
+      # there is no workspace to grant against. A FAILED az call is a different
+      # thing and is treated as an error - "the CLI was throttled" and "L5 has not
+      # run" must not look the same, which is how F20 recurred once already.
+      - name: Grant data-api the Fabric workspace Viewer role now that the identity exists (F24)
+        id: f24_grant
+        if: ${{ !inputs.dry_run && vars.FABRIC_CAPACITY_ID != '' }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Assert-AzSucceeded {
+            param([Parameter(Mandatory)][string]$What)
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error title=Azure CLI call failed::$What returned exit code $LASTEXITCODE. This is NOT the same as 'the identity does not exist yet' - it is a CLI, auth or throttling failure, and the F24 Fabric grant did not run."
+              exit 1
+            }
+          }
+
+          # Resolved by shape rather than by a hardcoded name: naming.bicep owns the
+          # prefix and env (CLAUDE.md - never hardcode 'mls' outside naming.bicep),
+          # so this asks the resource group what data-api identity it holds.
+          $ids = @(
+            az identity list --resource-group $env:RG_APPS --query "[?contains(name, 'data-api')].{name:name, principalId:principalId}" -o json |
+              ConvertFrom-Json
+          )
+          Assert-AzSucceeded -What 'az identity list'
+
+          if ($ids.Count -eq 0) {
+            Write-Host "::warning title=data-api identity not found::No user-assigned identity matching 'data-api' in $env:RG_APPS. Skipping the F24 Fabric workspace grant."
+            exit 0
+          }
+          if ($ids.Count -gt 1) {
+            # Same refusal the G3 teardowns make on an ambiguous match: granting a
+            # workspace role to an arbitrary identity is worse than not granting one.
+            Write-Host "::error title=Ambiguous data-api identity::Found $($ids.Count) identities matching 'data-api' in $env:RG_APPS ($(($ids | ForEach-Object { $_.name }) -join ', ')). Refusing to grant the Fabric workspace role to an arbitrary one."
+            exit 1
+          }
+
+          $principalId = $ids[0].principalId
+          Write-Host "Resolved data-api identity '$($ids[0].name)' -> principal $principalId."
+
+          # The Fabric roleAssignments API wants the identity's PRINCIPAL (object)
+          # id, which is what `az identity show/list` returns as principalId - not
+          # the clientId the container app consumes.
+          $token = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+          Assert-AzSucceeded -What 'az account get-access-token (Fabric)'
+          if ([string]::IsNullOrWhiteSpace($token)) {
+            Write-Host '::error title=Fabric token acquisition failed::Could not mint a Fabric API token for the F24 grant.'
+            exit 1
+          }
+
+          # Reuses the script rather than re-implementing the grant: it already
+          # checks Get-FabricWorkspaceRoleAssignment before POSTing, so a replay is
+          # a no-op, and it is create-if-absent for the workspace and lakehouse it
+          # touches on the way past.
+          ./infra/fabric/provision-workspace.ps1 `
+            -Token $token `
+            -CapacityId $env:FABRIC_CAPACITY_ID `
+            -DataApiPrincipalId $principalId `
+            -Confirm:$false
+
+          Write-Host "F24: data-api holds the Fabric workspace Viewer role."
+
+      - name: Report a failed F24 grant pass
+        if: ${{ !inputs.dry_run && steps.f24_grant.outcome == 'failure' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### F24 Fabric grant did not complete"
+            echo
+            echo "The post-L7 Fabric workspace Viewer grant for \`data-api\` did not apply. The deployment itself succeeded and this does not block the Verifier, but \`data-api\` in cloud mode will 403 on every lakehouse read until the grant lands."
+            echo
+            echo 'Apply it by hand: `infra/fabric/provision-workspace.ps1 -Token <fabric-token> -CapacityId <id> -DataApiPrincipalId <principalId>`'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload L7 artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

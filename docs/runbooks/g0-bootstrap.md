@@ -362,8 +362,12 @@ it is still about sign-in risk and auto-labeling, nothing else.
     open — the server also says so loudly in its boot log.
 
     **If you deliberately want an open endpoint** (throwaway environment only), set
-    `MCP_ALLOW_UNAUTHENTICATED=true`. Cloud mode otherwise refuses to boot without a
+    `MCP_ALLOW_UNAUTHENTICATED=true`. **Every** mode otherwise refuses to boot without a
     token, by design: an open endpoint has to be chosen, never defaulted into.
+    (Not just cloud mode. An earlier revision of this line said "cloud mode", which is
+    precisely the inversion finding F2 was about: the shipped configuration is `local`,
+    so a gate that only armed itself in cloud was inert in production. `loadInboundAuth`
+    in `apps/mcp-tools/src/auth-gate.ts` now throws regardless of mode.)
 
 12. ⚠ **Entra ID `SignInLogs`/`AuditLogs` diagnostic setting** — *added 2026-08-26 for
     finding F9* (`compliance/findings/2026-08-26-prepublication-review.md#f9`);

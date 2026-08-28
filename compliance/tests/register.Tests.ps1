@@ -42,9 +42,39 @@ Describe 'remediation register' {
         }
     }
 
-    It 'the narrative findings record exists and covers all 18' {
+    It 'the narrative findings record covers every finding it claims to, with no gaps' {
+        # Derived from the file, never hardcoded. A literal count went stale at 18
+        # while the register reached 23, leaving F19-F23 with no structural guard -
+        # including F23, whose #f23 anchor compliance/assessment/CM-6.json cites as
+        # evidence. Deleting that section would have kept this suite green and left
+        # a dangling evidence pointer.
         Test-Path $script:Findings | Should -BeTrue
         $body = Get-Content $script:Findings -Raw
-        1..18 | ForEach-Object { $body | Should -Match "(?m)^#+\s*F$_\b" }
+
+        $numbers = @([regex]::Matches($body, '(?m)^#+\s*F(\d+)\b') |
+            ForEach-Object { [int]$_.Groups[1].Value } |
+            Sort-Object -Unique)
+        $numbers.Count | Should -BeGreaterThan 0 -Because 'the register must contain findings'
+
+        # Contiguous from F1: a missing number means a section was removed or
+        # renumbered without the register noticing.
+        $missing = @(1..($numbers[-1]) | Where-Object { $_ -notin $numbers })
+        $missing | Should -BeNullOrEmpty -Because 'finding numbers must run contiguously from F1'
+    }
+
+    It 'every assessment record asserts a permitted status - GAP or CLOSED, never COMPLIANT' {
+        # The absence of this assertion is why compliance/README.md drifted into
+        # claiming every record was GAP long after 16 were CLOSED. CLOSED means "no
+        # known open finding", deliberately weaker than "the control is met";
+        # COMPLIANT is a claim this register never makes, because an authored
+        # assertion cannot carry machine-verified provenance (spec 3.4).
+        $records = @(Get-ChildItem $script:Root -Filter *.json)
+        $records.Count | Should -BeGreaterThan 0
+
+        foreach ($file in $records) {
+            $record = Get-Content $file.FullName -Raw | ConvertFrom-Json
+            $record.assertion.status |
+                Should -BeIn @('GAP', 'CLOSED') -Because "$($file.Name) must assert a permitted status"
+        }
     }
 }

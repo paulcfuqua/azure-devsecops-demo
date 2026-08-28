@@ -233,3 +233,84 @@ Describe 'F20: the SQL contained-user grant is re-applied once the identity exis
         $reportStep | Should -Match 'GITHUB_STEP_SUMMARY'
     }
 }
+
+Describe 'F24: data-api is granted the Fabric workspace Viewer role after L7 creates its identity' {
+    BeforeAll {
+        function Get-JobBody {
+            param([string]$JobName, [string]$Source)
+            if ($Source -notmatch "(?ms)^  $JobName`:?
+(.*?)(?=^  \w\S*:?
+|\z)") {
+                throw "Could not isolate job '$JobName' in layer-07-apps.yml."
+            }
+            return $Matches[1]
+        }
+        function Get-StepBody {
+            param([string]$StepName, [string]$JobBody)
+            $escaped = [regex]::Escape($StepName)
+            if ($JobBody -notmatch "(?ms)^\s{6}- name: $escaped?
+(.*?)(?=^\s{6}- name:|\z)") {
+                throw "Could not isolate step '$StepName' in its job body."
+            }
+            return $Matches[1]
+        }
+        $script:F24DeployJob = Get-JobBody -JobName 'deploy' -Source $script:Layer07
+        $script:F24Step = Get-StepBody -StepName 'Grant data-api the Fabric workspace Viewer role now that the identity exists (F24)' -JobBody $script:F24DeployJob
+    }
+
+    It 'lives in the deploy job (mls-github-deployer, which can write) - not the Reader-only verify job' {
+        $verifyJob = Get-JobBody -JobName 'verify' -Source $script:Layer07
+        $script:F24DeployJob | Should -Match ([regex]::Escape('(F24)'))
+        $verifyJob | Should -Not -Match ([regex]::Escape('(F24)'))
+    }
+
+    It 'actually passes -DataApiPrincipalId - the parameter that existed unwired since Task 12' {
+        # The whole finding was that provision-workspace.ps1 carried this parameter
+        # and nothing ever passed it. `git grep DataApiPrincipalId -- .github/`
+        # returned only a comment.
+        $script:F24Step | Should -Match '-DataApiPrincipalId\s+\$principalId'
+    }
+
+    It 'grants Viewer only - never a broader workspace role' {
+        # provision-workspace.ps1 hardcodes Viewer for both principals; assert this
+        # step does not reach for anything wider.
+        $script:F24Step | Should -Not -Match '(?i)(Admin|Member|Contributor)'
+    }
+
+    It 'resolves the identity''s principal (object) id, not its client id' {
+        # The Fabric roleAssignments API takes the object id; clientId is what the
+        # container app consumes and would silently grant nothing.
+        $script:F24Step | Should -Match 'principalId'
+        $script:F24Step | Should -Not -Match '--query .clientId'
+    }
+
+    It 'refuses when more than one data-api identity matches, rather than granting to an arbitrary one' {
+        $script:F24Step | Should -Match '(?m)::error.*Ambiguous data-api identity'
+    }
+
+    It 'distinguishes an Azure CLI failure from "the identity does not exist yet"' {
+        $script:F24Step | Should -Match '\$LASTEXITCODE'
+        $script:F24Step | Should -Match '(?m)::error.*Azure CLI call failed'
+    }
+
+    It 'runs after the V7.1 manifest is written AND uploaded, so a failure here cannot skip them' {
+        $writeIndex = $script:F24DeployJob.IndexOf('- name: Write the V7.1 deploy manifest for the Verifier')
+        $uploadIndex = $script:F24DeployJob.IndexOf('- name: Upload the V7.1 deploy manifest')
+        $grantIndex = $script:F24DeployJob.IndexOf('Grant data-api the Fabric workspace Viewer role now that the identity exists (F24)')
+
+        $writeIndex | Should -BeGreaterThan -1
+        $uploadIndex | Should -BeGreaterThan $writeIndex
+        $grantIndex | Should -BeGreaterThan $uploadIndex
+    }
+
+    It 'carries continue-on-error, so a transient failure cannot red the deploy job and starve the verify job' {
+        $script:F24Step | Should -Match '(?m)^\s*continue-on-error:\s*true\s*$'
+    }
+
+    It 'surfaces a failed grant in the run summary, since continue-on-error keeps the job green' {
+        $reportStep = Get-StepBody -StepName 'Report a failed F24 grant pass' -JobBody $script:F24DeployJob
+        $reportStep | Should -Match "steps\.f24_grant\.outcome == 'failure'"
+        $reportStep | Should -Match 'GITHUB_STEP_SUMMARY'
+    }
+}
+
