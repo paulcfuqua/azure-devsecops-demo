@@ -290,15 +290,19 @@ function Invoke-Main {
     if (-not [string]::IsNullOrWhiteSpace($ReportRoot)) { $childArgument += @('-ReportRoot', $ReportRoot) }
     if ($NoRetry) { $childArgument += '-NoRetry' }
 
+    # V11.1 -Control @('3.4.1'): post-teardown inventory matches the declared empty
+    # baseline (no mls-rg-* survives) - the same "actual state matches the declared
+    # baseline" claim as V3.1/V5.2/V6.1, just for resource groups. Both branches record the
+    # same criterion identity, so both carry the same mapping.
     if ($Phase -eq 'Down') {
-        Invoke-MlsCriterion -Context $context -Id 'V11.1' `
+        Invoke-MlsCriterion -Context $context -Id 'V11.1' -Control @('3.4.1') `
             -Description 'All RGs absent post-down' `
             -Command "az group list --query `"[?starts_with(name,'$ResourceGroupPrefix')].name`"" `
             -Expected 'empty array - none of mls-rg-platform, mls-rg-apps, mls-rg-data, mls-rg-ops (nor any stray mls-rg-*)' `
             -Test { Test-ResourceGroupAbsent -Prefix $ResourceGroupPrefix -SubscriptionId $subscription } | Out-Null
     }
     else {
-        Invoke-MlsCriterion -Context $context -Id 'V11.1' `
+        Invoke-MlsCriterion -Context $context -Id 'V11.1' -Control @('3.4.1') `
             -Description 'All RGs absent post-down' `
             -Command "az group list --query `"[?starts_with(name,'$ResourceGroupPrefix')].name`"   # down-state checkpoint" `
             -Expected 'empty array at the post-down checkpoint' -NoRetry `
@@ -308,7 +312,7 @@ function Invoke-Main {
         } | Out-Null
     }
 
-    Invoke-MlsCriterion -Context $context -Id 'V11.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V11.2' -Control @('3.4.1', '3.12.3') `
         -Description 'Tenant objects intact (L3/L4 audits still pass)' `
         -Command "pwsh verification/layer-03-audit.ps1   # users/groups/CA/app registrations (V3.1-V3.4)`npwsh verification/layer-04-audit.ps1   # labels + GUIDs (V4.1) - this is V4.2's L11 re-execution" `
         -Expected 'both audits PASS: 5 users, 4 groups, 3 app registrations, CA still enabledForReportingButNotEnforced, licences Active for every user flagged licensed, 4 labels with unchanged GUIDs' -NoRetry `
@@ -317,7 +321,10 @@ function Invoke-Main {
     } | Out-Null
 
     if ($Phase -eq 'Up') {
-        Invoke-MlsCriterion -Context $context -Id 'V11.3' `
+        # V11.3 re-runs every layer's own criteria against the rebuilt environment - the
+        # broadest re-assessment event in the estate, hence Security Assessment (3.12), not
+        # merely configuration management.
+        Invoke-MlsCriterion -Context $context -Id 'V11.3' -Control @('3.12.1', '3.12.3') `
             -Description 'Post-up: all layer audits green' `
             -Command 'foreach ($n in 1..10) { pwsh verification/layer-$(''{0:d2}'' -f $n)-audit.ps1 }' `
             -Expected 'PASS for every layer audit L1-L10 against the rebuilt environment' -NoRetry `
@@ -325,7 +332,8 @@ function Invoke-Main {
             Test-AllLayerAuditGreen -Layer $ChildAuditLayer -Root $PSScriptRoot -Argument $childArgument -SkipChildAudit:$SkipChildAudit
         } | Out-Null
 
-        Invoke-MlsCriterion -Context $context -Id 'V11.4' `
+        # -Control @(): rebuild wall-clock is an operational SLA, not CUI protection.
+        Invoke-MlsCriterion -Context $context -Id 'V11.4' -Control @() `
             -Description 'Wall-clock < 60 min' `
             -Command "timestamps recorded by up.ps1 (start) and the Verifier's audit runner (last synchronous audit green), cross-checked against gh api repos/$repositoryName/actions/runs created_at/updated_at" `
             -Expected "elapsed < $WallClockBudgetMinutes:00 minutes on both clocks" -NoRetry `
@@ -333,7 +341,8 @@ function Invoke-Main {
             Test-WallClock -StartUtc $startUtc -CompletedUtc $completedUtc -BudgetMinutes $WallClockBudgetMinutes -Repository $repositoryName
         } | Out-Null
 
-        Invoke-MlsCriterion -Context $context -Id 'V11.5' `
+        # -Control @(): idle-cost/FinOps check, not CUI protection.
+        Invoke-MlsCriterion -Context $context -Id 'V11.5' -Control @() `
             -Description 'Run-rate returns to idle profile' `
             -Command "az consumption usage list --start-date <cycle+1d> --end-date <cycle+2d> --query `"[].{svc:instanceName, cost:pretaxCost}`"`naz resource show --ids <capacity> --query properties.state`naz sql db show --ids <dbId> --query status" `
             -Expected "daily cost < `$$IdleDailyCostBudget (the <`$5/month idle envelope pro-rated); capacity Paused (trial: recorded equivalent); SQL Paused" `
@@ -344,12 +353,16 @@ function Invoke-Main {
         } | Out-Null
     }
     else {
+        # SKIP placeholders for the Up-phase criteria, recorded here so the down-state
+        # report still names all five L11 ids (see the -Test bodies below). Each carries
+        # the SAME -Control mapping as its real Up-phase counterpart above: the criterion's
+        # evidentiary meaning does not change because this phase could not measure it.
         foreach ($pair in @(
-                @{ Id = 'V11.3'; Description = 'Post-up: all layer audits green'; Command = 'foreach ($n in 1..10) { pwsh verification/layer-<nn>-audit.ps1 }'; Expected = 'PASS for every layer audit L1-L10 against the rebuilt environment' },
-                @{ Id = 'V11.4'; Description = 'Wall-clock < 60 min'; Command = 'up.ps1 start timestamp vs last synchronous audit green'; Expected = "elapsed < $WallClockBudgetMinutes minutes" },
-                @{ Id = 'V11.5'; Description = 'Run-rate returns to idle profile'; Command = 'az consumption usage list ...'; Expected = 'daily cost within the idle envelope; capacity and SQL Paused' }
+                @{ Id = 'V11.3'; Control = @('3.12.1', '3.12.3'); Description = 'Post-up: all layer audits green'; Command = 'foreach ($n in 1..10) { pwsh verification/layer-<nn>-audit.ps1 }'; Expected = 'PASS for every layer audit L1-L10 against the rebuilt environment' },
+                @{ Id = 'V11.4'; Control = @(); Description = 'Wall-clock < 60 min'; Command = 'up.ps1 start timestamp vs last synchronous audit green'; Expected = "elapsed < $WallClockBudgetMinutes minutes" },
+                @{ Id = 'V11.5'; Control = @(); Description = 'Run-rate returns to idle profile'; Command = 'az consumption usage list ...'; Expected = 'daily cost within the idle envelope; capacity and SQL Paused' }
             )) {
-            Invoke-MlsCriterion -Context $context -Id $pair.Id -Description $pair.Description `
+            Invoke-MlsCriterion -Context $context -Id $pair.Id -Control $pair.Control -Description $pair.Description `
                 -Command $pair.Command -Expected $pair.Expected -NoRetry `
                 -Test {
                 New-MlsCheckResult -Status 'SKIP' -Observed "not measurable in the 'Down' phase" `

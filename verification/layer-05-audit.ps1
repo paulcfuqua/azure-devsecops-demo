@@ -284,7 +284,9 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Expected-counts fixture' -Value $countPath `
         -Status $(if ($null -ne $expectedCount) { 'OK' } else { 'ABSENT' })
 
-    Invoke-MlsCriterion -Context $context -Id 'V5.1' `
+    # -Control @(): existence/provisioning check for the workspace and lakehouse. No CUI
+    # protection is asserted - it is a precondition for V5.2's inventory check.
+    Invoke-MlsCriterion -Context $context -Id 'V5.1' -Control @() `
         -Description 'Fabric REST: workspace + lakehouse exist' `
         -Command "GET $($script:FabricApiBaseUrl)/workspaces  # displayName eq '$WorkspaceName'`nGET $($script:FabricApiBaseUrl)/workspaces/<id>/lakehouses  # displayName eq '$LakehouseName'" `
         -Expected "workspace '$WorkspaceName' bound to the configured capacity; exactly one lakehouse '$LakehouseName'" `
@@ -293,7 +295,7 @@ function Invoke-Main {
             -LakehouseName $LakehouseName -CapacityId $capacityId -Context $context
     } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V5.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V5.2' -Control @('3.4.1') `
         -Description 'Table list matches manifest' `
         -Command "GET $($script:FabricApiBaseUrl)/workspaces/<id>/lakehouses/<id>/tables" `
         -Expected "exactly the 10 tables: $($ExpectedTable -join ', ') (set equality)" `
@@ -313,7 +315,10 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'SQL access token' `
         -Value $(if ($sqlToken) { 'supplied (value never logged)' } else { 'minted from the current az login at query time' })
 
-    Invoke-MlsCriterion -Context $context -Id 'V5.3' `
+    # -Control @(): deterministic seed row-count check over synthetic, fictional demo data
+    # (CLAUDE.md: synthetic data only) - a data-integrity check, not a CUI protection
+    # assertion.
+    Invoke-MlsCriterion -Context $context -Id 'V5.3' -Control @() `
         -Description 'SQL analytics endpoint returns expected row counts (launches = 1,200 +/- 0)' `
         -Command "SELECT 'launches' AS t, COUNT(*) AS n FROM launches UNION ALL ... (one arm per table, all 10) -- against the lakehouse SQL analytics endpoint as mls-verifier" `
         -Expected "launches = $ExpectedLaunchCount exactly; the other nine equal to Track A's committed fixture" `
@@ -322,7 +327,9 @@ function Invoke-Main {
             -ExpectedCount $expectedCount -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName
     } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V5.4' `
+    # -Control @(): idle-cost control (capacity paused when unused). Cost/FinOps, not CUI
+    # protection.
+    Invoke-MlsCriterion -Context $context -Id 'V5.4' -Control @() `
         -Description 'Capacity state == Paused after layer completes' `
         -Command "az resource show --ids $capacityId --query properties.state   # paid F2`nGET $($script:FabricApiBaseUrl)/capacities                       # trial phase" `
         -Expected 'paid F2: "Paused" exactly. Trial: state recorded as the accepted $0/hr equivalent' `

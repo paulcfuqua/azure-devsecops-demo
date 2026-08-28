@@ -417,32 +417,35 @@ function Invoke-Main {
         Add-MlsNote -Context $context -Message "Eval path recorded by the run: '$path' (fabric-data-agent or mcp-tools-only). Both paths must pass V8.2 identically; the report names the path so the evidence is unambiguous (L08.md fallback)."
     }
 
-    Invoke-MlsCriterion -Context $context -Id 'V8.1' `
+    Invoke-MlsCriterion -Context $context -Id 'V8.1' -Control @('3.4.1', '3.4.3') `
         -Description "Deployed agent's solution unique name + version + component list match the committed solution exactly, and its published state is current" `
         -Command "GET <envUrl>/api/data/v9.2/solutions?`$filter=uniquename eq '<name>'`nGET <envUrl>/api/data/v9.2/msdyn_solutioncomponentsummaries?`$filter=msdyn_solutionid eq <id>`nSelect-Xml -Path $solutionFile -XPath '//Version','//UniqueName'" `
         -Expected 'unique name and version identical; component set equal (set equality); no unmanaged layer on the agent component' `
         -RetryWindowMinutes 5 `
         -Test { Test-DeployedSolution -Committed $committed -EnvironmentUrl $environment -Header $header } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V8.2' `
+    # -Control @(): answer-accuracy eval for the agent's chat responses - a quality/
+    # correctness measure, not a CUI protection assertion.
+    Invoke-MlsCriterion -Context $context -Id 'V8.2' -Control @() `
         -Description "Eval suite passes >= 9/10 against the deployed agent, with each answer's number independently re-derived by the Verifier from the lakehouse" `
         -Command "read eval-results.json`nfor each question: run the fixture's pinned reference SQL on the lakehouse SQL analytics endpoint as mls-verifier and compare with the agent's stated figure" `
         -Expected ">= $EvalPassBar questions pass both checks; canonical: weekday argmax of launches = Saturday" -NoRetry `
         -Test { Test-EvalSuite -Artifact $artifact -PassBar $EvalPassBar -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V8.3' `
+    Invoke-MlsCriterion -Context $context -Id 'V8.3' -Control @('3.1.2', '3.4.6') `
         -Description 'No tool invoked outside the five-tool allowlist and the agent declares exactly those five' `
         -Command "runtime: every tool call recorded across every eval question`nstatic: MCP tools/list against the deployed server`nstatic: tool/connector components declared by the unpacked solution" `
         -Expected "runtime filter empty; tools/list returns exactly $($AllowedTool -join ', '); no additional tool, connector, agent flow or knowledge source beyond the MCP connection and (Fabric path) the single connected data agent" -NoRetry `
         -Test { Test-ToolAllowlist -Artifact $artifact -McpServerUrl $serverUrl -AllowedTool $AllowedTool -Committed $committed } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V8.4' `
+    Invoke-MlsCriterion -Context $context -Id 'V8.4' -Control @('3.14.2') `
         -Description 'Every visual answer is an Adaptive Card payload that validates against the pinned Adaptive Cards schema; zero HTML/JS/JSX in any response' `
         -Command "validate each recorded card payload against the pinned Adaptive Cards $AdaptiveCardVersion profile`ngrep every response body for generated UI code" `
         -Expected "every card `"type`":`"AdaptiveCard`" with `"version`":`"$AdaptiveCardVersion`", no Action.Execute; the code-grep returns empty" -NoRetry `
         -Test { Test-AdaptiveCardAnswer -Artifact $artifact -Version $AdaptiveCardVersion } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V8.5' `
+    # -Control @(): latency SLA, not CUI protection.
+    Invoke-MlsCriterion -Context $context -Id 'V8.5' -Control @() `
         -Description 'p95 latency < 20 s' `
         -Command '$lat = $r.questions.latencySeconds | Sort-Object; $p95 = $lat[[math]::Ceiling(0.95 * $lat.Count) - 1]' `
         -Expected "p95 < $LatencyBudgetSeconds seconds" -NoRetry `

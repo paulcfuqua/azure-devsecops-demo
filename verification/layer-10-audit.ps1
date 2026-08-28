@@ -425,7 +425,7 @@ function Invoke-Main {
     $windowMinutes = $ChainWindowHours * 60
     $pendingAllowed = ($windowStart -ne [datetime]::MinValue)
 
-    Invoke-MlsCriterion -Context $context -Id 'V10.1' `
+    Invoke-MlsCriterion -Context $context -Id 'V10.1' -Control @('3.14.1') `
         -Description 'For the seeded CodeQL alert, the full Autofix trail holds (alert -> autofix success -> PR with Autofix commit and explanation -> gauntlet green -> merged by automation -> new ACA revision -> alert fixed, timestamps monotonic)' `
         -Command "gh api repos/$repositoryName/code-scanning/alerts/<n> --jq '{state, created_at, rule:.rule.id}'`ngh api repos/$repositoryName/code-scanning/alerts/<n>/autofix --jq '{status, description, started_at}'`ngh pr view <pr> --json headRefOid,body,commits`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest,mergeCommit`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName --query `"[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}`"`ngh api repos/$repositoryName/code-scanning/alerts/<n> --jq '.state'" `
         -Expected "seven stages hold: autofix status success with a non-empty description carried in the PR body; head commit from autofix/commits; all check-run conclusions success; mergedBy == $AutomationLogin with an auto-merge request; a witness revision after the merge carrying MLS_HEAL_COMMIT == the PR's merge commit; alert state fixed; timestamps monotonic" `
@@ -435,7 +435,7 @@ function Invoke-Main {
             -ResourceGroupName $ResourceGroupName -AppName $VulnLabAppName -AutomationLogin $AutomationLogin
     } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V10.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V10.2' -Control @('3.14.1') `
         -Description 'For at least 2 of the 3 seeded dependency pins, the Dependabot trail holds (alert -> patch PR -> gauntlet green -> merged by automation -> new ACA revision -> alert fixed)' `
         -Command "gh api repos/$repositoryName/dependabot/alerts/<n> --jq '{state, created_at, dep:.dependency.package.name}'`ngh pr list --author `"app/dependabot`" --json number,title,headRefName`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest,mergeCommit`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName --query `"[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}`"`ngh api repos/$repositoryName/dependabot/alerts/<n> --jq '.state'" `
         -Expected "all six stages hold for at least $DependencyPassBar of the seeded pins (3/3 is the target, $DependencyPassBar/3 is the pass line)" `

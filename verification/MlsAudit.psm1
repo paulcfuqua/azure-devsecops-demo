@@ -64,6 +64,13 @@ $script:StandardPollIntervalSeconds = 300
 # which records PENDING until the declared deadline actually passes.
 $script:DefaultMaxWaitMinutes = 120
 
+# Invoke-MlsCriterion's -Control parameter is validated against this set: the ids of
+# Task 1's catalog (compliance/catalog/nist-800-171r2.json), loaded once on first use and
+# cached here for the life of the module (spec 2026-08-26-compliance-platform-design.md
+# section 4.2). $null means "not loaded yet"; an empty HashSet would be indistinguishable from
+# "loaded but the catalog was empty", so the unloaded state is its own sentinel.
+$script:ControlCatalogRequirementId = $null
+
 # Sleep in slices so Ctrl+C lands promptly and the deadline is re-checked often.
 $script:SleepSliceSeconds = 5
 
@@ -266,6 +273,32 @@ function Get-MlsJsonFile {
     catch {
         throw "'$Path' ($Purpose) is not valid JSON: $($_.Exception.Message)"
     }
+}
+
+function Get-MlsControlCatalogRequirementId {
+    <#
+    .SYNOPSIS
+        The set of valid NIST SP 800-171 Rev 2 requirement ids, for validating
+        Invoke-MlsCriterion's -Control argument.
+    .DESCRIPTION
+        Loaded once from compliance/catalog/nist-800-171r2.json (Task 1's catalog, the
+        authoritative source for which control ids exist) and cached in module scope for
+        the rest of the process's life - the catalog does not change mid-run, and every
+        criterion in an audit run would otherwise re-read and re-parse the same file.
+
+        This is deliberately the ONLY validation path: a criterion that names a control id
+        the catalog does not carry is a dangling evidence pointer (this plan has already
+        shipped one), and catching that at authoring time - a criterion throws the moment
+        it runs with a bad id - is cheaper than catching it downstream in the collector
+        that later joins criterion rows to the catalog.
+    #>
+    param()
+    if ($null -ne $script:ControlCatalogRequirementId) { return $script:ControlCatalogRequirementId }
+    $path = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'compliance', 'catalog', 'nist-800-171r2.json'
+    $catalog = Get-MlsJsonFile -Path $path -Purpose 'NIST SP 800-171 Rev 2 catalog - Invoke-MlsCriterion -Control validates against this'
+    $ids = @(Get-MlsProperty -InputObject $catalog -Name 'requirements' | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'id')" })
+    $script:ControlCatalogRequirementId = [System.Collections.Generic.HashSet[string]]::new([string[]]$ids, [StringComparer]::Ordinal)
+    return $script:ControlCatalogRequirementId
 }
 
 # --- read-only guards ------------------------------------------------------------------
@@ -847,6 +880,18 @@ function Invoke-MlsCriterion {
         When the declared window started (L6 completion, re-seed merge). With
         -PendingWhenUnexpired this turns "not yet, but still inside the window" into
         PENDING instead of FAIL.
+    .PARAMETER Control
+        The NIST SP 800-171 Rev 2 requirement id(s) (compliance/catalog/nist-800-171r2.json)
+        this criterion is evidence for - what Task 5's verification-suite collector turns
+        into machine-verified evidence (spec section 4.2). Optional, defaulting to an empty array:
+        an un-migrated or third-party call site that omits -Control keeps working exactly
+        as before, and a criterion that genuinely evidences no requirement (an availability
+        check, a cost check) should pass -Control @() explicitly rather than omit the
+        argument, so control-mapping.Tests.ps1's "every criterion declares a Control
+        decision" check can tell "considered and mapped to nothing" apart from "not
+        considered yet". Every entry is validated against the catalog at call time; a
+        control id the catalog does not carry throws immediately, naming the offending id,
+        rather than silently becoming a dangling evidence pointer.
     #>
     param(
         [Parameter(Mandatory)]$Context,
@@ -860,8 +905,17 @@ function Invoke-MlsCriterion {
         [double]$InProcessWaitMinutes = -1,
         [datetime]$WindowStartUtc = [datetime]::MinValue,
         [switch]$PendingWhenUnexpired,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [AllowEmptyCollection()][string[]]$Control = @()
     )
+    if ($Control.Count -gt 0) {
+        $validControlId = Get-MlsControlCatalogRequirementId
+        foreach ($controlId in $Control) {
+            if (-not $validControlId.Contains($controlId)) {
+                throw "Invoke-MlsCriterion -Control '$controlId' (criterion $Id) is not a requirement id in compliance/catalog/nist-800-171r2.json. Check for a typo, or confirm the catalog actually carries this id (Task 1 is authoritative)."
+            }
+        }
+    }
     $window = if ($RetryWindowMinutes -ge 0) { $RetryWindowMinutes } else { $Context.RetryWindowMinutes }
     $poll = if ($PollIntervalSeconds -gt 0) { $PollIntervalSeconds } else { $Context.PollIntervalSeconds }
     $budget = if ($InProcessWaitMinutes -ge 0) { $InProcessWaitMinutes } else { [math]::Min($window, $Context.MaxWaitMinutes) }
@@ -929,6 +983,7 @@ function Invoke-MlsCriterion {
         PollIntervalSecond = $poll
         StartedUtc         = $started.ToString('yyyy-MM-ddTHH:mm:ssZ')
         FinishedUtc        = $finishedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        Control            = @($Control)
     }
     $Context.Criterion.Add($row) | Out-Null
 
@@ -1104,6 +1159,8 @@ function Write-MlsReport {
         if (-not [string]::IsNullOrWhiteSpace($row.Detail)) {
             $lines.Add("- **Note:** $(Format-MlsValue -Value $row.Detail -MaximumLength 1200)")
         }
+        $controlValue = if (@($row.Control).Count -gt 0) { ($row.Control -join ', ') } else { '(none - this criterion asserts no 800-171 requirement)' }
+        $lines.Add("- **Control (NIST SP 800-171 Rev 2):** $controlValue")
         $lines.Add("- **Retry:** window $($row.RetryWindowMinutes) min, poll $($row.PollIntervalSecond) s, attempts $($row.Attempt), slept $($row.SleptSeconds) s")
         $lines.Add('')
     }
@@ -1275,6 +1332,7 @@ Export-ModuleMember -Function @(
     'Get-MlsPercentile',
     'Resolve-MlsInput',
     'Get-MlsJsonFile',
+    'Get-MlsControlCatalogRequirementId',
     'Assert-MlsReadOnlyAzArgument',
     'Assert-MlsReadOnlyGhArgument',
     'Assert-MlsCommand',

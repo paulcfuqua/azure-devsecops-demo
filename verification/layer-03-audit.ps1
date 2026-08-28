@@ -258,26 +258,31 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Manifest shape' `
         -Value "$(@($manifest.users).Count) users / $(@($manifest.groups).Count) groups / $(@($manifest.appRegistrations).Count) app registrations / $(@($manifest.conditionalAccessPolicies).Count) CA policies"
 
-    Invoke-MlsCriterion -Context $context -Id 'V3.1' `
+    Invoke-MlsCriterion -Context $context -Id 'V3.1' -Control @('3.1.1', '3.5.1') `
         -Description 'Graph queries confirm object counts' `
         -Command "GET /v1.0/users/<upn> for each manifest user`nGET /v1.0/groups?`$filter=displayName eq '<name>'`nGET /v1.0/applications?`$filter=displayName eq '<name>'`nGET /v1.0/groups?`$filter=startswith(displayName,'$NamingPrefix')  # drift sweep" `
         -Expected "$(@($manifest.users).Count) users, $(@($manifest.groups).Count) groups, $(@($manifest.appRegistrations).Count) app registrations - each manifest entry resolving to exactly one object, zero $NamingPrefix-prefixed extras" `
         -Test { Test-DirectoryObjectCount -Manifest $manifest -Domain $tenantDomain -NamingPrefix $NamingPrefix } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V3.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V3.2' -Control @('3.1.1', '3.1.2') `
         -Description 'Graph queries confirm group memberships' `
         -Command "GET /v1.0/groups/<id>/members for each manifest group" `
         -Expected "each group's member set equals the manifest's member list exactly (set equality)" `
         -Test { Test-GroupMembership -Manifest $manifest -Domain $tenantDomain } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V3.3' `
+    Invoke-MlsCriterion -Context $context -Id 'V3.3' -Control @('3.5.3', '3.5.4') `
         -Description 'CA policy state == enabledForReportingButNotEnforced' `
         -Command 'GET /v1.0/identity/conditionalAccess/policies  # Policy.Read.All, read-only' `
         -Expected 'both manifest CA policies present with State == enabledForReportingButNotEnforced' `
         -Test { Test-ConditionalAccessState -Manifest $manifest } | Out-Null
 
     $licensedUser = Get-ManifestUserPrincipalName -Manifest $manifest -Domain $tenantDomain -LicensedOnly
-    Invoke-MlsCriterion -Context $context -Id 'V3.4' `
+    # -Control @(): license assignment is an entitlement/billing precondition for identity
+    # features (Conditional Access, Identity Protection) to be available, not itself an
+    # implemented protection. What those features do is evidenced directly by V3.3;
+    # licence state alone would over-claim if mapped to the identification/authentication
+    # requirements those features realize.
+    Invoke-MlsCriterion -Context $context -Id 'V3.4' -Control @() `
         -Description "License assignment state == success for all $($licensedUser.Count) licensed of $(@($manifest.users).Count)" `
         -Command "GET /v1.0/subscribedSkus`nGET /v1.0/users/<upn>?`$select=licenseAssignmentStates" `
         -Expected "each of the $($licensedUser.Count) manifest user(s) flagged licensed carries the $LicenseSkuPartNumber assignment with State == Active and no error" `

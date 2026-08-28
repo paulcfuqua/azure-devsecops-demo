@@ -205,19 +205,19 @@ function Invoke-Main {
     }
     $baseline = Get-RecordedLabelGuid -Path $baselinePath
 
-    Invoke-MlsCriterion -Context $context -Id 'V4.1' `
+    Invoke-MlsCriterion -Context $context -Id 'V4.1' -Control @('3.8.4') `
         -Description 'Get-Label returns the 4 labels with expected GUIDs recorded to verification/reports/' `
         -Command "Connect-IPPSSession -AppId <mls-verifier> -Organization $organizationName -CertificateThumbprint <thumbprint>`nGet-Label | Select-Object DisplayName, Guid | Where-Object DisplayName -in '$($ExpectedLabel -join "','")'" `
         -Expected "exactly 4 labels ($($ExpectedLabel -join ', ')); GUIDs equal to the recorded baseline when one exists" `
         -Test { Test-LabelTaxonomy -ExpectedLabel $ExpectedLabel -Baseline $baseline -Context $context } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V4.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V4.2' -Control @('3.8.4') `
         -Description 'Labels survive a kill/rebuild cycle (checked again at L11)' `
         -Command "Get-Label  # re-read at checkpoint '$Checkpoint', compared against $baselinePath" `
         -Expected 'same 4 labels, same GUIDs as label-guids.json, at every checkpoint' -NoRetry `
         -Test { Test-LabelPersistence -ExpectedLabel $ExpectedLabel -Baseline $baseline -Checkpoint $Checkpoint } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V4.3' `
+    Invoke-MlsCriterion -Context $context -Id 'V4.3' -Control @('3.8.4') `
         -Description "Label policy exists, publishing the taxonomy to the demo groups (supplementary - L04.md Failure mode 5, F18)" `
         -Command "Connect-IPPSSession -AppId <mls-verifier> -Organization $organizationName -CertificateThumbprint <thumbprint>`nGet-LabelPolicy -Identity '$ExpectedLabelPolicy' | Select-Object Labels, ExchangeLocation" `
         -Expected "policy '$ExpectedLabelPolicy' exists; Labels == [$($ExpectedLabel -join ', ')]; ExchangeLocation == [$($ExpectedLabelPolicyScope -join ', ')]" `

@@ -146,6 +146,30 @@ Describe 'Invoke-MlsCriterion' {
         { Invoke-MlsCriterion -Context $context -Id 'not-an-anchor' -Description 'x' -Command 'y' -Expected 'z' -Test { } } |
             Should -Throw
     }
+
+    It '-Control is optional: a call that omits it still produces a valid row with an empty mapping' {
+        $context = New-TestContext
+        $row = Invoke-MlsCriterion -Context $context -Id 'V6.1' -Description 'no control decision supplied' `
+            -Command 'az resource show' -Expected 'ok' -Test { New-MlsCheckResult -Passed $true -Observed 'ok' }
+        $row.Status | Should -Be 'PASS'
+        $row.PSObject.Properties.Name | Should -Contain 'Control'
+        @($row.Control).Count | Should -Be 0
+    }
+
+    It 'carries a supplied -Control mapping onto the row unchanged' {
+        $context = New-TestContext
+        $row = Invoke-MlsCriterion -Context $context -Id 'V3.3' -Control @('3.5.3') -Description 'CA policy state' `
+            -Command 'GET /v1.0/identity/conditionalAccess/policies' -Expected 'ok' `
+            -Test { New-MlsCheckResult -Passed $true -Observed 'ok' }
+        $row.Control | Should -Be @('3.5.3')
+    }
+
+    It 'rejects a -Control id absent from the NIST SP 800-171 catalog, naming the offending id' {
+        $context = New-TestContext
+        { Invoke-MlsCriterion -Context $context -Id 'V3.3' -Control @('9.9.9') -Description 'x' `
+                -Command 'y' -Expected 'z' -Test { New-MlsCheckResult -Passed $true -Observed 'o' } } |
+            Should -Throw '*9.9.9*'
+    }
 }
 
 Describe 'Wait-MlsRetryInterval' {
@@ -213,6 +237,23 @@ Describe 'Write-MlsReport' {
         $fresh = Join-Path -Path $script:ReportRoot -ChildPath 'nested-does-not-exist'
         $report = Write-MlsReport -Context $script:Context -ReportRoot $fresh -Timestamp '20260824-120003Z'
         Test-Path -LiteralPath $report.MarkdownPath | Should -BeTrue
+    }
+
+    It 'carries each criterion''s Control mapping into both the Markdown and the JSON sibling' {
+        $context = New-TestContext
+        Invoke-MlsCriterion -Context $context -Id 'V6.1' -Control @('3.4.1') -Description 'baseline config' `
+            -Command 'az sql db show' -Expected 'ok' -Test { New-MlsCheckResult -Passed $true -Observed 'ok' } | Out-Null
+        Invoke-MlsCriterion -Context $context -Id 'V6.4' -Control @() -Description 'no mapping' -NoRetry `
+            -Command 'az sql db show' -Expected 'ok' -Test { New-MlsCheckResult -Passed $true -Observed 'ok' } | Out-Null
+        $report = Write-MlsReport -Context $context -Timestamp '20260824-120004Z'
+        $markdown = Get-Content -LiteralPath $report.MarkdownPath -Raw
+        $markdown | Should -BeLike '*3.4.1*'
+        $markdown | Should -BeLike '*none - this criterion asserts no 800-171 requirement*'
+        $document = Get-Content -LiteralPath $report.JsonPath -Raw | ConvertFrom-Json
+        $mapped = @($document.criteria | Where-Object { $_.Id -eq 'V6.1' })[0]
+        $unmapped = @($document.criteria | Where-Object { $_.Id -eq 'V6.4' })[0]
+        @($mapped.Control) | Should -Be @('3.4.1')
+        @($unmapped.Control).Count | Should -Be 0
     }
 }
 

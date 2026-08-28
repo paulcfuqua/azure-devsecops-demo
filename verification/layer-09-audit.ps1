@@ -273,31 +273,34 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'ZAP run id' -Value "$zapRun" -Status $(if ($zapRun) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Download root' -Value $downloads
 
-    Invoke-MlsCriterion -Context $context -Id 'V9.1' `
+    Invoke-MlsCriterion -Context $context -Id 'V9.1' -Control @('3.11.2') `
         -Description 'GitHub API shows all GHAS features enabled' `
         -Command "gh api repos/$repositoryName --jq '.security_and_analysis'`ngh api repos/$repositoryName/vulnerability-alerts -i   # expect 204`ngh api repos/$repositoryName/code-scanning/analyses --jq '.[0].tool.name'" `
         -Expected "secret scanning + push protection enabled; vulnerability-alerts 204; a completed CodeQL analysis for each of $($CodeQlLanguage -join ', ')" `
         -Test { Test-GhasFeature -Repository $repositoryName -CodeQlLanguage $CodeQlLanguage } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V9.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V9.2' -Control @('3.11.2', '3.14.1') `
         -Description 'A seeded CRITICAL image fails CI (negative test) then passes after pin' `
         -Command "gh api repos/$repositoryName/actions/runs/<layer09-runId>/jobs --jq '.jobs[] | select(.name | startswith(`"trivy-negative`")) | {name, conclusion}'" `
         -Expected 'trivy-negative-fail concludes success (its inner Trivy step exited non-zero on the seeded CRITICAL) and trivy-negative-pass concludes success' -NoRetry `
         -Test { Test-TrivyNegativeTest -Repository $repositoryName -RunId $runId } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V9.3' `
+    Invoke-MlsCriterion -Context $context -Id 'V9.3' -Control @('3.4.1') `
         -Description 'SBOM artifact present + SPDX-valid' `
         -Command "gh release view <tag> --json assets --jq '.assets[].name'`ngh release download <tag> -p '*.spdx.json' -D <tmp>`npyspdxtools -i <file>.spdx.json   # or in-process SPDX structural validation" `
         -Expected 'one *.spdx.json per app attached to the release; validator exits 0 (well-formed SPDX, non-empty package list)' -NoRetry `
         -Test { Test-SbomArtifact -Repository $repositoryName -Tag $tag -DownloadRoot $downloads } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V9.4' `
+    Invoke-MlsCriterion -Context $context -Id 'V9.4' -Control @('3.11.2') `
         -Description 'ZAP report artifact exists with 0 High' `
         -Command "gh run download <zap-runId> -n $ZapArtifactName -D <tmp>`n(Get-Content report.json | ConvertFrom-Json).site.alerts | Where-Object riskdesc -like 'High*'" `
         -Expected 'report artifact present for the staging URL; zero alerts at risk level High' -NoRetry `
         -Test { Test-ZapReport -Repository $repositoryName -RunId $zapRun -ArtifactName $ZapArtifactName -DownloadRoot $downloads } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V9.5' `
+    # -Control @(): this asserts Defender for Containers ends the demo OFF (a cost-control
+    # toggle, exercised then disabled) - the opposite of a protection being in place, so
+    # mapping it to a scanning/detection requirement would misrepresent what it proves.
+    Invoke-MlsCriterion -Context $context -Id 'V9.5' -Control @() `
         -Description 'Defender plan toggles on -> off leaving state Off' `
         -Command "az security pricing show --name $DefenderPlanName --query `"{tier:pricingTier}`"`naz monitor activity-log list --offset $ActivityLogOffset --query `"[?contains(operationName.value,'Microsoft.Security/pricings')].{op:operationName.value, status:status.value, time:eventTimestamp}`"" `
         -Expected 'pricingTier == "Free" AND the paired Standard-then-Free write events inside the layer window' `

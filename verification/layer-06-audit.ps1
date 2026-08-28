@@ -333,7 +333,7 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'LAW customer id' -Value $workspaceId -Status $(if ($workspaceId) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Cost export account' -Value $accountName -Status $(if ($accountName) { 'OK' } else { 'ABSENT' })
 
-    Invoke-MlsCriterion -Context $context -Id 'V6.1' `
+    Invoke-MlsCriterion -Context $context -Id 'V6.1' -Control @('3.4.1') `
         -Description 'ARM GET on each resource: SKU/serverless/auto-pause/minReplicas values match manifest exactly' `
         -Command "az sql db show --ids <dbId> --query `"{sku:currentSku.name, autoPause:autoPauseDelay, minCap:minCapacity}`"`naz containerapp env show --ids <envId> --query properties.provisioningState" `
         -Expected "serverless GP_S_Gen5-class SKU; autoPauseDelay == $ExpectedAutoPauseDelay; minCapacity == $ExpectedMinCapacity; ACA environment provisioningState == Succeeded" `
@@ -343,7 +343,7 @@ function Invoke-Main {
             -ExpectedAutoPauseDelay $ExpectedAutoPauseDelay -ExpectedMinCapacity $ExpectedMinCapacity
     } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V6.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V6.2' -Control @('3.3.1') `
         -Description 'KQL query against LAW succeeds as verifier' `
         -Command "az monitor log-analytics query --workspace <lawCustomerId> --analytics-query 'Heartbeat | take 1' --timespan P1D" `
         -Expected 'a well-formed table result under the mls-verifier login (row content may be empty this early)' `
@@ -357,7 +357,9 @@ function Invoke-Main {
         Add-MlsNote -Context $context -Message 'V6.3: no L6 completion timestamp supplied (-LayerCompletedUtc / $env:MLS_L6_COMPLETED_AT), so the 24 h deadline could not be computed and a missing export is recorded FAIL rather than PENDING.'
     }
 
-    Invoke-MlsCriterion -Context $context -Id 'V6.3' `
+    # -Control @(): cost-export landing is a FinOps/cost-visibility check, not CUI
+    # protection.
+    Invoke-MlsCriterion -Context $context -Id 'V6.3' -Control @() `
         -Description 'First cost export file lands within 24 h (async check L7 window)' `
         -Command "az storage blob list --account-name <exportSA> --container-name $CostExportContainerName --auth-mode login --query `"[].{name:name, len:properties.contentLength}`"" `
         -Expected '>= 1 export blob with contentLength > 0 within 24 h of L6 completion' `
@@ -381,7 +383,8 @@ function Invoke-Main {
         Add-MlsNote -Context $context -Message 'V6.4: no last-touched timestamp supplied (-SqlLastTouchedUtc / the L6 deploy''s post-seed time), so the 75-minute idle deadline could not be computed and a database that is still Online is recorded FAIL rather than PENDING. That is correct for a re-check run made after the window; for an inline run straight after the deploy, pass the timestamp.'
     }
 
-    Invoke-MlsCriterion -Context $context -Id 'V6.4' `
+    # -Control @(): idle-cost control (auto-pause). Cost/FinOps, not CUI protection.
+    Invoke-MlsCriterion -Context $context -Id 'V6.4' -Control @() `
         -Description 'SQL auto-pauses (checked after 75 min idle)' `
         -Command 'az sql db show --ids <dbId> --query "status"' `
         -Expected '"Paused" at the 75-minute mark (60-minute auto-pause delay + 15 minutes of margin)' `
@@ -391,7 +394,13 @@ function Invoke-Main {
 
     # V6.5 (F16, Task 18 - CP-9) - not a master-plan criterion (see .DESCRIPTION); ARM
     # GET is read-your-writes after deployment success, same retry shape as V6.1.
-    Invoke-MlsCriterion -Context $context -Id 'V6.5' `
+    # -Control @(): this criterion evidences 800-53 CP-9 (System Backup) by its own
+    # description above - CP-9 is not one of the 110 NIST SP 800-171 Rev 2 requirements
+    # (800-171 carries no distinct Contingency Planning family), so it cannot map into this
+    # catalog. It is also not 3.8.9 (protect the CONFIDENTIALITY of backup CUI): retention
+    # days and storage-redundancy tier are durability/availability properties, not a
+    # confidentiality control.
+    Invoke-MlsCriterion -Context $context -Id 'V6.5' -Control @() `
         -Description 'SQL backup posture (short-term retention + backup storage redundancy) matches the template-pinned values' `
         -Command "az sql db show --ids <dbId> --query requestedBackupStorageRedundancy`naz resource show --ids <dbId>/backupShortTermRetentionPolicies/default --query properties.retentionDays" `
         -Expected "requestedBackupStorageRedundancy == $ExpectedBackupStorageRedundancy; short-term retentionDays == $ExpectedBackupRetentionDays" `

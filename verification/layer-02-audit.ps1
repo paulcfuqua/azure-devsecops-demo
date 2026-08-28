@@ -147,19 +147,22 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Management group' -Value $ManagementGroupName
     Add-MlsPreflight -Context $context -Name 'Canary resource group' -Value "$CanaryResourceGroupName (written by the deploy workflow, never by this audit)"
 
-    Invoke-MlsCriterion -Context $context -Id 'V2.1' `
+    # -Control @(): confirms subscription placement under the management group, a
+    # governance-hierarchy precondition for policy scope (V2.3). Placement alone implements
+    # no 800-171 requirement by itself.
+    Invoke-MlsCriterion -Context $context -Id 'V2.1' -Control @() `
         -Description 'az account management-group show mls shows the sub' `
         -Command "az account management-group show --name $ManagementGroupName --expand --recurse --query `"children[?contains(id, '$subscription')].displayName`"" `
         -Expected 'exactly one child returned - the demo subscription' `
         -Test { Test-ManagementGroupPlacement -ManagementGroupName $ManagementGroupName -SubscriptionId $subscription } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V2.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V2.2' -Control @('3.4.2') `
         -Description 'Creating an untagged canary RG fails with policy denial (then cleaned up)' `
         -Command "az monitor activity-log list --offset $ActivityLogOffset --status Failed --query `"[?contains(resourceGroupName,'$CanaryResourceGroupName')].{op:operationName.value, sub:subStatus.localizedValue, code:properties.statusMessage}`"`naz group exists --name $CanaryResourceGroupName" `
         -Expected 'at least one Microsoft.Resources/subscriptions/resourceGroups/write event with RequestDisallowedByPolicy; az group exists == false' `
         -Test { Test-CanaryPolicyDenial -CanaryResourceGroupName $CanaryResourceGroupName -ActivityLogOffset $ActivityLogOffset } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V2.3' `
+    Invoke-MlsCriterion -Context $context -Id 'V2.3' -Control @('3.12.1', '3.12.3') `
         -Description 'az policy state summarize returns NIST compliance data within 30 min of assignment' `
         -Command "az policy state summarize --subscription $subscription --query `"policyAssignments[?contains(policyAssignmentId,'$NistAssignmentPattern')].{id:policyAssignmentId, nonCompliant:results.nonCompliantResources}`"" `
         -Expected 'the NIST 800-53 R5 initiative assignment appears with a populated results block' `

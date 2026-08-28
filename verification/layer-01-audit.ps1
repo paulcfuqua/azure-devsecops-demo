@@ -218,25 +218,29 @@ function Invoke-Main {
     $allowedGuid = Get-AllowedGuid -RepoRoot $root -AllowlistPath $GuidAllowlistPath
     Add-MlsPreflight -Context $context -Name 'GUID allowlist entries' -Value "$($allowedGuid.Count)"
 
-    Invoke-MlsCriterion -Context $context -Id 'V1.1' `
+    Invoke-MlsCriterion -Context $context -Id 'V1.1' -Control @('3.5.2') `
         -Description 'Actions run using OIDC succeeds (az account show inside the runner matches the demo sub)' `
         -Command "gh run list --workflow $WorkflowFile --limit 1 --json databaseId,conclusion`ngh api repos/$repositoryName/actions/runs/<databaseId>/jobs --jq '.jobs[] | select(.name==`"$OidcJobName`") | .conclusion'" `
         -Expected "run conclusion == 'success' and job '$OidcJobName' conclusion == 'success'" `
         -Test { Test-OidcRoundTrip -Repository $repositoryName -WorkflowFile $WorkflowFile -OidcJobName $OidcJobName } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V1.2' `
+    Invoke-MlsCriterion -Context $context -Id 'V1.2' -Control @('3.4.2') `
         -Description 'gh api repos/{repo} shows secret scanning + push protection enabled' `
         -Command "gh api repos/$repositoryName --jq '.security_and_analysis | {ss: .secret_scanning.status, pp: .secret_scanning_push_protection.status}'" `
         -Expected '{"ss":"enabled","pp":"enabled"}' -NoRetry `
         -Test { Test-SecretScanning -Repository $repositoryName } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V1.3' `
+    # -Control @(): confirms no tenant/subscription/capacity identifier or generic GUID is
+    # committed to the repo. That is infrastructure-identifier hygiene, not CUI protection -
+    # these are not Controlled Unclassified Information and 800-171 has no "do not commit
+    # environment identifiers" requirement, so this criterion evidences none of the 110.
+    Invoke-MlsCriterion -Context $context -Id 'V1.3' -Control @() `
         -Description 'No committed IDs (grep audit)' `
         -Command "git grep -inIE '<AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|FABRIC_CAPACITY_ID>'`ngit grep -inIE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' -- ':!docs' ':!*.lock'" `
         -Expected 'first sweep: zero matches (exit code 1). second sweep: matches only on the reviewed allowlist' -NoRetry `
         -Test { Test-CommittedIdentifier -RepoRoot $root -SecretValue $secretValue -AllowedGuid $allowedGuid } | Out-Null
 
-    Invoke-MlsCriterion -Context $context -Id 'V1.4' `
+    Invoke-MlsCriterion -Context $context -Id 'V1.4' -Control @('3.5.1', '3.5.2') `
         -Description 'Federated credential subject matches repo:<owner>/<repo>' `
         -Command "GET https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$DeployerAppName'`nGET https://graph.microsoft.com/v1.0/applications/<id>/federatedIdentityCredentials" `
         -Expected "Issuer == https://token.actions.githubusercontent.com; Subject == repo:${repositoryName}:environment:$EnvironmentName" `
