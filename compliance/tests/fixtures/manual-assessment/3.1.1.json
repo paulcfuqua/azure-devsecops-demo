@@ -1,0 +1,17 @@
+{
+  "control": "3.1.1",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f1"
+    ],
+    "assertedBy": "fixture-author",
+    "assertedAt": "2026-08-27",
+    "rationale": "Fixture record for collector-manual.Tests.ps1: asserts GAP, a known open finding."
+  },
+  "recommendation": "Fixture only - close the underlying finding.",
+  "gapSeverity": "high",
+  "references": []
+}

@@ -1,0 +1,16 @@
+{
+  "assignment": {
+    "name": "nist-800-53-r5",
+    "displayName": "NIST SP 800-53 Rev. 5",
+    "enforcementMode": "DoNotEnforce"
+  },
+  "policyStates": [
+    {
+      "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca",
+      "policyAssignmentId": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
+      "policyDefinitionGroupNames": ["SC-7"],
+      "complianceState": "Compliant",
+      "timestamp": "2026-08-27T00:00:00Z"
+    }
+  ]
+}

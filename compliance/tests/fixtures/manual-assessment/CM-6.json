@@ -1,0 +1,17 @@
+{
+  "control": "CM-6",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "CLOSED",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f23"
+    ],
+    "assertedBy": "fixture-author",
+    "assertedAt": "2026-08-27",
+    "rationale": "Fixture mirroring the real register's own shape: an 800-53-keyed file the 800-171 catalog has no requirement for. New-MlsEvidence must throw on this control id, and manual.ps1 must catch it, warn, and keep processing the other fixtures in this directory."
+  },
+  "recommendation": "Fixture only.",
+  "gapSeverity": "none",
+  "references": []
+}
