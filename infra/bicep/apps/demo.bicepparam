@@ -37,6 +37,13 @@ param dataApiImage = readEnvironmentVariable(
   'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 )
 
+// compliance (Task 13/15) — the estate's own NIST compliance board, gated by
+// Easy Auth (see main.bicep's compliance app block for the full rationale).
+param complianceImage = readEnvironmentVariable(
+  'COMPLIANCE_IMAGE',
+  'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+)
+
 // Ports: 80 matches the placeholder hello-world image. The real apps listen on
 // 8080; CI overrides these once the GHCR images are in play (open item P-1).
 param launchOpsTargetPort = int(readEnvironmentVariable('LAUNCH_OPS_PORT', '80'))
@@ -45,6 +52,7 @@ param mcpToolsTargetPort = int(
   readEnvironmentVariable('MCP_TOOLS_PORT', readEnvironmentVariable('COPILOT_SVC_PORT', '80'))
 )
 param dataApiTargetPort = int(readEnvironmentVariable('DATA_API_PORT', '80'))
+param complianceTargetPort = int(readEnvironmentVariable('COMPLIANCE_PORT', '80'))
 
 // Image content digests, resolved by layer-07-apps.yml from the registry (or
 // read back from the running app) and stamped onto each container as
@@ -54,6 +62,14 @@ param launchOpsImageDigest = readEnvironmentVariable('LAUNCH_OPS_IMAGE_DIGEST', 
 param controlTowerImageDigest = readEnvironmentVariable('CONTROL_TOWER_IMAGE_DIGEST', 'unset')
 param mcpToolsImageDigest = readEnvironmentVariable('MCP_TOOLS_IMAGE_DIGEST', 'unset')
 param dataApiImageDigest = readEnvironmentVariable('DATA_API_IMAGE_DIGEST', 'unset')
+param complianceImageDigest = readEnvironmentVariable('COMPLIANCE_IMAGE_DIGEST', 'unset')
+
+// Entra application (client) ID Easy Auth validates compliance-app sign-ins
+// against. NOT a secret (see main.bicep's compliance app block) — the same
+// non-secret-environment-variable pattern as MLS_GITHUB_REPO / MLS_OWNER.
+// The Entra app registration is Identity's to create; 'unset' is a
+// deliberately invalid clientId so an out-of-order deploy fails loudly.
+param complianceEntraClientId = readEnvironmentVariable('MLS_COMPLIANCE_CLIENT_ID', 'unset')
 
 // data-api backend selection. Empty = decide from whether L5 handed us a Fabric
 // SQL analytics endpoint; MLS_DATA_BACKENDS forces it either way.

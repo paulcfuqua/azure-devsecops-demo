@@ -1,0 +1,352 @@
+name: app-compliance-ci
+
+# =============================================================================
+# Path-filtered CI for apps/compliance (Task 15, L7).
+# Mirrors app-control-tower-ci.yml's structure, minus the @mls/spec-renderer
+# workspace dependency this app does not have (design brief section 5.1: it
+# renders its own board, not spec-renderer specs).
+#
+# build -> test -> container build -> Trivy (fail on CRITICAL) -> smoke-test
+#       (F22 pattern: docker run + /healthz) -> GHCR push
+#       -> deploy to ACA via OIDC (guarded on the demo environment).
+#
+# Unlike the other three frontends, this app also needs compliance/catalog and
+# compliance/state/*.json (Task 8's committed artifact) to be checked out
+# before `vite build` runs — they are ordinary repo files, not generated here,
+# so a plain actions/checkout@v4 already covers it; the Dockerfile COPYs them
+# into the image build context separately (apps/compliance/Dockerfile).
+#
+# ---------------------------------------------------------------------------
+# OPEN ITEM P-7 — the Docker build context is the REPO ROOT, not
+# apps/compliance. The Dockerfile copies the root package-lock.json and
+# compliance/catalog + compliance/state, so an app-directory context cannot
+# build it.
+#
+# OPEN ITEM P-1 — target port. The image serves on 8080 (nginx) but
+# infra/bicep/apps/demo.bicepparam still defaults the container app's target
+# port to the placeholder 80. Set COMPLIANCE_PORT=8080 in the `demo` GitHub
+# environment when the first real image publishes; the deploy job warns
+# rather than silently mutating ingress.
+# ---------------------------------------------------------------------------
+#
+# PRE-G0 GUARD: build/test/scan/push run from day one; the deploy job skips until
+# the `demo` environment variables exist.
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/compliance/**
+      - compliance/catalog/**
+      - compliance/state/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/app-compliance-ci.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - apps/compliance/**
+      - compliance/catalog/**
+      - compliance/state/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/app-compliance-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-compliance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: apps/compliance
+  APP_SLUG: compliance
+  WORKSPACE: apps/compliance
+
+jobs:
+  preflight:
+    name: preflight (demo environment guard)
+    # Fork pull requests must not reach the `demo` environment. This job mints no
+    # OIDC token (top-level permissions are contents: read), so it was never a
+    # credential path — but a public-repo PR should not touch a deployment
+    # environment at all, and the deploy job below carries the same guard.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    environment: demo
+    outputs:
+      configured: ${{ steps.guard.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          layer: compliance deploy
+
+  build-test:
+    name: build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Typecheck and build compliance
+        run: |
+          set -euo pipefail
+          npm run typecheck --workspace "${WORKSPACE}"
+          npm run build --workspace "${WORKSPACE}"
+
+      - name: Test the app
+        run: npm run test --workspace "${WORKSPACE}"
+
+  image:
+    name: container build, scan and push
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+      tag: ${{ steps.tag.outputs.tag }}
+      # The digest of what was actually pushed. L7's V7.1-style build binding
+      # (this app's own /healthz, not the Verifier sweep — see main.bicep's
+      # compliance app block) needs it to travel from the only step that
+      # knows it to the deploy step that stamps it on the app.
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute the GHCR reference
+        id: tag
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          registry="ghcr.io/$(printf '%s' "${REPO}" | tr '[:upper:]' '[:lower:]')/${APP_SLUG}"
+          tag="sha-${GITHUB_SHA:0:7}"
+          {
+            echo "registry=${registry}"
+            echo "tag=${tag}"
+            echo "image=${registry}:${tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image (context = repo root, open item P-7)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.APP_DIR }}/Dockerfile
+          load: true
+          push: false
+          tags: ${{ steps.tag.outputs.image }}
+          cache-from: type=gha,scope=compliance
+          cache-to: type=gha,mode=max,scope=compliance
+
+      - name: Trivy gate — fail the build on CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.tag.outputs.image }}
+          format: table
+          severity: CRITICAL
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Trivy SARIF for the Security tab (non-blocking)
+        if: ${{ always() && github.event_name != 'pull_request' }}
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.tag.outputs.image }}
+          format: sarif
+          output: trivy-compliance.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload the Trivy SARIF
+        if: ${{ always() && github.event_name != 'pull_request' && hashFiles('trivy-compliance.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-compliance.sarif
+          category: trivy-compliance
+
+      - name: Smoke-test the image — boot it and check its own /healthz (F22)
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+        run: |
+          set -euo pipefail
+          # F22 pattern, applied to this app from its first commit rather than
+          # acquired in a later remediation: CI builds and Trivy-scans this
+          # image but must also prove the entrypoint actually serves THIS app.
+          # The failure mode is silent, not loud: if /etc/nginx/conf.d is not
+          # writable by `nginx`, the base image's docker-entrypoint.sh skips
+          # the envsubst pass over *.template and nginx falls back to the
+          # STOCK "Welcome to nginx!" config baked into nginx:1.27-alpine.
+          #
+          # WHICH HALF OF THIS CHECK CATCHES THAT. Per this app's Dockerfile,
+          # stock nginx serves on PORT 80 — only our template ever says
+          # `listen 8080;`. We publish and curl 8080 only, so an untemplated
+          # image accepts no connection at all and the poll below fails on its
+          # bounded timeout. That timeout branch is the load-bearing one for
+          # the F14-class regression. The "ok " body-prefix assertion is an
+          # independent second guard, covering every other "something answers
+          # 8080 but it is not this app" case that a bare 200 would wave through.
+          #
+          # Placed after the Trivy CRITICAL gate (a vulnerable image is never
+          # even started) and before "Log in to GHCR" (no registry credential
+          # has entered the job's environment yet). The brief's other placement
+          # rule -- no job holding packages:write or id-token:write -- cannot be
+          # honoured to the letter: this `image` job builds AND pushes, so it
+          # holds packages:write (and security-events:write) by construction,
+          # same as every app-*-ci.yml image job.
+          container_id="$(docker run -d -p 127.0.0.1::8080 "${IMAGE}")"
+          cleanup() {
+            docker stop "${container_id}" >/dev/null 2>&1 || true
+            docker rm "${container_id}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          host_port="$(docker port "${container_id}" 8080/tcp | awk -F: '{print $NF}' | head -n1)"
+          if [ -z "${host_port}" ]; then
+            echo "::error::compliance: docker port reported no host mapping for 8080. Usually this means the container is already gone (an image whose entrypoint exits immediately); a container that starts but never binds 8080 normally fails the poll below instead."
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+          url="http://127.0.0.1:${host_port}/healthz"
+          status=""
+          body=""
+          for _ in $(seq 1 30); do
+            if raw="$(curl -s --max-time 3 -w '\n%{http_code}' "${url}")"; then
+              status="${raw##*$'\n'}"
+              body="${raw%$'\n'*}"
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "${status}" ]; then
+            echo "::error::compliance never accepted a connection on :8080/healthz within 60s"
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+          echo "GET /healthz -> ${status}: ${body}"
+          if [ "${status}" != "200" ] || ! printf '%s' "${body}" | grep -Eq '^ok '; then
+            echo "::error::compliance answered on 8080 but /healthz did not return this app's own payload (status ${status}, body: ${body}) -- something is serving that port and it is not this app. Note the F14-class untemplated-nginx case does NOT land here: stock nginx serves on port 80, so that regression fails the poll above with no connection at all."
+            docker logs "${container_id}" 2>&1 || true
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the scanned image
+        id: push
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ env.APP_DIR }}/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.tag.outputs.image }}
+            ${{ steps.tag.outputs.registry }}:latest
+          cache-from: type=gha,scope=compliance
+          cache-to: type=gha,mode=max,scope=compliance
+
+  deploy:
+    name: deploy to Container Apps
+    needs: [preflight, image]
+    if: ${{ needs.preflight.outputs.configured == 'true' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    environment: demo
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-github-deployer)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Roll the new image onto the container app
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          APP_NAME: ${{ steps.names.outputs.ca-compliance }}
+          IMAGE: ${{ needs.image.outputs.image }}
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # MLS_IMAGE_DIGEST is stamped in the same call, same convention as
+          # the other frontends. --set-env-vars, not --replace-env-vars: this
+          # app has no other env vars to lose, but the convention is kept
+          # identical rather than special-cased.
+          az containerapp update \
+            --resource-group "${RG_APPS}" \
+            --name "${APP_NAME}" \
+            --image "${IMAGE}" \
+            --set-env-vars "MLS_IMAGE_DIGEST=${IMAGE_DIGEST:-unset}" \
+            --min-replicas 0 \
+            --output none
+          echo "Deployed ${IMAGE} (digest ${IMAGE_DIGEST:-unset}) to ${APP_NAME}."
+          if [ -z "${IMAGE_DIGEST:-}" ]; then
+            echo "::warning title=No image digest recorded::The push step reported no digest, so MLS_IMAGE_DIGEST is 'unset' on ${APP_NAME}."
+          fi
+
+      - name: Check the ingress target port (open item P-1)
+        env:
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          APP_NAME: ${{ steps.names.outputs.ca-compliance }}
+          CONFIGURED_PORT: ${{ vars.COMPLIANCE_PORT }}
+        run: |
+          set -euo pipefail
+          current="$(az containerapp show -g "${RG_APPS}" -n "${APP_NAME}" \
+            --query properties.configuration.ingress.targetPort -o tsv)"
+          echo "Current ingress target port: ${current}"
+          if [ "${current}" = "80" ] && [ -z "${CONFIGURED_PORT}" ]; then
+            echo "::warning title=P-1 open — target port still 80::${APP_NAME} serves a real image on 8080 but ingress still targets the placeholder port 80. Set COMPLIANCE_PORT=8080 in the demo environment and re-run layer-07-apps.yml. Ingress was deliberately NOT mutated here."
+          fi
+
+      - name: Deployment summary
+        env:
+          APP_NAME: ${{ steps.names.outputs.ca-compliance }}
+          IMAGE: ${{ needs.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### compliance deployed"
+            echo
+            echo "- container app: \`${APP_NAME}\`"
+            echo "- image: \`${IMAGE}\`"
+            echo
+            echo "This app sits behind Container Apps Easy Auth (infra/bicep/apps/main.bicep) --"
+            echo "an unauthenticated request redirects to login rather than reaching the board."
+          } >> "${GITHUB_STEP_SUMMARY}"

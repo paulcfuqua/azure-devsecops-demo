@@ -124,6 +124,8 @@ jobs:
       # server-to-server from Microsoft's cloud), so there is no ingress toggle.
       MCP_TOOLS_PORT: ${{ vars.MCP_TOOLS_PORT || '80' }}
       DATA_API_PORT: ${{ vars.DATA_API_PORT || '80' }}
+      # Task 13/15: compliance board port, same P-1 pattern as the other three.
+      COMPLIANCE_PORT: ${{ vars.COMPLIANCE_PORT || '80' }}
       # data-api cloud mode. Without the Fabric SQL analytics endpoint the app
       # provisions in LOCAL mode, which answers 503 on every table route because
       # data/generated is not baked into the image — the template says so in its
@@ -132,6 +134,10 @@ jobs:
       MLS_FABRIC_SQL_ENDPOINT: ${{ vars.MLS_SQL_ENDPOINT }}
       MLS_FABRIC_DATABASE: ${{ vars.MLS_LAKEHOUSE_NAME || 'mls_operations' }}
       MLS_GITHUB_REPO: ${{ github.repository }}
+      # Entra application (client) ID for the compliance app's Easy Auth
+      # config. NOT a secret (main.bicep's compliance app block) — a client ID
+      # is a public identifier, the same trust class as AZURE_CLIENT_ID above.
+      MLS_COMPLIANCE_CLIENT_ID: ${{ vars.MLS_COMPLIANCE_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -157,6 +163,7 @@ jobs:
             echo "CONTROL_TOWER_IMAGE=${registry}/control-tower:${IMAGE_TAG}"
             echo "MCP_TOOLS_IMAGE=${registry}/mcp-tools:${IMAGE_TAG}"
             echo "DATA_API_IMAGE=${registry}/data-api:${IMAGE_TAG}"
+            echo "COMPLIANCE_IMAGE=${registry}/compliance:${IMAGE_TAG}"
           } >> "${GITHUB_ENV}"
           echo "resolved=true" >> "${GITHUB_OUTPUT}"
 
@@ -192,6 +199,7 @@ jobs:
           CA_CONTROL_TOWER: ${{ steps.names.outputs.ca-control-tower }}
           CA_MCP: ${{ steps.names.outputs.ca-mcp }}
           CA_DATA_API: ${{ steps.names.outputs.ca-data-api }}
+          CA_COMPLIANCE: ${{ steps.names.outputs.ca-compliance }}
         run: |
           set -euo pipefail
 
@@ -227,6 +235,7 @@ jobs:
           resolve "${CONTROL_TOWER_IMAGE:-}" "${CA_CONTROL_TOWER}" CONTROL_TOWER_IMAGE_DIGEST
           resolve "${MCP_TOOLS_IMAGE:-}" "${CA_MCP}" MCP_TOOLS_IMAGE_DIGEST
           resolve "${DATA_API_IMAGE:-}" "${CA_DATA_API}" DATA_API_IMAGE_DIGEST
+          resolve "${COMPLIANCE_IMAGE:-}" "${CA_COMPLIANCE}" COMPLIANCE_IMAGE_DIGEST
 
       - name: What-if the apps deployment
         env:
@@ -274,14 +283,16 @@ jobs:
               launchOpsFqdn: .launchOpsFqdn.value,
               controlTowerFqdn: .controlTowerFqdn.value,
               mcpToolsFqdn: .mcpToolsFqdn.value,
-              mcpToolsEndpoint: .mcpToolsEndpoint.value
+              mcpToolsEndpoint: .mcpToolsEndpoint.value,
+              complianceAppName: .complianceAppName.value,
+              complianceFqdn: .complianceFqdn.value
             }' l7-manifest.json
             echo '```'
             echo
-            echo "Target ports in effect — launch-ops: ${LAUNCH_OPS_PORT}, control-tower: ${CONTROL_TOWER_PORT}, mcp-tools: ${MCP_TOOLS_PORT}, data-api: ${DATA_API_PORT}."
+            echo "Target ports in effect — launch-ops: ${LAUNCH_OPS_PORT}, control-tower: ${CONTROL_TOWER_PORT}, mcp-tools: ${MCP_TOOLS_PORT}, data-api: ${DATA_API_PORT}, compliance: ${COMPLIANCE_PORT}."
             if [ "${LAUNCH_OPS_PORT}" = "80" ]; then
               echo
-              echo "> **P-1 open:** ports are still on the placeholder 80. Set LAUNCH_OPS_PORT / CONTROL_TOWER_PORT / MCP_TOOLS_PORT / DATA_API_PORT to 8080 in the demo environment once real images are published."
+              echo "> **P-1 open:** ports are still on the placeholder 80. Set LAUNCH_OPS_PORT / CONTROL_TOWER_PORT / MCP_TOOLS_PORT / DATA_API_PORT / COMPLIANCE_PORT to 8080 in the demo environment once real images are published."
             fi
             echo
             echo "data-api backend mode: \`${data_api_mode}\`"

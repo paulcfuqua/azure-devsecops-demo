@@ -64,6 +64,12 @@ outputs:
       healing trail. Composed here rather than in each workflow so the prefix stays owned
       by naming.bicep (CLAUDE.md).
     value: ${{ steps.resolve.outputs.ca-vuln-lab }}
+  ca-compliance:
+    description: >-
+      containerAppName(prefix, "compliance", env) — the Task 13 compliance board, gated by
+      Container Apps Easy Auth. app-compliance-ci.yml's deploy job and layer-07-apps.yml's
+      image-digest resolution step both address it by this name.
+    value: ${{ steps.resolve.outputs.ca-compliance }}
   key-vault:
     description: 'keyVaultName(prefix, env).'
     value: ${{ steps.resolve.outputs.key-vault }}
@@ -119,6 +125,7 @@ runs:
           echo "ca-mcp=${prefix}-mcp-${envseg}-ca"
           echo "ca-data-api=${prefix}-data-api-${envseg}-ca"
           echo "ca-vuln-lab=${prefix}-vuln-lab-${envseg}-ca"
+          echo "ca-compliance=${prefix}-compliance-${envseg}-ca"
           echo "key-vault=${prefix}-sec-${envseg}-kv"
           echo "law=${prefix}-obs-${envseg}-law"
           echo "app-insights=${prefix}-obs-${envseg}-appi"

@@ -250,6 +250,18 @@ param vulnLabWitnessImage string = 'mcr.microsoft.com/azuredocs/containerapps-he
 @description('Commit the L10 witness revision attests to. "unset" until a heal merges; .github/workflows/vuln-lab-witness.yml re-stamps it on every push to main that touches apps/vuln-lab/**, which is what creates the revision V10.1 stage 6 / V10.2 stage 5 look for.')
 param vulnLabHealCommit string = 'unset'
 
+@description('compliance container image (GHCR public path at deploy time). Task 13/15.')
+param complianceImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
+@description('Container port the compliance app listens on. 80 matches the hello-world placeholder; app-compliance-ci.yml overrides via COMPLIANCE_PORT once the real image is published (open item P-1\'s pattern).')
+param complianceTargetPort int = 80
+
+@description('Image content digest for the compliance app, stamped as MLS_IMAGE_DIGEST so V7.1-style build binding is possible even though this app is deliberately outside V7.1\'s own -AppName sweep (see the compliance app block below). "unset" is the honest placeholder.')
+param complianceImageDigest string = 'unset'
+
+@description('Entra application (client) ID Easy Auth validates compliance-app sign-ins against. NOT a secret — an OAuth client ID is a public identifier (CLAUDE.md hard rule 5 treats tenant/subscription IDs the same way), and no client secret is ever configured for this provider (see the compliance app block below for why one is not needed). The Entra app registration itself is the Identity workstream\'s to create (L2-L4), not this template\'s; "unset" is a deliberately invalid clientId so a deploy run ahead of that registration fails loudly instead of shipping an Easy Auth block nobody can ever pass.')
+param complianceEntraClientId string = 'unset'
+
 @description('[derived] Replica ceiling — enough for a demo burst, small enough to cap active spend.')
 param maxReplicas int = 2
 
@@ -315,6 +327,7 @@ var controlTowerName = naming.containerAppName(companyPrefix, naming.appKeys.con
 var mcpToolsName = naming.containerAppName(companyPrefix, naming.appKeys.mcpTools, env)
 var dataApiName = naming.containerAppName(companyPrefix, naming.appKeys.dataApi, env)
 var vulnLabName = naming.containerAppName(companyPrefix, naming.appKeys.vulnLab, env)
+var complianceName = naming.containerAppName(companyPrefix, naming.appKeys.compliance, env)
 var mcpToolsIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.mcpTools, env)
 var dataApiIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.dataApi, env)
 
@@ -323,6 +336,7 @@ var tagsControlTower = naming.requiredTags(env, naming.appKeys.controlTower, cos
 var tagsMcpTools = naming.requiredTags(env, naming.appKeys.mcpTools, costCenter, owner, dataClassification)
 var tagsDataApi = naming.requiredTags(env, naming.appKeys.dataApi, costCenter, owner, dataClassification)
 var tagsVulnLab = naming.requiredTags(env, naming.appKeys.vulnLab, costCenter, owner, dataClassification)
+var tagsCompliance = naming.requiredTags(env, naming.appKeys.compliance, costCenter, owner, dataClassification)
 
 // Empty means "decide from what L5 handed us": cloud when there is a Fabric SQL
 // analytics endpoint to read the three analytical tables from, local otherwise.
@@ -766,6 +780,148 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
   }
 }
 
+// ------------------------------------------------------------------ compliance app (Task 13)
+//
+// mls-compliance-demo-ca — the board that shows the estate's OWN compliance
+// posture (design brief section 5.1). Structurally it is a static SPA exactly
+// like control-tower/launch-ops (nginx serving a Vite build), but it is a
+// THIRD shape from an access-control standpoint:
+//   data-api       INTERNAL-ONLY — nothing outside the CAE has any business
+//                  calling it (F1/Task 6).
+//   launch-ops,
+//   control-tower  EXTERNAL, OPEN — public marketing/ops dashboards; anyone
+//                  reaching the FQDN is the intended audience.
+//   compliance     EXTERNAL, GATED — human-facing like the two above, but the
+//                  audience is "someone on this program", not "the internet".
+//                  A NIST control-family board is not something to leave
+//                  anonymously reachable.
+//
+// EASY AUTH, NOT AN APPLICATION GATE. The app holds no session, no user store
+// and no auth code of its own (apps/compliance has no server — it is nginx
+// serving a prebuilt bundle). Container Apps built-in authentication
+// (Microsoft.App/containerApps/authConfigs) sits in FRONT of the container at
+// the platform/ingress layer, so an unauthenticated request never reaches
+// nginx at all — there is nowhere in a static SPA to keep a secret or enforce
+// a policy, so the platform enforces it instead. Why no client secret is
+// configured, and why the client ID parameter below is not itself a secret,
+// is explained inline next to authConfig in the module below rather than
+// repeated here.
+//
+// NO IDENTITY, NO RBAC GRANTS. Unlike data-api/mcp-tools this app calls no
+// Azure data plane at all — the catalog and every compliance/state/*.json
+// snapshot are baked into the JS bundle at image build time
+// (apps/compliance/Dockerfile), so there is no credential for a managed
+// identity to hold and none is provisioned.
+//
+// DELIBERATELY EXCLUDED FROM containerAppNames/imageDigests (see those
+// outputs below, and complianceAppName's own description). V7.1's
+// Test-PublicEndpoint issues an UNAUTHENTICATED GET expecting 200 — the exact
+// request Easy Auth exists to intercept and redirect. Folding this app into
+// the outputs the job-summary/manifest step reads from would either paint a
+// permanently-red-looking manifest entry or, worse, invite a future change to
+// loop containerAppNames into a blind health sweep and get every request
+// redirected to a login page. Same reasoning L10's vulnLabWitnessApp already
+// established for a different reason (see that block below) — a fixed count
+// of "the apps V7.1/V7.5 sweep" is not the same set as "every container app
+// this template deploys", and conflating them is the mistake to avoid.
+module complianceApp 'br/public:avm/res/app/container-app:0.23.0' = {
+  name: 'l7-ca-compliance'
+  params: {
+    name: complianceName
+    location: location
+    tags: tagsCompliance
+    environmentResourceId: caeResourceId
+    ingressExternal: true // human-facing, but gated by Easy Auth below — not public
+    ingressTargetPort: complianceTargetPort
+    ingressAllowInsecure: false
+    scaleSettings: scaleToZero
+    // Container Apps built-in authentication (Microsoft.App/containerApps/
+    // authConfigs). Sits IN FRONT of the container at the platform/ingress
+    // layer — an unauthenticated request never reaches nginx at all, which is
+    // the whole point: this is platform configuration, not an application
+    // gate (apps/compliance has no server and nowhere to keep a secret or
+    // enforce a policy of its own). unauthenticatedClientAction:
+    // 'RedirectToLoginPage' is the ARM name for the portal's "Require
+    // authentication" toggle, and it is a pinned literal — the platform must
+    // never fall through to serving an unauthenticated request.
+    authConfig: {
+      platform: {
+        enabled: true
+      }
+      globalValidation: {
+        unauthenticatedClientAction: 'RedirectToLoginPage'
+        redirectToProvider: 'azureactivedirectory'
+      }
+      identityProviders: {
+        azureActiveDirectory: {
+          enabled: true
+          registration: {
+            // complianceEntraClientId IS NOT A SECRET — an OAuth "application
+            // (client) ID" is a public identifier (visible in the browser's
+            // own redirect URL during login), the same trust class CLAUDE.md
+            // hard rule 5 already puts tenant/subscription IDs in. The Entra
+            // app registration itself is the Identity workstream's to create
+            // (L2-L4), not this layer's; 'unset' is a deliberately invalid
+            // GUID so a deploy run ahead of that registration fails the ARM
+            // deployment outright instead of shipping an Easy Auth block
+            // nobody can ever pass.
+            clientId: complianceEntraClientId
+            // v2.0 issuer, built from environment()/tenant() rather than a
+            // hardcoded host — az bicep's linter (no-hardcoded-env-urls)
+            // refuses a literal login.microsoftonline.com, and this also
+            // keeps the template cloud-portable rather than Azure-public-only.
+            //
+            // NO CLIENT SECRET ANYWHERE (hard rule 5: no secrets in the repo,
+            // none in CI): neither a stored client-secret setting name nor a
+            // client-secret certificate thumbprint is configured below. Those
+            // exist for a CONFIDENTIAL client that calls a downstream API (Graph, etc.)
+            // on the signed-in user's behalf, or that persists provider
+            // tokens in Easy Auth's token store for reuse. This app does
+            // neither — it asks exactly one question, "is this caller signed
+            // in to our tenant" — and Microsoft documents the Entra provider
+            // as fully usable without a client secret for precisely that
+            // scenario (learn.microsoft.com/azure/container-apps/authentication).
+            openIdIssuer: '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
+          }
+        }
+      }
+      login: {
+        // No downstream API is ever called on the signed-in user's behalf,
+        // so no provider token is worth persisting, and nothing here needs a
+        // storage-account-backed token store.
+        tokenStore: {
+          enabled: false
+        }
+      }
+      httpSettings: {
+        requireHttps: true
+      }
+    }
+    // No managed identity, no secrets: this app reads only what was baked
+    // into its image at build time and needs no Azure data-plane credential.
+    containers: [
+      {
+        name: naming.appKeys.compliance
+        image: complianceImage
+        resources: {
+          cpu: json(containerCpu)
+          memory: containerMemory
+        }
+        env: [
+          {
+            // /healthz build marker, same convention as the other frontends
+            // (apps/compliance/nginx.conf.template). Not read by V7.1 (see
+            // the header comment above) — kept for parity and for anyone
+            // curling it by hand, exactly like data-api's `build` marker.
+            name: 'MLS_IMAGE_DIGEST'
+            value: complianceImageDigest
+          }
+        ]
+      }
+    ]
+  }
+}
+
 // ------------------------------------------------------------------ L10 deployment witness
 //
 // mls-vuln-lab-demo-ca. verification/layer-10-audit.ps1 reads
@@ -871,7 +1027,7 @@ output dataApiIdentityClientId string = dataApiIdentity.outputs.clientId
 @description('Principal (object) ID of the data-api user-assigned identity, for role assignments made outside this template.')
 output dataApiIdentityPrincipalId string = dataApiIdentity.outputs.principalId
 
-@description('Container app NAME per app key. verification/layer-07-audit.ps1 addresses apps by name (-AppName), and the L7 workflow builds the V7.1 deploy manifest from these. The L10 witness is deliberately NOT here: it serves nothing, has no image digest to bind an endpoint to, and V7.1 would report it as an app whose /healthz never answers. It is published separately as vulnLabWitnessAppName.')
+@description('Container app NAME per app key. verification/layer-07-audit.ps1 addresses apps by name (-AppName), and the L7 workflow builds the V7.1 deploy manifest from these. Two apps are deliberately NOT here, for different reasons: the L10 witness serves nothing, has no image digest to bind an endpoint to, and V7.1 would report it as an app whose /healthz never answers (published separately as vulnLabWitnessAppName); the compliance app (Task 13) sits behind Easy Auth, and V7.1\'s sweep is an UNAUTHENTICATED GET expecting 200 — exactly what Easy Auth exists to refuse. Folding it in here would either paint a permanently-red manifest entry or invite a future change to loop this output into a blind health sweep (published separately as complianceAppName).')
 output containerAppNames object = {
   launchOps: launchOpsName
   controlTower: controlTowerName
@@ -884,6 +1040,12 @@ output vulnLabWitnessAppName string = vulnLabName
 
 @description('Resource ID of the L10 deployment witness.')
 output vulnLabWitnessResourceId string = vulnLabWitnessApp.outputs.resourceId
+
+@description('Name of the compliance container app (mls-compliance-demo-ca) — deliberately not in containerAppNames; see that output\'s description. app-compliance-ci.yml\'s deploy job resolves this same name independently via the naming composite action (ca-compliance) rather than reading it from here, the same relationship app-control-tower-ci.yml already has with controlTowerName.')
+output complianceAppName string = complianceName
+
+@description('Public HTTPS FQDN of the compliance app. Reaching it without an authenticated Entra session redirects to login rather than serving the board.')
+output complianceFqdn string = complianceApp.outputs.fqdn
 
 @description('MLS_IMAGE_DIGEST as deployed, per app. This is the deploy run\'s record of what each endpoint should be serving; the L7 workflow writes it into the manifest V7.1 compares against /healthz.')
 output imageDigests object = {

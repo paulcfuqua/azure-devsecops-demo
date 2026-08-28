@@ -60,6 +60,9 @@ $script:AppDefs = @(
     @{ Name = 'launch-ops';    File = 'app-launch-ops-ci.yml';    Payload = 'nginx-text' }
     @{ Name = 'data-api';      File = 'app-data-api-ci.yml';      Payload = 'json-data-api' }
     @{ Name = 'mcp-tools';     File = 'app-mcp-tools-ci.yml';     Payload = 'json-mcp-tools' }
+    # Task 15: compliance's smoke step follows the same nginx "ok <digest>"
+    # convention as control-tower/launch-ops (apps/compliance/nginx.conf.template).
+    @{ Name = 'compliance';    File = 'app-compliance-ci.yml';    Payload = 'nginx-text' }
 )
 
 $script:Apps = foreach ($def in $script:AppDefs) {
