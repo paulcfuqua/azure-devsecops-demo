@@ -17,7 +17,7 @@
     "@fluentui/react-components": "^9.74.6",
     "@microsoft/applicationinsights-web": "^3.4.3",
     "@mls/spec-renderer": "*",
-    "react": "^18.3.1",
+    "react": "^19.2.8",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
