@@ -522,9 +522,9 @@ has run. Each one is an audit input that cannot be derived from ARM:
 | `MLS_L9_RUN_ID` | `layer-09-devsecops.yml` run ID | V9.2's Trivy negative test | **no longer hand-set** — see below |
 | `MLS_L9_RELEASE_TAG` | release tag carrying the SBOMs | V9.3 | **no longer hand-set** |
 | `MLS_L9_ZAP_RUN_ID` | run ID whose artifact holds the ZAP baseline report | V9.4 | **no longer hand-set** |
-| `MLS_COMPLIANCE_CLIENT_ID` | Entra **application (client) ID** the compliance board's Container Apps Easy Auth validates sign-ins against (`infra/bicep/apps/demo.bicepparam` → `complianceEntraClientId`) | The compliance board (L12). **Not a secret:** an OAuth client ID is a public identifier, visible in the browser's own redirect URL during login, and the provider is configured with **no client secret at all**. Set it as a *variable*, not a secret | **L3 — REQUIRED; L7 refuses to deploy without it** |
-| `MLS_LAUNCH_OPS_CLIENT_ID` | Same, for `launch-ops` (`→ launchOpsEntraClientId`). Registration: `mls-launch-ops-demo-app` | The launch-ops dashboard. Since F25 this app is login-gated: it proxies `/api/` to `data-api`, whose identity holds Security Reader at subscription scope | **L3 — REQUIRED; L7 refuses to deploy without it** |
-| `MLS_CONTROL_TOWER_CLIENT_ID` | Same, for `control-tower` (`→ controlTowerEntraClientId`). Registration: `mls-control-tower-demo-app` | The control tower. This is the app F25 was demonstrated against: `GET /api/feeds/secure-score` returned live Defender posture to anonymous callers | **L3 — REQUIRED; L7 refuses to deploy without it** |
+| `MLS_COMPLIANCE_CLIENT_ID` | Entra **application (client) ID** the compliance board's Container Apps Easy Auth validates sign-ins against (`infra/bicep/apps/demo.bicepparam` → `complianceEntraClientId`) | The compliance board (L12). **Not a secret:** an OAuth client ID is a public identifier, visible in the browser's own redirect URL during login, and the provider is configured with **no client secret at all**. Set it as a *variable*, not a secret | **Optional override.** L7 resolves it from Entra; set it only to bring your own registration |
+| `MLS_LAUNCH_OPS_CLIENT_ID` | Same, for `launch-ops` (`→ launchOpsEntraClientId`). Registration: `mls-launch-ops-demo-app` | The launch-ops dashboard. Since F25 this app is login-gated: it proxies `/api/` to `data-api`, whose identity holds Security Reader at subscription scope | **Optional override** — same as above |
+| `MLS_CONTROL_TOWER_CLIENT_ID` | Same, for `control-tower` (`→ controlTowerEntraClientId`). Registration: `mls-control-tower-demo-app` | The control tower. This is the app F25 was demonstrated against: `GET /api/feeds/secure-score` returned live Defender posture to anonymous callers | **Optional override** — same as above |
 
 > **The three `MLS_L9_*` values are now produced by the layer run.**
 > `.github/workflows/layer-09-devsecops.yml` exists (2026-08-24) and passes all three to
@@ -535,33 +535,46 @@ has run. Each one is an audit input that cannot be derived from ARM:
 > both V9.2 and V9.4. Leave all three variables unset on the happy path; they survive only
 > as an override for re-verifying an older run by hand.
 
-> **All three dashboards are login-gated, and L7 will not deploy without their client
-> IDs (F25/F26, 2026-08-28).**
+> **All three dashboards are login-gated, and you do not have to configure that
+> (F25/F26/F36, 2026-08-28).**
 > `infra/entra/manifest.json` declares four app registrations — `mls-launch-ops-demo-app`,
 > `mls-control-tower-demo-app`, `mls-mcp-tools-demo-app` and `mls-compliance-demo-app`.
 > Creating them is the **Identity & Governance workstream's** job (L3); the L7 template
 > deliberately owns no Entra writes.
 >
-> **What this runbook used to say here was wrong.** It claimed that leaving
+> **The three variables above are overrides, not prerequisites.** On a normal
+> `infra-up` the flow is entirely automatic:
+> 1. **L3** creates the four registrations from the manifest, as `mls-github-deployer`.
+> 2. **L7** looks each dashboard's application (client) ID up by that registration's
+>    manifest display name (`az ad app list`), honouring one of the three variables first
+>    if you set it. `mls-github-deployer` holds `Application.ReadWrite.OwnedBy`, which
+>    covers exactly the registrations it created at L3.
+> 3. **L7, after the apps deploy**, adds each app's Easy Auth reply URL —
+>    `https://<that app's ingress FQDN>/.auth/login/aad/callback` — to its registration,
+>    *merged* into whatever is already there. That FQDN does not exist until the app is
+>    deployed, which is why this used to be a manual step and is now not one.
+>
+> **A client ID that cannot be resolved is not an error.** That app still deploys, but
+> `infra/bicep/apps/main.bicep` ties each app's `ingressExternal` to the *same* expression
+> as its `authConfig`, so it comes up **internal to the Container Apps environment** and
+> unreachable from the internet. The run says exactly which apps those are, and prints the
+> one command that fixes it (`gh workflow run layer-03-entra.yml`). There is no parameter
+> combination that publishes one of these three apps anonymously. An `az` failure, or two
+> registrations with the same name, *is* an error and stops the deploy — a throttled CLI
+> call and "L3 has not run yet" must not look the same.
+>
+> **What this runbook used to say here was wrong twice.** It first claimed that leaving
 > `MLS_COMPLIANCE_CLIENT_ID` unset made the parameter fall back to the literal `'unset'`,
 > so "ARM rejects the deployment outright". It does not, and never did.
 > `layer-07-apps.yml` passes `${{ vars.MLS_COMPLIANCE_CLIENT_ID }}`, and **an undefined
 > GitHub variable expands to the empty string** — so the environment variable is
 > *set-but-empty*, `readEnvironmentVariable` returns `''`, and the `'unset'` default is
 > never reached. (Confirmed against Bicep CLI 0.46.1: variable unset → `"unset"`;
-> variable set to the empty string → `""`.) The board would have gone up with an Easy
-> Auth block carrying an empty `clientId`.
+> variable set to the empty string → `""`.) It then claimed L7 refused to deploy without
+> all three variables — true when written, and the reason the estate could not be
+> deployed out of the box at all. That refusal is gone (F36).
 >
-> What happens now instead, and it is deliberate belt-and-braces:
-> 1. `layer-07-apps.yml`'s first step **fails the deploy job** if any of
->    `MLS_LAUNCH_OPS_CLIENT_ID`, `MLS_CONTROL_TOWER_CLIENT_ID` or
->    `MLS_COMPLIANCE_CLIENT_ID` is unset or empty, naming the ones that are missing.
-> 2. `infra/bicep/apps/main.bicep` ties each app's `ingressExternal` to the *same*
->    expression as its `authConfig`, so an app with no client ID deploys **internal to
->    the Container Apps environment** rather than open to the internet. There is no
->    parameter combination that publishes one of these three apps anonymously.
->
-> Never work around a failure here by removing `authConfig`: `control-tower` and
+> Never work around a sign-in prompt by removing `authConfig`: `control-tower` and
 > `launch-ops` proxy `/api/` straight through to `data-api`, whose identity holds
 > **Security Reader at subscription scope** (finding F25).
 > `docs/runbooks/layers/L12.md` § Preconditions carries the same statement for whoever is

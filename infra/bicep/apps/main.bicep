@@ -583,9 +583,12 @@ module dataApiSecurityReaderGrant 'modules/workload-role-assignments.bicep' = {
 // that publishes one of these three apps to the internet without Easy Auth in
 // front of it. A missing client ID costs you a demo you cannot reach from
 // outside the environment; it can never cost you an open dashboard.
-// .github/workflows/layer-07-apps.yml additionally refuses to deploy at all
-// when any of the three variables is unset, so the usual outcome is a loud
-// pre-deploy failure rather than a silently internal app.
+// .github/workflows/layer-07-apps.yml RESOLVES each client ID from the Entra app
+// registration L3 created (F36) rather than demanding it be hand-set, so on the
+// normal path all three arrive configured; when one cannot be resolved that
+// workflow deploys anyway and says loudly which app is internal-only. This
+// template is what makes that safe, and is the only thing that has to be: it is
+// the guard, not the belt-and-braces.
 // ---------------------------------------------------------------------------
 
 @description('True when an Entra client ID is actually configured. BOTH sentinels matter: readEnvironmentVariable returns its default only when the variable is UNDEFINED, and a GitHub Actions vars.* expansion for an undefined variable produces the EMPTY STRING, which is defined — so the parameter arrives as "" and never as the "unset" default (F26; verified against Bicep CLI 0.46.1: unset -> "unset", empty -> ""). Anything that is neither empty nor the sentinel is treated as configured; the template does not validate GUID shape, ARM does.')
@@ -1072,7 +1075,7 @@ output launchOpsFqdn string = launchOpsApp.outputs.fqdn
 @description('FQDN of control-tower. EXTERNAL and Easy-Auth gated when controlTowerEntraClientId is configured; an INTERNAL (in-environment only) FQDN when it is not — see frontendAuthStatus below and the EASY AUTH block above the container apps section (F25).')
 output controlTowerFqdn string = controlTowerApp.outputs.fqdn
 
-@description('Which human-facing apps actually got Easy Auth, and therefore which ones are externally reachable at all (F25/F26). true = external + Entra sign-in required; false = NO client ID was supplied, so the app deployed INTERNAL to the Container Apps environment and V7.1 will not be able to reach it. .github/workflows/layer-07-apps.yml refuses to deploy when any of these would be false, so a false here means the template was deployed by some other path.')
+@description('Which human-facing apps actually got Easy Auth, and therefore which ones are externally reachable at all (F25/F26). true = external + Entra sign-in required; false = NO client ID was supplied, so the app deployed INTERNAL to the Container Apps environment and V7.1 will not be able to reach it. .github/workflows/layer-07-apps.yml resolves the client IDs from L3\'s Entra app registrations and deploys regardless (F36), warning and naming each app a false here corresponds to — so a false means that registration does not exist yet, not that something went wrong.')
 output frontendAuthStatus object = {
   launchOps: launchOpsAuthConfigured
   controlTower: controlTowerAuthConfigured

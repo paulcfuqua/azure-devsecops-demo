@@ -27,11 +27,17 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 > ### The three dashboards require an Entra sign-in.
 >
 > `launch-ops`, `control-tower` and the compliance board are gated by Container Apps
-> Easy Auth, and the L7 deploy **refuses to run** until you supply an application (client)
-> ID for each (`MLS_LAUNCH_OPS_CLIENT_ID`, `MLS_CONTROL_TOWER_CLIENT_ID`,
-> `MLS_COMPLIANCE_CLIENT_ID`). That is not incidental polish: both frontends proxy
-> `/api/` straight through to `data-api`, so an open dashboard is an open door to that
-> Security Reader grant (finding F25). See
+> Easy Auth. That is not incidental polish: both frontends proxy `/api/` straight through
+> to `data-api`, so an open dashboard is an open door to that Security Reader grant
+> (finding F25).
+>
+> **You do not have to configure anything for this.** L3 creates the four Entra app
+> registrations from `infra/entra/manifest.json`; L7 looks each application (client) ID up
+> by name, and registers each app's Easy Auth redirect URI once its ingress FQDN exists.
+> `MLS_LAUNCH_OPS_CLIENT_ID`, `MLS_CONTROL_TOWER_CLIENT_ID` and `MLS_COMPLIANCE_CLIENT_ID`
+> remain as *overrides* for bringing your own registrations. An app whose client ID cannot
+> be resolved still deploys, but **internal to the Container Apps environment** and
+> unreachable from the internet — never open (finding F36). See
 > [docs/runbooks/g0-bootstrap.md](docs/runbooks/g0-bootstrap.md) § C9.
 
 ## Status

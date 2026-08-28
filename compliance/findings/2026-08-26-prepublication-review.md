@@ -28,19 +28,21 @@ open: **F13** (five of seven workload RBAC grants land; the sixth needs F19) and
 itself (deferred to the sponsor — needs a new Function App deploy surface and a G2 spend
 decision against the $200/30-day credit).
 
-**F25–F35 addendum (2026-08-28, the final pre-publication audit).** Eleven more findings,
+**F25–F36 addendum (2026-08-28, the final pre-publication audit).** Twelve more findings,
 raised by a last pass done specifically in the position of *a stranger cloning this repo
 and deploying it into their own Azure and Entra tenant* — a lens none of the earlier
-passes used. Three are critical ([F25](#f25), [F26](#f26), [F32](#f32)); all eleven are
-closed. The most important thing this pass demonstrates is not any single finding but a
+passes used. Three are critical ([F25](#f25), [F26](#f26), [F32](#f32)); all twelve are
+closed. [F36](#f36) came from turning that same lens on this pass's own output: F25's fix
+was correct and left the estate impossible to deploy without manual portal work, which
+the stranger lens is exactly what catches. The most important thing this pass demonstrates is not any single finding but a
 pattern: **a closed finding's own `Fix:` text can be the bypass** ([F25](#f25)), **a
 guard can be asserted and never fire** ([F26](#f26)), and **a test can verify a security
 property by matching a comment** ([F27](#f27)). Where a claim turned out to be false, the
 claim was corrected rather than quietly deleted — [F28](#f28), [F29](#f29) and
-[F35](#f35) changed no code at all, because the documents were the defect. Six findings (F14, F15, F19, F20, F21, F22)
-map to no NIST SP 800-171 control at all, so this document and the findings-index table's
-`Closed by` column are their *only* durable record — there is no `compliance/assessment/`
-file to additionally point at for those.
+[F35](#f35) changed no code at all, because the documents were the defect. Eight findings
+(F14, F15, F19, F20, F21, F22, F29, F36) map to no NIST SP 800-171 control at all, so this
+document and the findings-index table's `Closed by` column are their *only* durable record
+— there is no `compliance/assessment/` file to additionally point at for those.
 
 ## Index
 
@@ -81,6 +83,7 @@ file to additionally point at for those.
 | [F33](#f33) | Zero of 263 `uses:` SHA-pinned; `aquasecurity/trivy-action@0.28.0` resolves to no ref at all | medium | CONFIRMED | 3.4.1 | final pre-publication audit |
 | [F34](#f34) | `.superpowers/` (3.3 MB of transcripts) excluded only by a nested ignore file | medium | CONFIRMED | 3.1.3 | final pre-publication audit |
 | [F35](#f35) | Subscription-wide DENY policy nowhere stated as requiring a dedicated, empty subscription | medium | CONFIRMED | CM-6 | final pre-publication audit |
+| [F36](#f36) | F25's fix made the estate undeployable: L7 refused to run without three hand-set client IDs, and the redirect URIs could not exist until it had | high | CONFIRMED | — (availability/adoptability) | final pre-publication audit |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -1445,9 +1448,13 @@ Two structural decisions matter more than the config itself:
    `complianceAuthConfigured`). No parameter combination publishes one of these apps to
    the internet without authentication in front of it; a missing client ID costs you an
    app you cannot reach from outside the environment, never an open one.
-2. **`.github/workflows/layer-07-apps.yml` refuses to deploy** when any of
+2. **`.github/workflows/layer-07-apps.yml` refused to deploy** when any of
    `MLS_LAUNCH_OPS_CLIENT_ID`, `MLS_CONTROL_TOWER_CLIENT_ID` or
-   `MLS_COMPLIANCE_CLIENT_ID` is unset or empty, naming the missing ones.
+   `MLS_COMPLIANCE_CLIENT_ID` was unset or empty, naming the missing ones.
+   **Superseded by [F36](#f36):** that refusal made the estate undeployable out of the
+   box, and the workflow now *resolves* the three client IDs from the app registrations
+   L3 creates, deploying whatever is resolvable and reporting the rest. Decision 1 above
+   — the fail-closed template — is what actually holds the property, and it is unchanged.
 
 `globalValidation.excludedPaths` is `['/healthz']` and nothing else, so V7.1's
 unauthenticated GET still works and nothing under `/api/` is reachable without a session.
@@ -1825,3 +1832,94 @@ grant **across the whole subscription** (F25), the L9 Defender pricing-plan roun
 **Fix:** stated as a requirement, not a suggestion, at the top of `README.md`, in its own
 `SECURITY.md` section, and in a callout at the head of `g0-bootstrap.md`. No code changed
 — the policies are the point of the demo. The omission was the defect.
+
+---
+
+## F36
+
+**F25's fix was secure and undeployable: L7 refused to run without three hand-set client IDs, and the redirect URIs they needed could not exist until it had run**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED (read end to end against the tree)
+- **Controls:** — (availability / adoptability; it protects F25's 3.1.1, 3.1.2, 3.13.1 fix by keeping it reachable)
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Found while:** checking, in the position of a stranger cloning this repo, whether the
+F25/F26 remediation could actually be deployed — the same lens that produced F25 itself.
+
+**Where:** `.github/workflows/layer-07-apps.yml:160-190` (the "Require an Entra client ID
+for every externally-reachable app" step, since deleted): the first step of the `deploy`
+job hard-refused the whole L7 deployment unless `MLS_LAUNCH_OPS_CLIENT_ID`,
+`MLS_CONTROL_TOWER_CLIENT_ID` and `MLS_COMPLIANCE_CLIENT_ID` were all set as GitHub
+environment variables. Also `docs/runbooks/layers/L03.md`, which closed its L7 note with
+"register the apps here, run L7, then add the redirect URIs" — a manual third step.
+
+**Impact.** An adopter's first `infra-up` could not deploy L7 at all. To get past it they
+had to run L3, open the portal, copy three application IDs into GitHub variables, run L7,
+read three ingress FQDNs out of the run, and go back to the portal to add three redirect
+URIs — because Easy Auth's reply URL is
+`https://<that app's ingress FQDN>/.auth/login/aad/callback`, and the FQDN does not exist
+until the app the refusal was blocking has deployed. That is a chicken-and-egg with a
+manual resolution, in a repo whose stated purpose is being cloned and deployed. F25 was
+right to make the dashboards login-gated; the *workflow* half of its fix bought nothing
+the template did not already guarantee and cost the estate its deployability.
+
+**What was NOT wrong.** `infra/bicep/apps/main.bicep` makes each app's `ingressExternal`
+literally the same expression as "is Easy Auth configured for this app", so a missing
+client ID has always meant *internal ingress*, never *open dashboard*. That is the
+control. The workflow refusal was belt-and-braces on top of a belt that holds.
+
+**Fix**, in three parts:
+
+1. **Resolve, do not demand.** A new step, `Resolve the Easy Auth client IDs from their
+   Entra app registrations (F36)`, runs after the OIDC login. Per app it honours an
+   explicitly-set variable if there is one, and otherwise looks the registration up by the
+   display name `infra/entra/manifest.json` declares for that `appKey`
+   (`az ad app list --display-name … --query "[?displayName=='…'].appId"`; the exact name
+   is re-asserted in the query because `az` has spelled that server-side filter both `eq`
+   and `startswith`). L3 already creates all four registrations as this same identity, and
+   `mls-github-deployer` holds `Application.ReadWrite.OwnedBy` (narrowed from `.All` by
+   [F8](#f8)), which covers exactly the apps it created. The three variables survive as
+   **overrides** for an adopter bringing their own registrations. Manifest entries gained
+   an `appKey` field so the workflow never spells a display name — the company prefix is
+   `naming.bicep`'s to own (CLAUDE.md).
+2. **Fail safe, not closed-to-deployment.** The refusal is deleted. Whatever resolves is
+   deployed; an app whose client ID does not resolve still deploys, internal-only, and the
+   run says so with a `::warning` naming it and a step-summary table giving each app, its
+   state, and the one command that fixes it (`gh workflow run layer-03-entra.yml`). The
+   three outcomes are deliberately not conflated: **resolved** → external + Entra sign-in;
+   **not found** → a documented state, not an error; **`az` failed or MORE THAN ONE
+   registration matched** → an error that stops the deploy, because "the CLI was throttled"
+   and "L3 has not run yet" must not look the same ([F20](#f20)'s original defect, fixed
+   twice in this repo), and gating a dashboard against the wrong tenant identity is worse
+   than not publishing it ([F24](#f24)'s refusal, reused).
+3. **Register the reply URLs automatically.** A second new step patches each registration's
+   `web.redirectUris` with `https://<fqdn>/.auth/login/aad/callback` once the FQDNs are
+   known, reading the existing list first and **merging** — `--web-redirect-uris` replaces
+   the whole list, so overwriting would silently drop a working URI whenever an FQDN
+   changed. Already present is a no-op it states out loud. Its placement and failure
+   posture are identical to the F20 and F24 remediation steps — after the V7.1 manifest is
+   written and uploaded (those steps carry no `always()`), with `continue-on-error` and a
+   companion step that reports a failure to `$GITHUB_STEP_SUMMARY` — because idempotent
+   remediation must never fail a deployment that otherwise worked.
+
+**Found and fixed alongside it:** the same step's `@(az …) | Where-Object` idiom returns a
+bare **string** when exactly one item survives the filter, and `$x[0]` on a string is its
+first *character*. `layer-07-apps.yml`'s F20 grant step had carried this since Task 22:
+with the single database this estate actually has, `$dbNames[0]` evaluated to one letter,
+and the contained-user grant would have been aimed at a database of that name on every
+ordinary run. Both the new code and the F20 step now wrap the whole pipeline.
+
+**Preserved, and re-asserted by test:** the fail-closed property (no client ID ⇒ no
+external ingress, now asserted as the whole chain from the workflow's `GITHUB_ENV` write
+through `demo.bicepparam`, `isEntraClientIdConfigured()` and `ingressExternal`); no client
+secret anywhere; `excludedPaths` is `['/healthz']` and nothing else; `data-api` stays
+`ingressExternal: false`.
+
+**Not claimed:** nothing here has been deployed. The two new steps were exercised locally
+against a stubbed `az` for all of their outcomes — every ID resolved, one registration
+missing, a duplicate registration, a failing CLI call, a fresh registration, a
+registration with an unrelated URI already listed, a registration already carrying this
+URI, and an app with no client ID — and the workflow shape is asserted by
+`verification/tests/frontend-auth.Tests.ps1` (25 new assertions, mutation-tested).

@@ -134,60 +134,22 @@ jobs:
       MLS_FABRIC_SQL_ENDPOINT: ${{ vars.MLS_SQL_ENDPOINT }}
       MLS_FABRIC_DATABASE: ${{ vars.MLS_LAKEHOUSE_NAME || 'mls_operations' }}
       MLS_GITHUB_REPO: ${{ github.repository }}
-      # Entra application (client) IDs for the three human-facing apps' Easy
-      # Auth configs. NOT secrets (main.bicep's EASY AUTH block) — a client ID
-      # is a public identifier, the same trust class as AZURE_CLIENT_ID above.
+      # The three human-facing apps' Easy Auth client IDs (MLS_LAUNCH_OPS_CLIENT_ID,
+      # MLS_CONTROL_TOWER_CLIENT_ID, MLS_COMPLIANCE_CLIENT_ID) are deliberately
+      # NOT set here. They are RESOLVED FROM ENTRA by the "Resolve the Easy Auth
+      # client IDs" step below and written to GITHUB_ENV under exactly the names
+      # infra/bicep/apps/demo.bicepparam reads (F36). Declaring them at job level
+      # as well would put a job-level `env:` and a GITHUB_ENV write of the same
+      # name in the same job, and nothing here should depend on which of those
+      # two wins. The step reads the GitHub variables itself, as OPTIONAL
+      # overrides, from its own step-level `env:`.
       #
-      # An UNDEFINED GitHub variable expands to the EMPTY STRING here, not to
-      # nothing, so readEnvironmentVariable in demo.bicepparam sees a variable
-      # that IS set and never returns its 'unset' default (F26). The template
-      # fails closed on both spellings, and the step below refuses the deploy
-      # outright rather than shipping three apps nobody can reach (F25).
-      MLS_COMPLIANCE_CLIENT_ID: ${{ vars.MLS_COMPLIANCE_CLIENT_ID }}
-      MLS_LAUNCH_OPS_CLIENT_ID: ${{ vars.MLS_LAUNCH_OPS_CLIENT_ID }}
-      MLS_CONTROL_TOWER_CLIENT_ID: ${{ vars.MLS_CONTROL_TOWER_CLIENT_ID }}
+      # An UNDEFINED GitHub variable expands to the EMPTY STRING, not to nothing,
+      # so readEnvironmentVariable in demo.bicepparam sees a variable that IS set
+      # and never returns its 'unset' default (F26). main.bicep fails closed on
+      # both spellings: no client ID means INTERNAL ingress and no authConfig.
     steps:
       - uses: actions/checkout@v4
-
-      # F25/F26. The three dashboards are login-gated, and Easy Auth needs an
-      # Entra app registration per app (infra/entra/manifest.json, created at
-      # L3). Without a client ID main.bicep deploys that app INTERNAL rather
-      # than open to the internet — correct, but a demo nobody can reach is
-      # worse feedback than a refusal, so refuse here and say exactly what to
-      # set. Do NOT "fix" a failure here by removing authConfig: control-tower
-      # proxies /api/ straight to data-api, whose identity holds Security
-      # Reader at subscription scope (F25).
-      - name: Require an Entra client ID for every externally-reachable app
-        env:
-          MISSING_HINT: docs/runbooks/g0-bootstrap.md § C9 and docs/runbooks/layers/L03.md
-        run: |
-          set -euo pipefail
-          missing=()
-          for var in MLS_LAUNCH_OPS_CLIENT_ID MLS_CONTROL_TOWER_CLIENT_ID MLS_COMPLIANCE_CLIENT_ID; do
-            value="$(printenv "${var}" || true)"
-            if [ -z "${value}" ] || [ "${value}" = 'unset' ]; then
-              missing+=("${var}")
-            fi
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error title=Easy Auth client IDs missing::Not deploying. Unset: ${missing[*]}. See ${MISSING_HINT}."
-            {
-              echo "### L7 refused to deploy — Easy Auth is not configured"
-              echo
-              echo "Unset repository/environment variables: \`${missing[*]}\`"
-              echo
-              echo "Since F25 the launch-ops, control-tower and compliance dashboards are"
-              echo "**login-gated**: each needs the application (client) ID of its Entra app"
-              echo "registration (\`infra/entra/manifest.json\`, created at L3). These are"
-              echo "variables, not secrets — a client ID is a public identifier."
-              echo
-              echo "Set them and re-run. Never work around this by removing \`authConfig\`:"
-              echo "control-tower proxies \`/api/\` straight to \`data-api\`, whose identity holds"
-              echo "**Security Reader at subscription scope**."
-            } >> "${GITHUB_STEP_SUMMARY}"
-            exit 1
-          fi
-          echo 'All three Easy Auth client IDs are set.'
 
       - id: names
         uses: ./.github/actions/naming
@@ -221,6 +183,175 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # ---------------------------------------------------------------------
+      # F36 — the Easy Auth client IDs resolve themselves.
+      #
+      # F25 made all three dashboards login-gated and F26 made that gate real,
+      # but between them they left the estate UNDEPLOYABLE out of the box: the
+      # step that used to stand at the top of this job refused the entire L7
+      # deploy unless an adopter had hand-set MLS_LAUNCH_OPS_CLIENT_ID,
+      # MLS_CONTROL_TOWER_CLIENT_ID and MLS_COMPLIANCE_CLIENT_ID first. Secure,
+      # but not deployable — and those two were never actually in tension: L3
+      # (infra/entra/apply-entra.ps1) already CREATES all four app registrations
+      # from infra/entra/manifest.json, as this same identity, so the client IDs
+      # are discoverable rather than something a human has to copy out of the
+      # portal into a GitHub variable.
+      #
+      # So, per app: honour an explicitly-set variable when there is one
+      # (bring-your-own registration stays supported), otherwise look the
+      # registration up BY ITS MANIFEST DISPLAY NAME. The names are read from
+      # infra/entra/manifest.json and never written as string literals here —
+      # the company prefix is naming.bicep's to own (CLAUDE.md).
+      #
+      # THREE OUTCOMES, AND TWO OF THEM ARE NOT ERRORS:
+      #   * resolved   -> the app deploys EXTERNAL, behind an Entra sign-in.
+      #   * not found  -> NOT an error. main.bicep's ingressExternal is literally
+      #                   the same expression as "is a client ID configured", so
+      #                   the app still deploys — INTERNAL to the Container Apps
+      #                   environment, unreachable from the internet, with no
+      #                   authConfig to be missing. That is a documented state,
+      #                   not a failure, and this step says so loudly: a
+      #                   ::warning naming the apps, plus a step-summary block
+      #                   naming each one, its state, and the command that fixes
+      #                   it. A missing client ID can cost you a demo you cannot
+      #                   reach; it can never cost you an open dashboard.
+      #   * az failed, or MORE THAN ONE registration matched -> an ERROR, exit 1.
+      #     "the CLI was throttled" and "L3 has not run yet" must never look the
+      #     same — that conflation is F20's original defect and this repo has
+      #     fixed it twice — and gating a dashboard against the WRONG tenant
+      #     identity is worse than not publishing it, which is the same refusal
+      #     the F24 step below makes on an ambiguous identity match.
+      #
+      # Reading the registrations needs Application.ReadWrite.OwnedBy, which
+      # scripts/bootstrap/01-root-oidc.ps1 grants mls-github-deployer (reduced
+      # from .All by F8) and which covers exactly the apps this identity created.
+      # ---------------------------------------------------------------------
+      - name: Resolve the Easy Auth client IDs from their Entra app registrations (F36)
+        id: easy_auth
+        shell: pwsh
+        env:
+          # OPTIONAL OVERRIDES, not requirements. Set one to bring your own app
+          # registration; leave it unset and L3's is used. NOT secrets — an
+          # OAuth client ID is a public identifier, the same trust class as
+          # AZURE_CLIENT_ID (CLAUDE.md hard rule 5), and no client secret is
+          # configured for the Easy Auth provider anywhere.
+          MLS_LAUNCH_OPS_CLIENT_ID: ${{ vars.MLS_LAUNCH_OPS_CLIENT_ID }}
+          MLS_CONTROL_TOWER_CLIENT_ID: ${{ vars.MLS_CONTROL_TOWER_CLIENT_ID }}
+          MLS_COMPLIANCE_CLIENT_ID: ${{ vars.MLS_COMPLIANCE_CLIENT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # az failures do not throw in pwsh ($PSNativeCommandUseErrorActionPreference
+          # defaults to $false), so every call is checked explicitly - the same
+          # shape as the F20 and F24 grant steps further down this job.
+          function Assert-AzSucceeded {
+            param([Parameter(Mandatory)][string]$What)
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error title=Azure CLI call failed::$What returned exit code $LASTEXITCODE. This is NOT the same as 'the app registration does not exist yet' - it is a CLI, auth or Graph-permission failure, and no client ID could be resolved. mls-github-deployer holds Application.ReadWrite.OwnedBy, which can read the registrations it created at L3; if that consent is missing, set MLS_LAUNCH_OPS_CLIENT_ID / MLS_CONTROL_TOWER_CLIENT_ID / MLS_COMPLIANCE_CLIENT_ID on the demo environment as an override and re-run."
+              exit 1
+            }
+          }
+
+          $manifest = Get-Content -LiteralPath 'infra/entra/manifest.json' -Raw | ConvertFrom-Json
+
+          # appKey, not a display-name literal: the manifest owns the names.
+          $targets = @(
+            @{ Key = 'launch-ops'; Variable = 'MLS_LAUNCH_OPS_CLIENT_ID'; Output = 'launch-ops-app-id' }
+            @{ Key = 'control-tower'; Variable = 'MLS_CONTROL_TOWER_CLIENT_ID'; Output = 'control-tower-app-id' }
+            @{ Key = 'compliance'; Variable = 'MLS_COMPLIANCE_CLIENT_ID'; Output = 'compliance-app-id' }
+          )
+
+          $rows = [System.Collections.Generic.List[string]]::new()
+          $unpublished = [System.Collections.Generic.List[object]]::new()
+
+          foreach ($target in $targets) {
+            $declared = @($manifest.appRegistrations | Where-Object { $_.appKey -eq $target.Key })
+            if ($declared.Count -ne 1) {
+              Write-Host "::error title=Manifest does not declare exactly one app registration for '$($target.Key)'::infra/entra/manifest.json has $($declared.Count) appRegistrations entries with appKey '$($target.Key)'; expected exactly one. Fix the manifest - guessing which registration gates a dashboard is the failure this refuses to make."
+              exit 1
+            }
+            $displayName = [string]$declared[0].displayName
+
+            $clientId = ''
+            $state = ''
+            $override = [Environment]::GetEnvironmentVariable($target.Variable)
+            if ($override -and $override.Trim() -and $override.Trim() -ne 'unset') {
+              $clientId = $override.Trim()
+              $state = "supplied by the $($target.Variable) variable (override)"
+            }
+            else {
+              # --display-name filters server-side, but az has spelled that filter
+              # both 'eq' and 'startswith' across versions, so the exact name is
+              # re-asserted in the query: a registration merely PREFIXED with this
+              # name is a different app registration.
+              # The OUTER @() is load-bearing: `@(...) | Where-Object` hands back a
+              # bare STRING when exactly one item survives the filter, and $matched[0]
+              # on a string is its first CHARACTER, not the appId. One matching
+              # registration is the normal case, so without this the happy path
+              # gates every dashboard against a one-letter client ID.
+              $matched = @(
+                @(
+                  az ad app list --display-name $displayName --query "[?displayName=='$displayName'].appId" -o tsv
+                ) | Where-Object { $_ -and $_.Trim() }
+              )
+              Assert-AzSucceeded -What "az ad app list --display-name $displayName"
+
+              if ($matched.Count -gt 1) {
+                Write-Host "::error title=Ambiguous app registration::Found $($matched.Count) app registrations named '$displayName'. Refusing to gate a dashboard against an arbitrary one - the wrong client ID authenticates against the wrong tenant identity. Delete the duplicate, or set $($target.Variable) explicitly to the one you mean."
+                exit 1
+              }
+              if ($matched.Count -eq 1) {
+                $clientId = ([string]$matched[0]).Trim()
+                $state = 'resolved from Entra'
+              }
+              else {
+                $state = "NOT FOUND - no app registration named $displayName in this tenant"
+                $unpublished.Add([pscustomobject]@{ DisplayName = $displayName; Variable = $target.Variable })
+              }
+            }
+
+            if ($clientId) {
+              Write-Host "$displayName -> $clientId ($state)."
+              $rows.Add("| $displayName | $state | **external**, Entra sign-in required |")
+            }
+            else {
+              Write-Host "$displayName -> no client ID ($state)."
+              $rows.Add("| $displayName | $state | **internal only** - deployed, not publicly reachable |")
+            }
+
+            # Written under the exact names demo.bicepparam's readEnvironmentVariable
+            # calls read. An app with no client ID gets the EMPTY STRING, which
+            # main.bicep's isEntraClientIdConfigured() treats as not-configured
+            # exactly like the 'unset' sentinel (F26) - so it fails closed either way.
+            "$($target.Variable)=$clientId" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "$($target.Output)=$clientId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+          $summary = [System.Collections.Generic.List[string]]::new()
+          $summary.Add('### Easy Auth - which dashboards this run publishes')
+          $summary.Add('')
+          $summary.Add('| App registration | Client ID | Ingress |')
+          $summary.Add('|---|---|---|')
+          foreach ($row in $rows) { $summary.Add($row) }
+
+          if ($unpublished.Count -gt 0) {
+            $names = ($unpublished | ForEach-Object { $_.DisplayName }) -join ', '
+            $variables = ($unpublished | ForEach-Object { $_.Variable }) -join ', '
+            Write-Host "::warning title=Some dashboards are not publicly reachable::$($unpublished.Count) of $($targets.Count) Easy Auth client IDs could not be resolved ($names). Those apps still DEPLOY, but with internal ingress and no Easy Auth, so they are not reachable from the internet - that is the fail-closed behaviour, not a failure. Fix: run L3 (gh workflow run layer-03-entra.yml), which creates every app registration in infra/entra/manifest.json, then re-run this workflow. Or set $variables on the demo environment to bring your own registrations."
+            $summary.Add('')
+            $summary.Add("**$($unpublished.Count) of $($targets.Count) dashboards deployed INTERNAL to the Container Apps environment and are NOT reachable from the internet.** This is not an error: infra/bicep/apps/main.bicep ties each app's ingressExternal to the same expression as its Easy Auth config, so an app with no client ID is never published anonymously.")
+            $summary.Add('')
+            $summary.Add('Fix it with one command - L3 creates every app registration declared in infra/entra/manifest.json:')
+            $summary.Add('')
+            $summary.Add('```bash')
+            $summary.Add('gh workflow run layer-03-entra.yml')
+            $summary.Add('```')
+            $summary.Add('')
+            $summary.Add("Then re-run this workflow: it resolves the client IDs itself and registers each app's redirect URI. To bring your own registrations instead, set $variables on the demo environment (variables, not secrets).")
+          }
+
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       # ---------------------------------------------------------------------
       # V7.1's content-hash marker. The criterion binds "endpoint is up" to
@@ -475,9 +606,16 @@ jobs:
           # Every non-master database, not "| [0]". Picking the first would land
           # the grant on an arbitrary database the moment this estate ever holds
           # more than one, silently and with no way to tell from the log.
+          # The OUTER @() is load-bearing, and its absence was a live defect until
+          # F36: `@(...) | Where-Object` returns a bare STRING when exactly one
+          # item survives, and $dbNames[0] on a string is its first CHARACTER. The
+          # single-database case is the normal one, so the grant was being aimed at
+          # a one-letter database name on every ordinary run.
           $dbNames = @(
-            az sql db list --resource-group $env:RG_PLATFORM --server $serverName --query "[?name!='master'].name" -o tsv
-          ) | Where-Object { $_ -and $_.Trim() }
+            @(
+              az sql db list --resource-group $env:RG_PLATFORM --server $serverName --query "[?name!='master'].name" -o tsv
+            ) | Where-Object { $_ -and $_.Trim() }
+          )
           Assert-AzSucceeded -What 'az sql db list'
 
           if ($dbNames.Count -eq 0 -or -not $sqlFqdn) {
@@ -641,6 +779,119 @@ jobs:
             echo
             # shellcheck disable=SC2016  # backticks are markdown code-span syntax; no expansion wanted
             echo 'Apply it by hand: `infra/fabric/provision-workspace.ps1 -Token <fabric-token> -CapacityId <id> -DataApiPrincipalId <principalId>`'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+
+      # ---------------------------------------------------------------------
+      # F36, second half — the redirect-URI chicken-and-egg, closed here.
+      #
+      # Easy Auth's reply URL is https://<that app's own ingress FQDN>/.auth/login/aad/callback,
+      # and the FQDN does not exist until the container app is deployed. That is
+      # why docs/runbooks/layers/L03.md used to end with a manual "register the
+      # apps here, run L7, then add the redirect URIs by hand" — an adopter's
+      # first sign-in would otherwise fail AADSTS50011 (reply URL mismatch) on a
+      # correctly deployed estate. The apps have just deployed and their FQDNs
+      # are in l7-manifest.json, so this registers each one now.
+      #
+      # MERGE, NEVER OVERWRITE. `az ad app update --web-redirect-uris` REPLACES
+      # the whole list, so writing only the URI this run computed would silently
+      # drop every other one — including a still-working URI from a previous
+      # environment whose FQDN changed on a kill/rebuild, leaving a dashboard
+      # that 400s at login with nothing in the log to say why. Existing URIs are
+      # read first and kept, and a URI that is already present is a no-op this
+      # step says out loud rather than a redundant Graph write.
+      #
+      # Placement and failure posture are deliberately identical to the F20 and
+      # F24 steps above, and for the same two reasons: it runs AFTER the V7.1
+      # manifest is written and uploaded (those steps carry no always(), so a
+      # hard failure here would skip them and the Verifier would have no
+      # manifest), and it carries continue-on-error because `verify` needs
+      # `deploy` to SUCCEED — an idempotent remediation must never fail a
+      # deployment that otherwise worked. Failures are annotated and summarised
+      # rather than swallowed.
+      #
+      # An app whose client ID did not resolve is SKIPPED, not failed: it
+      # deployed with internal ingress and has no Easy Auth provider to give a
+      # reply URL to, and the step above has already said so loudly.
+      # ---------------------------------------------------------------------
+      - name: Register each dashboard's Easy Auth redirect URI now that its FQDN exists (F36)
+        id: redirect_uris
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          LAUNCH_OPS_APP_ID: ${{ steps.easy_auth.outputs.launch-ops-app-id }}
+          CONTROL_TOWER_APP_ID: ${{ steps.easy_auth.outputs.control-tower-app-id }}
+          COMPLIANCE_APP_ID: ${{ steps.easy_auth.outputs.compliance-app-id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Assert-AzSucceeded {
+            param([Parameter(Mandatory)][string]$What)
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error title=Azure CLI call failed::$What returned exit code $LASTEXITCODE. The apps deployed; only the Easy Auth redirect URI registration did not. Sign-in will fail with AADSTS50011 until each app registration lists https://<that app's fqdn>/.auth/login/aad/callback."
+              exit 1
+            }
+          }
+
+          # The deployment's own outputs, not values reconstructed from workflow
+          # variables: these are the FQDNs ARM actually assigned.
+          $outputs = Get-Content -LiteralPath 'l7-manifest.json' -Raw | ConvertFrom-Json
+
+          $targets = @(
+            @{ Name = 'launch-ops'; AppId = $env:LAUNCH_OPS_APP_ID; Fqdn = $outputs.launchOpsFqdn.value }
+            @{ Name = 'control-tower'; AppId = $env:CONTROL_TOWER_APP_ID; Fqdn = $outputs.controlTowerFqdn.value }
+            @{ Name = 'compliance'; AppId = $env:COMPLIANCE_APP_ID; Fqdn = $outputs.complianceFqdn.value }
+          )
+
+          foreach ($target in $targets) {
+            if ([string]::IsNullOrWhiteSpace($target.AppId)) {
+              Write-Host "$($target.Name): no Entra client ID resolved, so it deployed with internal ingress and has no Easy Auth provider to give a reply URL to. Skipping."
+              continue
+            }
+            if ([string]::IsNullOrWhiteSpace($target.Fqdn)) {
+              Write-Host "::warning title=No ingress FQDN for $($target.Name)::The L7 deployment outputs carried no FQDN for this app, so its Easy Auth redirect URI could not be registered."
+              continue
+            }
+
+            $redirectUri = "https://$($target.Fqdn)/.auth/login/aad/callback"
+
+            $existingJson = (az ad app show --id $target.AppId --query 'web.redirectUris' -o json) -join "`n"
+            Assert-AzSucceeded -What "az ad app show --id $($target.AppId)"
+
+            $existing = @()
+            if ($existingJson -and $existingJson.Trim() -and $existingJson.Trim() -ne 'null') {
+              $existing = @(@($existingJson | ConvertFrom-Json) | Where-Object { $_ -and ([string]$_).Trim() })
+            }
+
+            if ($existing -contains $redirectUri) {
+              Write-Host "$($target.Name): redirect URI already registered ($redirectUri). Nothing to do."
+              continue
+            }
+
+            # MERGE: everything already registered stays, this run only ADDS.
+            $merged = @($existing) + @($redirectUri)
+            az ad app update --id $target.AppId --web-redirect-uris $merged | Out-Null
+            Assert-AzSucceeded -What "az ad app update --id $($target.AppId)"
+            Write-Host "$($target.Name): registered $redirectUri (the app now lists $($merged.Count) redirect URI(s))."
+          }
+
+      # Surfaces the step above when it fails. continue-on-error keeps the job
+      # green on purpose, which also makes a failure easy to scroll past; this
+      # puts it in the run summary where the sponsor actually looks - the same
+      # companion the F20 and F24 steps carry.
+      - name: Report a failed redirect-URI registration
+        if: ${{ !inputs.dry_run && steps.redirect_uris.outcome == 'failure' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Easy Auth redirect URIs were not registered"
+            echo
+            echo "The apps deployed and this does not block the Verifier, but signing in to a dashboard will fail with **AADSTS50011** (reply URL mismatch) until each app registration lists its own callback URL."
+            echo
+            # shellcheck disable=SC2016  # backticks are markdown code-span syntax; no expansion wanted
+            echo 'Add it by hand, per app: `az ad app update --id <appId> --web-redirect-uris <every existing URI> https://<that app fqdn>/.auth/login/aad/callback` — list the EXISTING URIs too, because the flag replaces the whole list.'
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload L7 artifacts
