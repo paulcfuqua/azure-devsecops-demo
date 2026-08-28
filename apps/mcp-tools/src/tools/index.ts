@@ -233,7 +233,7 @@ const STATIC_TOOLS: Tool[] = [
       "compliance board renders (compliance/state/state-latest.json) — one source of truth, not " +
       "a second opinion that can drift from the board. Optionally filter by control id (e.g. " +
       '"3.5.3"), family (e.g. "3.1"), framework ("nist-800-171r2" for the 110-requirement ' +
-      'catalog, the default scope, or "nist-800-53r5" for four records — CM-6, CP-9, IR-4, SI-4 ' +
+      'catalog, or "nist-800-53r5" for four records — CM-6, CP-9, IR-4, SI-4 ' +
       "— the catalog has no requirement for) or status (COMPLIANT, PARTIAL, GAP, INCONCLUSIVE, " +
       "NOT_APPLICABLE, NOT_ASSESSED). Returns { controls, outOfCatalogControls, summary, notes }: " +
       "controls and outOfCatalogControls are separate arrays that are NEVER merged — an " +
@@ -272,7 +272,7 @@ const STATIC_TOOLS: Tool[] = [
           type: "string",
           enum: ["nist-800-171r2", "nist-800-53r5"],
           description:
-            "nist-800-171r2 scopes to the 110-requirement catalog (default when omitted); " +
+            "nist-800-171r2 scopes to the 110-requirement catalog; omitting it returns both, counted separately as matchCount and outOfCatalogMatchCount; " +
             "nist-800-53r5 scopes to the four out-of-catalog records (CM-6, CP-9, IR-4, SI-4).",
         },
         status: {

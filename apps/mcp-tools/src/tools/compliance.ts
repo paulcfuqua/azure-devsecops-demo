@@ -247,7 +247,10 @@ export interface ComplianceQueryResult {
   commit: string;
   commitShort: string;
   /** Rows in `controls` + `outOfCatalogControls` combined. */
+  /** Catalog requirements matching the query. Never includes out-of-catalog rows. */
   matchCount: number;
+  /** Out-of-catalog (800-53-keyed) records matching. Deliberately a separate count. */
+  outOfCatalogMatchCount: number;
   /** Matches from the 110-requirement catalog. */
   controls: ComplianceControlAnswer[];
   /** Matches assessed against nist-800-53r5, never merged with `controls`
@@ -425,7 +428,15 @@ export function queryComplianceState(
     collectedAt: state.collectedAt,
     commit: state.commit,
     commitShort: state.commitShort,
-    matchCount: controls.length + outOfCatalogControls.length,
+    // Split, never summed. A single matchCount conflated the 110-requirement
+    // catalog with the four 800-53 records that have no 800-171 requirement at
+    // all - so a caller asking for PARTIAL controls was handed 16 when the
+    // 800-171 answer is 12, and would report "16 of the 110". That is
+    // CM-6/CP-9/IR-4/SI-4 reaching an 800-171 answer, which is the one crossing
+    // this platform forbids. The two counts stay apart so no caller can add them
+    // by accident.
+    matchCount: controls.length,
+    outOfCatalogMatchCount: outOfCatalogControls.length,
     controls,
     outOfCatalogControls,
     // Unfiltered, always the whole estate — a narrow question must never

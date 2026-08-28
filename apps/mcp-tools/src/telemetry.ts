@@ -298,7 +298,7 @@ export async function initTelemetry(
           "service.version": TELEMETRY_VERSION,
         },
       },
-      // The five tools are the story; HTTP server auto-instrumentation would
+      // The six tools are the story; HTTP server auto-instrumentation would
       // add a duplicate span per POST /mcp for no extra information.
       instrumentationOptions: { http: { enabled: true } },
     });

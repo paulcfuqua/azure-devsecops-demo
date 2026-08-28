@@ -129,6 +129,8 @@ jobs:
     # The only job with a write token, and the only job that installs nothing.
     permissions:
       contents: write
+      # The PR fallback below needs this; the direct-push path does not.
+      pull-requests: write
     # workflow_dispatch can be fired from any ref; the state artifact belongs on the
     # default branch and nowhere else.
     if: ${{ github.ref == 'refs/heads/main' }}
@@ -163,10 +165,35 @@ jobs:
           fi
           git commit -m "verify(compliance): state at ${MLS_COMMIT}" \
             -m 'Emitted by .github/workflows/compliance.yml. Counts by status and provenance; deliberately no blended percentage.'
-          # Serialised by the workflow concurrency group, but a push can still lose a
-          # race with a human merge landing between checkout and push. Rebase once and
-          # retry rather than failing the nightly run over it.
-          git push || {
-            git pull --rebase origin main
-            git push
-          }
+          # Push direct to main, with a branch+PR fallback.
+          #
+          # This repo's own L1 target is branch protection with required checks on main
+          # (.github/README.md), and repo-static currently reports that very control as a
+          # GAP at 3.4.5. The day it lands, a direct push from GITHUB_TOKEN is rejected -
+          # the rebase would no-op, the retry would fail, and the nightly run would be red
+          # every night. Every other write-token workflow here (self-heal.yml) lands
+          # changes by PR and auto-merge for exactly that reason.
+          #
+          # So: try the direct push, because it is cheaper and makes no PR noise while
+          # main is unprotected. If it is refused, fall back to a branch and a PR rather
+          # than failing. Either way the artifact lands; only the route changes.
+          #
+          # Serialised by the workflow concurrency group, but a push can still lose a race
+          # with a human merge landing between checkout and push - hence the rebase.
+          if git push; then
+            echo 'Artifact pushed directly to main.'
+            exit 0
+          fi
+
+          echo 'Direct push refused; rebasing and retrying once.'
+          git pull --rebase origin main
+          if git push; then
+            echo 'Artifact pushed to main after rebase.'
+            exit 0
+          fi
+
+          echo '::notice title=Falling back to a pull request::Direct push to main was refused (branch protection is the expected cause). Opening a PR instead.'
+          branch="compliance-state/${MLS_COMMIT}"
+          git switch -c "${branch}"
+          git push --set-upstream origin "${branch}"
+          gh pr create --base main --head "${branch}"             --title "verify(compliance): state at ${MLS_COMMIT}"             --body 'Automated compliance state artifact. Counts by status and provenance; deliberately no blended percentage.'

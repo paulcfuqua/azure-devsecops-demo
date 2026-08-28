@@ -164,7 +164,19 @@ export function ControlDetail({ control, state, catalog }: ControlDetailProps): 
         <Title3 as="h3">Status basis</Title3>
         {row.statusBasis.length === 0 ? (
           <Text size={200} className={styles.recordMeta}>
-            Nothing was authored or collected for this control.
+            {/*
+              Branch on what was actually collected. The flat "nothing was
+              collected" wording was false for every control with supporting
+              evidence but no status basis - 3.4.5 and 3.11.2 today, where the one
+              collected record is a FAIL - and it contradicted this same panel's
+              own `observed` line a few rows above, which the emitter deliberately
+              words "...evidence record(s) were collected for it and are carried in
+              supportingEvidence as context only" precisely to avoid saying
+              nothing was collected. One screenshot must not make two claims.
+            */}
+            {supporting.length === 0
+              ? "Nothing was authored or collected for this control."
+              : "Nothing was authored that could drive a status. Evidence was collected and is listed under Supporting evidence below, as context only."}
           </Text>
         ) : (
           row.statusBasis.map((record, i) => <StatusBasisRow key={i} record={record} />)

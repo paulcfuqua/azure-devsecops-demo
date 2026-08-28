@@ -10,7 +10,7 @@
  * design: Copilot Studio calls this server from outside Azure over the public
  * internet, so an internal-only ingress would make showpiece #1 impossible.
  * That means the endpoint is reachable by anyone who finds the FQDN, and the
- * five tools behind it read real tenant data — Log Analytics, Defender secure
+ * six tools behind it read real tenant data — Log Analytics, Defender secure
  * score, Cost Management, GitHub security alerts, and the lakehouse.
  *
  * `query_lakehouse_sql` is already gated read-only (single statement, SELECT or
@@ -153,7 +153,7 @@ export function loadInboundAuth(
     throw new Error(
       "MCP_AUTH_TOKEN is required.\n" +
         "  This server runs with external ingress in every deployed configuration, so\n" +
-        "  without it the five tools are callable by anyone who finds the URL, and every\n" +
+        "  without it the six tools are callable by anyone who finds the URL, and every\n" +
         "  call bills the subscription.\n" +
         "  Set MCP_AUTH_TOKEN (the platform injects it from Key Vault), or set\n" +
         "  MCP_ALLOW_UNAUTHENTICATED=true if an open endpoint is genuinely what you intend.",

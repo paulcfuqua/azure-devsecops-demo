@@ -12,7 +12,7 @@
  *
  * ONE `TokenProvider` IS SHARED BY ALL FOUR TOKEN-AUTHENTICATED AZURE ADAPTERS.
  * That is deliberate: `DefaultAzureCredential` is not free to construct or
- * call, tokens are per *scope* and live ~24h, and five tools answering one
+ * call, tokens are per *scope* and live ~24h, and six tools answering one
  * agent turn must not become five token acquisitions.
  *
  * `credential` and `executor` are injectable for tests. There is no code path

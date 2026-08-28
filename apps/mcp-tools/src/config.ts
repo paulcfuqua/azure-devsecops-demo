@@ -4,7 +4,7 @@
  * There is no LLM here and therefore no model, no API key and no prompt: this
  * process is an MCP server. The Copilot Studio agent owns all orchestration
  * (amendment 2026-08-24). The knobs are the listen port, which adapter set the
- * five tools run against, and — on the cloud set — where each upstream lives.
+ * six tools run against, and — on the cloud set — where each upstream lives.
  *
  * ── Tenant activation is CONFIGURATION, not development ──────────────────────
  * `MLS_TOOL_BACKENDS=cloud` used to throw "not wired yet". It is now real: the
