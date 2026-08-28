@@ -1,5 +1,5 @@
 /**
- * V8.2 — tool allowlist enforcement. Exactly five tools are advertised over
+ * V8.2 — tool allowlist enforcement. Exactly six tools are advertised over
  * MCP, and any other tool name is refused without execution.
  *
  * These assertions run against the real MCP server through an in-memory
@@ -22,6 +22,7 @@ const EXPECTED_NAMES = [
   "get_cost_series",
   "get_defender_posture",
   "get_github_security",
+  "query_compliance",
   "query_lakehouse_sql",
   "query_log_analytics",
 ];
@@ -36,10 +37,10 @@ async function connectInMemory(): Promise<Client> {
 }
 
 describe("tool allowlist (V8.2)", () => {
-  it("declares exactly the five master-plan tools", () => {
+  it("declares exactly the six master-plan tools", () => {
     expect(toolDefinitions.map((t) => t.name).sort()).toEqual(EXPECTED_NAMES);
-    expect(toolDefinitions).toHaveLength(5);
-    expect(ALLOWED_TOOL_NAMES).toHaveLength(5);
+    expect(toolDefinitions).toHaveLength(6);
+    expect(ALLOWED_TOOL_NAMES).toHaveLength(6);
   });
 
   it("isAllowedTool rejects unknown names", () => {
@@ -54,11 +55,11 @@ describe("tool allowlist (V8.2)", () => {
     await expect(registry.execute("run_shell", {})).rejects.toThrow(/allowlist/);
   });
 
-  it("tools/list advertises five tools with agent-facing descriptions and object schemas", async () => {
+  it("tools/list advertises six tools with agent-facing descriptions and object schemas", async () => {
     const client = await connectInMemory();
     const { tools } = await client.listTools();
 
-    expect(tools).toHaveLength(5);
+    expect(tools).toHaveLength(6);
     expect(tools.map((t) => t.name).sort()).toEqual(EXPECTED_NAMES);
     for (const tool of tools) {
       // The description is what the agent's orchestrator reasons over — an

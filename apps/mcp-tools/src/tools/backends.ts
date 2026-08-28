@@ -28,6 +28,7 @@ import path from "node:path";
 import { fixturesDir } from "../config.js";
 import { queryLakehouse, type LakehouseQueryResult } from "../data/lakehouse.js";
 import type { SqlDialect } from "./sql-dialect.js";
+import { ComplianceStateBackend, type ComplianceBackend } from "./compliance.js";
 
 function readFixture(name: string): unknown {
   const p = path.join(fixturesDir, name);
@@ -217,6 +218,21 @@ export { LiveGithubSecurityBackend } from "./cloud/github-security.js";
 export { AzureDefenderPostureBackend } from "./cloud/defender-posture.js";
 export { AzureCostSeriesBackend } from "./cloud/cost-series.js";
 
+/*
+ * query_compliance has no cloud/local split (see compliance.ts): it always
+ * reads the same bundled, committed state artifact, so ComplianceStateBackend
+ * is re-exported here rather than living under ./cloud/.
+ */
+export {
+  ComplianceStateBackend,
+  loadComplianceState,
+  queryComplianceState,
+  type ComplianceBackend,
+  type ComplianceQueryParams,
+  type ComplianceQueryResult,
+  type ComplianceState,
+} from "./compliance.js";
+
 /* ------------------------------------------------------------------ */
 /* Backend sets                                                        */
 /* ------------------------------------------------------------------ */
@@ -228,6 +244,7 @@ export interface Backends {
   githubSecurity: GithubSecurityBackend;
   defenderPosture: DefenderPostureBackend;
   costSeries: CostSeriesBackend;
+  compliance: ComplianceBackend;
 }
 
 /** Phase P default: all-local backends. */
@@ -238,5 +255,6 @@ export function createLocalBackends(): Backends {
     githubSecurity: new FixtureGithubSecurityBackend(),
     defenderPosture: new FixtureDefenderPostureBackend(),
     costSeries: new LocalCostSeriesBackend(),
+    compliance: new ComplianceStateBackend(),
   };
 }

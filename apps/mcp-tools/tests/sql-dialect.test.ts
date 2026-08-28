@@ -84,7 +84,7 @@ describe("the advertised dialect follows the active backend", () => {
     }
   });
 
-  it("the four non-SQL tool descriptions are byte-identical across dialects", () => {
+  it("the five non-SQL tool descriptions are byte-identical across dialects", () => {
     const sqlite = buildToolDefinitions("sqlite").filter((t) => t.name !== "query_lakehouse_sql");
     const tsql = buildToolDefinitions("tsql").filter((t) => t.name !== "query_lakehouse_sql");
     expect(tsql).toEqual(sqlite);
@@ -97,13 +97,14 @@ describe("the advertised dialect follows the active backend", () => {
       .toContain("strftime");
   });
 
-  it("both dialects still advertise exactly the five allowlisted tools", () => {
+  it("both dialects still advertise exactly the six allowlisted tools", () => {
     for (const dialect of ["sqlite", "tsql"] as const) {
       const names = buildToolDefinitions(dialect).map((t) => t.name).sort();
       expect(names).toEqual([
         "get_cost_series",
         "get_defender_posture",
         "get_github_security",
+        "query_compliance",
         "query_lakehouse_sql",
         "query_log_analytics",
       ]);

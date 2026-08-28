@@ -60,7 +60,7 @@ describe("MCP over Streamable HTTP", () => {
     expect(await res.json()).toEqual({
       ok: true,
       mode: "local",
-      tools: 5,
+      tools: 6,
       transport: "streamable-http",
       endpoint: "/mcp",
       sqlDialect: "sqlite",
@@ -77,13 +77,14 @@ describe("MCP over Streamable HTTP", () => {
     });
   });
 
-  it("lists exactly five tools", async () => {
+  it("lists exactly six tools", async () => {
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(5);
+    expect(tools).toHaveLength(6);
     expect(tools.map((t) => t.name).sort()).toEqual([
       "get_cost_series",
       "get_defender_posture",
       "get_github_security",
+      "query_compliance",
       "query_lakehouse_sql",
       "query_log_analytics",
     ]);
@@ -139,6 +140,20 @@ describe("MCP over Streamable HTTP", () => {
     const payload = payloadOf(result);
     expect(payload.secure_score.name).toBe("ascScore");
     expect(payload.controls.value.length).toBeGreaterThan(0);
+  });
+
+  it("query_compliance answers from the real committed state artifact", async () => {
+    const result = await client.callTool({
+      name: "query_compliance",
+      arguments: { control: "3.1.1" },
+    });
+    expect(result.isError).toBeFalsy();
+
+    const payload = payloadOf(result);
+    expect(payload.controls[0].control).toBe("3.1.1");
+    // Whole-estate counts ride along on every answer — see compliance-tool.test.ts
+    // for the full honesty-rule coverage, including the no-percentage checks.
+    expect(payload.summary.totalRequirements).toBe(110);
   });
 
   it("GET /mcp is 405 — the endpoint is stateless and POST-only", async () => {

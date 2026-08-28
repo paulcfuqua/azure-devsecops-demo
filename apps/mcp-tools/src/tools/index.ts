@@ -1,7 +1,8 @@
 /**
- * Tool registry — EXACTLY five tools are exposed over MCP, and the server
+ * Tool registry — EXACTLY six tools are exposed over MCP, and the server
  * refuses any tools/call whose name is not on this allowlist (master plan L8 /
- * audit V8.2). Do not add tools here without a master-plan change.
+ * audit V8.2). Do not add tools here without a master-plan change. (Task 14
+ * added the sixth, query_compliance, alongside the original five.)
  *
  * THESE DESCRIPTIONS ARE AGENT-FACING SURFACE AREA. The Copilot Studio agent's
  * orchestrator reads nothing else about these tools: name, description and
@@ -22,7 +23,7 @@
  * See src/tools/sql-dialect.ts for the full reasoning.
  */
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { Backends, CostSeriesParams } from "./backends.js";
+import type { Backends, ComplianceQueryParams, CostSeriesParams } from "./backends.js";
 import { DIALECTS, MAX_RESULT_ROWS, type DialectProfile, type SqlDialect } from "./sql-dialect.js";
 
 export const ALLOWED_TOOL_NAMES = [
@@ -31,6 +32,7 @@ export const ALLOWED_TOOL_NAMES = [
   "get_github_security",
   "get_defender_posture",
   "get_cost_series",
+  "query_compliance",
 ] as const;
 
 export type AllowedToolName = (typeof ALLOWED_TOOL_NAMES)[number];
@@ -99,7 +101,7 @@ function lakehouseSqlTool(profile: DialectProfile): Tool {
   };
 }
 
-/** The four tools whose description does not vary with the SQL dialect. */
+/** The five tools whose description does not vary with the SQL dialect. */
 const STATIC_TOOLS: Tool[] = [
   {
     name: "query_log_analytics",
@@ -223,10 +225,72 @@ const STATIC_TOOLS: Tool[] = [
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
+  {
+    name: "query_compliance",
+    title: "Query NIST SP 800-171 compliance state",
+    description:
+      "Answer NIST SP 800-171 compliance questions from the same committed state artifact the " +
+      "compliance board renders (compliance/state/state-latest.json) — one source of truth, not " +
+      "a second opinion that can drift from the board. Optionally filter by control id (e.g. " +
+      '"3.5.3"), family (e.g. "3.1"), framework ("nist-800-171r2" for the 110-requirement ' +
+      'catalog, the default scope, or "nist-800-53r5" for four records — CM-6, CP-9, IR-4, SI-4 ' +
+      "— the catalog has no requirement for) or status (COMPLIANT, PARTIAL, GAP, INCONCLUSIVE, " +
+      "NOT_APPLICABLE, NOT_ASSESSED). Returns { controls, outOfCatalogControls, summary, notes }: " +
+      "controls and outOfCatalogControls are separate arrays that are NEVER merged — an " +
+      "outOfCatalogControls record's status must never be reported as the answer for a " +
+      "requirement it is mapped to for orientation only (its own requirementsMappingToThisControl " +
+      'field says so; e.g. CP-9\'s status is never the answer to a question about 3.8.9, and a ' +
+      'query for control "3.8.9" never returns CP-9). summary carries the WHOLE estate\'s counts ' +
+      "regardless of any filter above, so a narrow question never hides the wider picture. RULES " +
+      "THIS TOOL AND ITS CALLER MUST BOTH FOLLOW WHEN ANSWERING: never compute or state a " +
+      "percentage, ratio or score from any of this — this platform deliberately reports counts " +
+      "only; if asked for a percentage, say plainly that it is not computed, and why, then give " +
+      "the counts from summary instead. Read summary.byProvenanceAndStatus, never a bare " +
+      "byProvenance total: 'machine-verified' includes a criterion a machine explicitly declined " +
+      "to run, and only status COMPLIANT means verified-and-passing. Each control's registerStatus " +
+      'is the raw word a human wrote (e.g. "CLOSED", meaning only "no known open finding") and is ' +
+      "never the same claim as its derived status field — CLOSED is rendered PARTIAL here and is " +
+      "never COMPLIANT. recommendation is authored text or null — never invent or extrapolate one " +
+      "when it is null. Every record describes what the repository declares, not what is " +
+      "deployed: nothing in this estate has been deployed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        control: {
+          type: "string",
+          description:
+            'Exact control id, e.g. "3.5.3" (NIST SP 800-171), or an out-of-catalog id assessed ' +
+            "only against NIST SP 800-53: CM-6, CP-9, IR-4, SI-4.",
+        },
+        family: {
+          type: "string",
+          description:
+            'Exact family id, e.g. "3.1" (800-171) or a 800-53 family abbreviation for an ' +
+            'out-of-catalog record, e.g. "CP".',
+        },
+        framework: {
+          type: "string",
+          enum: ["nist-800-171r2", "nist-800-53r5"],
+          description:
+            "nist-800-171r2 scopes to the 110-requirement catalog (default when omitted); " +
+            "nist-800-53r5 scopes to the four out-of-catalog records (CM-6, CP-9, IR-4, SI-4).",
+        },
+        status: {
+          type: "string",
+          enum: ["COMPLIANT", "PARTIAL", "GAP", "INCONCLUSIVE", "NOT_APPLICABLE", "NOT_ASSESSED"],
+          description:
+            "One of the six derived statuses. Never the register's own GAP/CLOSED authoring " +
+            "vocabulary — CLOSED is rendered PARTIAL here.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
 ];
 
 /**
- * The five MCP tool definitions for a given SQL dialect. Order is stable and
+ * The six MCP tool definitions for a given SQL dialect. Order is stable and
  * `query_lakehouse_sql` is first — `tools/list` order is what an orchestrator
  * sees first, and the lakehouse tool answers most questions.
  */
@@ -253,7 +317,7 @@ for (const dialect of Object.keys(DIALECTS) as SqlDialect[]) {
 
 /**
  * How many rows a tool result carries, for the `mls.tool.row_count` span
- * attribute. Shape-aware because the five tools return four different envelopes;
+ * attribute. Shape-aware because the six tools return five different envelopes;
  * returns undefined where "rows" is not a meaningful concept.
  *
  * SAFETY: this reads only array LENGTHS. No cell value, no column name and no
@@ -280,6 +344,11 @@ export function countRows(name: string, payload: unknown): number | undefined {
       return Array.isArray(p?.controls?.value) ? p.controls.value.length : undefined;
     case "get_cost_series":
       return Array.isArray(p?.properties?.rows) ? p.properties.rows.length : undefined;
+    case "query_compliance":
+      return (
+        (Array.isArray(p?.controls) ? p.controls.length : 0) +
+        (Array.isArray(p?.outOfCatalogControls) ? p.outOfCatalogControls.length : 0)
+      );
     default:
       return undefined;
   }
@@ -295,7 +364,7 @@ export class ToolRegistry {
     this.cachedDefinitions = buildToolDefinitions(this.dialect);
   }
 
-  /** What `tools/list` returns: five tools, described for the ACTIVE backend. */
+  /** What `tools/list` returns: six tools, described for the ACTIVE backend. */
   get definitions(): Tool[] {
     return this.cachedDefinitions;
   }
@@ -323,6 +392,8 @@ export class ToolRegistry {
         return this.backends.defenderPosture.getPosture();
       case "get_cost_series":
         return this.backends.costSeries.getSeries(args as CostSeriesParams);
+      case "query_compliance":
+        return this.backends.compliance.query(args as ComplianceQueryParams);
       default:
         throw new Error(`Tool "${name}" is not on the allowlist`);
     }

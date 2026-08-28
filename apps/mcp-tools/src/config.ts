@@ -44,6 +44,16 @@ export const generatedDataDir =
 export const fixturesDir = path.join(packageRoot, "fixtures");
 
 /**
+ * Task 8's committed compliance state artifact — the file query_compliance
+ * answers from, baked into the image next to `fixtures/` (see Dockerfile).
+ * Same path in every backend mode: query_compliance has no cloud/local split,
+ * it always reads this bundled, read-only, offline artifact.
+ */
+export const complianceStatePath =
+  process.env.MLS_COMPLIANCE_STATE_PATH ??
+  path.join(repoRoot, "compliance", "state", "state-latest.json");
+
+/**
  * Which adapter set the tools execute against.
  *   local — sql.js over data/generated + committed fixtures (Phase P, laptop).
  *   cloud — Fabric SQL analytics endpoint / Log Analytics / GitHub / Defender /

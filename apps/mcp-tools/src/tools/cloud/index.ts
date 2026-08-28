@@ -1,16 +1,19 @@
 /**
- * The cloud backend set — five adapters, one managed identity, one factory.
+ * The cloud backend set — five Azure-backed adapters plus the compliance
+ * reader, one managed identity, one factory.
  *
  * This is the whole of "tenant activation is configuration, not development":
  * `MLS_TOOL_BACKENDS=cloud` plus the six environment variables `loadCloudConfig`
- * validates, and the same five tools answer from Fabric, Azure Monitor, GitHub,
+ * validates, and five of the six tools answer from Fabric, Azure Monitor, GitHub,
  * Defender and Cost Management instead of from CSVs and fixtures. Nothing above
  * this file changes — same tool names, same JSON Schemas, same response shapes.
+ * `query_compliance` is the sixth: it has no tenant to switch to, so it reads
+ * the same bundled state artifact here as it does locally (see compliance.ts).
  *
- * ONE `TokenProvider` IS SHARED BY ALL FOUR AZURE ADAPTERS. That is deliberate:
- * `DefaultAzureCredential` is not free to construct or call, tokens are per
- * *scope* and live ~24h, and five tools answering one agent turn must not
- * become five token acquisitions.
+ * ONE `TokenProvider` IS SHARED BY ALL FOUR TOKEN-AUTHENTICATED AZURE ADAPTERS.
+ * That is deliberate: `DefaultAzureCredential` is not free to construct or
+ * call, tokens are per *scope* and live ~24h, and five tools answering one
+ * agent turn must not become five token acquisitions.
  *
  * `credential` and `executor` are injectable for tests. There is no code path
  * here that reaches the network without one of them being supplied or
@@ -20,6 +23,7 @@
 import type { CloudConfig } from "../../config.js";
 import { createDefaultCredential, TokenProvider, type TokenCredentialLike } from "../auth.js";
 import type { Backends } from "../backends.js";
+import { ComplianceStateBackend } from "../compliance.js";
 import type { FetchLike, RetryPolicy } from "../http.js";
 import { AzureCostSeriesBackend } from "./cost-series.js";
 import { AzureDefenderPostureBackend } from "./defender-posture.js";
@@ -86,5 +90,8 @@ export async function createCloudBackends(
       ...(config.armEndpoint ? { armEndpoint: config.armEndpoint } : {}),
       ...shared,
     }),
+    // query_compliance has no cloud/local split — it always reads the same
+    // bundled, committed state artifact regardless of MLS_TOOL_BACKENDS.
+    compliance: new ComplianceStateBackend(),
   };
 }

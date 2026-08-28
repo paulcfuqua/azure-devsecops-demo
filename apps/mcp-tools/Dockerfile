@@ -39,6 +39,12 @@ COPY --from=build /repo/apps/mcp-tools/dist ./dist
 COPY apps/mcp-tools/package.json ./package.json
 COPY apps/mcp-tools/fixtures ./fixtures
 
+# Task 8's committed compliance state artifact — query_compliance's whole data
+# source, read-only and offline in every mode (config.ts's complianceStatePath
+# resolves to repoRoot/compliance/state/state-latest.json, and repoRoot is
+# this WORKDIR's grandparent, /repo, in this image).
+COPY compliance/state/state-latest.json /repo/compliance/state/state-latest.json
+
 # Local lakehouse data (data/generated) is NOT baked in — it is gitignored
 # generator output. Locally, mount it and set MLS_DATA_DIR; at L5-L8 the
 # lakehouse adapter points at the Fabric SQL analytics endpoint instead.

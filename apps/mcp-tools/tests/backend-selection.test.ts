@@ -199,7 +199,7 @@ describe("MLS_TOOL_BACKENDS=cloud is real", () => {
   });
 });
 
-describe("createCloudBackends wires all five cloud adapters", () => {
+describe("createCloudBackends wires all five cloud adapters (plus the compliance reader)", () => {
   it("selects the cloud implementation for every tool", async () => {
     const backends = await cloudBackends(loadCloudConfig(FULL_ENV));
     expect(backends.lakehouseSql.constructor.name).toBe("FabricLakehouseSqlBackend");
@@ -207,6 +207,8 @@ describe("createCloudBackends wires all five cloud adapters", () => {
     expect(backends.githubSecurity.constructor.name).toBe("LiveGithubSecurityBackend");
     expect(backends.defenderPosture.constructor.name).toBe("AzureDefenderPostureBackend");
     expect(backends.costSeries.constructor.name).toBe("AzureCostSeriesBackend");
+    // query_compliance has no cloud/local split -- it's the same reader either way.
+    expect(backends.compliance.constructor.name).toBe("ComplianceStateBackend");
   });
 
   it("switches the declared SQL dialect to T-SQL", async () => {
@@ -271,7 +273,7 @@ describe("/healthz makes the selection observable", () => {
       get_defender_posture: "AzureDefenderPostureBackend",
       get_cost_series: "AzureCostSeriesBackend",
     });
-    expect(body.tools).toBe(5);
+    expect(body.tools).toBe(6);
   });
 
   it("never echoes a token, a connection string or a workspace id", async () => {
@@ -299,7 +301,7 @@ describe("cloud mode end to end over MCP", () => {
     );
     try {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(5);
+      expect(tools).toHaveLength(6);
       const sqlTool = tools.find((t) => t.name === "query_lakehouse_sql")!;
       expect(sqlTool.description).toContain("DATEPART(weekday, actual_date)");
       expect(sqlTool.description).toContain("SET DATEFIRST 7");

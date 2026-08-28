@@ -1,5 +1,5 @@
 /**
- * The MCP server itself: five tools over the Model Context Protocol.
+ * The MCP server itself: six tools over the Model Context Protocol.
  *
  * The Copilot Studio agent attaches to this server as a tool source; it — not
  * this process — decides which tool to call and how to render the answer
@@ -34,9 +34,11 @@ export const SERVER_INSTRUCTIONS =
   "launches, fleet, supply chain, spend history and security findings by running SQL against " +
   "the operations lakehouse; query_log_analytics covers live platform telemetry; " +
   "get_github_security, get_defender_posture and get_cost_series return current security and " +
-  "cost state. Every tool is read-only and returns JSON data — no prose and no UI. Prefer one " +
-  "aggregate SQL query over many small calls, and cite the numbers the tools return rather " +
-  "than estimating.";
+  "cost state; query_compliance answers NIST SP 800-171 compliance questions from the same " +
+  "artifact the compliance board renders. Every tool is read-only and returns JSON data — no " +
+  "prose and no UI. Prefer one aggregate SQL query over many small calls, and cite the numbers " +
+  "the tools return rather than estimating. query_compliance never returns a percentage, ratio " +
+  "or score — report the counts it returns, and say so explicitly if asked for one.";
 
 /** Serialise an adapter result as an MCP tool result (data only). */
 function dataResult(payload: unknown): CallToolResult {
@@ -83,7 +85,7 @@ export function createMcpServer(
     // a span is opened — an unknown name is not a tool call to measure.
     if (!isAllowedTool(name)) {
       return errorResult(
-        `Tool "${name}" is not on the allowlist. This server exposes exactly five tools: ` +
+        `Tool "${name}" is not on the allowlist. This server exposes exactly six tools: ` +
           `${registry.definitions.map((t) => t.name).join(", ")}.`,
       );
     }
