@@ -62,18 +62,89 @@ BeforeAll {
     $script:LawRoleModulePath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'bicep', 'apps', 'modules', 'log-analytics-reader-role.bicep'
     $script:Layer07Path = Join-Path -Path $script:RepoRoot -ChildPath '.github' -AdditionalChildPath 'workflows', 'layer-07-apps.yml'
     $script:Layer07 = Get-Content -LiteralPath $script:Layer07Path -Raw
+
+    # COMMENT-STRIPPED copies of every Bicep file these assertions read (F27).
+    # Every occurrence of the strings 'Security Reader', 'Log Analytics Reader'
+    # and 'Cost Management Reader' in main.bicep is inside a // comment or an
+    # @description(); ZERO are executable Bicep, because the real assignments
+    # carry only GUIDs. The tests below used to match those strings, so
+    # changing a grant to Owner left the comment reading "Security Reader" and
+    # the suite green. Roles are asserted by role definition GUID, in code.
+    $script:StrippedBicep = @{}
+    foreach ($entry in @(
+            @{ Key = 'main'; Path = $script:MainBicepPath },
+            @{ Key = 'workloadRole'; Path = $script:WorkloadRoleModulePath },
+            @{ Key = 'lawRole'; Path = $script:LawRoleModulePath })) {
+        $raw = Get-Content -LiteralPath $entry.Path -Raw
+        $script:StrippedBicep[$entry.Key] = (
+            ($raw -split "`n") |
+                Where-Object { $_ -notmatch '^\s*@description\(' } |
+                ForEach-Object { $_ -replace '//.*$', '' }
+        ) -join "`n"
+    }
+
+    # The built-in role definition GUIDs the grants above must carry. These are
+    # Azure-wide constants (learn.microsoft.com/azure/role-based-access-control/
+    # built-in-roles); a wrong one is a different role, which is the whole point
+    # of asserting them rather than a comment.
+    $script:RoleGuid = [ordered]@{
+        'Security Reader'        = '39bc4728-0917-49c7-9d2c-d95423bc2eb4'
+        'Cost Management Reader' = '72fafb9e-0641-4937-9268-a91bfd8191a3'
+        'Log Analytics Reader'   = '73c42c96-874c-492b-b04d-ab87d138a893'
+    }
+    # Roles nothing in this layer may ever grant a workload identity. Owner and
+    # Contributor are the two that would make F13's least-privilege claim false
+    # while every surrounding comment still read correctly.
+    $script:ForbiddenRoleGuid = [ordered]@{
+        'Owner'                    = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
+        'Contributor'              = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+        'User Access Administrator' = '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9'
+    }
 }
 
 Describe 'workload identities have their grants expressed in code' {
-    It 'declares a role assignment for every documented grant this layer can make' {
-        foreach ($role in 'Log Analytics Reader', 'Security Reader', 'Cost Management Reader') {
-            $script:MainBicep | Should -Match ([regex]::Escape($role))
+    It 'carries the role definition GUID of every documented grant, in executable Bicep' {
+        # Security Reader and Cost Management Reader are passed as literals at
+        # their call sites in main.bicep; Log Analytics Reader is a var inside
+        # its dedicated module. Both are code; neither is a comment.
+        $script:StrippedBicep['main'] | Should -Match ([regex]::Escape($script:RoleGuid['Security Reader']))
+        $script:StrippedBicep['main'] | Should -Match ([regex]::Escape($script:RoleGuid['Cost Management Reader']))
+        $script:StrippedBicep['lawRole'] | Should -Match ([regex]::Escape($script:RoleGuid['Log Analytics Reader']))
+    }
+
+    It 'grants Security Reader to BOTH data-api and mcp-tools, by GUID' {
+        ([regex]::Matches($script:StrippedBicep['main'], [regex]::Escape($script:RoleGuid['Security Reader'])).Count) |
+            Should -BeGreaterOrEqual 2
+    }
+
+    It 'invokes the Log Analytics Reader module twice — once per identity' {
+        ([regex]::Matches($script:StrippedBicep['main'], [regex]::Escape('modules/log-analytics-reader-role.bicep')).Count) |
+            Should -BeGreaterOrEqual 2
+    }
+
+    It 'grants no role outside the documented read-only set' {
+        # Every roleDefinitionId literal anywhere in this layer's executable
+        # Bicep must be one of the three above. A fourth GUID is either a new
+        # grant nobody documented or a privilege escalation.
+        $guidPattern = "'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'"
+        $observed = @()
+        foreach ($key in @('main', 'workloadRole', 'lawRole')) {
+            $observed += @([regex]::Matches($script:StrippedBicep[$key], $guidPattern) |
+                    ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() })
+        }
+        $allowed = @($script:RoleGuid.Values | ForEach-Object { $_.ToLowerInvariant() })
+        foreach ($guid in ($observed | Sort-Object -Unique)) {
+            $guid | Should -BeIn $allowed -Because 'every role definition GUID in this layer must be one of the three documented read-only roles'
         }
     }
 
-    It 'grants both data-api and mcp-tools identities, not just one' {
-        ([regex]::Matches($script:MainBicep, [regex]::Escape('Log Analytics Reader')).Count) | Should -BeGreaterOrEqual 2
-        ([regex]::Matches($script:MainBicep, [regex]::Escape('Security Reader')).Count) | Should -BeGreaterOrEqual 2
+    It 'never grants Owner, Contributor or User Access Administrator' {
+        foreach ($name in $script:ForbiddenRoleGuid.Keys) {
+            foreach ($key in @('main', 'workloadRole', 'lawRole')) {
+                $script:StrippedBicep[$key] | Should -Not -Match ([regex]::Escape($script:ForbiddenRoleGuid[$name])) `
+                    -Because "$name must never be granted to a workload identity"
+            }
+        }
     }
 
     It 'uses dedicated modules for the subscription- and resource-scoped grants' {
