@@ -26,14 +26,25 @@ follow-on implementation plan proceeds.
   **authored reference data**: it carries no status field and asserts nothing about this
   estate. See [`catalog/README.md`](catalog/README.md) for its sources and for the four
   places its content is an editorial decision rather than a straight transcription. The
-  control ids used in `assessment/` are not yet validated against it; that join arrives
-  with the derivation function.
+  control ids used in `assessment/` are still not validated against it: four records
+  (`CM-6`, `SI-4`, `IR-4`, `CP-9`) key on 800-53 ids the 800-171 catalog has no
+  requirement for, so the catalog-to-register join is not an identity mapping and the
+  state emitter has to decide what to do with them.
+- **`lib/MlsCompliance.psm1`** — the status derivation, spec §3.4. `Get-MlsControlStatus`
+  is a pure function over (requirement, assessment, evidence) returning `Status`,
+  `Provenance` and `Observed`; `Get-MlsComplianceVocabulary` publishes the two
+  vocabularies below as data so counting code never invents its own list. It reads no
+  file, no clock and no environment, and keeps no state between calls — which is what
+  makes the honesty rules mechanical rather than a matter of review discipline.
 - **`tests/register.Tests.ps1`** — Pester 6 tests asserting the register's structural
   integrity: an assessment file exists for every control the findings table cites, every
   file is valid JSON with the required fields, no `not-applicable` control lacks a
   justification, and every assertion cites at least one piece of evidence.
 - **`tests/catalog.Tests.ps1`** — Pester 6 tests asserting the catalog's counts, numbering
   and mapping shape, so a partial transcription cannot pass for a complete framework.
+- **`tests/derivation.Tests.ps1`** — Pester 6 tests over every row of §3.4's table, both
+  halves of the honesty invariant as property tests, purity, and the degenerate and
+  malformed inputs each branch must fail closed on.
 
 ## What does not exist yet
 
@@ -42,7 +53,7 @@ follow-on implementation plan proceeds.
   posture, policy compliance state). Nothing here is machine-verified yet; every record
   in `assessment/` is an authored assertion, which is why no status ever renders as
   `COMPLIANT` — an authored assertion can never claim machine-verified provenance
-  (spec §3.4).
+  (spec §3.4, and **Derived vocabulary** below).
 
 ## Register vocabulary
 
@@ -56,15 +67,58 @@ load-bearing:
   assert that the control is satisfied, that the estate was assessed exhaustively, or
   that anything was verified against a live tenant.
 - **`COMPLIANT`** — a status this register never asserts, for the reason above. If you
-  see it anywhere in `compliance/`, that is a defect.
+  see it in `assessment/`, that is a defect. It is a legitimate *derived* status — see
+  **Derived vocabulary** below — and the two are not the same word used twice.
 
 `compliance/tests/register.Tests.ps1` enforces that every record's status is one of the
 two permitted values.
+
+## Derived vocabulary
+
+What a human asserted and what the platform can justify saying are different things, and
+`Get-MlsControlStatus` **maps** between them rather than passing `assertion.status`
+through — passing it through would put `CLOSED`, a word that belongs to no rendered enum,
+straight onto the board. The derived statuses are:
+
+`COMPLIANT` · `PARTIAL` · `GAP` · `INCONCLUSIVE` · `NOT_APPLICABLE` · `NOT_ASSESSED`
+
+each carrying a provenance of `machine-verified`, `asserted`, `declared` or `none`. The
+mapping from the register:
+
+| Assessment | Derived status | Provenance |
+|---|---|---|
+| `not-applicable` **with** an `naJustification` | `NOT_APPLICABLE` | `declared` |
+| `not-applicable` **without** one | `NOT_ASSESSED` | `none` |
+| `criteria`, all collected and passing | `COMPLIANT` | `machine-verified` |
+| `criteria`, any failing | `GAP` | `machine-verified` |
+| `criteria`, any inconclusive, skipped or never collected | `INCONCLUSIVE` | `machine-verified` |
+| no criteria, an authored `CLOSED` citing evidence | `PARTIAL` | `asserted` |
+| no criteria, an authored `GAP` citing evidence | `GAP` | `asserted` |
+| no criteria, an authored status outside the register's two | `INCONCLUSIVE` | `asserted` |
+| no criteria, an assertion citing nothing, or no assertion, or no file | `NOT_ASSESSED` | `none` |
+
+**`COMPLIANT` is reachable from the criteria branch only.** An authored assertion can
+never produce it, whatever its status: `CLOSED` means "no known open finding", which is
+weaker than "the control is met", so deriving `COMPLIANT` from it would launder the
+weaker claim into the stronger one on the board. `Provenance` is likewise set by which
+branch fired and never read from an input field, so no record can ask to be called
+machine-verified. Both halves are property-tested over a generated space of assertion
+shapes in `tests/derivation.Tests.ps1`, so neither can be broken without a test going
+red.
+
+Every record in `assessment/` carries `criteria: []` today, so every one takes an
+authored path and the board is `PARTIAL` and `GAP`, never green. The machine-verified
+path is what the collectors populate.
+
+There is deliberately **no "% compliant" figure** anywhere: counts by status and by
+provenance only. A percentage that blends verified and asserted controls is the exact
+number an adopter would quote and should not (spec §3.4).
 
 ## Why the schema looks the way it does
 
 These assessment records double as seed data for the compliance platform once it's
 built. The schema in each `assessment/*.json` file — `control`, `applicability`,
 `criteria`, `assertion`, `recommendation`, `gapSeverity`, `references` — is fixed by
-spec §3.2 and is not this task's to redesign. A later derivation function reads these
-files directly.
+spec §3.2 and is not this task's to redesign. `lib/MlsCompliance.psm1` reads these
+records directly, as either a hashtable or a `ConvertFrom-Json` object, and treats a
+partial or malformed record as ordinary input to fail closed on rather than as an error.
