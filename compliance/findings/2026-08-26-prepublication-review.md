@@ -26,7 +26,18 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 (rationale, evidence, and the closing commit SHA) for that control. Two findings remain
 open: **F13** (five of seven workload RBAC grants land; the sixth needs F19) and **F19**
 itself (deferred to the sponsor — needs a new Function App deploy surface and a G2 spend
-decision against the $200/30-day credit). Six findings (F14, F15, F19, F20, F21, F22)
+decision against the $200/30-day credit).
+
+**F25–F35 addendum (2026-08-28, the final pre-publication audit).** Eleven more findings,
+raised by a last pass done specifically in the position of *a stranger cloning this repo
+and deploying it into their own Azure and Entra tenant* — a lens none of the earlier
+passes used. Three are critical ([F25](#f25), [F26](#f26), [F32](#f32)); all eleven are
+closed. The most important thing this pass demonstrates is not any single finding but a
+pattern: **a closed finding's own `Fix:` text can be the bypass** ([F25](#f25)), **a
+guard can be asserted and never fire** ([F26](#f26)), and **a test can verify a security
+property by matching a comment** ([F27](#f27)). Where a claim turned out to be false, the
+claim was corrected rather than quietly deleted — [F28](#f28), [F29](#f29) and
+[F35](#f35) changed no code at all, because the documents were the defect. Six findings (F14, F15, F19, F20, F21, F22)
 map to no NIST SP 800-171 control at all, so this document and the findings-index table's
 `Closed by` column are their *only* durable record — there is no `compliance/assessment/`
 file to additionally point at for those.
@@ -35,7 +46,7 @@ file to additionally point at for those.
 
 | # | Finding | Severity | Confidence | Controls | Closed by |
 |---|---|---|---|---|---|
-| [F1](#f1) | data-api: public internet, zero inbound auth | critical | CONFIRMED | 3.1.1, 3.1.2, 3.13.1 | Task 6 |
+| [F1](#f1) | data-api: public internet, zero inbound auth — **closed incompletely; see [F25](#f25)** | critical | CONFIRMED | 3.1.1, 3.1.2, 3.13.1 | Task 6, then F25 |
 | [F2](#f2) | MCP auth gate inert in the shipped configuration | critical | CONFIRMED | 3.1.1, 3.5.1, 3.13.1 | Tasks 4, 5 |
 | [F3](#f3) | Direct Line token endpoint fails open twice | high | CONFIRMED | 3.1.1, 3.5.1 | Task 7 |
 | [F4](#f4) | App Insights key + subscription inventory in a public job summary | high | CONFIRMED | 3.1.3, 3.13.16 | Task 8 |
@@ -59,6 +70,17 @@ file to additionally point at for those.
 | [F22](#f22) | Container images never smoke-tested in CI | medium | CONFIRMED | — (availability) | Task 24 |
 | [F23](#f23) | Three G3 full-tenant teardown scripts the runbooks instruct operators to run did not exist | high | CONFIRMED | CM-6 | Task 25 |
 | [F24](#f24) | data-api's Fabric workspace Viewer grant expressed but never invoked | high | CONFIRMED | 3.1.1, 3.1.2, 3.1.5 | final branch review |
+| [F25](#f25) | data-api internet-reachable and unauthenticated **through both public frontends** — F1's fix was incomplete and its own text was the bypass | critical | CONFIRMED | 3.1.1, 3.1.2, 3.13.1 | final pre-publication audit |
+| [F26](#f26) | Easy Auth guard never fires: a `readEnvironmentVariable` default is unreachable when a workflow feeds it from `vars.*` | critical | CONFIRMED (reproduced) | 3.1.1, 3.13.1 | final pre-publication audit |
+| [F27](#f27) | Least-privilege verified by matching **comments**; zero of the matched strings are executable Bicep | high | CONFIRMED | 3.1.1, 3.1.2, 3.1.5 | final pre-publication audit |
+| [F28](#f28) | "No secrets in CI" is false — six long-lived credentials, and the rotation list in the incident-response text named one | high | CONFIRMED | 3.1.3, 3.5.1 | final pre-publication audit |
+| [F29](#f29) | self-heal's auto-merge "gauntlet" names two legs that structurally cannot run on a heal PR | medium | CONFIRMED | — (unattended-merge justification) | final pre-publication audit |
+| [F30](#f30) | `sbom.yml`: `contents: write` in the same job as `npm ci` of known-CVE packages and a floating action | high | CONFIRMED | 3.4.1, 3.14.1 | final pre-publication audit |
+| [F31](#f31) | L9 disables a Defender plan it did not enable, reported as "a spend decrease, so no gate applies" | high | CONFIRMED | SI-4 | final pre-publication audit |
+| [F32](#f32) | Purview teardown deletes an adopter's **real** `Confidential` label; the apply path rewrites it | critical | CONFIRMED | CM-6, 3.8.4 | final pre-publication audit |
+| [F33](#f33) | Zero of 263 `uses:` SHA-pinned; `aquasecurity/trivy-action@0.28.0` resolves to no ref at all | medium | CONFIRMED | 3.4.1 | final pre-publication audit |
+| [F34](#f34) | `.superpowers/` (3.3 MB of transcripts) excluded only by a nested ignore file | medium | CONFIRMED | 3.1.3 | final pre-publication audit |
+| [F35](#f35) | Subscription-wide DENY policy nowhere stated as requiring a dedicated, empty subscription | medium | CONFIRMED | CM-6 | final pre-publication audit |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -71,9 +93,20 @@ F19–F21 were surfaced building Task 12 (F13's closing task), same day as the r
 - **Severity:** critical
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.1, 3.1.2, 3.13.1
-- **Closed by:** Task 6
-- **Status:** CLOSED
+- **Closed by:** Task 6 (**incompletely** — finished by [F25](#f25))
+- **Status:** CLOSED, but only since F25
 - **Remediation record:** `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.13.1.json`
+
+> **Correction (final pre-publication audit).** Task 6's fix was necessary and not
+> sufficient, and **the `Fix:` line at the bottom of this entry was the bypass**. Making
+> data-api internal does not make it unreachable while `control-tower` and `launch-ops`
+> are externally reachable, unauthenticated, and blind-proxying `/api/` to it — which is
+> exactly what "both frontends already proxy `/api/` server-side" describes.
+> `GET https://<control-tower-fqdn>/api/feeds/secure-score` still reached data-api with no
+> credential, and still returned the adopter's live Defender for Cloud posture. This entry
+> read `CLOSED` for a day while a reader could copy the exploit out of its own fix text.
+> The hole is closed by **[F25](#f25)**, which puts Easy Auth on both frontends; the `Fix:`
+> line below is left as written, because what it says is the finding.
 
 **Where:** `apps/data-api/src/app.ts:56` ("there is deliberately no Authorization here");
 `app.ts:67-169` (middleware chain — requestId, securityHeaders, cors, requestSpan,
@@ -1355,3 +1388,440 @@ resolution and the grant are verified by code reading and by the workflow-shape
 assertions in `verification/tests/workload-rbac.Tests.ps1`'s `F24:` block, which were
 mutation-tested (dropping `-DataApiPrincipalId`, and dropping `continue-on-error`, each
 turn exactly one assertion red).
+
+---
+
+## F25
+
+**data-api is internet-reachable and unauthenticated through both public frontends**
+
+- **Severity:** critical
+- **Confidence:** CONFIRMED (traced end to end)
+- **Controls:** 3.1.1, 3.1.2, 3.13.1
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.13.1.json`
+
+**Found while:** the final pre-publication audit, checking F1's recorded fix against the
+tree rather than against itself.
+
+**Where:** `infra/bicep/apps/main.bicep` (`dataApiApp`: `ingressExternal: false` — F1's
+fix, correct as far as it goes); `apps/control-tower/nginx.conf.template` and
+`apps/launch-ops/nginx.conf.template` (`location /api/ { proxy_pass ${DATA_API_ORIGIN}/; }`
+— a blind proxy: no credential required, no path allowlist); `main.bicep` again (both
+frontends `ingressExternal: true` with **no `authConfig`**); `apps/data-api/src/app.ts:80-84`
+(the middleware chain is `requestId, securityHeaders, cors, requestSpan, readOnlyGuard` —
+no authentication of any kind).
+
+**Attack path:** one request.
+
+    GET https://<control-tower-fqdn>/api/feeds/secure-score
+
+**Impact:** data-api's user-assigned identity holds **Security Reader at SUBSCRIPTION
+scope** (`dataApiSecurityReaderGrant`) plus Log Analytics Reader. An anonymous internet
+caller reads the adopter's real Defender for Cloud secure score and posture, the
+`/feeds/dependabot-alerts` feed and Log Analytics query results — through a dashboard the
+adopter believed was a read-only demo. Every cost path F1 described is also still open,
+because the requests still land on data-api and still wake serverless SQL.
+
+**What was wrong with F1's closure.** F1's `Fix:` line reads "`ingressExternal: false`;
+both frontends already proxy `/api/` server-side." That second clause is the *reason
+internal ingress was judged sufficient* — and it is the bypass. The register therefore
+handed a reader a working exploit while asserting the finding was closed, which is worse
+than an open finding: an open finding is a to-do, a wrongly-closed one is a false
+assurance that stops anyone looking again. F1's entry is corrected in place to say so.
+
+**Fix:** Container Apps Easy Auth on **all three** human-facing apps, mirroring the
+compliance board's proven pattern — `platform.enabled`,
+`globalValidation.unauthenticatedClientAction: 'RedirectToLoginPage'`, an Entra provider
+carrying only a public `clientId` and `openIdIssuer`, `tokenStore` disabled, **no client
+secret**. Now expressed once, in `main.bicep`'s `entraEasyAuthConfig()` function, and used
+by `launchOpsApp`, `controlTowerApp` and `complianceApp`.
+
+Two structural decisions matter more than the config itself:
+
+1. **`ingressExternal` is now literally the same expression as "is Easy Auth configured
+   for this app"** (`launchOpsAuthConfigured` / `controlTowerAuthConfigured` /
+   `complianceAuthConfigured`). No parameter combination publishes one of these apps to
+   the internet without authentication in front of it; a missing client ID costs you an
+   app you cannot reach from outside the environment, never an open one.
+2. **`.github/workflows/layer-07-apps.yml` refuses to deploy** when any of
+   `MLS_LAUNCH_OPS_CLIENT_ID`, `MLS_CONTROL_TOWER_CLIENT_ID` or
+   `MLS_COMPLIANCE_CLIENT_ID` is unset or empty, naming the missing ones.
+
+`globalValidation.excludedPaths` is `['/healthz']` and nothing else, so V7.1's
+unauthenticated GET still works and nothing under `/api/` is reachable without a session.
+`infra/entra/manifest.json` gained `mls-compliance-demo-app`, the fourth app registration
+the manifest never declared.
+
+**Rejected alternative:** token-gating the nginx proxy (have the frontend inject a shared
+secret on the `/api/` hop). It protects nothing — nginx would inject the token for
+anonymous callers exactly as it does for authenticated ones. The only real fix is
+authenticating the frontend.
+
+**This changes the demo's access model**, and that is stated plainly in `README.md`,
+`docs/runbooks/g0-bootstrap.md` § C9, `docs/runbooks/layers/L07.md`, `L03.md` and
+`L12.md`: the dashboards are login-gated now. Publishing a demo that exposes an adopter's
+real Defender posture to the internet is the worse trade.
+
+**Not claimed:** nothing here has been deployed. The fix is verified by `az bicep build`,
+by `verification/tests/frontend-auth.Tests.ps1` (14 assertions, each mutation-tested), and
+by reading the AVM `container-app` 0.23.0 module's own compiled template to confirm that a
+`null` `authConfig` skips the child resource and that `excludedPaths` is accepted by the
+resource-derived `globalValidation` type.
+
+---
+
+## F26
+
+**The compliance app's Easy Auth guard never fires: a `readEnvironmentVariable` default is unreachable when a workflow feeds it from `vars.*`**
+
+- **Severity:** critical
+- **Confidence:** CONFIRMED (reproduced against Bicep CLI 0.46.1)
+- **Controls:** 3.1.1, 3.13.1
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** `docs/runbooks/g0-bootstrap.md` § C9 claimed that leaving
+`MLS_COMPLIANCE_CLIENT_ID` unset makes `complianceEntraClientId` fall back to the literal
+`'unset'`, which "is not a GUID, so **ARM rejects the deployment outright**". The same
+claim appeared in `main.bicep`'s own comment, in `.github/README.md`, in
+`docs/runbooks/layers/L03.md` and in `L12.md`.
+
+**What is actually true:** `.github/workflows/layer-07-apps.yml` sets
+`MLS_COMPLIANCE_CLIENT_ID: ${{ vars.MLS_COMPLIANCE_CLIENT_ID }}`, and **an undefined
+GitHub Actions variable expands to the empty string**. The environment variable is
+therefore *set*, `readEnvironmentVariable('MLS_COMPLIANCE_CLIENT_ID', 'unset')` returns
+`''`, and the `'unset'` sentinel is never reached. Reproduced directly against the Bicep
+CLI: variable **unset** → `"unset"`; variable set to the **empty string** → `""`.
+
+**Impact:** the guard that was supposed to stop a NIST control-family board deploying
+without authentication did nothing. Combined with F25 it is worse than it looks: this
+class of mistake was the only thing standing between three dashboards and the internet.
+
+**Fix:** `isEntraClientIdConfigured()` in `main.bicep` treats **both** the empty string and
+the `'unset'` sentinel as not-configured, and each app's `ingressExternal` is derived from
+it (see F25). `@minLength(36)` on the parameter was evaluated and **rejected**: Bicep
+validates it at *bicepparam compile time* (BCP333), so the repo's own
+`az bicep build-params` gate — and every adopter's deploy — would fail on the `'unset'`
+default itself, not on the empty string. The workflow-level refusal plus fail-closed
+ingress achieves the intent without breaking the gate.
+
+**Sibling, found by the same reasoning and fixed with it:**
+`.github/workflows/layer-06-platform.yml` passed
+`KEY_VAULT_CREATE_MODE: ${{ vars.KEY_VAULT_CREATE_MODE }}` against
+`readEnvironmentVariable('KEY_VAULT_CREATE_MODE', 'default')`. Unset, the parameter
+resolved to `''`, which `@allowed(['default', 'recover'])` rejects — **BCP033 at
+bicepparam compile time, for every adopter who has not set the variable, which is all of
+them on a first run.** Now `${{ vars.KEY_VAULT_CREATE_MODE || 'default' }}`. Every other
+`readEnvironmentVariable` default fed from `vars.*` was audited: the ports and
+`MLS_LAKEHOUSE_NAME` already carry `|| '<literal>'` fallbacks, and `MLS_SQL_ENDPOINT` /
+`MLS_ALERT_EMAIL` default to `''` anyway, so empty and unset are the same value there.
+
+---
+
+## F27
+
+**`workload-rbac.Tests.ps1` verified least privilege by matching comments**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED
+- **Controls:** 3.1.1, 3.1.2, 3.1.5
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** `verification/tests/workload-rbac.Tests.ps1:69-71` asserted
+`$script:MainBicep | Should -Match 'Security Reader'`, and the same for
+`'Log Analytics Reader'` and `'Cost Management Reader'`.
+
+**What was wrong:** **every** occurrence of those three strings in
+`infra/bicep/apps/main.bicep` is inside a `//` comment or an `@description()`. **Zero are
+executable Bicep** — the real role assignments carry only GUIDs. Change a grant to Owner
+and the adjacent comment still reads "Security Reader", so the suite stays green while the
+estate hands a workload identity full control of the subscription. Given F25 put that
+Security Reader grant on the public internet, this is the test that most needed to work.
+
+**Fix:** the assertions run against **comment-and-`@description`-stripped** copies of
+`main.bicep`, `modules/workload-role-assignments.bicep` and
+`modules/log-analytics-reader-role.bicep`, and check role definition **GUIDs**:
+`39bc4728-0917-49c7-9d2c-d95423bc2eb4` (Security Reader),
+`72fafb9e-0641-4937-9268-a91bfd8191a3` (Cost Management Reader),
+`73c42c96-874c-492b-b04d-ab87d138a893` (Log Analytics Reader). Two new assertions go
+further than restoring the old intent: every role-definition GUID literal anywhere in the
+layer must be one of those three (a fourth is either an undocumented grant or an
+escalation), and Owner, Contributor and User Access Administrator must appear nowhere.
+
+---
+
+## F28
+
+**"No secrets in the repo, and none in CI" is false — and the most damaging instance is incident-response text**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED
+- **Controls:** 3.1.3, 3.5.1
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** `CLAUDE.md` hard rule 5, `SECURITY.md` § Scope, `docs/runbooks/layers/L01.md`
+failure mode 4, `docs/runbooks/layers/L06.md`, `docs/runbooks/g0-bootstrap.md` § C9b and
+`.github/workflows/gitleaks.yml` (both its header and its "What a finding means" step) all
+asserted that CI holds no secret and that the only stored secret in the system is the
+Direct Line secret in Key Vault.
+
+**What is actually true — six long-lived credentials:**
+
+| Credential | Where |
+|---|---|
+| `PURVIEW_CERT_BASE64` / `PURVIEW_CERT_PASSWORD` | `demo` environment secret (Entra app X.509) |
+| `MLS_VERIFIER_CERT_BASE64` / `MLS_VERIFIER_CERT_PASSWORD` | `verify` environment secret (Entra app X.509) |
+| `SELF_HEAL_TOKEN` | repository secret — a PAT with `repo` **write** |
+| `MLS_VERIFIER_GH_TOKEN` | `verify` environment secret |
+| Direct Line secret | Key Vault |
+| `mcp-auth-token` | Key Vault |
+
+`g0-bootstrap.md` § C9b disclosed four of them honestly *in a table* while asserting the
+false sentence immediately above it — which is how a claim like this survives review.
+
+**Impact, and why this is not merely a documentation nit:** `gitleaks.yml`'s failure step
+is **incident-response text**. On a real leak it told the responder that the only
+credential to rotate was the Direct Line secret, and that "everything Azure is OIDC, so
+there is no cloud credential to rotate" — sending them away with six live credentials
+un-rotated, including a PAT that can write to this repository.
+
+**Fix:** `gitleaks.yml` first — its failure step now prints the complete rotation table
+above, with where each credential lives and how to rotate it, and says to rotate
+`SELF_HEAL_TOKEN` first if you cannot tell what leaked. `CLAUDE.md`, `SECURITY.md`,
+`L01.md`, `L06.md` and `g0-bootstrap.md` are corrected to match, each stating why every
+credential exists (no federated path) and pointing at the workflow as the canonical
+rotation list. **No code changed:** the six credentials are all justified. The claim was
+the defect.
+
+---
+
+## F29
+
+**The self-heal auto-merge "gauntlet" claim names two structurally unreachable legs**
+
+- **Severity:** medium
+- **Confidence:** CONFIRMED
+- **Controls:** — (integrity of an unattended-merge justification)
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** `.github/workflows/self-heal.yml:94-97` justified merging machine-authored code
+without human approval because the PR "must clear the SAME gauntlet as any other change —
+lint-ci, both test suites, CodeQL, gitleaks, the Trivy CRITICAL gate, and ZAP."
+
+**What was wrong:** two of the six named legs cannot run on a heal PR at all. `zap.yml`
+has only `workflow_call` and `workflow_dispatch` triggers, so it produces no check run on
+a pull request and can never be a required check on one. The Trivy CRITICAL gate lives
+only in the five `app-*-ci.yml` workflows, whose `pull_request` `paths:` filters are
+`apps/<app>/**` plus the **root** `package.json`/`package-lock.json` — none of which
+matches a heal PR touching `apps/vuln-lab/package*.json`.
+
+**Impact:** the justification for merging machine-written code with no human in the loop
+was overstated by a third. What actually gates a heal PR is `lint-ci`, `codeql` and
+`gitleaks` — a reasonable gate, and now what the comment says.
+
+**Fix:** the comment enumerates what actually runs and, separately, what does not and why,
+with a note that the list is the justification for unattended merge and is worth exactly
+what it runs. No workflow behaviour changed.
+
+---
+
+## F30
+
+**`sbom.yml` held a write token in the same job as `npm ci` of known-CVE packages and a floating third-party action**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED
+- **Controls:** 3.4.1, 3.14.1 (supply chain)
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** `.github/workflows/sbom.yml` — one job with `permissions: contents: write`
+(`:54`) that also ran `npm ci` **and** `npm ci --prefix apps/vuln-lab` (installing packages
+with deliberately seeded CVEs, and executing their `postinstall` scripts) **and**
+`anchore/sbom-action@v0`, a floating major on a 0.x action, with `actions/checkout`'s
+`persist-credentials` defaulted true — so `GITHUB_TOKEN` sat in `.git/config` while all of
+that ran.
+
+**Why this one is embarrassing rather than merely wrong:** `compliance.yml` documents this
+exact rule in its own "WHY TWO JOBS" block — "a job that can push to the default branch
+must not also resolve and execute third-party code, because a compromised or typo-squatted
+dependency then inherits a write token" — and `sbom.yml` broke it.
+
+**Fix:** split, mirroring `compliance.yml`'s own two-job pattern. `generate` holds
+`contents: read`, checks out with `persist-credentials: false`, and does all the work;
+`attach` holds `contents: write`, installs nothing, checks out nothing, downloads the
+documents `generate` produced and calls `gh release upload`.
+
+---
+
+## F31
+
+**L9 switched off a Defender for Containers plan it did not enable, and called it a spend decrease**
+
+- **Severity:** high
+- **Confidence:** CONFIRMED
+- **Controls:** SI-4 (and G2's own integrity)
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** `.github/workflows/layer-09-devsecops.yml` — the "Disable the plan (spend
+decrease, no gate)" step ran under `if: always()`, and `defender_toggle` defaults **true**.
+
+**Impact:** an adopter whose subscription already ran Defender for Containers — a paid
+security control, at subscription scope — had it **silently switched off** at the end of
+every L9 run, and the run summary reported that as "a spend DECREASE, so no gate applies".
+That is true about cost and wrong about everything else: the gate framework asks only
+"does this cost more?", so a change that removes a security control passes it unexamined.
+
+**Fix:** restore-what-you-found. A new step reads the plan's incoming `pricingTier` before
+anything is touched. If it is anything but `Free`, the job **refuses** — it changes
+nothing, explains why, and tells the operator to re-run with `defender_toggle: false`. The
+disable and its assertion are additionally gated on the incoming state having been `Free`,
+so the round-trip can only ever undo its own enable. `docs/runbooks/layers/L09.md` records
+the behaviour and points at the dedicated-subscription requirement (F35).
+
+---
+
+## F32
+
+**The Purview teardown deletes an adopter's real sensitivity labels, and the apply path silently rewrites them**
+
+- **Severity:** critical
+- **Confidence:** CONFIRMED
+- **Controls:** CM-6, 3.8.4
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** `infra/purview/teardown.ps1` — `Get-LabelTaxonomy` returned the bare names
+`'Public'`, `'Internal'`, `'Confidential'`, `'Export-Controlled'`, and
+`Remove-SensitivityLabel` called `Remove-Label -Identity $Name` with **no ownership check
+whatsoever**. `verification/reports/label-guids.json` was named in the script's own G3
+warning banner and in its `.NOTES`, and was **never read**.
+`infra/purview/labels.ps1`'s `Initialize-SensitivityLabel` declared
+`SupportsShouldProcess` but no `ConfirmImpact = 'High'`, and
+`.github/workflows/layer-04-purview.yml` runs it with `-Confirm:$false`.
+
+**Impact:** those are three of the most common sensitivity-label names in existence. An
+adopter with an existing Microsoft Purview taxonomy loses `Confidential` to a G3 teardown
+— and **every document already labelled with it loses its classification and its
+protection**, which recreating a label of the same name does not undo, because the GUID
+changes. The apply path is as bad in the other direction: the adopter's production
+`Confidential` is detected as *drifted* (its tooltip is not the demo's) and **silently
+rewritten with demo tooltip text, in CI, with no prompt**.
+
+**Fix, two independent controls:**
+
+1. **Prefix.** `Get-LabelTaxonomy` in both scripts takes a `-Prefix` resolved by a new
+   `Get-CompanyPrefix`, which parses `defaultCompanyPrefix` out of
+   `infra/bicep/naming.bicep` — the same helper, parsed the same way, that
+   `scripts/down.ps1` and `infra/policy/teardown.ps1` already use, because CLAUDE.md
+   forbids hardcoding the prefix anywhere else. Labels are `<prefix>-public`,
+   `<prefix>-internal`, `<prefix>-confidential`, `<prefix>-export-controlled`; `Name` and
+   `DisplayName` are the same string so that `Get-Label -Identity` and the audit's
+   `DisplayName` match address exactly the objects this estate created. The policy name is
+   prefixed too. Both scripts **refuse to run** rather than guess if `naming.bicep` cannot
+   be parsed.
+2. **GUID ownership.** `Remove-SensitivityLabel` now takes the set of GUIDs recorded in
+   `verification/reports/label-guids.json` and deletes a label **only** when the object the
+   tenant returned carries one of them. No baseline file, no readable GUID, or a GUID that
+   is not in the baseline are all `Refused` — reported distinctly from `Declined` and
+   `WhatIf`, and checked *before* `$WhatIfPreference`, so a `-WhatIf` rehearsal tells the
+   operator which labels are not theirs before they approve G3.
+
+`Initialize-SensitivityLabel` also gained `ConfirmImpact = 'High'` on the function that
+actually calls `ShouldProcess` (it does not propagate from a caller). That does not stop
+the CI path, which passes `-Confirm:$false`; the prefix is what protects an adopter there.
+
+`verification/layer-04-audit.ps1` moved with it: its `-ExpectedLabel` and
+`-ExpectedLabelPolicy` defaults resolve from the same prefix, because an audit still
+looking for the bare words would have matched an adopter's own taxonomy and reported a
+healthy demo built out of someone else's labels. `docs/runbooks/layers/L04.md`,
+`kill-rebuild.md`, `auto-label-design.md`, `scripts/down.ps1`, the L4 workflow header and
+the master plan all name the prefixed labels now.
+
+---
+
+## F33
+
+**Zero of 263 `uses:` references were SHA-pinned — and one of them did not resolve at all**
+
+- **Severity:** medium
+- **Confidence:** CONFIRMED
+- **Controls:** 3.4.1 (supply chain)
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED for the seven third-party actions that run in privileged jobs
+
+**Where:** every workflow. The seven that matter: `anchore/sbom-action@v0` (a floating
+**major** on a 0.x action), `gitleaks/gitleaks-action@v2`, `docker/build-push-action@v6`,
+`docker/setup-buildx-action@v3`, `docker/login-action@v3`,
+`aquasecurity/trivy-action@0.28.0`, `zaproxy/action-baseline@v0.14.0`. The docker and
+Trivy ones run in `packages: write` jobs beside a live GHCR credential: a moved tag
+publishes a backdoored image that L7 then deploys.
+
+**Found while pinning:** `aquasecurity/trivy-action@0.28.0` **does not resolve to any ref
+in that repository.** Its tags are `v0.28.0` (plus a single unprefixed `0.35.0`); there is
+no `0.28.0` tag and no branch of that name. Every Trivy step in this repo — the five app
+CI gates and the three in `layer-09-devsecops.yml`, including both halves of V9.2's
+negative test — was therefore failing to resolve its action. Pinning by SHA fixes that as
+a side effect, which is itself an argument for pinning.
+
+**Fix:** all seven pinned to the commit SHA their tag currently resolves to, with the
+version kept as a trailing comment (`@<sha> # v3`) — 36 `uses:` lines across nine
+workflows. `.github/dependabot.yml` already registers the `github-actions` ecosystem, so
+the pins stay maintained. First-party `actions/*` references are deliberately left on
+tags.
+
+---
+
+## F34
+
+**`.superpowers/` was excluded only by a nested ignore file**
+
+- **Severity:** medium
+- **Confidence:** CONFIRMED
+- **Controls:** 3.1.3
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** the only rule covering 3.3 MB of agent transcripts and working notes was
+`.superpowers/sdd/.gitignore` containing `*` — one directory *below* the directory that
+needed ignoring. Moving `.superpowers/`, adding any sibling under it, or a single
+`git add -f` would have swept the lot into a public repository.
+
+**Fix:** `.superpowers/` added to the **root** `.gitignore`, where the rule survives a
+reorganisation.
+
+---
+
+## F35
+
+**Subscription-wide DENY policy, nowhere stated as requiring a dedicated subscription**
+
+- **Severity:** medium
+- **Confidence:** CONFIRMED
+- **Controls:** CM-6
+- **Closed by:** the final pre-publication security audit
+- **Status:** CLOSED
+
+**Where:** `README.md`, `SECURITY.md` and `docs/runbooks/g0-bootstrap.md` all describe
+cost, gates and trial strategy at length, and none of them said that this repository
+assigns **subscription-wide DENY policy**: six `require-<tag>` deny rules on resource
+groups and an `allowed-locations` deny on every resource
+(`infra/bicep/landing-zone/main.bicep`).
+
+**Impact for a stranger deploying this into their own tenant:** those policies apply to
+**everything already in the subscription**, not only to what the demo creates. The next
+deployment anyone makes without the six required tags, or into a location outside the
+allowlist, is refused — by a demo they installed to look at. Alongside it: a NIST SP
+800-53 R5 initiative and a budget at subscription scope, `data-api`'s Security Reader
+grant **across the whole subscription** (F25), the L9 Defender pricing-plan round-trip
+(F31), and an `infra-down.yml` that deletes four resource groups by name.
+
+**Fix:** stated as a requirement, not a suggestion, at the top of `README.md`, in its own
+`SECURITY.md` section, and in a callout at the head of `g0-bootstrap.md`. No code changed
+— the policies are the point of the demo. The omission was the defect.
