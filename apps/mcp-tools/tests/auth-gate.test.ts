@@ -50,7 +50,8 @@ describe("the gate actually blocks", () => {
   it("rejects a request with no credential", async () => {
     const res = await post();
     expect(res.status).toBe(401);
-    expect((await res.json()).error.message).toBe("Unauthorized");
+    const payload = (await res.json()) as { error: { message: string } };
+    expect(payload.error.message).toBe("Unauthorized");
   });
 
   it("rejects a wrong bearer token", async () => {
@@ -113,7 +114,12 @@ describe("the gate lets the right caller through", () => {
   it("keeps /healthz reachable for the Container Apps probe", async () => {
     const res = await fetch(`${url}/healthz`);
     expect(res.status).toBe(200);
-    const body = await res.json();
+    // res.json() is typed unknown; name the shape this test asserts on rather than
+    // reaching through an unknown.
+    const body = (await res.json()) as {
+      ok: boolean;
+      auth: { enforced: boolean; deliberatelyOpen: boolean };
+    };
     expect(body.ok).toBe(true);
     // Posture is reported; the token is not.
     expect(body.auth).toEqual({ enforced: true, deliberatelyOpen: false });

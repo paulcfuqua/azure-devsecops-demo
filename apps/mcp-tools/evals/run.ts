@@ -67,7 +67,17 @@ function readPayload(result: McpToolResult): McpCallOutcome {
 }
 
 async function startServer(): Promise<{ http: HttpServer; url: string }> {
-  const app = createApp({ config: { port: 0, backendMode: "local" } });
+  // inboundAuth became a required part of McpToolsConfig when the auth gate was made to
+  // fail closed in every mode (finding F2). This harness runs an in-process server with
+  // no ingress, so it declares the deliberately-open posture explicitly rather than
+  // leaving the field off and relying on a default that no longer exists.
+  const app = createApp({
+    config: {
+      port: 0,
+      backendMode: "local",
+      inboundAuth: { token: undefined, enforced: false, deliberatelyOpen: true },
+    },
+  });
   const http = app.listen(0);
   await new Promise<void>((resolve) => http.once("listening", () => resolve()));
   return { http, url: `http://127.0.0.1:${(http.address() as AddressInfo).port}${MCP_PATH}` };

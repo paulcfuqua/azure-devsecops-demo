@@ -90,7 +90,11 @@ export function presentedCredential(req: Request): string | undefined {
   const header = req.get("authorization");
   if (header) {
     const match = /^Bearer[ \t]+(.+)$/i.exec(header.trim());
-    if (match) return match[1].trim();
+    // match[1] types as possibly-undefined under noUncheckedIndexedAccess even though a
+    // successful exec of this pattern always carries the group. Read it once and check,
+    // rather than asserting non-null.
+    const bearer = match?.[1];
+    if (bearer !== undefined) return bearer.trim();
   }
   const apiKey = req.get("x-api-key");
   if (typeof apiKey === "string" && apiKey.trim().length > 0) return apiKey.trim();
