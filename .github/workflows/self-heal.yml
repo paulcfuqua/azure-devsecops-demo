@@ -91,11 +91,30 @@ name: self-heal
 #   * The blast radius is a public demo repo full of synthetic data. There is
 #     no customer, no production traffic and no real secret in the diff path.
 #     The estate it deploys to is disposable by design (`infra-down.yml`).
-#   * The merge is not unconditional: the PR must clear the SAME gauntlet as any
-#     other change — lint-ci, both test suites, CodeQL, gitleaks, the Trivy
-#     CRITICAL gate, and ZAP. `--auto` only fires when every required check is
-#     green, and a heal that breaks the build simply never merges (L10 failure
-#     mode 4: "the pipeline honestly refusing a bad heal").
+#   * The merge is not unconditional: the PR must clear the same checks any
+#     other change to these paths clears. `--auto` only fires when every
+#     required check is green, and a heal that breaks the build simply never
+#     merges (L10 failure mode 4: "the pipeline honestly refusing a bad heal").
+#
+#     WHAT THAT ACTUALLY IS, on a heal PR touching `apps/vuln-lab/**` (F29 —
+#     this list previously also named the Trivy CRITICAL gate and ZAP, and
+#     neither can run on such a PR):
+#       * `lint-ci`  — actionlint, PSScriptAnalyzer, the Pester suite, pytest,
+#                      `npm test` and `npm run typecheck`. No path filter, so it
+#                      runs on every PR.
+#       * `codeql`   — `pull_request` on `main`, no path filter.
+#       * `gitleaks` — `pull_request` on `main`, no path filter.
+#     NOT reachable on a heal PR, and not to be claimed:
+#       * The **Trivy CRITICAL gate** lives only in the five `app-*-ci.yml`
+#         workflows, whose `pull_request` `paths:` filters are `apps/<app>/**`
+#         plus the ROOT `package.json`/`package-lock.json`. A Dependabot fix to
+#         `apps/vuln-lab/package*.json` matches none of them, so no app CI runs
+#         and no image is ever scanned.
+#       * **ZAP** (`zap.yml`) has only `workflow_call` and `workflow_dispatch`
+#         triggers. A workflow with no `pull_request` trigger cannot produce a
+#         check run on a PR, so it can never be a required check on one.
+#     Keep this list honest: it is the justification for merging machine-written
+#     code without a human, and it is worth exactly what it actually runs.
 #   * Scope is narrow: this workflow only ever lands a fix GitHub itself
 #     generated for a named security advisory, on its own branch.
 #

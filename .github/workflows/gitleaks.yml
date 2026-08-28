@@ -10,14 +10,16 @@ name: gitleaks
 # repo settings (V1.2), gitleaks is the in-repo check that also runs on forks and
 # on full history.
 #
-# Since the 2026-08-24 amendment CI holds no secret at all: everything Azure
+# Since the 2026-08-24 amendment CI holds no CLOUD credential: everything Azure
 # authenticates via OIDC, runtime LLM work is a Copilot Studio agent, and
-# tenant/subscription IDs live in GitHub environment variables. The system's one
-# stored secret is the Direct Line secret, which lives in Key Vault and is
-# exchanged server-side — it must never appear in this repo or in a browser
-# bundle. So a hit here is either that secret leaking where it must not go, or a
-# test fixture that pattern-matches a credential (rewrite the fixture; never use
-# the push-protection bypass for convenience).
+# tenant/subscription IDs live in GitHub environment variables. CI is NOT
+# secret-free, and saying it was is finding F28 — the "What a finding means"
+# step below carries the complete rotation list (four GitHub secrets, two Key
+# Vault secrets), because that is the text a responder reads at 2am. Keep it in
+# sync with SECURITY.md and CLAUDE.md hard rule 5. A hit here is one of those
+# six leaking where it must not go, or a test fixture that pattern-matches a
+# credential (rewrite the fixture; never use the push-protection bypass for
+# convenience).
 #
 # gitleaks-action v2 is free for public repositories; GITLEAKS_LICENSE is only
 # required for organization-owned private repos.
@@ -53,7 +55,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'true'
@@ -68,10 +70,23 @@ jobs:
             echo
             echo "Treat this as an incident, in this order:"
             echo
-            echo "1. **Rotate** whatever leaked. The only live credential in this"
-            echo "   system is the **Direct Line secret** (Key Vault; rotate it in the"
-            echo "   agent's channel settings). Everything Azure is OIDC, so there is"
-            echo "   no cloud credential to rotate."
+            echo "1. **Rotate** whatever leaked. Everything *Azure* is OIDC, so there is"
+            echo "   no cloud credential to rotate — but this system does hold long-lived"
+            echo "   credentials, and this is the complete list (F28: the previous version"
+            echo "   of this text named only the Direct Line secret, which would have sent"
+            echo "   a responder home with six live credentials un-rotated):"
+            echo
+            echo "   | Credential | Where it lives | How to rotate |"
+            echo "   |---|---|---|"
+            echo "   | \`PURVIEW_CERT_BASE64\` / \`PURVIEW_CERT_PASSWORD\` | \`demo\` environment secret | New X.509 cert on the Purview S&C app registration; upload, then remove the old one |"
+            echo "   | \`MLS_VERIFIER_CERT_BASE64\` / \`MLS_VERIFIER_CERT_PASSWORD\` | \`verify\` environment secret | Same, on the \`mls-verifier\` app registration |"
+            echo "   | \`SELF_HEAL_TOKEN\` | repository secret — a PAT with \`repo\` **write** | Revoke the PAT in GitHub settings, mint a new one, re-set the secret |"
+            echo "   | \`MLS_VERIFIER_GH_TOKEN\` | \`verify\` environment secret | Same |"
+            echo "   | Direct Line secret | the platform **Key Vault** | Rotate in the agent's channel settings, then re-set the vault secret |"
+            echo "   | \`mcp-auth-token\` | the platform **Key Vault** | Generate a new token, set the vault secret, restart the MCP container app |"
+            echo
+            echo "   \`SELF_HEAL_TOKEN\` is the most damaging of these: it can write to this"
+            echo "   repository. Rotate it first if you cannot tell what leaked."
             echo "2. If it is a **test fixture** that merely pattern-matches a"
             echo "   credential, rewrite the fixture so it stops matching."
             echo "3. Only then consider history rewriting — and only with sponsor"

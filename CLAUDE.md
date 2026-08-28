@@ -19,11 +19,19 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
    itself is the problem.
 4. **Synthetic data only.** Public facts (vehicle names, launch sites) are fine. Nothing
    proprietary from any employer. No real person's PII — demo users are fictional.
-5. **No secrets in the repo, and none in CI.** Tenant/subscription IDs live in GitHub
-   environment variables. Everything Azure authenticates via OIDC / workload identity
-   federation. Since the 2026-08-24 amendment there is **no LLM API key anywhere** — the
-   only stored secret in the system is the **Direct Line secret in Key Vault**, which is
-   exchanged server-side for a short-lived token and must never reach a browser.
+5. **No secrets in the repo. In CI, only the six that have no federated alternative.**
+   Tenant/subscription IDs live in GitHub environment *variables*. Everything **Azure**
+   authenticates via OIDC / workload identity federation, and since the 2026-08-24
+   amendment there is **no LLM API key anywhere**. CI is not secret-free, and claiming it
+   was is finding F28 — the complete list of long-lived credentials is:
+   `PURVIEW_CERT_BASE64`/`_PASSWORD` and `MLS_VERIFIER_CERT_BASE64`/`_PASSWORD` (two Entra
+   app X.509 certificates — Security & Compliance PowerShell has no federated path),
+   `SELF_HEAL_TOKEN` (a PAT with `repo` write, because a `GITHUB_TOKEN` push does not
+   trigger workflows) and `MLS_VERIFIER_GH_TOKEN`. Two more live in **Key Vault**: the
+   **Direct Line secret**, exchanged server-side for a short-lived token and never
+   reaching a browser, and `mcp-auth-token`. Adding a seventh needs a written reason;
+   `.github/workflows/gitleaks.yml`'s incident text is the rotation list and must stay
+   in sync with this one.
 
 ## How we work
 
