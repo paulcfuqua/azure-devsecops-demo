@@ -92,7 +92,7 @@
     -------------------------
     This guards the invocation shapes a collector author would actually type: bare
     `az ...`, `& az ...`, and their `gh`/`git` equivalents. It does not chase
-    `Start-Process az`, dynamic invocation built from a string via `Invoke-Expression`,
+    `Start-Process az`, dynamic invocation built from a string via `aliases (Set-Alias -Scope Global az ... defeats the shadow outright, because aliases outrank functions in command resolution - the one bypass an author could reach by accident rather than intent), Start-Process, cmd /c. NOT in this list, because it IS covered: Invoke-Expression`,
     or a `.exe` invoked by an absolute path - those are deliberate evasions, not the
     "typed `az` instead of `Invoke-MlsAz`" failure mode this exists to catch, and no
     collector in this plan needs any of them.
@@ -152,6 +152,10 @@ Import-Module $script:MlsAuditModulePath -Force -ErrorAction Stop
 # 'skip' or 'pending' - see the module header.
 $script:MlsEvidenceStatus = @('pass', 'fail', 'inconclusive')
 
+# The one collector that reads Verifier audits, and therefore the only source permitted
+# to name a criterion. See Get-MlsEvidenceProblem.
+$script:MlsCriterionScopedSource = 'verification-suite'
+
 # --- private helpers ----------------------------------------------------------------------
 
 function Get-MlsEvidenceText {
@@ -182,6 +186,16 @@ function Get-MlsEvidenceProblem {
     #>
     [OutputType([string[]])]
     param($Record)
+
+    # criterion is a Verifier-audit concept. Only the verification-suite collector reads
+    # Verifier audits, so only it may set one. Enforced here rather than left to each
+    # collector's restraint: a reviewer demonstrated that
+    # `New-MlsEvidence -Source 'manual' ... -Criterion 'V3.3'` derived
+    # COMPLIANT / machine-verified end to end, as did a hand-built record passed through
+    # Invoke-MlsCollector - which also defeated the four per-collector "never sets a
+    # criterion" tests, since those only observe what the collectors choose to emit.
+    # Control-scoped evidence satisfying a criterion that never ran is the single worst
+    # thing this contract could permit.
 
     $problem = [System.Collections.Generic.List[string]]::new()
 
@@ -221,6 +235,15 @@ function Get-MlsEvidenceProblem {
     $collectedAt = Get-MlsProperty -InputObject $Record -Name 'collectedAt'
     if ([string]::IsNullOrWhiteSpace("$collectedAt") -or "$collectedAt" -notmatch '^\d{4}-\d{2}-\d{2}T') {
         $problem.Add("'collectedAt' must be an ISO-8601 timestamp stamped at construction, found '$collectedAt'")
+    }
+
+    $criterion = Get-MlsEvidenceText (Get-MlsProperty -InputObject $Record -Name 'criterion')
+    if ($null -ne $criterion -and $source -ne $script:MlsCriterionScopedSource) {
+        $problem.Add("'criterion' is '$criterion' but 'source' is '$source'; only the " +
+            "$($script:MlsCriterionScopedSource) collector reads Verifier audits, so only it may name a " +
+            "criterion. Control-scoped evidence carrying a criterion would satisfy a declared criterion " +
+            "that never ran, and could make a control derive COMPLIANT / machine-verified off a grep of " +
+            "the working tree")
     }
 
     return , @($problem.ToArray())

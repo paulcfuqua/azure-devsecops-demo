@@ -15,7 +15,9 @@
 # infra/bicep/naming.bicep (one segment) and infra/bicep/apps/modules/*.bicep
 # (three segments), which is exactly backwards for a test whose entire job is
 # "no .bicep file anywhere leaks a secret". Get-ChildItem -Recurse is used
-# instead so every .bicep file in the tree is actually covered.
+# instead so every .bicep file under infra/ is actually covered. Deliberately NOT the
+# whole repository tree: compliance/tests/fixtures/ carries a valueless secret-shaped
+# output on purpose, as a negative fixture for the repo-static collector.
 #
 # Also deliberately NOT the brief's literal `Key` alternative on its own: two
 # entirely legitimate, non-secret outputs already exist —

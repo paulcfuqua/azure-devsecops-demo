@@ -111,10 +111,20 @@ Invoke-MlsCollector -Name $script:CollectorName -ScriptBlock {
         return
     }
 
+    # Allow-list, not deny-list. An earlier revision defaulted an absent or blank
+    # enforcementMode to 'Default' and then asked whether it equalled 'DoNotEnforce',
+    # so an entirely ABSENT assignment object, an explicit null, and any unrecognised
+    # word (including ARM's alternate 'Disabled' spelling) all resolved to "enforced"
+    # and a Compliant row rendered `pass`. This collector's own docstring says the
+    # caller merges TWO endpoints - compliance state and the assignment - so the
+    # half-merged case, where only the first query succeeded, is the likely one, and
+    # it was the one that failed open. Absence of the enforcement signal is not
+    # evidence of enforcement. Every other unrecognised-input path in this layer
+    # fails closed to 'inconclusive'; this one now does too.
     $assignment = Get-MlsProperty -InputObject $script:Response -Name 'assignment'
     $enforcementMode = "$(Get-MlsProperty -InputObject $assignment -Name 'enforcementMode')".Trim()
-    if ([string]::IsNullOrWhiteSpace($enforcementMode)) { $enforcementMode = 'Default' }
-    $auditOnly = $enforcementMode -eq 'DoNotEnforce'
+    $enforcementKnown = $enforcementMode -in @('Default', 'DoNotEnforce')
+    $auditOnly = $enforcementMode -ne 'Default'
 
     $controlMap = Get-MlsAzurePolicyControlMap
 
@@ -130,7 +140,8 @@ Invoke-MlsCollector -Name $script:CollectorName -ScriptBlock {
             if ([string]::IsNullOrWhiteSpace($resourceId)) { $resourceId = '(resource id not recorded)' }
 
             $status = if ($auditOnly) {
-                # DoNotEnforce: a scorecard, not an enforced control - never pass, whatever
+                # Either DoNotEnforce (a scorecard, not an enforced control) or an
+                # enforcement signal we could not read at all. Never pass, whatever
                 # complianceState says.
                 'inconclusive'
             }
@@ -142,10 +153,16 @@ Invoke-MlsCollector -Name $script:CollectorName -ScriptBlock {
                 }
             }
 
-            $auditNote = if ($auditOnly) {
+            $auditNote = if (-not $auditOnly) { '' }
+            elseif ($enforcementKnown) {
                 " Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control."
             }
-            else { '' }
+            elseif ([string]::IsNullOrWhiteSpace($enforcementMode)) {
+                " Enforcement could not be determined: the response carried no assignment enforcementMode. Absence of the signal is not evidence of enforcement, so this is reported as inconclusive rather than as a pass."
+            }
+            else {
+                " Enforcement could not be determined: assignment enforcementMode was '$enforcementMode', which is neither Default nor DoNotEnforce. Reported as inconclusive rather than assumed enforced."
+            }
 
             $assignmentIdText = "$(Get-MlsProperty -InputObject $row -Name 'policyAssignmentId')".Trim()
             $artifactValue = if ([string]::IsNullOrWhiteSpace($assignmentIdText)) { $null } else { $assignmentIdText }

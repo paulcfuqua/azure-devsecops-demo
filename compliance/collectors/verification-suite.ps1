@@ -171,9 +171,20 @@ Invoke-MlsCollector -Name $script:CollectorName -ScriptBlock {
                 foreach ($controlId in $controlList) {
                     $controlText = "$controlId".Trim()
                     if ([string]::IsNullOrWhiteSpace($controlText)) { continue }
-                    $emitted.Add((New-MlsEvidence -Control $controlText -Source $script:CollectorName `
-                        -Status $mappedStatus -Observed $observedText -Criterion $criterionId `
-                        -Artifact $artifact))
+                    # Per-ROW try, inside the per-FILE one. New-MlsEvidence throws on a
+                    # control id the catalog no longer carries, and that was the single
+                    # failure mode able to escape the row-level `continue`s above - so
+                    # one stale id discarded every record from that report, blanking a
+                    # whole layer's machine-verified evidence. The docstring already
+                    # promised row-level isolation; now the code does it.
+                    try {
+                        $emitted.Add((New-MlsEvidence -Control $controlText -Source $script:CollectorName `
+                            -Status $mappedStatus -Observed $observedText -Criterion $criterionId `
+                            -Artifact $artifact))
+                    }
+                    catch {
+                        Write-Warning "verification-suite: skipping criterion '$criterionId' -> control '$controlText' in $($file.Name): $($_.Exception.Message)"
+                    }
                 }
             }
 

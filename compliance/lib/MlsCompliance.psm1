@@ -375,9 +375,24 @@ function Get-MlsControlStatus {
                 foreach ($record in @($Evidence)) {
                     $recordCriterion = Get-MlsComplianceText (
                         Get-MlsComplianceField -InputObject $record -Name 'criterion')
-                    if ($null -ne $recordCriterion -and $recordCriterion -eq $criterionId) {
-                        $matched += , $record
+                    if ($null -eq $recordCriterion -or $recordCriterion -ne $criterionId) { continue }
+
+                    # The criterion is not enough on its own. A Verifier criterion declares
+                    # WHICH requirements it evidences, and verification-suite fans one record
+                    # out per (criterion, control) pair precisely to carry that. Joining on the
+                    # criterion alone threw the control away, so an assessment for 3.1.1
+                    # declaring V3.3 would match a record V3.3 emitted for 3.5.3 and derive
+                    # COMPLIANT / machine-verified for a requirement the criterion never
+                    # claimed to evidence. A record whose control does not name this
+                    # requirement is not evidence for this requirement.
+                    $recordControl = Get-MlsComplianceText (
+                        Get-MlsComplianceField -InputObject $record -Name 'control')
+                    if ($null -ne $recordControl -and $null -ne $requirementId -and
+                        $recordControl -ne $requirementId) {
+                        continue
                     }
+
+                    $matched += , $record
                 }
             }
 

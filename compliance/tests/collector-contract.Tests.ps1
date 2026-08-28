@@ -58,10 +58,14 @@ Describe 'evidence records' {
         { New-MlsEvidence -Control '3.5.3' -Source 's' -Status 'pass' -Observed '   ' } | Should -Throw
     }
 
-    # Task 2's finding, carried forward by Task 3's report: an assessment's `criteria`
-    # only ever claims what genuinely ran. A collector must therefore gate emission on a
-    # real PASS/FAIL and never manufacture evidence for a criterion that was SKIPPED or
-    # left PENDING - so those words are not in the contract at all.
+    # A collector must never manufacture a PASS for a criterion that was SKIPPED or left
+    # PENDING, and the literal words 'skip' and 'pending' are not statuses in this
+    # contract at all. It DOES emit an 'inconclusive' record for them: a skip is itself
+    # an observation, and silence derives INCONCLUSIVE / provenance 'none' where a
+    # record derives INCONCLUSIVE / machine-verified carrying the audit's own words and
+    # the report it came from. An earlier revision of this comment said a collector must
+    # not emit for them at all, which Task 5 overrode; the assertions below were always
+    # correct, only the doctrine above them was stale.
     It 'rejects skip - a skipped criterion is not evidence of anything' {
         { New-MlsEvidence -Control '3.5.3' -Source 's' -Status 'skip' -Observed 'o' } | Should -Throw
     }
@@ -118,12 +122,12 @@ Describe 'collector isolation' {
 
     It 'fails a collector that issues a mutating gh call' {
         { Invoke-MlsCollector -Name 'bad' -ScriptBlock { gh repo delete octocat/hello } } |
-            Should -Throw '*'
+            Should -Throw '*read*'
     }
 
     It 'fails a collector that issues a mutating git call' {
         { Invoke-MlsCollector -Name 'bad' -ScriptBlock { git push origin main } } |
-            Should -Throw '*'
+            Should -Throw '*read*'
     }
 
     It 'leaves az, gh and git resolving to the real executables once the collector returns' {
@@ -272,5 +276,80 @@ Describe 'evidence carries the criterion id Task 3 joins on' {
 
         $result.Status | Should -Be 'INCONCLUSIVE'
         $result.Provenance | Should -Be 'none' -Because 'nothing matched the declared criterion'
+    }
+}
+
+Describe 'the contract closes the bypasses a reviewer found' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..' 'collectors' 'CollectorContract.psm1') -Force
+        Import-Module (Join-Path $PSScriptRoot '..' 'lib' 'MlsCompliance.psm1') -Force
+    }
+
+    It 'refuses a criterion on any source but verification-suite' {
+        # Previously this succeeded and derived COMPLIANT / machine-verified end to end:
+        # control-scoped evidence satisfying a criterion that never ran. The four
+        # per-collector "never sets a criterion" tests could not catch it, because they
+        # only observe what the collectors choose to emit.
+        foreach ($source in 'repo-static', 'manual', 'github-security', 'azure-policy') {
+            { New-MlsEvidence -Control '3.5.3' -Source $source -Status 'pass' `
+                -Observed 'x' -Criterion 'V3.3' } |
+                Should -Throw "*only the verification-suite collector*" -Because "$source is control-scoped"
+        }
+    }
+
+    It 'still allows verification-suite to name a criterion' {
+        $record = New-MlsEvidence -Control '3.5.3' -Source 'verification-suite' `
+            -Status 'pass' -Observed 'x' -Criterion 'V3.3'
+        $record.criterion | Should -Be 'V3.3'
+    }
+
+    It 'rejects a hand-built record that smuggles a criterion past the constructor' {
+        # Invoke-MlsCollector validates whatever a collector emits, not only what
+        # New-MlsEvidence built - so the hand-built path has to be closed too.
+        # Built inside the scriptblock rather than captured by a closure: Pester's own
+        # scriptblock instrumentation makes closure capture unreliable here, and the
+        # point of the test is the validation, not the capture.
+        { Invoke-MlsCollector -Name 'smuggler' -ScriptBlock {
+                [pscustomobject]@{
+                    control = '3.5.3'; criterion = 'V3.3'; source = 'repo-static'
+                    status = 'pass'; observed = 'x'; artifact = $null
+                    collectedAt = '2026-08-28T00:00:00Z'
+                }
+            } } | Should -Throw '*only the verification-suite collector*'
+    }
+
+    It 'normalises criterion whitespace and treats blank as absent' {
+        # Untested until a reviewer mutated it away and the suite stayed green. It matters
+        # because Task 8 serialises this field: "" and null are different in JSON.
+        (New-MlsEvidence -Control '3.5.3' -Source 'verification-suite' -Status 'pass' `
+            -Observed 'x' -Criterion '  V3.3  ').criterion | Should -Be 'V3.3'
+        (New-MlsEvidence -Control '3.5.3' -Source 'verification-suite' -Status 'pass' `
+            -Observed 'x' -Criterion '   ').criterion | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'the derivation will not credit evidence to the wrong requirement' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..' 'collectors' 'CollectorContract.psm1') -Force
+        Import-Module (Join-Path $PSScriptRoot '..' 'lib' 'MlsCompliance.psm1') -Force
+    }
+
+    It 'a record for one control cannot satisfy a criterion declared on another' {
+        # verification-suite fans one record out per (criterion, control) pair precisely
+        # to carry which requirement a criterion evidences. Joining on the criterion
+        # alone discarded that, so an assessment for 3.1.1 declaring V3.3 matched a
+        # record V3.3 emitted for 3.5.3 and derived COMPLIANT / machine-verified.
+        $record = New-MlsEvidence -Control '3.5.3' -Source 'verification-suite' `
+            -Status 'pass' -Observed 'both policies enforced' -Criterion 'V3.3'
+
+        $wrong = Get-MlsControlStatus -Requirement @{ id = '3.1.1' } `
+            -Assessment @{ applicability = 'applicable'; criteria = @('V3.3') } -Evidence @($record)
+        $wrong.Status | Should -Be 'INCONCLUSIVE'
+        $wrong.Provenance | Should -Be 'none'
+
+        $right = Get-MlsControlStatus -Requirement @{ id = '3.5.3' } `
+            -Assessment @{ applicability = 'applicable'; criteria = @('V3.3') } -Evidence @($record)
+        $right.Status | Should -Be 'COMPLIANT'
+        $right.Provenance | Should -Be 'machine-verified'
     }
 }

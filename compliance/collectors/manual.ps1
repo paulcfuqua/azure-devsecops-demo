@@ -20,7 +20,7 @@
     it today - has nothing authored to transcribe. It emits nothing, silently: that is not
     a malformed record, it is the ordinary "this control is machine-verified only" shape.
 
-    NEVER A CRITERION - STRUCTURALLY BLOCKS COMPLIANT
+    NEVER A CRITERION - and the contract now enforces that, rather than trusting this collector to abstain: Get-MlsEvidenceProblem rejects a criterion on any source but verification-suite
     ---------------------------------------------------------
     This record is control-scoped like repo-static, github-security and azure-policy: it
     never sets -Criterion. That is not merely stylistic here - Get-MlsControlStatus
