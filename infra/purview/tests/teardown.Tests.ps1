@@ -37,17 +37,38 @@ BeforeAll {
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'teardown.ps1')
     Set-StrictMode -Off
 
-    $script:ExpectedNames = @('Public', 'Internal', 'Confidential', 'Export-Controlled')
-    $script:ExpectedPolicyName = 'mls-demo-label-policy'
+    # Names come from the script's own prefix resolution (naming.bicep), never from a
+    # literal here: F32's whole point is that the labels are <prefix>-prefixed, and a
+    # test carrying its own copy of the bare names would go green against a script
+    # that had regressed to deleting an adopter's 'Confidential'.
+    $script:Prefix = Get-CompanyPrefix
+    $script:ExpectedNames = Get-LabelTaxonomy -Prefix $script:Prefix
+    $script:ExpectedPolicyName = Get-LabelPolicyName -Prefix $script:Prefix
+
+    # The GUID each mocked label reports, and the baseline file that says this estate
+    # owns them. Without a matching baseline every delete is refused (F32).
+    $script:LabelGuid = @{}
+    $index = 0
+    foreach ($name in $script:ExpectedNames) {
+        $index++
+        $script:LabelGuid[$name] = ('{0}{0}{0}{0}{0}{0}{0}{0}-{0}{0}{0}{0}-{0}{0}{0}{0}-{0}{0}{0}{0}-{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}{0}' -f $index)
+    }
+    $script:BaselineRoot = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "mls-purview-teardown-tests-$([guid]::NewGuid().ToString('n'))"
+    New-Item -ItemType Directory -Path $script:BaselineRoot -Force | Out-Null
+    $script:BaselinePath = Join-Path -Path $script:BaselineRoot -ChildPath 'label-guids.json'
+    ($script:LabelGuid | ConvertTo-Json) | Set-Content -LiteralPath $script:BaselinePath -Encoding utf8
 
     function Invoke-TeardownForTest {
-        param([switch]$AsWhatIf, [switch]$AsAllowAutomation)
-        Invoke-Main -AllowAutomation:$AsAllowAutomation -WhatIf:$AsWhatIf -Confirm:$false
+        param([switch]$AsWhatIf, [switch]$AsAllowAutomation, [string]$BaselinePath = $script:BaselinePath)
+        Invoke-Main -AllowAutomation:$AsAllowAutomation -WhatIf:$AsWhatIf -Confirm:$false -LabelGuidPath $BaselinePath
     }
 }
 
 AfterAll {
     Remove-Item Env:\MLS_SKIP_MAIN -ErrorAction SilentlyContinue
+    if ($script:BaselineRoot -and (Test-Path -LiteralPath $script:BaselineRoot)) {
+        Remove-Item -LiteralPath $script:BaselineRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Describe 'infra/purview/teardown.ps1' {
@@ -60,7 +81,7 @@ Describe 'infra/purview/teardown.ps1' {
         # the default and contexts that want "absent" override explicitly.
         Mock Get-Label {
             if ($script:ExpectedNames -contains $Identity) {
-                return [pscustomobject]@{ Name = $Identity }
+                return [pscustomobject]@{ Name = $Identity; Guid = $script:LabelGuid[$Identity] }
             }
             throw "The Label $Identity doesn't exist"
         }
@@ -216,7 +237,7 @@ Describe 'infra/purview/teardown.ps1' {
         # to make ShouldProcess return $false.
         It 'reports every category as Declined, not Deleted, when every prompt is declined' {
             Mock Remove-PublishedLabelPolicy { @{ Name = $Name; Existed = $true; Confirmed = $false } }
-            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $false } }
+            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $false; Refused = $false } }
 
             $outcomes = Invoke-TeardownForTest
 
@@ -228,7 +249,7 @@ Describe 'infra/purview/teardown.ps1' {
 
         It 'still reports Deleted when the prompt is confirmed - the guard is not simply hard-coded' {
             Mock Remove-PublishedLabelPolicy { @{ Name = $Name; Existed = $true; Confirmed = $true } }
-            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $true } }
+            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $true; Refused = $false } }
 
             $outcomes = Invoke-TeardownForTest
 
@@ -245,7 +266,8 @@ Describe 'infra/purview/teardown.ps1' {
             $policyResult.Existed | Should -BeTrue -Because 'the policy is mocked as present'
             $policyResult.Confirmed | Should -BeFalse -Because 'ShouldProcess returns false under -WhatIf'
 
-            $labelResult = Remove-SensitivityLabel -Name $script:ExpectedNames[0] -WhatIf
+            $labelResult = Remove-SensitivityLabel -Name $script:ExpectedNames[0] `
+                -BaselineGuid (Get-LabelGuidBaseline -Path $script:BaselinePath) -WhatIf
             $labelResult.Existed | Should -BeTrue
             $labelResult.Confirmed | Should -BeFalse
 
@@ -257,13 +279,90 @@ Describe 'infra/purview/teardown.ps1' {
             # Both leave Confirmed $false; only one is a dry run. Conflating them
             # would make a -WhatIf rehearsal look like a refused teardown.
             Mock Remove-PublishedLabelPolicy { @{ Name = $Name; Existed = $true; Confirmed = $false } }
-            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $false } }
+            Mock Remove-SensitivityLabel { @{ Name = $Name; Existed = $true; Confirmed = $false; Refused = $false } }
 
             $outcomes = Invoke-Main -WhatIf
 
             $values = @($outcomes.PSObject.Properties | ForEach-Object { $_.Value })
             $values | Should -Not -Contain 'Declined'
             @($values | Where-Object { $_ -eq 'WhatIf' }).Count | Should -Be 5
+        }
+    }
+
+    Context 'label names are prefixed, never the bare words (F32)' {
+        # The defect: Get-LabelTaxonomy returned the literal 'Public', 'Internal',
+        # 'Confidential', 'Export-Controlled' - the three most common sensitivity
+        # label names in existence. Against an adopter with an existing Purview
+        # taxonomy this teardown deleted their production 'Confidential', and every
+        # document already labelled with it lost its classification and protection.
+        It 'derives every label name from naming.bicep, and none of them is a bare generic word' {
+            $taxonomy = Get-LabelTaxonomy -Prefix $script:Prefix
+            @($taxonomy).Count | Should -Be 4
+            foreach ($name in $taxonomy) {
+                $name | Should -BeLike "$($script:Prefix)-*"
+            }
+            foreach ($bare in @('Public', 'Internal', 'Confidential', 'Export-Controlled')) {
+                $taxonomy | Should -Not -Contain $bare -Because 'a bare generic name is an adopter''s own label, not ours'
+            }
+        }
+
+        It 'reads the prefix out of infra/bicep/naming.bicep rather than hardcoding it' {
+            $namingPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', 'bicep', 'naming.bicep'
+            Get-CompanyPrefix -Path $namingPath | Should -Be $script:Prefix
+            { Get-CompanyPrefix -Path (Join-Path -Path $script:BaselineRoot -ChildPath 'no-such-naming.bicep') } |
+                Should -Throw '*naming.bicep*'
+        }
+    }
+
+    Context 'ownership: only labels whose GUID is in the recorded baseline are deleted (F32)' {
+        # The banner has always named verification/reports/label-guids.json. Nothing
+        # read it: Remove-Label -Identity <name> fired on a name match alone. A name
+        # is not evidence of ownership; a GUID we recorded is.
+        It 'refuses to delete a label whose GUID is not in the baseline, and deletes nothing else either way' {
+            $stranger = $script:ExpectedNames[2]
+            Mock Get-Label {
+                if ($script:ExpectedNames -contains $Identity) {
+                    $guid = if ($Identity -eq $stranger) { '99999999-9999-9999-9999-999999999999' } else { $script:LabelGuid[$Identity] }
+                    return [pscustomobject]@{ Name = $Identity; Guid = $guid }
+                }
+                throw "The Label $Identity doesn't exist"
+            } -ParameterFilter { $true }
+
+            $result = Invoke-TeardownForTest
+
+            $result.$stranger | Should -Be 'Refused'
+            Should -Invoke Remove-Label -Exactly -Times 0 -ParameterFilter { $Identity -eq $stranger }
+            Should -Invoke Remove-Label -Exactly -Times 3
+        }
+
+        It 'refuses every delete when there is no baseline file at all' {
+            $missing = Join-Path -Path $script:BaselineRoot -ChildPath 'absent.json'
+            $result = Invoke-TeardownForTest -BaselinePath $missing
+            foreach ($name in $script:ExpectedNames) { $result.$name | Should -Be 'Refused' }
+            Should -Invoke Remove-Label -Exactly -Times 0
+        }
+
+        It 'refuses a label that reports no GUID at all' {
+            Mock Get-Label {
+                if ($script:ExpectedNames -contains $Identity) { return [pscustomobject]@{ Name = $Identity } }
+                throw "The Label $Identity doesn't exist"
+            }
+            $result = Invoke-TeardownForTest
+            foreach ($name in $script:ExpectedNames) { $result.$name | Should -Be 'Refused' }
+            Should -Invoke Remove-Label -Exactly -Times 0
+        }
+
+        It 'Get-LabelGuidBaseline returns null for absent, unparsable and empty baselines, and a populated set otherwise' {
+            Get-LabelGuidBaseline -Path (Join-Path -Path $script:BaselineRoot -ChildPath 'nope.json') | Should -BeNullOrEmpty
+            $bad = Join-Path -Path $script:BaselineRoot -ChildPath 'bad.json'
+            'not json at all {' | Set-Content -LiteralPath $bad -Encoding utf8
+            Get-LabelGuidBaseline -Path $bad | Should -BeNullOrEmpty
+            $empty = Join-Path -Path $script:BaselineRoot -ChildPath 'empty.json'
+            '{}' | Set-Content -LiteralPath $empty -Encoding utf8
+            Get-LabelGuidBaseline -Path $empty | Should -BeNullOrEmpty
+            $good = Get-LabelGuidBaseline -Path $script:BaselinePath
+            $good.Count | Should -Be 4
+            $good.Contains($script:LabelGuid[$script:ExpectedNames[0]]) | Should -BeTrue
         }
     }
 

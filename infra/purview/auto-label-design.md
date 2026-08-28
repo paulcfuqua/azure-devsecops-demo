@@ -13,17 +13,18 @@
 
 Auto-label the `mls-operations` Fabric lakehouse workspace (launch telemetry
 summaries, supplier pricing, incident findings) with the same four-label taxonomy
-`labels.ps1` creates — `Public` / `Internal` / `Confidential` / `Export-Controlled` —
+`labels.ps1` creates — `<prefix>-public` / `<prefix>-internal` /
+`<prefix>-confidential` / `<prefix>-export-controlled` —
 so that content matching a sensitivity pattern picks up the right label without a
 human applying it by hand. Candidate triggers, sketched only (none of this is
 tuned, tested, or normative):
 
 | Content pattern (illustrative) | Target label |
 |---|---|
-| Supplier pricing / cost figures, incident findings | `Confidential` |
-| Launch dates, vehicle names, published mission facts | `Public` (default floor) |
-| Everything else in the workspace | `Internal` (default) |
-| Fictional export-controlled technical data markers | `Export-Controlled` |
+| Supplier pricing / cost figures, incident findings | `<prefix>-confidential` |
+| Launch dates, vehicle names, published mission facts | `<prefix>-public` (default floor) |
+| Everything else in the workspace | `<prefix>-internal` (default) |
+| Fictional export-controlled technical data markers | `<prefix>-export-controlled` |
 
 A real implementation would run in simulation mode first (report matches without
 labeling anything), then move to enforce only after a human reviews a sample of

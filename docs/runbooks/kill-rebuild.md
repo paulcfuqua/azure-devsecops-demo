@@ -14,7 +14,7 @@ day-to-day operation.
 | Dies every cycle (gate-free) | Persists every cycle (G3 to touch) |
 |---|---|
 | RGs `mls-rg-platform`, `mls-rg-apps`, `mls-rg-data`, `mls-rg-ops` — and everything in them (ACA env + apps, SQL, LAW/App Insights, storage, Key Vault, registry/images) | Entra users (5), groups (4), CA policies (report-only), app registrations (3) |
-| Fabric workspace **items** in `mls-operations` (lakehouse `mls_operations` + its 10 Delta tables) — **and, since 2026-08-24, the Fabric data agent, which is a workspace item too** | Purview labels (Public/Internal/Confidential/Export-Controlled) + their GUIDs |
+| Fabric workspace **items** in `mls-operations` (lakehouse `mls_operations` + its 10 Delta tables) — **and, since 2026-08-24, the Fabric data agent, which is a workspace item too** | Purview labels (`<prefix>-public`/`-internal`/`-confidential`/`-export-controlled`) + their GUIDs |
 | Subscription-scope cost-export definition [derived — removed so it doesn't point at deleted storage] | Fabric workspace shell `mls-operations` + role assignments; the capacity itself |
 | | OIDC federation on `mls-github-deployer`; `mls-verifier`; MG `mls` + policy/NIST assignments; the $75 budget; the GitHub repo and all its config |
 | | **The Power Platform environment, its pay-as-you-go billing plan, and the Copilot Studio agent + its solution** (2026-08-24) — not RG-scoped, and re-import + republish + Direct Line reconfiguration does not fit inside the hour |

@@ -36,12 +36,17 @@ param(
     [string]$Organization,
     [string]$VerifierAppId,
     [string]$CertificateThumbprint,
-    [string[]]$ExpectedLabel = @('Public', 'Internal', 'Confidential', 'Export-Controlled'),
+    # Empty resolves to the prefixed taxonomy read from infra/bicep/naming.bicep
+    # (F32): the labels are named <prefix>-public/-internal/-confidential/
+    # -export-controlled, never the bare words, so this audit can never be pointed at
+    # an adopter's own 'Confidential'.
+    [string[]]$ExpectedLabel = @(),
     [string]$LabelGuidPath,
     [ValidateSet('layer', 'post-down', 'post-up')][string]$Checkpoint = 'layer',
     [string]$ReportRoot,
     [switch]$NoRetry,
-    [string]$ExpectedLabelPolicy = 'mls-demo-label-policy',
+    # Empty resolves to '<prefix>-demo-label-policy'.
+    [string]$ExpectedLabelPolicy = '',
     [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
 )
 
@@ -49,6 +54,40 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path -Path $PSScriptRoot -ChildPath 'MlsAudit.psm1') -Force
+
+function Get-CompanyPrefix {
+    <#
+    .SYNOPSIS
+        Reads `defaultCompanyPrefix` out of infra/bicep/naming.bicep - the same helper,
+        parsed the same way, as infra/purview/labels.ps1's and scripts/down.ps1's.
+    .DESCRIPTION
+        F32's own defect. The taxonomy this audit checks used to be the bare words
+        'Public', 'Internal', 'Confidential', 'Export-Controlled'; labels.ps1 now
+        creates <prefix>-prefixed names, and an audit that still looked for the bare
+        words would match an ADOPTER'S OWN labels and report a healthy demo built out
+        of somebody else's taxonomy. Reader-only script, so it refuses rather than
+        guessing.
+    #>
+    param([string]$Path = (Join-Path -Path (Split-Path -Path $PSScriptRoot -Parent) -ChildPath 'infra' -AdditionalChildPath 'bicep', 'naming.bicep'))
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Cannot resolve the label-name prefix: '$Path' does not exist. Names come from infra/bicep/naming.bicep and nowhere else (CLAUDE.md). Run this audit from a clone of the repository, or pass -ExpectedLabel explicitly."
+    }
+    $content = Get-Content -LiteralPath $Path -Raw
+    $match = [regex]::Match($content, "var\s+defaultCompanyPrefix\s*=\s*'([^']+)'")
+    if (-not $match.Success) {
+        throw "Could not parse 'defaultCompanyPrefix' out of '$Path'."
+    }
+    return $match.Groups[1].Value
+}
+
+function Get-ExpectedLabelName {
+    <# The prefixed four-label taxonomy infra/purview/labels.ps1 creates, in the same
+       lowest-to-highest order. Kept as a literal list here, mirroring that script's
+       own Get-LabelTaxonomy, for the reason it gives: a read-only audit importing
+       another layer's apply script is a bigger coupling than one four-item list. #>
+    param([Parameter(Mandatory)][string]$Prefix)
+    return @("$Prefix-public", "$Prefix-internal", "$Prefix-confidential", "$Prefix-export-controlled")
+}
 
 function Get-LabelSnapshot {
     <# One read of the four labels, normalised to name -> guid. #>
@@ -172,16 +211,24 @@ function Invoke-Main {
         [string]$Organization,
         [string]$VerifierAppId,
         [string]$CertificateThumbprint,
-        [string[]]$ExpectedLabel = @('Public', 'Internal', 'Confidential', 'Export-Controlled'),
+        [string[]]$ExpectedLabel = @(),
         [string]$LabelGuidPath,
         [string]$Checkpoint = 'layer',
         [string]$ReportRoot,
         [switch]$NoRetry,
         [switch]$SkipConnect,
-        [string]$ExpectedLabelPolicy = 'mls-demo-label-policy',
+        [string]$ExpectedLabelPolicy = '',
         [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
+    # Resolved here rather than as a parameter default so naming.bicep is read once,
+    # at run time, and an explicit -ExpectedLabel / -ExpectedLabelPolicy still wins
+    # (F32). Both names are prefixed; neither is ever the bare word.
+    if (@($ExpectedLabel).Count -eq 0 -or [string]::IsNullOrWhiteSpace($ExpectedLabelPolicy)) {
+        $companyPrefix = Get-CompanyPrefix
+        if (@($ExpectedLabel).Count -eq 0) { $ExpectedLabel = Get-ExpectedLabelName -Prefix $companyPrefix }
+        if ([string]::IsNullOrWhiteSpace($ExpectedLabelPolicy)) { $ExpectedLabelPolicy = "$companyPrefix-demo-label-policy" }
+    }
     $organizationName = Resolve-MlsInput -Name 'Organization' -Value $Organization `
         -EnvironmentVariable @('TENANT_DOMAIN', 'MLS_TENANT_DOMAIN') `
         -Hint 'Connect-IPPSSession needs the tenant domain; the S&C endpoint has no other way to find the tenant.'

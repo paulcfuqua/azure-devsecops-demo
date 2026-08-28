@@ -349,7 +349,7 @@ function Get-TeardownManifest {
 
     $survives = @(
         'Entra users (5), groups (4), CA policies (report-only), app registrations (3)'
-        'Purview labels (Public/Internal/Confidential/Export-Controlled) and their GUIDs'
+        "Purview labels ($Prefix-public/-internal/-confidential/-export-controlled) and their GUIDs"
         "Fabric workspace SHELL '$Prefix-operations' + role assignments; the capacity itself"
         "Management group '$Prefix', policy + NIST assignments, the `$75 budget"
         'OIDC federation on the deployer, mls-verifier, and this repository'

@@ -69,16 +69,20 @@ BeforeAll {
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'labels.ps1')
     Set-StrictMode -Off
 
-    $script:ExpectedNames = @('Public', 'Internal', 'Confidential', 'Export-Controlled')
+    # Prefixed, and derived from the script's own naming.bicep parse rather than
+    # written out here: F32. A test carrying its own copy of the bare generic names
+    # would stay green against a regression that recreated an adopter's labels.
+    $script:Prefix = Get-CompanyPrefix
+    $script:ExpectedNames = @((Get-LabelTaxonomy -Prefix $script:Prefix).Name)
     # The demo groups L04.md:53 says the policy scopes the labels to - same four groups
     # infra/entra/manifest.json's groups[].displayName defines.
     $script:ExpectedGroups = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
-    $script:ExpectedPolicyName = 'mls-demo-label-policy'
+    $script:ExpectedPolicyName = Get-LabelPolicyName -Prefix $script:Prefix
 
     function Get-MatchingLabelGetMock {
         <# A Get-Label mock where every label in the taxonomy already exists, unchanged. #>
         return {
-            $wanted = Get-LabelTaxonomy | Where-Object { $_.Name -eq $Identity }
+            $wanted = Get-LabelTaxonomy -Prefix $script:Prefix | Where-Object { $_.Name -eq $Identity }
             if (-not $wanted) { throw "The Label $Identity doesn't exist" }
             return [pscustomobject]@{ Name = $wanted.Name; DisplayName = $wanted.DisplayName; Tooltip = $wanted.Tooltip }
         }
@@ -104,7 +108,7 @@ Describe 'labels' {
 
     Context 'taxonomy definition' {
         It 'defines exactly the four labels, lowest to highest sensitivity' {
-            $taxonomy = Get-LabelTaxonomy
+            $taxonomy = Get-LabelTaxonomy -Prefix $script:Prefix
             @($taxonomy).Name | Should -Be $script:ExpectedNames
             foreach ($label in $taxonomy) {
                 $label.DisplayName | Should -Not -BeNullOrEmpty
@@ -113,9 +117,51 @@ Describe 'labels' {
         }
     }
 
+    Context 'label names are prefixed, never the bare words (F32)' {
+        # The defect this closes: Get-LabelTaxonomy returned the literal 'Public',
+        # 'Internal', 'Confidential' and 'Export-Controlled'. Against an adopter with
+        # an existing Microsoft Purview taxonomy, the update-on-drift path below is
+        # not a create - it silently rewrites their production 'Confidential' label's
+        # tooltip with demo text, in CI, under -Confirm:$false.
+        It 'prefixes every label name and every display name, and uses no bare generic word' {
+            $taxonomy = Get-LabelTaxonomy -Prefix $script:Prefix
+            @($taxonomy).Count | Should -Be 4
+            foreach ($label in $taxonomy) {
+                $label.Name | Should -BeLike "$($script:Prefix)-*"
+                $label.DisplayName | Should -BeLike "$($script:Prefix)-*"
+            }
+            foreach ($bare in @('Public', 'Internal', 'Confidential', 'Export-Controlled')) {
+                @($taxonomy).Name | Should -Not -Contain $bare
+                @($taxonomy).DisplayName | Should -Not -Contain $bare
+            }
+        }
+
+        It 'reads the prefix out of infra/bicep/naming.bicep rather than hardcoding it' {
+            $namingPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', 'bicep', 'naming.bicep'
+            Get-CompanyPrefix -Path $namingPath | Should -Be $script:Prefix
+            { Get-CompanyPrefix -Path (Join-Path -Path $PSScriptRoot -ChildPath 'no-such-naming.bicep') } |
+                Should -Throw '*naming.bicep*'
+        }
+
+        It 'prefixes the published policy name too' {
+            Get-LabelPolicyName -Prefix $script:Prefix | Should -BeLike "$($script:Prefix)-*"
+        }
+
+        It 'Initialize-SensitivityLabel declares ConfirmImpact High on the function that calls ShouldProcess' {
+            # ConfirmImpact does not propagate from caller to callee, so declaring it
+            # on Invoke-Main would do nothing. Writing a tenant-level sensitivity
+            # label is high-impact and an interactive operator must be asked.
+            $attribute = (Get-Item 'Function:\Initialize-SensitivityLabel').ScriptBlock.Attributes |
+                Where-Object { $_ -is [System.Management.Automation.CmdletBindingAttribute] }
+            $attribute | Should -Not -BeNullOrEmpty
+            $attribute.SupportsShouldProcess | Should -BeTrue
+            $attribute.ConfirmImpact | Should -Be 'High'
+        }
+    }
+
     Context 'label policy scope definition' {
         It 'names the policy and scopes it to exactly the four demo groups L04.md names' {
-            Get-LabelPolicyName | Should -Be $script:ExpectedPolicyName
+            Get-LabelPolicyName -Prefix $script:Prefix | Should -Be $script:ExpectedPolicyName
             Get-LabelPolicyScope | Should -Be $script:ExpectedGroups
         }
     }
@@ -126,7 +172,7 @@ Describe 'labels' {
         }
 
         It 'creates all four labels' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke New-Label -Exactly -Times 4
             foreach ($expected in $script:ExpectedNames) {
                 Should -Invoke New-Label -Exactly -Times 1 -ParameterFilter { $Name -eq $expected }
@@ -139,7 +185,7 @@ Describe 'labels' {
     Context 'all labels already exist and match (idempotent replay)' {
         BeforeEach {
             Mock Get-Label {
-                $wanted = Get-LabelTaxonomy | Where-Object { $_.Name -eq $Identity }
+                $wanted = Get-LabelTaxonomy -Prefix $script:Prefix | Where-Object { $_.Name -eq $Identity }
                 if (-not $wanted) { throw "The Label $Identity doesn't exist" }
                 return [pscustomobject]@{
                     Name        = $wanted.Name
@@ -150,7 +196,7 @@ Describe 'labels' {
         }
 
         It 'creates and updates nothing' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke New-Label -Exactly -Times 0
             Should -Invoke Set-Label -Exactly -Times 0
             foreach ($name in $script:ExpectedNames) { $result.$name | Should -Be 'Unchanged' }
@@ -160,10 +206,10 @@ Describe 'labels' {
     Context 'one label drifted' {
         BeforeEach {
             Mock Get-Label {
-                $wanted = Get-LabelTaxonomy | Where-Object { $_.Name -eq $Identity }
+                $wanted = Get-LabelTaxonomy -Prefix $script:Prefix | Where-Object { $_.Name -eq $Identity }
                 if (-not $wanted) { throw "The Label $Identity doesn't exist" }
                 $tooltip = $wanted.Tooltip
-                if ($Identity -eq 'Confidential') { $tooltip = 'stale tooltip' }
+                if ($Identity -eq "$($script:Prefix)-confidential") { $tooltip = 'stale tooltip' }
                 return [pscustomobject]@{
                     Name        = $wanted.Name
                     DisplayName = $wanted.DisplayName
@@ -173,19 +219,19 @@ Describe 'labels' {
         }
 
         It 'updates only the drifted label in place' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke New-Label -Exactly -Times 0
-            Should -Invoke Set-Label -Exactly -Times 1 -ParameterFilter { $Identity -eq 'Confidential' }
-            $result.Confidential | Should -Be 'Updated'
-            $result.Public | Should -Be 'Unchanged'
+            Should -Invoke Set-Label -Exactly -Times 1 -ParameterFilter { $Identity -eq "$($script:Prefix)-confidential" }
+            $result."$($script:Prefix)-confidential" | Should -Be 'Updated'
+            $result."$($script:Prefix)-public" | Should -Be 'Unchanged'
         }
     }
 
     Context 'mixed: some exist, some do not' {
         BeforeEach {
             Mock Get-Label {
-                if ($Identity -in @('Public', 'Internal')) {
-                    $wanted = Get-LabelTaxonomy | Where-Object { $_.Name -eq $Identity }
+                if ($Identity -in @("$($script:Prefix)-public", "$($script:Prefix)-internal")) {
+                    $wanted = Get-LabelTaxonomy -Prefix $script:Prefix | Where-Object { $_.Name -eq $Identity }
                     return [pscustomobject]@{ Name = $wanted.Name; DisplayName = $wanted.DisplayName; Tooltip = $wanted.Tooltip }
                 }
                 throw "The Label $Identity doesn't exist"
@@ -193,12 +239,12 @@ Describe 'labels' {
         }
 
         It 'creates only the missing ones' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke New-Label -Exactly -Times 2
-            Should -Invoke New-Label -Exactly -Times 1 -ParameterFilter { $Name -eq 'Confidential' }
-            Should -Invoke New-Label -Exactly -Times 1 -ParameterFilter { $Name -eq 'Export-Controlled' }
-            $result.Public | Should -Be 'Unchanged'
-            $result.'Export-Controlled' | Should -Be 'Created'
+            Should -Invoke New-Label -Exactly -Times 1 -ParameterFilter { $Name -eq "$($script:Prefix)-confidential" }
+            Should -Invoke New-Label -Exactly -Times 1 -ParameterFilter { $Name -eq "$($script:Prefix)-export-controlled" }
+            $result."$($script:Prefix)-public" | Should -Be 'Unchanged'
+            $result."$($script:Prefix)-export-controlled" | Should -Be 'Created'
         }
     }
 
@@ -213,7 +259,7 @@ Describe 'labels' {
 
         It 'with a drifted label, Set-Label does not run either' {
             Mock Get-Label {
-                $wanted = Get-LabelTaxonomy | Where-Object { $_.Name -eq $Identity }
+                $wanted = Get-LabelTaxonomy -Prefix $script:Prefix | Where-Object { $_.Name -eq $Identity }
                 if (-not $wanted) { throw 'missing' }
                 return [pscustomobject]@{ Name = $wanted.Name; DisplayName = $wanted.DisplayName; Tooltip = 'stale' }
             }
@@ -225,7 +271,7 @@ Describe 'labels' {
     Context 'session guard' {
         It 'fails clearly when Connect-IPPSSession has not been run' {
             Mock Test-IppSession { throw 'Security & Compliance cmdlets not found. Run Connect-IPPSSession first.' }
-            { Invoke-Main } | Should -Throw '*Connect-IPPSSession*'
+            { Invoke-Main -Confirm:$false } | Should -Throw '*Connect-IPPSSession*'
             Should -Invoke New-Label -Exactly -Times 0
             Should -Invoke New-LabelPolicy -Exactly -Times 0
         }
@@ -245,7 +291,7 @@ Describe 'labels' {
         }
 
         It 'publishes one policy, naming all four labels, scoped to exactly the four demo groups' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke New-LabelPolicy -Exactly -Times 1 -ParameterFilter {
                 $Name -eq $script:ExpectedPolicyName -and
                 -not (Compare-Object $Labels $script:ExpectedNames) -and
@@ -269,7 +315,7 @@ Describe 'labels' {
         }
 
         It 'creates and updates nothing' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke New-LabelPolicy -Exactly -Times 0
             Should -Invoke Set-LabelPolicy -Exactly -Times 0
             $result.LabelPolicy | Should -Be 'Unchanged'
@@ -289,7 +335,7 @@ Describe 'labels' {
         }
 
         It 'adds only the missing group to the existing policy, in place - never recreates it' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke New-LabelPolicy -Exactly -Times 0
             Should -Invoke Set-LabelPolicy -Exactly -Times 1 -ParameterFilter {
                 $Identity -eq $script:ExpectedPolicyName -and
@@ -316,7 +362,7 @@ Describe 'labels' {
         }
 
         It 'removes only the unexpected group, in place' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke Set-LabelPolicy -Exactly -Times 1 -ParameterFilter {
                 $RemoveExchangeLocation -contains 'mls-contractors' -and
                 $RemoveExchangeLocation.Count -eq 1 -and
@@ -332,17 +378,17 @@ Describe 'labels' {
             Mock Get-LabelPolicy {
                 return [pscustomobject]@{
                     Identity         = $Identity
-                    Labels           = @('Public', 'Internal', 'Confidential')
+                    Labels           = @($script:ExpectedNames | Select-Object -First 3)
                     ExchangeLocation = $script:ExpectedGroups
                 }
             }
         }
 
         It 'adds only the missing label to the existing policy, in place' {
-            $result = Invoke-Main
+            $result = Invoke-Main -Confirm:$false
             Should -Invoke New-LabelPolicy -Exactly -Times 0
             Should -Invoke Set-LabelPolicy -Exactly -Times 1 -ParameterFilter {
-                $AddLabel -contains 'Export-Controlled' -and
+                $AddLabel -contains "$($script:Prefix)-export-controlled" -and
                 $AddLabel.Count -eq 1 -and
                 $null -eq $RemoveLabel -and
                 $null -eq $AddExchangeLocation -and

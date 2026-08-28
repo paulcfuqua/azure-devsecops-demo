@@ -1,12 +1,19 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    L4 Purview sensitivity labels - Public / Internal / Confidential / Export-Controlled.
+    L4 Purview sensitivity labels - <prefix>-public / -internal / -confidential / -export-controlled.
 
 .DESCRIPTION
     Creates the four-label taxonomy AND publishes the label policy that scopes it to
     the demo groups, via Security & Compliance PowerShell (ExchangeOnlineManagement
-    module). The caller must ALREADY be connected:
+    module).
+
+    EVERY LABEL NAME IS PREFIXED with the estate's company prefix, read from
+    infra/bicep/naming.bicep (F32). These are tenant-level objects in the
+    adopter's own Microsoft Purview: an unprefixed `Confidential` is not a create, it
+    is a silent rewrite of whatever `Confidential` that tenant already had.
+
+    The caller must ALREADY be connected:
 
         Connect-IPPSSession -UserPrincipalName <admin-upn>
 
@@ -45,37 +52,83 @@ function Write-Status {
     Write-Host $Message -ForegroundColor $Color
 }
 
+function Get-CompanyPrefix {
+    <#
+    .SYNOPSIS
+        Reads `defaultCompanyPrefix` out of infra/bicep/naming.bicep.
+    .DESCRIPTION
+        Same single source of truth, parsed the same way, as scripts/down.ps1's
+        Get-CompanyPrefix, infra/policy/teardown.ps1's Get-ManagementGroupName and the
+        .github/actions/naming composite action. CLAUDE.md forbids hardcoding the
+        company prefix anywhere but naming.bicep, and F32 is exactly
+        what happens when a tenant-level object is NOT prefixed: this script used to
+        create labels called literally `Public`, `Internal`, `Confidential` and
+        `Export-Controlled`, the three most common sensitivity-label names in
+        existence. Against an adopter's existing Microsoft Purview taxonomy that is not
+        a create - it is a silent in-place rewrite of their production `Confidential`
+        label (and teardown.ps1 then deleted it).
+
+        Refuses rather than guessing: a label name this script is not sure about is
+        the whole defect.
+    #>
+    param([string]$Path = (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'bicep', 'naming.bicep'))
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "Cannot resolve the label-name prefix: '$Path' does not exist. Names come from infra/bicep/naming.bicep and nowhere else (CLAUDE.md, 'Naming and tagging'). Run this script from a clone of the repository."
+    }
+    $content = Get-Content -LiteralPath $Path -Raw
+    $match = [regex]::Match($content, "var\s+defaultCompanyPrefix\s*=\s*'([^']+)'")
+    if (-not $match.Success) {
+        throw "Could not parse 'defaultCompanyPrefix' out of '$Path'. Creating sensitivity labels under a guessed prefix could collide with the tenant's own taxonomy; refusing."
+    }
+    return $match.Groups[1].Value
+}
+
 function Get-LabelTaxonomy {
-    <# The four-label MLS taxonomy, lowest to highest sensitivity. #>
+    <#
+        The four-label demo taxonomy, lowest to highest sensitivity, EVERY NAME
+        PREFIXED with the estate's company prefix.
+
+        The prefix is not cosmetic. These labels are tenant-level objects in an
+        adopter's own Microsoft Purview, not resources in a disposable resource group:
+        an unprefixed `Confidential` collides with the label a real organisation most
+        likely already has, and this script's update-on-drift path would then rewrite
+        that label's tooltip with demo text - in CI, under -Confirm:$false, with no
+        prompt. Name and DisplayName are deliberately the same string so that both
+        Get-Label -Identity (which matches Name) and verification/layer-04-audit.ps1
+        (which matches DisplayName) address exactly the objects this script created.
+    #>
+    param([Parameter(Mandatory)][string]$Prefix)
     return @(
         [pscustomobject]@{
-            Name        = 'Public'
-            DisplayName = 'Public'
+            Name        = "$Prefix-public"
+            DisplayName = "$Prefix-public"
             Tooltip     = 'Approved for public release. Launch dates, vehicle names, published mission facts.'
         }
         [pscustomobject]@{
-            Name        = 'Internal'
-            DisplayName = 'Internal'
+            Name        = "$Prefix-internal"
+            DisplayName = "$Prefix-internal"
             Tooltip     = 'MLS internal business information. Default for day-to-day operational data.'
         }
         [pscustomobject]@{
-            Name        = 'Confidential'
-            DisplayName = 'Confidential'
+            Name        = "$Prefix-confidential"
+            DisplayName = "$Prefix-confidential"
             Tooltip     = 'Sensitive MLS business data: telemetry summaries, supplier pricing, incident findings.'
         }
         [pscustomobject]@{
-            Name        = 'Export-Controlled'
-            DisplayName = 'Export-Controlled'
+            Name        = "$Prefix-export-controlled"
+            DisplayName = "$Prefix-export-controlled"
             Tooltip     = 'Fictional demo analogue of export-controlled technical data. Strictest handling.'
         }
     )
 }
 
 function Get-LabelPolicyName {
-    <# The single published policy name. Not Azure-resource-named (mls-<app|role>-<env>-<type>
+    <# The single published policy name. Not Azure-resource-named (<prefix>-<app|role>-<env>-<type>
        does not apply - this is a tenant-level S&C object, same as the labels themselves,
-       which are also named without that pattern). #>
-    return 'mls-demo-label-policy'
+       which are also named without that pattern) but prefixed for the same reason they
+       are: it is created in the adopter's tenant, alongside whatever is already there. #>
+    param([Parameter(Mandatory)][string]$Prefix)
+    return "$Prefix-demo-label-policy"
 }
 
 function Get-LabelPolicyScope {
@@ -121,8 +174,21 @@ function Get-ExistingLabelPolicy {
 }
 
 function Initialize-SensitivityLabel {
-    <# Create-if-absent / update-on-drift a single sensitivity label. Returns outcome string. #>
-    [CmdletBinding(SupportsShouldProcess)]
+    <#
+        Create-if-absent / update-on-drift a single sensitivity label. Returns outcome
+        string.
+
+        ConfirmImpact is 'High' HERE, on the function that actually calls
+        ShouldProcess - ConfirmImpact does not propagate from a caller to a callee, so
+        declaring it on Invoke-Main alone would never trigger the default
+        $ConfirmPreference of 'High' (the same lesson teardown.ps1's Remove-* wrappers
+        record). Writing to a tenant-level sensitivity label is a high-impact operation
+        in an adopter's own Purview, and an interactive operator should be asked.
+        .github/workflows/layer-04-purview.yml still passes -Confirm:$false because a
+        CI run cannot answer a prompt; the control that protects an adopter's existing
+        taxonomy in that path is Get-LabelTaxonomy's prefix, not this decorator.
+    #>
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -209,13 +275,14 @@ function Invoke-Main {
     [CmdletBinding(SupportsShouldProcess)]
     param()
     Test-IppSession | Out-Null
+    $prefix = Get-CompanyPrefix
     $outcomes = [ordered]@{}
-    $taxonomy = Get-LabelTaxonomy
+    $taxonomy = Get-LabelTaxonomy -Prefix $prefix
     foreach ($label in $taxonomy) {
         $outcomes[$label.Name] = Initialize-SensitivityLabel -Name $label.Name `
             -DisplayName $label.DisplayName -Tooltip $label.Tooltip
     }
-    $outcomes['LabelPolicy'] = Initialize-LabelPolicy -Name (Get-LabelPolicyName) `
+    $outcomes['LabelPolicy'] = Initialize-LabelPolicy -Name (Get-LabelPolicyName -Prefix $prefix) `
         -LabelName $taxonomy.Name -ExchangeLocation (Get-LabelPolicyScope)
     Write-Status ("Labels: " + (($outcomes.Keys | ForEach-Object { "$_=$($outcomes[$_])" }) -join ' ')) -Color Cyan
     return [pscustomobject]$outcomes

@@ -172,7 +172,9 @@ create-if-absent replay, no-ops in seconds.
 
 ### L4 — Purview sensitivity labels (Identity & Governance)
 
-Taxonomy Public / Internal / Confidential / Export-Controlled via S&C PowerShell;
+Taxonomy `<prefix>-public` / `-internal` / `-confidential` / `-export-controlled` via
+S&C PowerShell (prefixed since F32 — unprefixed names collide with an adopter's own
+Purview taxonomy);
 auto-label policy for the lakehouse workspace documented (applied where licensing
 allows).
 **Verify:** `Get-Label` returns the 4 labels with expected GUIDs recorded to

@@ -9,11 +9,16 @@ BeforeAll {
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l04-$([guid]::NewGuid().ToString('n'))"
     New-Item -ItemType Directory -Path $script:ReportRoot -Force | Out-Null
     $script:BaselinePath = Join-Path -Path $script:ReportRoot -ChildPath 'label-guids.json'
+    # Prefixed, and the prefix comes from the audit's own naming.bicep parse (F32):
+    # the labels are <prefix>-public/... and an audit still looking for the bare
+    # generic words would match an ADOPTER'S OWN taxonomy and report it green.
+    $script:Prefix = Get-CompanyPrefix
+    $script:ExpectedLabel = Get-ExpectedLabelName -Prefix $script:Prefix
     $script:Baseline = [ordered]@{
-        'Public'            = '11111111-1111-1111-1111-111111111111'
-        'Internal'          = '22222222-2222-2222-2222-222222222222'
-        'Confidential'      = '33333333-3333-3333-3333-333333333333'
-        'Export-Controlled' = '44444444-4444-4444-4444-444444444444'
+        "$($script:Prefix)-public"            = '11111111-1111-1111-1111-111111111111'
+        "$($script:Prefix)-internal"          = '22222222-2222-2222-2222-222222222222'
+        "$($script:Prefix)-confidential"      = '33333333-3333-3333-3333-333333333333'
+        "$($script:Prefix)-export-controlled" = '44444444-4444-4444-4444-444444444444'
     }
     Set-Content -LiteralPath $script:BaselinePath -Value ($script:Baseline | ConvertTo-Json) -Encoding utf8
 
@@ -29,7 +34,7 @@ BeforeAll {
     function Invoke-AuditForTest {
         param([switch]$NoRetry, [string]$LabelGuidPath = $script:BaselinePath, [string]$Checkpoint = 'layer')
         Invoke-Main -Organization 'meridianlaunch.onmicrosoft.com' -VerifierAppId 'ver-app' `
-            -CertificateThumbprint 'ABCD1234' -ExpectedLabel @('Public', 'Internal', 'Confidential', 'Export-Controlled') `
+            -CertificateThumbprint 'ABCD1234' -ExpectedLabel $script:ExpectedLabel `
             -LabelGuidPath $LabelGuidPath -Checkpoint $Checkpoint -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
 }
@@ -58,7 +63,7 @@ Describe 'layer-04-audit' {
         # keeps seeing an all-PASS run unless it overrides this mock itself.
         $script:Policy = [pscustomobject]@{
             Identity         = 'mls-demo-label-policy'
-            Labels           = @('Public', 'Internal', 'Confidential', 'Export-Controlled')
+            Labels           = $script:ExpectedLabel
             ExchangeLocation = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
         }
         Mock Get-MlsLabelPolicy { return $script:Policy }
@@ -75,7 +80,7 @@ Describe 'layer-04-audit' {
 
         It 'records the observed GUIDs as evidence in the report context' {
             $context = Invoke-AuditForTest
-            $context.Evidence['labelGuids']['Public'] | Should -Be $script:Baseline['Public']
+            $context.Evidence['labelGuids'][$script:ExpectedLabel[0]] | Should -Be $script:Baseline[$script:ExpectedLabel[0]]
         }
 
         It 'names the checkpoint L11 re-executes it at' {
@@ -84,13 +89,46 @@ Describe 'layer-04-audit' {
         }
     }
 
+    Context 'the expected taxonomy is prefixed, and resolved from naming.bicep (F32)' {
+        # The audit used to default -ExpectedLabel to the bare 'Public', 'Internal',
+        # 'Confidential', 'Export-Controlled'. Those are an adopter's own labels;
+        # matching on them would have reported a healthy demo built out of somebody
+        # else's Purview taxonomy.
+        It 'resolves the four expected names from the company prefix, with no bare generic word' {
+            $resolved = Get-ExpectedLabelName -Prefix $script:Prefix
+            @($resolved).Count | Should -Be 4
+            foreach ($name in $resolved) { $name | Should -BeLike "$($script:Prefix)-*" }
+            foreach ($bare in @('Public', 'Internal', 'Confidential', 'Export-Controlled')) {
+                $resolved | Should -Not -Contain $bare
+            }
+        }
+
+        It 'reads the prefix out of infra/bicep/naming.bicep rather than hardcoding it' {
+            $namingPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', 'infra', 'bicep', 'naming.bicep'
+            Get-CompanyPrefix -Path $namingPath | Should -Be $script:Prefix
+            { Get-CompanyPrefix -Path (Join-Path -Path $script:ReportRoot -ChildPath 'no-such-naming.bicep') } |
+                Should -Throw '*naming.bicep*'
+        }
+
+        It 'defaults to the prefixed taxonomy and the prefixed policy name when neither is passed' {
+            # -ExpectedLabel @() / -ExpectedLabelPolicy '' is exactly what the script
+            # entry point hands Invoke-Main when the caller passes nothing.
+            $context = Invoke-Main -Organization 'meridianlaunch.onmicrosoft.com' -VerifierAppId 'ver-app' `
+                -CertificateThumbprint 'ABCD1234' -ExpectedLabel @() -ExpectedLabelPolicy '' `
+                -LabelGuidPath $script:BaselinePath -ReportRoot $script:ReportRoot -NoRetry
+            (Get-Row -Context $context -Id 'V4.1').Status | Should -Be 'PASS'
+            (Get-Row -Context $context -Id 'V4.1').Expected | Should -BeLike "*$($script:Prefix)-confidential*"
+            (Get-Row -Context $context -Id 'V4.3').Expected | Should -BeLike "*$($script:Prefix)-demo-label-policy*"
+        }
+    }
+
     Context 'a criterion fails on a realistic wrong value' {
         It 'fails V4.1 on GUID drift and refuses to re-baseline' {
             $script:Labels = @(
-                [pscustomobject]@{ DisplayName = 'Public'; Guid = '55555555-5555-5555-5555-555555555555' }
-                [pscustomobject]@{ DisplayName = 'Internal'; Guid = $script:Baseline['Internal'] }
-                [pscustomobject]@{ DisplayName = 'Confidential'; Guid = $script:Baseline['Confidential'] }
-                [pscustomobject]@{ DisplayName = 'Export-Controlled'; Guid = $script:Baseline['Export-Controlled'] }
+                [pscustomobject]@{ DisplayName = $script:ExpectedLabel[0]; Guid = '55555555-5555-5555-5555-555555555555' }
+                [pscustomobject]@{ DisplayName = $script:ExpectedLabel[1]; Guid = $script:Baseline[$script:ExpectedLabel[1]] }
+                [pscustomobject]@{ DisplayName = $script:ExpectedLabel[2]; Guid = $script:Baseline[$script:ExpectedLabel[2]] }
+                [pscustomobject]@{ DisplayName = $script:ExpectedLabel[3]; Guid = $script:Baseline[$script:ExpectedLabel[3]] }
             )
             $context = Invoke-AuditForTest
             $row = Get-Row -Context $context -Id 'V4.1'
@@ -103,11 +141,11 @@ Describe 'layer-04-audit' {
         }
 
         It 'fails V4.1 when a label is missing from the taxonomy' {
-            $script:Labels = @($script:Labels | Where-Object { $_.DisplayName -ne 'Export-Controlled' })
+            $script:Labels = @($script:Labels | Where-Object { $_.DisplayName -ne $script:ExpectedLabel[3] })
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V4.1'
             $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*missing*Export-Controlled*'
+            $row.Observed | Should -BeLike "*missing*$($script:ExpectedLabel[3])*"
         }
     }
 
@@ -117,7 +155,7 @@ Describe 'layer-04-audit' {
             Mock Get-MlsLabel {
                 $script:Calls++
                 if ($script:Calls -lt 2) {
-                    return @($script:Labels | Where-Object { $_.DisplayName -ne 'Export-Controlled' })
+                    return @($script:Labels | Where-Object { $_.DisplayName -ne $script:ExpectedLabel[3] })
                 }
                 return $script:Labels
             }
@@ -188,11 +226,11 @@ Describe 'layer-04-audit' {
         }
 
         It 'fails when the published policy does not name one of the four labels' {
-            $script:Policy.Labels = @('Public', 'Internal', 'Confidential')
+            $script:Policy.Labels = @($script:ExpectedLabel | Select-Object -First 3)
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V4.3'
             $row.Status | Should -Be 'FAIL'
-            $row.Detail | Should -BeLike '*labels missing*Export-Controlled*'
+            $row.Detail | Should -BeLike "*labels missing*$($script:ExpectedLabel[3])*"
         }
 
         It 'is not in the master-plan traceability convention - documented as supplementary' {

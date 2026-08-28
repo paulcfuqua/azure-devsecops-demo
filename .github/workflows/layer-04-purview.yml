@@ -1,7 +1,8 @@
 name: layer-04-purview
 
 # =============================================================================
-# L4 — Purview sensitivity labels (Public / Internal / Confidential / Export-Controlled).
+# L4 — Purview sensitivity labels (<prefix>-public / -internal / -confidential /
+# -export-controlled; the prefix is naming.bicep's defaultCompanyPrefix — F32).
 # Playbook: docs/runbooks/layers/L04.md   Assets: infra/purview/labels.ps1
 #
 # labels.ps1 never authenticates on its own: the caller must already hold a
