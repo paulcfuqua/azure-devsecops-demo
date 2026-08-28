@@ -56,6 +56,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Collect the state artifact
+        id: collect
         shell: pwsh
         env:
           # The sha this job actually checked out, so the artifact stamps the code it
@@ -63,7 +64,11 @@ jobs:
           MLS_COMMIT: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          ./compliance/Invoke-MlsCompliance.ps1 -OutputRoot compliance/state -Commit $env:MLS_COMMIT
+          $state = ./compliance/Invoke-MlsCompliance.ps1 -OutputRoot compliance/state -Commit $env:MLS_COMMIT -PassThru
+          # Name the dated file this run produced, so the upload carries only it rather
+          # than every previously committed artifact sitting in the same directory.
+          $dated = ($state.collectedAt -split 'T')[0]
+          "dated-file=compliance/state/state-$dated.json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Sanity-check the artifact before anything is allowed to commit it
         run: |
@@ -108,7 +113,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: compliance-state
-          path: compliance/state/
+          # Only what this run produced. Uploading compliance/state/ wholesale would
+          # carry every previously committed dated artifact along with it, growing the
+          # per-run artifact by ~130 KB a day forever.
+          path: |
+            compliance/state/state-latest.json
+            ${{ steps.collect.outputs.dated-file }}
           if-no-files-found: error
           retention-days: 30
 
@@ -123,7 +133,11 @@ jobs:
     # default branch and nowhere else.
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
+      # fetch-depth: 0 because the push-retry below rebases, and `git pull --rebase`
+      # on the default shallow clone is the fragile half of that retry.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
@@ -136,6 +150,8 @@ jobs:
       - name: Commit the artifact if it changed
         env:
           MLS_COMMIT: ${{ github.sha }}
+          # Needed only by the PR fallback below; gh reads it from the environment.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'

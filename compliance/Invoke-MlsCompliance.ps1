@@ -287,14 +287,26 @@ function ConvertTo-MlsComplianceEvidenceRow {
         [Parameter(Mandatory)][bool]$Participated
     )
 
+    $source = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'source')
+
+    # The manual collector transcribes the SAME authored assertion the derivation already
+    # read, so on an asserted control that claim appears twice: once in statusBasis and
+    # again here. A board counting green marks would read two independent pieces of
+    # evidence where there is one. 3.13.16 in the first collected artifact shows three
+    # `pass` supporting records under a PARTIAL/asserted row for exactly this reason.
+    # Flagged rather than dropped - the record is real and a reader may want it - so a
+    # renderer can suppress or merge it structurally instead of by remembering prose.
+    $duplicatesStatusBasis = (-not $Participated) -and $source -eq 'manual'
+
     [pscustomobject][ordered]@{
-        source               = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'source')
-        criterion            = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'criterion')
-        status               = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'status')
-        observed             = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'observed')
-        artifact             = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'artifact')
-        collectedAt          = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'collectedAt')
-        participatedInStatus = $Participated
+        source                = $source
+        criterion             = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'criterion')
+        status                = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'status')
+        observed              = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'observed')
+        artifact              = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'artifact')
+        collectedAt           = Get-MlsComplianceTrimmed (Get-MlsProperty -InputObject $Record -Name 'collectedAt')
+        participatedInStatus  = $Participated
+        duplicatesStatusBasis = $duplicatesStatusBasis
     }
 }
 
@@ -641,7 +653,14 @@ foreach ($id in @($assessmentByControl.Keys)) {
     $row.framework = 'nist-800-53r5'
     $row.inCatalog = $false
     $row.family = ($id -split '-')[0]
+    # Machine-readable, not prose-only. This is a bare string[] of requirement ids -
+    # exactly the shape a renderer consumes without reading the adjacent note - and it
+    # sits directly in the path of the framework switcher, where an 800-53 view is one
+    # .map() from attributing CP-9's authored CLOSED to 3.8.9. The flag beside it exists
+    # so a renderer can refuse structurally rather than by remembering to read prose.
     $row | Add-Member -NotePropertyName 'requirementsMappingToThisControl' -NotePropertyValue $related
+    $row | Add-Member -NotePropertyName 'mappingIsOrientationOnly' -NotePropertyValue $true
+    $row | Add-Member -NotePropertyName 'statusMayBeRenderedOnMappedRequirements' -NotePropertyValue $false
     $row | Add-Member -NotePropertyName 'note' -NotePropertyValue (@(
             "This record was assessed against NIST SP 800-53 Rev 5 control $id."
             'The NIST SP 800-171 Rev 2 catalog has no requirement for it, so it is rendered on'

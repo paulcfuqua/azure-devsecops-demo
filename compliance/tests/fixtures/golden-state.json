@@ -171,8 +171,9 @@
           "status": "fail",
           "observed": "Register asserts GAP for 3.1.1, asserted by fixture-author on 2026-08-27, citing 1 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/tests/fixtures/state-assessment/3.1.1.json",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": true
         }
       ],
       "assessment": {
@@ -342,8 +343,9 @@
           "status": "inconclusive",
           "observed": "declared window has not elapsed: deadline 2026-08-26T14:40:00Z; re-run this criterion before then.",
           "artifact": "compliance/tests/fixtures/L03-report.json",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -823,8 +825,9 @@
           "status": "pass",
           "observed": "4 diagnosticSettings declaration(s) across 1 Bicep template(s) under infra/bicep/platform/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": "infra/bicep/platform",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -862,8 +865,9 @@
           "status": "pass",
           "observed": "isAzureMonitorTargetEnabled: true is declared on a SQL auditing settings resource under infra/bicep/platform/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": "infra/bicep/platform",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -1167,8 +1171,9 @@
           "status": "pass",
           "observed": "1 ruleset config file(s) committed under .github/rulesets/: main.json. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": ".github/rulesets",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -1304,8 +1309,9 @@
           "status": "pass",
           "observed": "8 of 8 manifest users present with expected UPNs and license flags",
           "artifact": "compliance/tests/fixtures/L03-report.json",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -1342,7 +1348,7 @@
           "detail": "8 of 8 manifest users present with expected UPNs and license flags",
           "source": "verification-suite",
           "artifact": "compliance/tests/fixtures/L03-report.json",
-          "collectedAt": "1970-01-01T00:00:00Z"
+          "collectedAt": "2026-08-28T15:36:46Z"
         }
       ],
       "evidence": [
@@ -1352,8 +1358,9 @@
           "status": "pass",
           "observed": "8 of 8 manifest users present with expected UPNs and license flags",
           "artifact": "compliance/tests/fixtures/L03-report.json",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": true
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": true,
+          "duplicatesStatusBasis": false
         }
       ],
       "supportingEvidence": [],
@@ -1396,7 +1403,7 @@
           "detail": "state=enabledForReportingButNotEnforced (report-only) on both baseline policies",
           "source": "verification-suite",
           "artifact": "compliance/tests/fixtures/L03-report.json",
-          "collectedAt": "1970-01-01T00:00:00Z"
+          "collectedAt": "2026-08-28T15:36:46Z"
         }
       ],
       "evidence": [
@@ -1406,8 +1413,9 @@
           "status": "fail",
           "observed": "state=enabledForReportingButNotEnforced (report-only) on both baseline policies",
           "artifact": "compliance/tests/fixtures/L03-report.json",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": true
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": true,
+          "duplicatesStatusBasis": false
         }
       ],
       "supportingEvidence": [],
@@ -1656,8 +1664,9 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.6.1, asserted by fixture-author on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/tests/fixtures/state-assessment/3.6.1.json",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": true
         }
       ],
       "assessment": {
@@ -1981,7 +1990,7 @@
           "detail": "label-guids.json baseline not present yet; label presence only was checked",
           "source": "verification-suite",
           "artifact": "compliance/tests/fixtures/L03-report.json",
-          "collectedAt": "1970-01-01T00:00:00Z"
+          "collectedAt": "2026-08-28T15:36:46Z"
         }
       ],
       "evidence": [
@@ -1991,8 +2000,9 @@
           "status": "inconclusive",
           "observed": "label-guids.json baseline not present yet; label presence only was checked",
           "artifact": "compliance/tests/fixtures/L03-report.json",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": true
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": true,
+          "duplicatesStatusBasis": false
         }
       ],
       "supportingEvidence": [],
@@ -2413,8 +2423,9 @@
           "status": "pass",
           "observed": "codeql.yml declares a schedule: trigger, so analysis runs on a cadence independent of pushes. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": ".github/workflows/codeql.yml",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -2583,8 +2594,9 @@
           "status": "pass",
           "observed": "All 2 app Dockerfile(s) under apps/*/ declare a USER directive. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": "apps",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         },
         {
           "source": "azure-policy",
@@ -2592,8 +2604,9 @@
           "status": "inconclusive",
           "observed": "Azure Policy 'NIST SP 800-53 Rev. 5' initiative, control group SC-7: complianceState=Compliant on resource /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca. Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control.",
           "artifact": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -2627,8 +2640,9 @@
           "status": "inconclusive",
           "observed": "Azure Policy 'NIST SP 800-53 Rev. 5' initiative, control group SC-7: complianceState=Compliant on resource /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca. Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control.",
           "artifact": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -2712,8 +2726,9 @@
           "status": "inconclusive",
           "observed": "Azure Policy 'NIST SP 800-53 Rev. 5' initiative, control group SC-7: complianceState=Compliant on resource /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca. Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control.",
           "artifact": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -2939,8 +2954,9 @@
           "status": "inconclusive",
           "observed": "Azure Policy 'NIST SP 800-53 Rev. 5' initiative, control group SC-7: complianceState=Compliant on resource /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca. Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control.",
           "artifact": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -2997,8 +3013,9 @@
           "status": "pass",
           "observed": "gitleaks.yml exists and checks out with fetch-depth: 0 (full history scanned). This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": ".github/workflows/gitleaks.yml",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         },
         {
           "source": "repo-static",
@@ -3006,8 +3023,9 @@
           "status": "pass",
           "observed": "No secret-shaped output names found across 2 Bicep template(s) under infra/bicep/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": "infra/bicep",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         },
         {
           "source": "github-security",
@@ -3015,8 +3033,9 @@
           "status": "pass",
           "observed": "GitHub security_and_analysis: secret_scanning=enabled, secret_scanning_push_protection=enabled.",
           "artifact": null,
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -3054,8 +3073,9 @@
           "status": "pass",
           "observed": "dependabot.yml declares 3 package-ecosystem entry(ies): npm, pip, github-actions. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": ".github/dependabot.yml",
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         },
         {
           "source": "github-security",
@@ -3063,8 +3083,9 @@
           "status": "pass",
           "observed": "GitHub security_and_analysis: dependabot_security_updates=enabled.",
           "artifact": null,
-          "collectedAt": "1970-01-01T00:00:00Z",
-          "participatedInStatus": false
+          "collectedAt": "2026-08-28T15:36:46Z",
+          "participatedInStatus": false,
+          "duplicatesStatusBasis": false
         }
       ],
       "assessment": null
@@ -3267,6 +3288,8 @@
         "3.4.1",
         "3.4.2"
       ],
+      "mappingIsOrientationOnly": true,
+      "statusMayBeRenderedOnMappedRequirements": false,
       "note": "This record was assessed against NIST SP 800-53 Rev 5 control CM-6. The NIST SP 800-171 Rev 2 catalog has no requirement for it, so it is rendered on its own row and counted separately from the 110. requirementsMappingToThisControl (3.4.1, 3.4.2) is listed for orientation only: this record's assertion is not applied to those requirements and does not appear in their rows, because its author wrote about CM-6, not about them."
     },
     {
@@ -3306,6 +3329,8 @@
       "requirementsMappingToThisControl": [
         "3.8.9"
       ],
+      "mappingIsOrientationOnly": true,
+      "statusMayBeRenderedOnMappedRequirements": false,
       "note": "This record was assessed against NIST SP 800-53 Rev 5 control CP-9. The NIST SP 800-171 Rev 2 catalog has no requirement for it, so it is rendered on its own row and counted separately from the 110. requirementsMappingToThisControl (3.8.9) is listed for orientation only: this record's assertion is not applied to those requirements and does not appear in their rows, because its author wrote about CP-9, not about them."
     }
   ]
