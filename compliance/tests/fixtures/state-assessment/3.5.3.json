@@ -1,0 +1,7 @@
+{
+  "control": "3.5.3",
+  "applicability": "applicable",
+  "criteria": ["V3.3"],
+  "recommendation": "Machine-verified only (fixture): V3.3 FAILs in the L03 report fixture, so this control derives GAP / machine-verified.",
+  "references": []
+}

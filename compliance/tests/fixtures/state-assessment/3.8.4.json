@@ -1,0 +1,7 @@
+{
+  "control": "3.8.4",
+  "applicability": "applicable",
+  "criteria": ["V4.1"],
+  "recommendation": "Fixture for the SKIP case: V4.1 is SKIP in the L03 report fixture, so the collector emits an inconclusive record and this control derives INCONCLUSIVE / machine-verified. It is machine-verified because a machine reached the question and explicitly declined to answer it - it is emphatically not verified-and-passing.",
+  "references": []
+}

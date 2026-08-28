@@ -28,8 +28,10 @@ follow-on implementation plan proceeds.
   places its content is an editorial decision rather than a straight transcription. The
   control ids used in `assessment/` are still not validated against it: four records
   (`CM-6`, `SI-4`, `IR-4`, `CP-9`) key on 800-53 ids the 800-171 catalog has no
-  requirement for, so the catalog-to-register join is not an identity mapping and the
-  state emitter has to decide what to do with them.
+  requirement for, so the catalog-to-register join is not an identity mapping. The state
+  emitter renders those four on their own rows (`outOfCatalogControls`) rather than
+  dropping them or forcing them through the mappings — see **What the state artifact
+  says** below.
 - **`lib/MlsCompliance.psm1`** — the status derivation, spec §3.4. `Get-MlsControlStatus`
   is a pure function over (requirement, assessment, evidence) returning `Status`,
   `Provenance` and `Observed`; `Get-MlsComplianceVocabulary` publishes the two
@@ -45,15 +47,51 @@ follow-on implementation plan proceeds.
 - **`tests/derivation.Tests.ps1`** — Pester 6 tests over every row of §3.4's table, both
   halves of the honesty invariant as property tests, purity, and the degenerate and
   malformed inputs each branch must fail closed on.
+- **`Invoke-MlsCompliance.ps1`** — the state emitter, spec §3.3. Loads the catalog and
+  the register, runs all five collectors, calls `Get-MlsControlStatus` once per
+  requirement, and writes `state/state-<ISO-date>.json` plus `state-latest.json` (a real
+  file copy, never a symlink: authored on Windows, collected on Linux). Read-only,
+  offline, and needs no tenant. See the file header for the three decisions it takes —
+  how the four 800-53-keyed records are rendered, how collected evidence that drove
+  nothing is surfaced without looking as though it drove something, and how a skipped
+  criterion is counted so `machine-verified` cannot be read as verified-and-passing.
+- **`state/`** — the emitted snapshots themselves, committed on every run of
+  `.github/workflows/compliance.yml` (push to `main`, nightly, dispatch) so
+  `git log compliance/state/` is the record of when the estate became compliant and when
+  it regressed. Never hand-edited.
+- **`tests/state-emitter.Tests.ps1`** and **`tests/fixtures/golden-state.json`** — the
+  emitter's suite and the golden file pinning the whole artifact for a fixture set that
+  exercises all six derived statuses, all four provenances, an out-of-catalog record and
+  a malformed register file. The golden's `commit` and `collectedAt` are placeholders: it
+  pins a shape, not a collection that happened.
 
-## What does not exist yet
+## What the state artifact says, and what it refuses to say
 
-- **`state/`** — collector-emitted, CI-committed snapshots joining the catalog and
-  assessment records against live evidence (`verification/` reports, repo statics, GHAS
-  posture, policy compliance state). Nothing here is machine-verified yet; every record
-  in `assessment/` is an authored assertion, which is why no status ever renders as
-  `COMPLIANT` — an authored assertion can never claim machine-verified provenance
-  (spec §3.4, and **Derived vocabulary** below).
+- One entry for **every one of the 110 requirements**. A requirement nothing was said
+  about is `NOT_ASSESSED` / `none`, never an omission.
+- Each control row separates three different things: `statusBasis` (the working the
+  derivation itself returned — nothing outside it moved the status), `evidence` (the
+  collected records that participated in it) and `supportingEvidence` (everything else
+  collected for that control, each marked `participatedInStatus: false`). Since every
+  register record declares `criteria: []` today, no collected evidence participates
+  anywhere; it is rendered as context, and labelled as context.
+- The four `800-53`-keyed records (`CM-6`, `CP-9`, `IR-4`, `SI-4`) get their own rows in
+  `outOfCatalogControls`, keyed on their own ids and counted separately. They are
+  deliberately **not** resolved through the catalog's `mappings.nist-800-53r5` onto
+  800-171 rows — CP-9 maps to 3.8.9, and rendering CP-9's authored `CLOSED` against
+  3.8.9 would attribute a claim its author never made.
+- `summary` carries `byStatus`, `byProvenance` and the cross-tabulation
+  `byProvenanceAndStatus`. The cross-tab is load-bearing: a criterion a machine
+  explicitly declined to run renders `INCONCLUSIVE` / `machine-verified`, so a bare
+  `machine-verified` total must never be read as verified-and-passing. `COMPLIANT` is
+  the only status that means that.
+- **No blended percentage, ever** — no `percentCompliant`, no score, no ratio. Counts
+  only. Enforced by the emitter's tests, which walk the whole object graph, and again by
+  the workflow, which greps the emitted bytes.
+
+Nothing in the register is machine-verified: every record in `assessment/` is an
+authored assertion, which is why no status derived from one ever renders as `COMPLIANT`
+(spec §3.4, and **Derived vocabulary** below).
 
 ## Register vocabulary
 

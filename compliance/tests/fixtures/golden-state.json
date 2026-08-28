@@ -1,0 +1,3312 @@
+{
+  "schemaVersion": 1,
+  "framework": "nist-800-171r2",
+  "frameworkName": "NIST SP 800-171 Revision 2",
+  "collectedAt": "1970-01-01T00:00:00Z",
+  "commit": "0000000000000000000000000000000000000000",
+  "commitShort": "0000000",
+  "workingTreeClean": false,
+  "notes": {
+    "supportingEvidence": "supportingEvidence holds evidence that was collected for the control and did NOT drive its status. What drove the status is statusBasis, which is the working the derivation itself returned; evidence[] is the subset of collected records that participated in it. Every record in the register declares an empty criteria list today, so every control takes the authored path and no collected evidence participates anywhere - it is rendered as context, and only as context.",
+    "outOfCatalogControls": "outOfCatalogControls holds assessment records keyed on control ids the NIST SP 800-171 Rev 2 catalog has no requirement for. They are rendered on their own rows, against the framework they were actually assessed under, and counted separately from the 110. They are deliberately not resolved through the catalog framework mappings onto 800-171 rows: that would attribute a claim to a requirement its author never wrote about.",
+    "countsOnly": "Counts only. There is deliberately no percentage, ratio or score anywhere in this artifact: a figure that blends machine-verified and asserted controls is the number an adopter would quote to an auditor and the number that would be wrong."
+  },
+  "summary": {
+    "totalRequirements": 110,
+    "byStatus": {
+      "COMPLIANT": 1,
+      "PARTIAL": 1,
+      "GAP": 2,
+      "INCONCLUSIVE": 1,
+      "NOT_APPLICABLE": 1,
+      "NOT_ASSESSED": 104
+    },
+    "byProvenance": {
+      "machine-verified": 3,
+      "asserted": 2,
+      "declared": 1,
+      "none": 104
+    },
+    "byProvenanceAndStatus": {
+      "machine-verified": {
+        "COMPLIANT": 1,
+        "PARTIAL": 0,
+        "GAP": 1,
+        "INCONCLUSIVE": 1,
+        "NOT_APPLICABLE": 0,
+        "NOT_ASSESSED": 0
+      },
+      "asserted": {
+        "COMPLIANT": 0,
+        "PARTIAL": 1,
+        "GAP": 1,
+        "INCONCLUSIVE": 0,
+        "NOT_APPLICABLE": 0,
+        "NOT_ASSESSED": 0
+      },
+      "declared": {
+        "COMPLIANT": 0,
+        "PARTIAL": 0,
+        "GAP": 0,
+        "INCONCLUSIVE": 0,
+        "NOT_APPLICABLE": 1,
+        "NOT_ASSESSED": 0
+      },
+      "none": {
+        "COMPLIANT": 0,
+        "PARTIAL": 0,
+        "GAP": 0,
+        "INCONCLUSIVE": 0,
+        "NOT_APPLICABLE": 0,
+        "NOT_ASSESSED": 104
+      }
+    },
+    "outOfCatalog": {
+      "count": 2,
+      "byStatus": {
+        "COMPLIANT": 0,
+        "PARTIAL": 2,
+        "GAP": 0,
+        "INCONCLUSIVE": 0,
+        "NOT_APPLICABLE": 0,
+        "NOT_ASSESSED": 0
+      },
+      "byProvenance": {
+        "machine-verified": 0,
+        "asserted": 2,
+        "declared": 0,
+        "none": 0
+      }
+    },
+    "notes": [
+      "machine-verified means a machine reached the question - including a criterion it explicitly declined to run, which is collected as an inconclusive record and renders INCONCLUSIVE / machine-verified. It does not mean passing. COMPLIANT is the only status that means verified and passing, and it is reachable from the criteria branch alone; read byProvenanceAndStatus, never byProvenance on its own.",
+      "asserted means a human wrote it down and the platform checked nothing. declared means a human declared the requirement not applicable and justified it. none means nothing was asserted and nothing was collected.",
+      "Counts only. There is deliberately no percentage, ratio or score anywhere in this artifact: a figure that blends machine-verified and asserted controls is the number an adopter would quote to an auditor and the number that would be wrong."
+    ]
+  },
+  "collectors": [
+    {
+      "name": "verification-suite",
+      "status": "ok",
+      "recordCount": 5,
+      "limitation": "Reads committed Verifier audit reports. It reports what an audit run observed at the time that report was written, not the state of the estate now. Nothing in this estate has been deployed, so there are no reports to read.",
+      "error": null
+    },
+    {
+      "name": "repo-static",
+      "status": "ok",
+      "recordCount": 8,
+      "limitation": "Reads the working tree. Every record describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence that anything runs.",
+      "error": null
+    },
+    {
+      "name": "github-security",
+      "status": "ok",
+      "recordCount": 2,
+      "limitation": "Reads a GET /repos/{owner}/{repo} response. It observes which GitHub Advanced Security features are switched on, never whether any finding they produced was acted on.",
+      "error": null
+    },
+    {
+      "name": "azure-policy",
+      "status": "ok",
+      "recordCount": 4,
+      "limitation": "Reads Azure Policy compliance state. The built-in \"NIST SP 800-53 Rev. 5\" initiative is a Regulatory Compliance initiative composed almost entirely of audit and auditIfNotExists policies, so an assignment-level enforcementMode of Default is NOT evidence that anything is enforced; the field that would settle it, policyDefinitionAction, is absent from the response shape this platform consumes. Treat every record from this collector as an audit observation, never as enforcement.",
+      "error": null
+    },
+    {
+      "name": "manual",
+      "status": "ok",
+      "recordCount": 2,
+      "limitation": "Transcribes an authored assertion from the register into an evidence record. It is a human claim carried forward verbatim, not an observation, and it can never drive a control to COMPLIANT.",
+      "error": null
+    }
+  ],
+  "assessmentProblems": [
+    {
+      "file": "Z99-malformed.json",
+      "problem": "Conversion from JSON failed with error: Unterminated string. Expected delimiter: \". Path '', line 1, position 75."
+    }
+  ],
+  "controls": [
+    {
+      "control": "3.1.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Limit system access to authorized users, processes acting on behalf of authorized users, and devices (including other systems).",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-2",
+          "AC-3",
+          "AC-17"
+        ],
+        "cmmc-2.0": [
+          "L1-3.1.1",
+          "L2-3.1.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(i)"
+        ]
+      },
+      "status": "GAP",
+      "provenance": "asserted",
+      "observed": "the register asserts GAP (a known open finding stands) citing 1 evidence reference(s)",
+      "statusBasis": [
+        {
+          "kind": "assertion",
+          "criterion": null,
+          "outcome": null,
+          "detail": "the register asserts GAP (a known open finding stands) citing 1 evidence reference(s)",
+          "source": "assessment-register",
+          "artifact": null,
+          "collectedAt": null
+        }
+      ],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "manual",
+          "criterion": null,
+          "status": "fail",
+          "observed": "Register asserts GAP for 3.1.1, asserted by fixture-author on 2026-08-27, citing 1 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
+          "artifact": "compliance/tests/fixtures/state-assessment/3.1.1.json",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": {
+        "path": "compliance/tests/fixtures/state-assessment/3.1.1.json",
+        "applicability": "applicable",
+        "registerStatus": "GAP",
+        "assertedBy": "fixture-author",
+        "assertedAt": "2026-08-27",
+        "gapSeverity": "high",
+        "recommendation": "Fixture only - close the underlying finding.",
+        "references": []
+      }
+    },
+    {
+      "control": "3.1.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Limit system access to the types of transactions and functions that authorized users are permitted to execute.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-2",
+          "AC-3",
+          "AC-17"
+        ],
+        "cmmc-2.0": [
+          "L1-3.1.2",
+          "L2-3.1.2"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(ii)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Control the flow of CUI in accordance with approved authorizations.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Separate the duties of individuals to reduce the risk of malevolent activity without collusion.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.4"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Employ the principle of least privilege, including for specific security functions and privileged accounts.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-6",
+          "AC-6(1)",
+          "AC-6(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.5"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Use non-privileged accounts or roles when accessing nonsecurity functions.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-6(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.7",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Prevent non-privileged users from executing privileged functions and capture the execution of such functions in audit logs.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-6(9)",
+          "AC-6(10)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.7"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "verification-suite",
+          "criterion": "V6.3",
+          "status": "inconclusive",
+          "observed": "declared window has not elapsed: deadline 2026-08-26T14:40:00Z; re-run this criterion before then.",
+          "artifact": "compliance/tests/fixtures/L03-report.json",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.1.8",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Limit unsuccessful logon attempts.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.8"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.9",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Provide privacy and security notices consistent with applicable CUI rules.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-8"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.9"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.10",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Use session lock with pattern-hiding displays to prevent access and viewing of data after a period of inactivity.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-11",
+          "AC-11(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.10"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.11",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Terminate (automatically) a user session after a defined condition.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-12"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.11"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.12",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Monitor and control remote access sessions.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-17(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.12"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.13",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Employ cryptographic mechanisms to protect the confidentiality of remote access sessions.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-17(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.13"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.14",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Route remote access via managed access control points.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-17(3)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.14"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.15",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Authorize remote execution of privileged commands and remote access to security-relevant information.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-17(4)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.15"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.16",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Authorize wireless access prior to allowing such connections.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-18"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.16"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.17",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Protect wireless access using authentication and encryption.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-18(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.17"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.18",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Control connection of mobile devices.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-19"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.18"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.19",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Encrypt CUI on mobile devices and mobile computing platforms.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-19(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.19"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.20",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Verify and control/limit connections to and use of external systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-20",
+          "AC-20(1)"
+        ],
+        "cmmc-2.0": [
+          "L1-3.1.20",
+          "L2-3.1.20"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(iii)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.21",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Limit use of portable storage devices on external systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-20(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.1.21"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.1.22",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.1",
+      "familyName": "Access Control",
+      "title": "Control CUI posted or processed on publicly accessible systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AC-22"
+        ],
+        "cmmc-2.0": [
+          "L1-3.1.22",
+          "L2-3.1.22"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(iv)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.2.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.2",
+      "familyName": "Awareness and Training",
+      "title": "Ensure that managers, systems administrators, and users of organizational systems are made aware of the security risks associated with their activities and of the applicable policies, standards, and procedures related to the security of those systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AT-2",
+          "AT-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.2.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.2.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.2",
+      "familyName": "Awareness and Training",
+      "title": "Ensure that personnel are trained to carry out their assigned information security-related duties and responsibilities.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AT-2",
+          "AT-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.2.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.2.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.2",
+      "familyName": "Awareness and Training",
+      "title": "Provide security awareness training on recognizing and reporting potential indicators of insider threat.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AT-2(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.2.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.3.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Create and retain system audit logs and records to the extent needed to enable the monitoring, analysis, investigation, and reporting of unlawful or unauthorized system activity.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-2",
+          "AU-3",
+          "AU-3(1)",
+          "AU-6",
+          "AU-11",
+          "AU-12"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "repo-static",
+          "criterion": null,
+          "status": "pass",
+          "observed": "4 diagnosticSettings declaration(s) across 1 Bicep template(s) under infra/bicep/platform/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "artifact": "infra/bicep/platform",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.3.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Ensure that the actions of individual system users can be uniquely traced to those users, so they can be held accountable for their actions.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-2",
+          "AU-3",
+          "AU-3(1)",
+          "AU-6",
+          "AU-11",
+          "AU-12"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "repo-static",
+          "criterion": null,
+          "status": "pass",
+          "observed": "isAzureMonitorTargetEnabled: true is declared on a SQL auditing settings resource under infra/bicep/platform/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "artifact": "infra/bicep/platform",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.3.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Review and update logged events.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.3.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Alert in the event of an audit logging process failure.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.4"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.3.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Correlate audit record review, analysis, and reporting processes for investigation and response to indications of unlawful, unauthorized, suspicious, or unusual activity.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-6(3)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.5"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.3.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Provide audit record reduction and report generation to support on-demand analysis and reporting.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.3.7",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Provide a system capability that compares and synchronizes internal system clocks with an authoritative source to generate time stamps for audit records.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-8",
+          "SC-45(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.7"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.3.8",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Protect audit information and audit logging tools from unauthorized access, modification, and deletion.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-9"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.8"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.3.9",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.3",
+      "familyName": "Audit and Accountability",
+      "title": "Limit management of audit logging functionality to a subset of privileged users.",
+      "mappings": {
+        "nist-800-53r5": [
+          "AU-9(4)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.3.9"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.4.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Establish and maintain baseline configurations and inventories of organizational systems (including hardware, software, firmware, and documentation) throughout the respective system development life cycles.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-2",
+          "CM-6",
+          "CM-8",
+          "CM-8(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.4.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Establish and enforce security configuration settings for information technology products employed in organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-2",
+          "CM-6",
+          "CM-8",
+          "CM-8(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.4.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Track, review, approve or disapprove, and log changes to organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.4.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Analyze the security impact of changes prior to implementation.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.4"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.4.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Define, document, approve, and enforce physical and logical access restrictions associated with changes to organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.5"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "repo-static",
+          "criterion": null,
+          "status": "pass",
+          "observed": "1 ruleset config file(s) committed under .github/rulesets/: main.json. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "artifact": ".github/rulesets",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.4.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Employ the principle of least functionality by configuring organizational systems to provide only essential capabilities.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.4.7",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Restrict, disable, or prevent the use of nonessential programs, functions, ports, protocols, and services.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-7(1)",
+          "CM-7(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.7"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.4.8",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Apply deny-by-exception (blacklisting) policy to prevent the use of unauthorized software or deny-all, permit-by-exception (whitelisting) policy to allow the execution of authorized software.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-7(4)",
+          "CM-7(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.8"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.4.9",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.4",
+      "familyName": "Configuration Management",
+      "title": "Control and monitor user-installed software.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CM-11"
+        ],
+        "cmmc-2.0": [
+          "L2-3.4.9"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.5.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Identify system users, processes acting on behalf of users, and devices.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-2",
+          "IA-3",
+          "IA-5"
+        ],
+        "cmmc-2.0": [
+          "L1-3.5.1",
+          "L2-3.5.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(v)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "verification-suite",
+          "criterion": "V3.1",
+          "status": "pass",
+          "observed": "8 of 8 manifest users present with expected UPNs and license flags",
+          "artifact": "compliance/tests/fixtures/L03-report.json",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.5.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Authenticate (or verify) the identities of users, processes, or devices, as a prerequisite to allowing access to organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-2",
+          "IA-3",
+          "IA-5"
+        ],
+        "cmmc-2.0": [
+          "L1-3.5.2",
+          "L2-3.5.2"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(vi)"
+        ]
+      },
+      "status": "COMPLIANT",
+      "provenance": "machine-verified",
+      "observed": "V3.1 (pass): 8 of 8 manifest users present with expected UPNs and license flags",
+      "statusBasis": [
+        {
+          "kind": "criterion",
+          "criterion": "V3.1",
+          "outcome": "pass",
+          "detail": "8 of 8 manifest users present with expected UPNs and license flags",
+          "source": "verification-suite",
+          "artifact": "compliance/tests/fixtures/L03-report.json",
+          "collectedAt": "1970-01-01T00:00:00Z"
+        }
+      ],
+      "evidence": [
+        {
+          "source": "verification-suite",
+          "criterion": "V3.1",
+          "status": "pass",
+          "observed": "8 of 8 manifest users present with expected UPNs and license flags",
+          "artifact": "compliance/tests/fixtures/L03-report.json",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": true
+        }
+      ],
+      "supportingEvidence": [],
+      "assessment": {
+        "path": "compliance/tests/fixtures/state-assessment/3.5.2.json",
+        "applicability": "applicable",
+        "registerStatus": null,
+        "assertedBy": null,
+        "assertedAt": null,
+        "gapSeverity": null,
+        "recommendation": "Machine-verified only (fixture): V3.1 PASSes in the L03 report fixture, so this control derives COMPLIANT / machine-verified.",
+        "references": []
+      }
+    },
+    {
+      "control": "3.5.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Use multifactor authentication for local and network access to privileged accounts and for network access to non-privileged accounts.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-2(1)",
+          "IA-2(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "GAP",
+      "provenance": "machine-verified",
+      "observed": "V3.3 (fail): state=enabledForReportingButNotEnforced (report-only) on both baseline policies",
+      "statusBasis": [
+        {
+          "kind": "criterion",
+          "criterion": "V3.3",
+          "outcome": "fail",
+          "detail": "state=enabledForReportingButNotEnforced (report-only) on both baseline policies",
+          "source": "verification-suite",
+          "artifact": "compliance/tests/fixtures/L03-report.json",
+          "collectedAt": "1970-01-01T00:00:00Z"
+        }
+      ],
+      "evidence": [
+        {
+          "source": "verification-suite",
+          "criterion": "V3.3",
+          "status": "fail",
+          "observed": "state=enabledForReportingButNotEnforced (report-only) on both baseline policies",
+          "artifact": "compliance/tests/fixtures/L03-report.json",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": true
+        }
+      ],
+      "supportingEvidence": [],
+      "assessment": {
+        "path": "compliance/tests/fixtures/state-assessment/3.5.3.json",
+        "applicability": "applicable",
+        "registerStatus": null,
+        "assertedBy": null,
+        "assertedAt": null,
+        "gapSeverity": null,
+        "recommendation": "Machine-verified only (fixture): V3.3 FAILs in the L03 report fixture, so this control derives GAP / machine-verified.",
+        "references": []
+      }
+    },
+    {
+      "control": "3.5.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Employ replay-resistant authentication mechanisms for network access to privileged and non-privileged accounts.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-2(8)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.4"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.5.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Prevent reuse of identifiers for a defined period.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.5"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.5.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Disable identifiers after a defined period of inactivity.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.5.7",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Enforce a minimum password complexity and change of characters when new passwords are created.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-5(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.7"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.5.8",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Prohibit password reuse for a specified number of generations.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-5(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.8"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.5.9",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Allow temporary password use for system logons with an immediate change to a permanent password.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-5(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.9"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.5.10",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Store and transmit only cryptographically-protected passwords.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-5(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.10"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.5.11",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.5",
+      "familyName": "Identification and Authentication",
+      "title": "Obscure feedback of authentication information.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IA-6"
+        ],
+        "cmmc-2.0": [
+          "L2-3.5.11"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.6.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.6",
+      "familyName": "Incident Response",
+      "title": "Establish an operational incident-handling capability for organizational systems that includes preparation, detection, analysis, containment, recovery, and user response activities.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IR-2",
+          "IR-4",
+          "IR-5",
+          "IR-6",
+          "IR-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.6.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "PARTIAL",
+      "provenance": "asserted",
+      "observed": "the register asserts CLOSED (no known open finding) citing 2 evidence reference(s); nothing here was machine-verified",
+      "statusBasis": [
+        {
+          "kind": "assertion",
+          "criterion": null,
+          "outcome": null,
+          "detail": "the register asserts CLOSED (no known open finding) citing 2 evidence reference(s); nothing here was machine-verified",
+          "source": "assessment-register",
+          "artifact": null,
+          "collectedAt": null
+        }
+      ],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "manual",
+          "criterion": null,
+          "status": "pass",
+          "observed": "Register asserts CLOSED for 3.6.1, asserted by fixture-author on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
+          "artifact": "compliance/tests/fixtures/state-assessment/3.6.1.json",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": {
+        "path": "compliance/tests/fixtures/state-assessment/3.6.1.json",
+        "applicability": "applicable",
+        "registerStatus": "CLOSED",
+        "assertedBy": "fixture-author",
+        "assertedAt": "2026-08-27",
+        "gapSeverity": "none",
+        "recommendation": "None outstanding (fixture).",
+        "references": []
+      }
+    },
+    {
+      "control": "3.6.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.6",
+      "familyName": "Incident Response",
+      "title": "Track, document, and report incidents to designated officials and/or authorities both internal and external to the organization.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IR-2",
+          "IR-4",
+          "IR-5",
+          "IR-6",
+          "IR-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.6.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.6.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.6",
+      "familyName": "Incident Response",
+      "title": "Test the organizational incident response capability.",
+      "mappings": {
+        "nist-800-53r5": [
+          "IR-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.6.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.7.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.7",
+      "familyName": "Maintenance",
+      "title": "Perform maintenance on organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MA-2",
+          "MA-3",
+          "MA-3(1)",
+          "MA-3(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.7.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.7",
+      "familyName": "Maintenance",
+      "title": "Provide controls on the tools, techniques, mechanisms, and personnel used to conduct system maintenance.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MA-2",
+          "MA-3",
+          "MA-3(1)",
+          "MA-3(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.7.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.7",
+      "familyName": "Maintenance",
+      "title": "Ensure equipment removed for off-site maintenance is sanitized of any CUI.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MA-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.7.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.7",
+      "familyName": "Maintenance",
+      "title": "Check media containing diagnostic and test programs for malicious code before the media are used in organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MA-3(2)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.4"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.7.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.7",
+      "familyName": "Maintenance",
+      "title": "Require multifactor authentication to establish nonlocal maintenance sessions via external network connections and terminate such connections when nonlocal maintenance is complete.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MA-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.5"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.7.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.7",
+      "familyName": "Maintenance",
+      "title": "Supervise the maintenance activities of maintenance personnel without required access authorization.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MA-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.7.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.8.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Protect (i.e., physically control and securely store) system media containing CUI, both paper and digital.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MP-2",
+          "MP-4",
+          "MP-6"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.8.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Limit access to CUI on system media to authorized users.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MP-2",
+          "MP-4",
+          "MP-6"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.8.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Sanitize or destroy system media containing CUI before disposal or release for reuse.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MP-2",
+          "MP-4",
+          "MP-6"
+        ],
+        "cmmc-2.0": [
+          "L1-3.8.3",
+          "L2-3.8.3"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(vii)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.8.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Mark media with necessary CUI markings and distribution limitations.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MP-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.4"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "INCONCLUSIVE",
+      "provenance": "machine-verified",
+      "observed": "V4.1 (inconclusive): label-guids.json baseline not present yet; label presence only was checked",
+      "statusBasis": [
+        {
+          "kind": "criterion",
+          "criterion": "V4.1",
+          "outcome": "inconclusive",
+          "detail": "label-guids.json baseline not present yet; label presence only was checked",
+          "source": "verification-suite",
+          "artifact": "compliance/tests/fixtures/L03-report.json",
+          "collectedAt": "1970-01-01T00:00:00Z"
+        }
+      ],
+      "evidence": [
+        {
+          "source": "verification-suite",
+          "criterion": "V4.1",
+          "status": "inconclusive",
+          "observed": "label-guids.json baseline not present yet; label presence only was checked",
+          "artifact": "compliance/tests/fixtures/L03-report.json",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": true
+        }
+      ],
+      "supportingEvidence": [],
+      "assessment": {
+        "path": "compliance/tests/fixtures/state-assessment/3.8.4.json",
+        "applicability": "applicable",
+        "registerStatus": null,
+        "assertedBy": null,
+        "assertedAt": null,
+        "gapSeverity": null,
+        "recommendation": "Fixture for the SKIP case: V4.1 is SKIP in the L03 report fixture, so the collector emits an inconclusive record and this control derives INCONCLUSIVE / machine-verified. It is machine-verified because a machine reached the question and explicitly declined to answer it - it is emphatically not verified-and-passing.",
+        "references": []
+      }
+    },
+    {
+      "control": "3.8.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Control access to media containing CUI and maintain accountability for media during transport outside of controlled areas.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MP-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.5"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.8.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Implement cryptographic mechanisms to protect the confidentiality of CUI stored on digital media during transport unless otherwise protected by alternative physical safeguards.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-28(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.8.7",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Control the use of removable media on system components.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MP-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.7"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.8.8",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Prohibit the use of portable storage devices when such devices have no identifiable owner.",
+      "mappings": {
+        "nist-800-53r5": [
+          "MP-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.8"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.8.9",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.8",
+      "familyName": "Media Protection",
+      "title": "Protect the confidentiality of backup CUI at storage locations.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CP-9"
+        ],
+        "cmmc-2.0": [
+          "L2-3.8.9"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.9.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.9",
+      "familyName": "Personnel Security",
+      "title": "Screen individuals prior to authorizing access to organizational systems containing CUI.",
+      "mappings": {
+        "nist-800-53r5": [
+          "PS-3",
+          "PS-4",
+          "PS-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.9.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.9.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.9",
+      "familyName": "Personnel Security",
+      "title": "Ensure that organizational systems containing CUI are protected during and after personnel actions such as terminations and transfers.",
+      "mappings": {
+        "nist-800-53r5": [
+          "PS-3",
+          "PS-4",
+          "PS-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.9.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_APPLICABLE",
+      "provenance": "declared",
+      "observed": "Fixture only: this demo estate has no personnel lifecycle process of its own; all demo users are fictional and are created and destroyed by infra/entra/. Recorded so the NOT_APPLICABLE / declared path is exercised by the golden state.",
+      "statusBasis": [
+        {
+          "kind": "justification",
+          "criterion": null,
+          "outcome": null,
+          "detail": "Fixture only: this demo estate has no personnel lifecycle process of its own; all demo users are fictional and are created and destroyed by infra/entra/. Recorded so the NOT_APPLICABLE / declared path is exercised by the golden state.",
+          "source": "assessment-register",
+          "artifact": null,
+          "collectedAt": null
+        }
+      ],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": {
+        "path": "compliance/tests/fixtures/state-assessment/3.9.2.json",
+        "applicability": "not-applicable",
+        "registerStatus": null,
+        "assertedBy": null,
+        "assertedAt": null,
+        "gapSeverity": null,
+        "recommendation": null,
+        "references": []
+      }
+    },
+    {
+      "control": "3.10.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.10",
+      "familyName": "Physical Protection",
+      "title": "Limit physical access to organizational systems, equipment, and the respective operating environments to authorized individuals.",
+      "mappings": {
+        "nist-800-53r5": [
+          "PE-2",
+          "PE-4",
+          "PE-5",
+          "PE-6"
+        ],
+        "cmmc-2.0": [
+          "L1-3.10.1",
+          "L2-3.10.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(viii)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.10.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.10",
+      "familyName": "Physical Protection",
+      "title": "Protect and monitor the physical facility and support infrastructure for organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "PE-2",
+          "PE-4",
+          "PE-5",
+          "PE-6"
+        ],
+        "cmmc-2.0": [
+          "L2-3.10.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.10.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.10",
+      "familyName": "Physical Protection",
+      "title": "Escort visitors and monitor visitor activity.",
+      "mappings": {
+        "nist-800-53r5": [
+          "PE-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.10.3",
+          "L2-3.10.3"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(ix)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.10.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.10",
+      "familyName": "Physical Protection",
+      "title": "Maintain audit logs of physical access.",
+      "mappings": {
+        "nist-800-53r5": [
+          "PE-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.10.4",
+          "L2-3.10.4"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(ix)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.10.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.10",
+      "familyName": "Physical Protection",
+      "title": "Control and manage physical access devices.",
+      "mappings": {
+        "nist-800-53r5": [
+          "PE-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.10.5",
+          "L2-3.10.5"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(ix)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.10.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.10",
+      "familyName": "Physical Protection",
+      "title": "Enforce safeguarding measures for CUI at alternate work sites.",
+      "mappings": {
+        "nist-800-53r5": [
+          "PE-17"
+        ],
+        "cmmc-2.0": [
+          "L2-3.10.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.11.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.11",
+      "familyName": "Risk Assessment",
+      "title": "Periodically assess the risk to organizational operations (including mission, functions, image, or reputation), organizational assets, and individuals, resulting from the operation of organizational systems and the associated processing, storage, or transmission of CUI.",
+      "mappings": {
+        "nist-800-53r5": [
+          "RA-3"
+        ],
+        "cmmc-2.0": [
+          "L2-3.11.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.11.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.11",
+      "familyName": "Risk Assessment",
+      "title": "Scan for vulnerabilities in organizational systems and applications periodically and when new vulnerabilities affecting those systems and applications are identified.",
+      "mappings": {
+        "nist-800-53r5": [
+          "RA-5",
+          "RA-5(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.11.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "repo-static",
+          "criterion": null,
+          "status": "pass",
+          "observed": "codeql.yml declares a schedule: trigger, so analysis runs on a cadence independent of pushes. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "artifact": ".github/workflows/codeql.yml",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.11.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.11",
+      "familyName": "Risk Assessment",
+      "title": "Remediate vulnerabilities in accordance with risk assessments.",
+      "mappings": {
+        "nist-800-53r5": [
+          "RA-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.11.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.12.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.12",
+      "familyName": "Security Assessment",
+      "title": "Periodically assess the security controls in organizational systems to determine if the controls are effective in their application.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CA-2",
+          "CA-5",
+          "CA-7",
+          "PL-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.12.1"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.12.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.12",
+      "familyName": "Security Assessment",
+      "title": "Develop and implement plans of action designed to correct deficiencies and reduce or eliminate vulnerabilities in organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CA-2",
+          "CA-5",
+          "CA-7",
+          "PL-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.12.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.12.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.12",
+      "familyName": "Security Assessment",
+      "title": "Monitor security controls on an ongoing basis to ensure the continued effectiveness of the controls.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CA-2",
+          "CA-5",
+          "CA-7",
+          "PL-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.12.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.12.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.12",
+      "familyName": "Security Assessment",
+      "title": "Develop, document, and periodically update system security plans that describe system boundaries, system environments of operation, how security requirements are implemented, and the relationships with or connections to other systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "CA-2",
+          "CA-5",
+          "CA-7",
+          "PL-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.12.4"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Monitor, control, and protect communications (i.e., information transmitted or received by organizational systems) at the external boundaries and key internal boundaries of organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-7",
+          "SA-8"
+        ],
+        "cmmc-2.0": [
+          "L1-3.13.1",
+          "L2-3.13.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(x)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 2 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "repo-static",
+          "criterion": null,
+          "status": "pass",
+          "observed": "All 2 app Dockerfile(s) under apps/*/ declare a USER directive. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "artifact": "apps",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        },
+        {
+          "source": "azure-policy",
+          "criterion": null,
+          "status": "inconclusive",
+          "observed": "Azure Policy 'NIST SP 800-53 Rev. 5' initiative, control group SC-7: complianceState=Compliant on resource /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca. Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control.",
+          "artifact": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.13.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Employ architectural designs, software development techniques, and systems engineering principles that promote effective information security within organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-7",
+          "SA-8"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.2"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "azure-policy",
+          "criterion": null,
+          "status": "inconclusive",
+          "observed": "Azure Policy 'NIST SP 800-53 Rev. 5' initiative, control group SC-7: complianceState=Compliant on resource /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca. Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control.",
+          "artifact": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.13.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Separate user functionality from system management functionality.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-2"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Prevent unauthorized and unintended information transfer via shared system resources.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.4"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Implement subnetworks for publicly accessible system components that are physically or logically separated from internal networks.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-7"
+        ],
+        "cmmc-2.0": [
+          "L1-3.13.5",
+          "L2-3.13.5"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xi)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "azure-policy",
+          "criterion": null,
+          "status": "inconclusive",
+          "observed": "Azure Policy 'NIST SP 800-53 Rev. 5' initiative, control group SC-7: complianceState=Compliant on resource /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca. Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control.",
+          "artifact": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.13.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Deny network communications traffic by default and allow network communications traffic by exception (i.e., deny all, permit by exception).",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-7(5)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.7",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Prevent remote devices from simultaneously establishing non-remote connections with organizational systems and communicating via some other connection to resources in external networks (i.e., split tunneling).",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-7(7)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.7"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.8",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Implement cryptographic mechanisms to prevent unauthorized disclosure of CUI during transmission unless otherwise protected by alternative physical safeguards.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-8",
+          "SC-8(1)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.8"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.9",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Terminate network connections associated with communications sessions at the end of the sessions or after a defined period of inactivity.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-10"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.9"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.10",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Establish and manage cryptographic keys for cryptography employed in organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-12"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.10"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.11",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Employ FIPS-validated cryptography when used to protect the confidentiality of CUI.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-13"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.11"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.12",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Prohibit remote activation of collaborative computing devices and provide indication of devices in use to users present at the device.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-15"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.12"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.13",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Control and monitor the use of mobile code.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-18"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.13"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.14",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Control and monitor the use of Voice over Internet Protocol (VoIP) technologies.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-7"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.14"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 1 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "azure-policy",
+          "criterion": null,
+          "status": "inconclusive",
+          "observed": "Azure Policy 'NIST SP 800-53 Rev. 5' initiative, control group SC-7: complianceState=Compliant on resource /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mls-rg-apps/providers/Microsoft.App/containerApps/mls-mcp-demo-ca. Initiative assignment enforcementMode=DoNotEnforce: this is a compliance scorecard, not an enforced control.",
+          "artifact": "/providers/Microsoft.Management/managementGroups/mls/providers/Microsoft.Authorization/policyAssignments/nist-800-53-r5",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.13.15",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Protect the authenticity of communications sessions.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-23"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.15"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.13.16",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.13",
+      "familyName": "System and Communications Protection",
+      "title": "Protect the confidentiality of CUI at rest.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SC-28"
+        ],
+        "cmmc-2.0": [
+          "L2-3.13.16"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 3 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "repo-static",
+          "criterion": null,
+          "status": "pass",
+          "observed": "gitleaks.yml exists and checks out with fetch-depth: 0 (full history scanned). This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "artifact": ".github/workflows/gitleaks.yml",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        },
+        {
+          "source": "repo-static",
+          "criterion": null,
+          "status": "pass",
+          "observed": "No secret-shaped output names found across 2 Bicep template(s) under infra/bicep/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "artifact": "infra/bicep",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        },
+        {
+          "source": "github-security",
+          "criterion": null,
+          "status": "pass",
+          "observed": "GitHub security_and_analysis: secret_scanning=enabled, secret_scanning_push_protection=enabled.",
+          "artifact": null,
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.14.1",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.14",
+      "familyName": "System and Information Integrity",
+      "title": "Identify, report, and correct system flaws in a timely manner.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SI-2",
+          "SI-3",
+          "SI-5"
+        ],
+        "cmmc-2.0": [
+          "L1-3.14.1",
+          "L2-3.14.1"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xii)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing that could drive a status was asserted about this control. 2 evidence record(s) were collected for it and are carried in supportingEvidence as context only.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [
+        {
+          "source": "repo-static",
+          "criterion": null,
+          "status": "pass",
+          "observed": "dependabot.yml declares 3 package-ecosystem entry(ies): npm, pip, github-actions. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "artifact": ".github/dependabot.yml",
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        },
+        {
+          "source": "github-security",
+          "criterion": null,
+          "status": "pass",
+          "observed": "GitHub security_and_analysis: dependabot_security_updates=enabled.",
+          "artifact": null,
+          "collectedAt": "1970-01-01T00:00:00Z",
+          "participatedInStatus": false
+        }
+      ],
+      "assessment": null
+    },
+    {
+      "control": "3.14.2",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.14",
+      "familyName": "System and Information Integrity",
+      "title": "Provide protection from malicious code at designated locations within organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SI-2",
+          "SI-3",
+          "SI-5"
+        ],
+        "cmmc-2.0": [
+          "L1-3.14.2",
+          "L2-3.14.2"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xiii)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.14.3",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.14",
+      "familyName": "System and Information Integrity",
+      "title": "Monitor system security alerts and advisories and take action in response.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SI-2",
+          "SI-3",
+          "SI-5"
+        ],
+        "cmmc-2.0": [
+          "L2-3.14.3"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.14.4",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.14",
+      "familyName": "System and Information Integrity",
+      "title": "Update malicious code protection mechanisms when new releases are available.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SI-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.14.4",
+          "L2-3.14.4"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xiv)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.14.5",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.14",
+      "familyName": "System and Information Integrity",
+      "title": "Perform periodic scans of organizational systems and real-time scans of files from external sources as files are downloaded, opened, or executed.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SI-3"
+        ],
+        "cmmc-2.0": [
+          "L1-3.14.5",
+          "L2-3.14.5"
+        ],
+        "far-52.204-21": [
+          "52.204-21(b)(1)(xv)"
+        ]
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.14.6",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.14",
+      "familyName": "System and Information Integrity",
+      "title": "Monitor organizational systems, including inbound and outbound communications traffic, to detect attacks and indicators of potential attacks.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SI-4",
+          "SI-4(4)"
+        ],
+        "cmmc-2.0": [
+          "L2-3.14.6"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    },
+    {
+      "control": "3.14.7",
+      "framework": "nist-800-171r2",
+      "inCatalog": true,
+      "family": "3.14",
+      "familyName": "System and Information Integrity",
+      "title": "Identify unauthorized use of organizational systems.",
+      "mappings": {
+        "nist-800-53r5": [
+          "SI-4"
+        ],
+        "cmmc-2.0": [
+          "L2-3.14.7"
+        ],
+        "far-52.204-21": []
+      },
+      "status": "NOT_ASSESSED",
+      "provenance": "none",
+      "observed": "Nothing has been asserted about this control and nothing was collected for it.",
+      "statusBasis": [],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": null
+    }
+  ],
+  "outOfCatalogControls": [
+    {
+      "control": "CM-6",
+      "framework": "nist-800-53r5",
+      "inCatalog": false,
+      "family": "CM",
+      "familyName": null,
+      "title": null,
+      "mappings": null,
+      "status": "PARTIAL",
+      "provenance": "asserted",
+      "observed": "the register asserts CLOSED (no known open finding) citing 1 evidence reference(s); nothing here was machine-verified",
+      "statusBasis": [
+        {
+          "kind": "assertion",
+          "criterion": null,
+          "outcome": null,
+          "detail": "the register asserts CLOSED (no known open finding) citing 1 evidence reference(s); nothing here was machine-verified",
+          "source": "assessment-register",
+          "artifact": null,
+          "collectedAt": null
+        }
+      ],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": {
+        "path": "compliance/tests/fixtures/state-assessment/CM-6.json",
+        "applicability": "applicable",
+        "registerStatus": "CLOSED",
+        "assertedBy": "fixture-author",
+        "assertedAt": "2026-08-27",
+        "gapSeverity": "none",
+        "recommendation": "Fixture only.",
+        "references": []
+      },
+      "requirementsMappingToThisControl": [
+        "3.4.1",
+        "3.4.2"
+      ],
+      "note": "This record was assessed against NIST SP 800-53 Rev 5 control CM-6. The NIST SP 800-171 Rev 2 catalog has no requirement for it, so it is rendered on its own row and counted separately from the 110. requirementsMappingToThisControl (3.4.1, 3.4.2) is listed for orientation only: this record's assertion is not applied to those requirements and does not appear in their rows, because its author wrote about CM-6, not about them."
+    },
+    {
+      "control": "CP-9",
+      "framework": "nist-800-53r5",
+      "inCatalog": false,
+      "family": "CP",
+      "familyName": null,
+      "title": null,
+      "mappings": null,
+      "status": "PARTIAL",
+      "provenance": "asserted",
+      "observed": "the register asserts CLOSED (no known open finding) citing 1 evidence reference(s); nothing here was machine-verified",
+      "statusBasis": [
+        {
+          "kind": "assertion",
+          "criterion": null,
+          "outcome": null,
+          "detail": "the register asserts CLOSED (no known open finding) citing 1 evidence reference(s); nothing here was machine-verified",
+          "source": "assessment-register",
+          "artifact": null,
+          "collectedAt": null
+        }
+      ],
+      "evidence": [],
+      "supportingEvidence": [],
+      "assessment": {
+        "path": "compliance/tests/fixtures/state-assessment/CP-9.json",
+        "applicability": "applicable",
+        "registerStatus": "CLOSED",
+        "assertedBy": "fixture-author",
+        "assertedAt": "2026-08-27",
+        "gapSeverity": "none",
+        "recommendation": "Fixture only.",
+        "references": []
+      },
+      "requirementsMappingToThisControl": [
+        "3.8.9"
+      ],
+      "note": "This record was assessed against NIST SP 800-53 Rev 5 control CP-9. The NIST SP 800-171 Rev 2 catalog has no requirement for it, so it is rendered on its own row and counted separately from the 110. requirementsMappingToThisControl (3.8.9) is listed for orientation only: this record's assertion is not applied to those requirements and does not appear in their rows, because its author wrote about CP-9, not about them."
+    }
+  ]
+}

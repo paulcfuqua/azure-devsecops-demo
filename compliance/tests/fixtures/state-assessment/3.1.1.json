@@ -1,0 +1,17 @@
+{
+  "control": "3.1.1",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "GAP",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f1"
+    ],
+    "assertedBy": "fixture-author",
+    "assertedAt": "2026-08-27",
+    "rationale": "Fixture for state-emitter.Tests.ps1: an authored GAP citing one reference. Derives GAP / asserted."
+  },
+  "recommendation": "Fixture only - close the underlying finding.",
+  "gapSeverity": "high",
+  "references": []
+}

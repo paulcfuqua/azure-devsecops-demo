@@ -1,0 +1,7 @@
+{
+  "control": "3.9.2",
+  "applicability": "not-applicable",
+  "naJustification": "Fixture only: this demo estate has no personnel lifecycle process of its own; all demo users are fictional and are created and destroyed by infra/entra/. Recorded so the NOT_APPLICABLE / declared path is exercised by the golden state.",
+  "criteria": [],
+  "references": []
+}

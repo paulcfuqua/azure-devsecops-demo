@@ -1,0 +1,17 @@
+{
+  "control": "CM-6",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "CLOSED",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f23"
+    ],
+    "assertedBy": "fixture-author",
+    "assertedAt": "2026-08-27",
+    "rationale": "Fixture mirroring the real register's shape: an 800-53-keyed record the 800-171 catalog has no requirement for. It must render as its own row keyed on CM-6, and must NOT be resolved through the catalog's mappings into 3.4.1 or 3.4.2."
+  },
+  "recommendation": "Fixture only.",
+  "gapSeverity": "none",
+  "references": []
+}

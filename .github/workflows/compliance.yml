@@ -1,0 +1,156 @@
+name: compliance
+
+# =============================================================================
+# Collects the NIST SP 800-171 compliance state and commits it, so
+# `git log compliance/state/` becomes the record of when the estate became
+# compliant and when it regressed — a question most GRC tooling cannot answer.
+#
+# Design: docs/superpowers/specs/2026-08-26-compliance-platform-design.md §3.3.
+# Runner:  compliance/Invoke-MlsCompliance.ps1.
+#
+# NO TENANT DEPENDENCY. Nothing in this estate has been deployed. The runner is
+# read-only, needs no credential, and produces a complete artifact today from the
+# catalog, the assessment register and the working tree alone — every other
+# collector returns empty, which is the normal case rather than an error path.
+# There is therefore no pre-G0 guard on this workflow: it is green from the first
+# push, and the pre-deployment board is what makes the post-deployment board mean
+# something.
+#
+# ---------------------------------------------------------------------------
+# WHY TWO JOBS
+#
+# `collect` runs the code. `commit` holds `contents: write`. They are separate
+# on purpose, and the split is the lesson from the prior remediation plan's
+# Task 5: a job that can push to the default branch must not also resolve and
+# execute third-party code, because a compromised or typo-squatted dependency
+# then inherits a write token. So `commit` installs NOTHING — no npm ci, no
+# Install-Module, no marketplace action beyond the pinned checkout and artifact
+# download — and does nothing but move already-produced JSON into place and
+# commit it. `collect` does all the work and holds only `contents: read`.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 02:17 UTC nightly. Off the hour deliberately: the top of the hour is when
+    # GitHub's scheduler is most contended and a run is most likely to be delayed.
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialised, never cancelled: two runs racing to commit the same dated artifact
+# would push over each other, and a cancelled run could leave a half-written
+# state file in the artifact store.
+concurrency:
+  group: compliance-state
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: collect compliance state
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect the state artifact
+        shell: pwsh
+        env:
+          # The sha this job actually checked out, so the artifact stamps the code it
+          # describes rather than whatever HEAD happens to be when it is committed.
+          MLS_COMMIT: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./compliance/Invoke-MlsCompliance.ps1 -OutputRoot compliance/state -Commit $env:MLS_COMMIT
+
+      - name: Sanity-check the artifact before anything is allowed to commit it
+        run: |
+          set -euo pipefail
+          # A short or malformed artifact must fail here, in the unprivileged job,
+          # rather than being committed and rendered as a board with holes in it.
+          test -s compliance/state/state-latest.json
+          controls="$(jq '.controls | length' compliance/state/state-latest.json)"
+          echo "requirements rendered: ${controls}"
+          if [ "${controls}" -ne 110 ]; then
+            echo "::error title=Incomplete compliance state::Expected 110 requirements, found ${controls}."
+            exit 1
+          fi
+          # No blended percentage, ever (spec section 3.4). Checked on the emitted bytes,
+          # not only in Pester, so a future change to the runner cannot ship one quietly.
+          # Matches a JSON KEY named like a score, never prose: the pattern requires the
+          # word to fill a quoted token that is immediately followed by a colon, so the
+          # artifact's own "there is deliberately no percentage" notes do not trip it.
+          if grep -Eiq '"[A-Za-z]*(percent|ratio|score|pct)[A-Za-z]*"[[:space:]]*:' \
+              compliance/state/state-latest.json; then
+            echo "::error title=Score field in compliance state::The artifact carries a percentage, ratio or score field. The board reports counts by status and provenance only."
+            exit 1
+          fi
+          if [ -L compliance/state/state-latest.json ]; then
+            echo "::error title=state-latest.json is a link::It must be a real file copy: this repo is authored on Windows and collected on Linux."
+            exit 1
+          fi
+          {
+            echo "### Compliance state"
+            echo
+            echo "| status | count |"
+            echo "|---|---|"
+            jq -r '.summary.byStatus | to_entries[] | "| \(.key) | \(.value) |"' compliance/state/state-latest.json
+            echo
+            echo "| provenance | count |"
+            echo "|---|---|"
+            jq -r '.summary.byProvenance | to_entries[] | "| \(.key) | \(.value) |"' compliance/state/state-latest.json
+            echo
+            echo "Counts only — there is deliberately no blended percentage."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compliance-state
+          path: compliance/state/
+          if-no-files-found: error
+          retention-days: 30
+
+  commit:
+    name: commit the dated artifact
+    needs: collect
+    runs-on: ubuntu-latest
+    # The only job with a write token, and the only job that installs nothing.
+    permissions:
+      contents: write
+    # workflow_dispatch can be fired from any ref; the state artifact belongs on the
+    # default branch and nowhere else.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: compliance-state
+          path: compliance/state
+
+      # A push made with GITHUB_TOKEN does not trigger workflows, so this commit cannot
+      # re-trigger the `push` job above. That is GitHub's own recursion guard, relied on
+      # here deliberately rather than worked around with a [skip ci] marker.
+      - name: Commit the artifact if it changed
+        env:
+          MLS_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add compliance/state
+          if git diff --cached --quiet; then
+            echo 'compliance state unchanged; nothing to commit.'
+            exit 0
+          fi
+          git commit -m "verify(compliance): state at ${MLS_COMMIT}" \
+            -m 'Emitted by .github/workflows/compliance.yml. Counts by status and provenance; deliberately no blended percentage.'
+          # Serialised by the workflow concurrency group, but a push can still lose a
+          # race with a human merge landing between checkout and push. Rebase once and
+          # retry rather than failing the nightly run over it.
+          git push || {
+            git pull --rebase origin main
+            git push
+          }

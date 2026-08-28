@@ -1,0 +1,18 @@
+{
+  "control": "3.6.1",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "CLOSED",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f99",
+      "commit deadbeef -- fixture only"
+    ],
+    "assertedBy": "fixture-author",
+    "assertedAt": "2026-08-27",
+    "rationale": "Fixture for state-emitter.Tests.ps1: an authored CLOSED citing two references. Derives PARTIAL / asserted - never COMPLIANT."
+  },
+  "recommendation": "None outstanding (fixture).",
+  "gapSeverity": "none",
+  "references": []
+}

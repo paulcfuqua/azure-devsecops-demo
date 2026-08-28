@@ -1,0 +1,7 @@
+{
+  "control": "3.5.2",
+  "applicability": "applicable",
+  "criteria": ["V3.1"],
+  "recommendation": "Machine-verified only (fixture): V3.1 PASSes in the L03 report fixture, so this control derives COMPLIANT / machine-verified.",
+  "references": []
+}

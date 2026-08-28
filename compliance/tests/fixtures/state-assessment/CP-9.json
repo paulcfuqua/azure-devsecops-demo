@@ -1,0 +1,17 @@
+{
+  "control": "CP-9",
+  "applicability": "applicable",
+  "criteria": [],
+  "assertion": {
+    "status": "CLOSED",
+    "evidence": [
+      "compliance/findings/2026-08-26-prepublication-review.md#f16"
+    ],
+    "assertedBy": "fixture-author",
+    "assertedAt": "2026-08-27",
+    "rationale": "Fixture for the wrong-box join this platform must never make: CP-9 maps to 3.8.9 in the catalog, and rendering this record's authored CLOSED against 3.8.9 would attribute a claim its author never made. 3.8.9 must stay NOT_ASSESSED / none."
+  },
+  "recommendation": "Fixture only.",
+  "gapSeverity": "none",
+  "references": []
+}
