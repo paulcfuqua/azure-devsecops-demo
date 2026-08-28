@@ -27,8 +27,19 @@
          (EMSPREMIUM) present with at least one unit consumed.
       9. $75/month budget exists.
 
-    Prints a pass/fail table and exits nonzero if any check fails ("G0 complete" per
-    docs/runbooks/g0-bootstrap.md section D means: all rows PASS).
+    Additionally, one INFORMATIONAL (non-gate-failing) check:
+      - G0 item 12: the tenant-scoped Entra diagnostic setting routing SignInLogs and
+        AuditLogs to the Log Analytics workspace (2026-08-26 finding F9). This is a
+        human, post-L6 step deliberately kept off mls-github-deployer (creating it needs
+        Security Administrator, which finding F8 specifically narrowed this SP away
+        from) - see docs/runbooks/g0-bootstrap.md item 12. Reported the same way items
+        C6/C7/C10 are treated in that runbook: visible, never gate-failing. The point is
+        that a missing setting becomes visible rather than silently trusted, not that G0
+        blocks Layer 1 on it.
+
+    Prints a pass/fail table and exits nonzero if any check FAILS ("G0 complete" per
+    docs/runbooks/g0-bootstrap.md section D means: all non-informational rows PASS). The
+    informational row never contributes to the fail count or the exit code.
 
 .EXAMPLE
     ./verify-g0.ps1 -SubscriptionId <sub>
@@ -84,15 +95,24 @@ function Invoke-AzCli {
 }
 
 function New-CheckResult {
+    <#
+        -Informational marks a row as NEVER gate-failing (2026-08-26 finding F9 / G0 item
+        12, Task 23): Status renders as INFO regardless of $Passed, so Get-FailCount -
+        which only counts Status -eq 'FAIL' - never counts it, matching how
+        docs/runbooks/g0-bootstrap.md section D already treats items C6/C7/C10. $Passed
+        still records whether the underlying condition held, via Detail.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
         Justification = 'Constructs an in-memory result row; no system state is changed (script is read-only by contract).')]
     param(
         [Parameter(Mandatory)][string]$Check,
         [Parameter(Mandatory)][bool]$Passed,
-        [string]$Detail = ''
+        [string]$Detail = '',
+        [switch]$Informational
     )
     $status = 'FAIL'
     if ($Passed) { $status = 'PASS' }
+    if ($Informational) { $status = 'INFO' }
     return [pscustomobject]@{ Check = $Check; Status = $status; Detail = $Detail }
 }
 
@@ -286,6 +306,41 @@ function Test-License {
     return New-CheckResult -Check 'Licenses' -Passed $false -Detail "missing/unassigned: $($missing -join '; ')"
 }
 
+function Test-EntraDiagnostic {
+    <#
+        2026-08-26 finding F9 / G0 item 12 (Task 23): the tenant Entra diagnostic
+        setting routing SignInLogs + AuditLogs to the Log Analytics workspace is a
+        documented human step (docs/runbooks/g0-bootstrap.md item 12), deliberately
+        kept off mls-github-deployer - creating it needs Security Administrator, and
+        finding F8 specifically narrowed this SP's Graph grant to shrink its tenant
+        blast radius. Before this check, F9's closure rested entirely on a human
+        remembering an unaudited `az monitor diagnostic-settings create` run. This
+        check is READ-ONLY and INFORMATIONAL (see New-CheckResult) - never gate-failing,
+        same treatment as items C6/C7/C10 in the runbook's section D.
+    #>
+    $response = Invoke-AzCli -Arguments @(
+        'monitor', 'diagnostic-settings', 'list',
+        '--resource', '/providers/microsoft.aadiam',
+        '--output', 'json'
+    ) -AllowFailure
+    $settings = @()
+    if ($response) {
+        if ($response.PSObject.Properties.Name -contains 'value') { $settings = @($response.value) }
+        else { $settings = @($response) }
+    }
+    $routed = @($settings | Where-Object {
+            $_ -and $_.logs -and
+            (@($_.logs | Where-Object { $_.category -eq 'SignInLogs' -and $_.enabled }).Count -ge 1) -and
+            (@($_.logs | Where-Object { $_.category -eq 'AuditLogs' -and $_.enabled }).Count -ge 1)
+        })
+    if ($routed.Count -ge 1) {
+        return New-CheckResult -Check 'EntraDiagnostics' -Passed $true -Informational `
+            -Detail "tenant diagnostic setting '$($routed[0].name)' routes SignInLogs + AuditLogs to the LAW (G0 item 12)"
+    }
+    return New-CheckResult -Check 'EntraDiagnostics' -Passed $false -Informational `
+        -Detail 'no tenant diagnostic setting routes both SignInLogs and AuditLogs yet - run G0 item 12 once, after L6 (informational only; does not block G0)'
+}
+
 function Test-Budget {
     param(
         [Parameter(Mandatory)][string]$SubscriptionId,
@@ -329,13 +384,15 @@ function Invoke-Main {
         @{ Name = 'FabricCapacity'; Run = { Test-FabricCapacity } }
         @{ Name = 'Licenses'; Run = { Test-License } }
         @{ Name = 'Budget'; Run = { Test-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName -BudgetAmount $BudgetAmount } }
+        @{ Name = 'EntraDiagnostics'; Informational = $true; Run = { Test-EntraDiagnostic } }
     )
     $results = foreach ($check in $checks) {
         try {
             & $check.Run
         }
         catch {
-            New-CheckResult -Check $check.Name -Passed $false -Detail "check errored: $($_.Exception.Message)"
+            New-CheckResult -Check $check.Name -Passed $false -Informational:([bool]$check.Informational) `
+                -Detail "check errored: $($_.Exception.Message)"
         }
     }
     return @($results)

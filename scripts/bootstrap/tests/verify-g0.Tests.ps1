@@ -77,6 +77,17 @@ Describe 'verify-g0' {
             name       = 'mls-monthly-budget'
             properties = [pscustomobject]@{ amount = 75 }
         }
+        $script:EntraDiagnosticSettings = [pscustomobject]@{
+            value = @(
+                [pscustomobject]@{
+                    name = 'mls-entra-law'
+                    logs = @(
+                        [pscustomobject]@{ category = 'SignInLogs'; enabled = $true }
+                        [pscustomobject]@{ category = 'AuditLogs'; enabled = $true }
+                    )
+                }
+            )
+        }
         Mock Invoke-AzCli {
             $joined = $Arguments -join ' '
             if ($joined -like 'account show*') { return $script:MockAccount }
@@ -96,15 +107,17 @@ Describe 'verify-g0' {
             if ($joined -like '*api.fabric.microsoft.com/v1/capacities*') { return $script:FabricCapacities }
             if ($joined -like '*subscribedSkus*') { return $script:Skus }
             if ($joined -like '*Microsoft.Consumption/budgets*') { return $script:Budget }
+            if ($joined -like '*microsoft.aadiam*') { return $script:EntraDiagnosticSettings }
             return $null
         }
     }
 
     Context 'aggregation - all green' {
-        It 'returns 9 rows, all PASS, and a fail count of 0' {
+        It 'returns 10 rows, 9 PASS + 1 informational, and a fail count of 0' {
             $results = Invoke-VerifyForTest
-            @($results).Count | Should -Be 9
-            @($results | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
+            @($results).Count | Should -Be 10
+            @($results | Where-Object { $_.Check -ne 'EntraDiagnostics' -and $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
+            (Get-Row $results 'EntraDiagnostics').Status | Should -Be 'INFO'
             Get-FailCount -Results $results | Should -Be 0
         }
 
@@ -203,12 +216,58 @@ Describe 'verify-g0' {
     }
 
     Context 'aggregation - checks that throw become FAIL rows, not crashes' {
-        It 'survives az being completely broken' {
+        It 'survives az being completely broken (the informational check errors to INFO, not FAIL)' {
             Mock Invoke-AzCli { throw 'az exploded' }
             $results = Invoke-VerifyForTest
-            @($results).Count | Should -Be 9
+            @($results).Count | Should -Be 10
             @($results | Where-Object { $_.Status -eq 'FAIL' }).Count | Should -Be 9
+            (Get-Row $results 'EntraDiagnostics').Status | Should -Be 'INFO'
             Get-FailCount -Results $results | Should -Be 9
+        }
+    }
+
+    Context 'EntraDiagnostics - informational, never gate-failing (2026-08-26 finding F9, G0 item 12)' {
+        It 'reports INFO (not FAIL) when both SignInLogs and AuditLogs route to the LAW' {
+            $results = Invoke-VerifyForTest
+            $row = Get-Row $results 'EntraDiagnostics'
+            $row.Status | Should -Be 'INFO'
+            $row.Detail | Should -BeLike '*SignInLogs*AuditLogs*'
+        }
+
+        It 'stays INFO (not FAIL), and says so, when no diagnostic setting routes both categories' {
+            $script:EntraDiagnosticSettings = [pscustomobject]@{ value = @() }
+            $results = Invoke-VerifyForTest
+            $row = Get-Row $results 'EntraDiagnostics'
+            $row.Status | Should -Be 'INFO'
+            $row.Detail | Should -BeLike '*no tenant diagnostic setting*'
+            Get-FailCount -Results $results | Should -Be 0
+        }
+
+        It 'stays INFO when only one of the two categories is enabled' {
+            $script:EntraDiagnosticSettings = [pscustomobject]@{
+                value = @(
+                    [pscustomobject]@{
+                        name = 'mls-entra-law'
+                        logs = @([pscustomobject]@{ category = 'SignInLogs'; enabled = $true })
+                    }
+                )
+            }
+            $results = Invoke-VerifyForTest
+            $row = Get-Row $results 'EntraDiagnostics'
+            $row.Status | Should -Be 'INFO'
+            $row.Detail | Should -BeLike '*no tenant diagnostic setting*'
+            Get-FailCount -Results $results | Should -Be 0
+        }
+
+        It 'never contributes to the gate fail count under any outcome' {
+            foreach ($dataset in @(
+                    [pscustomobject]@{ value = @() },
+                    $null
+                )) {
+                $script:EntraDiagnosticSettings = $dataset
+                $results = Invoke-VerifyForTest
+                Get-FailCount -Results $results | Should -Be 0
+            }
         }
     }
 
@@ -220,6 +279,15 @@ Describe 'verify-g0' {
                 [pscustomobject]@{ Check = 'c'; Status = 'FAIL'; Detail = '' }
             )
             Get-FailCount -Results $rows | Should -Be 2
+        }
+
+        It 'never counts an INFO row, even one recording a missing setting' {
+            $rows = @(
+                [pscustomobject]@{ Check = 'a'; Status = 'PASS'; Detail = '' }
+                [pscustomobject]@{ Check = 'EntraDiagnostics'; Status = 'INFO'; Detail = 'missing' }
+                [pscustomobject]@{ Check = 'b'; Status = 'FAIL'; Detail = '' }
+            )
+            Get-FailCount -Results $rows | Should -Be 1
         }
 
         It 'returns 0 for an empty set' {

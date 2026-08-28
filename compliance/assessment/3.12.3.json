@@ -5,10 +5,12 @@
   "assertion": {
     "status": "CLOSED",
     "evidence": [
-      "compliance/findings/2026-08-26-prepublication-review.md#f6"
+      "compliance/findings/2026-08-26-prepublication-review.md#f6",
+      "commit 5527354 -- Task 9 (F6 closed: mls-verifier given its own federated credential)",
+      "commit 9f49c82 -- Task 3 (F5 closed, before this file's evidence array was trimmed to its one remaining open contributor)"
     ],
     "assertedBy": "paulcfuqua",
-    "assertedAt": "2026-08-26",
+    "assertedAt": "2026-08-27",
     "rationale": "F6: the verifier's missing federated credential (3.12.1) meant the per-layer verify jobs that are meant to provide ongoing control monitoring could not authenticate at all, so continuous monitoring of security controls structurally did not happen despite G0 reporting green. F6 is now CLOSED (Task 9, see 3.12.1): mls-verifier holds its own federated credential on a distinct environment:verify subject, and every verify job — verify-l1.yml (L1), the layer-02 through layer-09 verify jobs, self-heal.yml's L10 verify job, and infra-down.yml's L11 down-state verify job — now declares environment: verify instead of environment: demo, so it actually authenticates as the Reader-scoped identity it claims to run as. This control has no other open contributor: the other finding that cited 3.12.3, F5 (lint-ci's dead node-test step), was already closed by Task 3, which removed it from this file's evidence."
   },
   "recommendation": "None outstanding for this control. (mls-verifier's own federated credential, Task 9/3.12.1, and moving every verify job to the distinct verify environment so continuous monitoring actually authenticates, are both DONE.) A regression here would reopen this control.",

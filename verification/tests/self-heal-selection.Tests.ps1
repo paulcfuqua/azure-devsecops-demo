@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Regression guard for F14 (compliance/findings/2026-08-26-prepublication-review.md#f14,
 # Task 16): the self-heal selection step must never again decide "already
 # handled" by asking `gh pr list` for open-PR branch names, and the

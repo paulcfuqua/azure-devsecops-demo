@@ -84,9 +84,9 @@ Describe 'platform alerting on the signals F9 collects (F17)' {
     }
 
     It 'scopes both rules at the Log Analytics workspace F9 routes diagnostics to' {
-        $matches = [regex]::Matches($script:MainBicep, 'scopes:\s*\[[^\]]*\]')
-        $matches.Count | Should -Be 2
-        foreach ($m in $matches) {
+        $scopeMatches = [regex]::Matches($script:MainBicep, 'scopes:\s*\[[^\]]*\]')
+        $scopeMatches.Count | Should -Be 2
+        foreach ($m in $scopeMatches) {
             $m.Value | Should -Match 'logAnalytics\.outputs\.resourceId'
         }
     }

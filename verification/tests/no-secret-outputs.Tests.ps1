@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Regression guard for F4 (compliance/findings/2026-08-26-prepublication-review.md#f4,
 # Task 8): nothing in this repo should publish an ingestion credential — an App
 # Insights connection string, a key, a secret — as a Bicep output, and no

@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     L5 provisioning - Fabric workspace `mls-operations` + lakehouse, idempotently.

@@ -413,6 +413,12 @@ it is still about sign-in risk and auto-labeling, nothing else.
     of the next sign-in or directory change — distinct from `AzureActivity`, which is the
     subscription Activity Log layer-06-platform.yml already wires on its own.
 
+    You no longer have to remember to run that `az monitor diagnostic-settings list`
+    yourself: `scripts/bootstrap/verify-g0.ps1` runs the same query as a tenth,
+    **informational** check (added Task 23) and reports whether it finds the setting —
+    see § D. It never blocks G0; it just means a missing setting shows up in the table
+    instead of staying invisible until someone goes looking for it.
+
 ### C9 — the `demo` and `verify` GitHub environments, variable by variable
 
 These are GitHub **environment variables**, not secrets, and they are never committed
@@ -562,6 +568,17 @@ until L8 has published an agent, C6 is deferred by design while the Fabric capac
 is on the trial SKU, and C10 cannot run until L3 has created the users it licenses. C6/C7
 block L8 only and C10 blocks L3's V3.4 only; `verify-g0.ps1` reports them as
 informational rather than failing the gate.
+
+**Item 12 (2026-08-26 finding F9, added Task 23) gets the same treatment, for a different
+reason.** `verify-g0.ps1` now runs a tenth, read-only `EntraDiagnostics` check (`az monitor
+diagnostic-settings list --resource "/providers/microsoft.aadiam"`) asserting the tenant
+diagnostic setting routes both `SignInLogs` and `AuditLogs` to the Log Analytics workspace.
+It renders `INFO`, not `PASS`/`FAIL`, and never contributes to the script's exit code —
+unlike C6/C7/C10, item 12 has no layer gate downstream waiting on it either way, so there
+is nothing for it to block. The point of the check is narrower: before it existed, F9's
+closure rested entirely on a human remembering to run an unaudited command after L6; now a
+missing setting shows up in the G0 table instead of staying invisible until someone
+happens to go looking.
 
 Note that `verify-g0.ps1` check 8 ("licences: M365 E5 and EMS E5 present with at least one
 unit consumed") is a **tenant-level** check — it confirms the trials are activated, not

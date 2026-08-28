@@ -6,10 +6,13 @@
     "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f2",
-      "compliance/findings/2026-08-26-prepublication-review.md#f3"
+      "compliance/findings/2026-08-26-prepublication-review.md#f3",
+      "commit dff549e -- Task 4 (F2 app-half closed: auth gate enforced by default)",
+      "commit 7a008ad -- Task 5 (F2 infra-half closed: mcp-auth-token resolved from Key Vault)",
+      "commit 3312489 -- Task 7 (F3 closed: Direct Line origin guard fails closed)"
     ],
     "assertedBy": "paulcfuqua",
-    "assertedAt": "2026-08-26",
+    "assertedAt": "2026-08-27",
     "rationale": "F2: the MCP auth gate used to throw only in backendMode 'cloud' and MLS_TOOL_BACKENDS is never set, so tool calls were accepted from callers whose identity was never established. F2 is now CLOSED (Tasks 4 and 5). Task 4 closed the application half: loadInboundAuth no longer keys enforcement off backendMode, so a caller must now present a credential by default in every mode, including the local mode that actually ships. Task 5 closed the infra half: the deployed token is now resolved from Key Vault via keyVaultUrl + the mcp-tools UAMI's Key Vault Secrets User grant (infra/bicep/apps/main.bicep, module mcpKvGrant) rather than a `@secure()` Bicep parameter, and MLS_TOOL_BACKENDS is set explicitly via mcpToolsBackendMode (default 'local') so the identity that must present a credential is no longer contingent on infra/ or CI ever having wired the value through — the container app resolves its own secret at runtime under its own managed identity. F3: the Direct Line token endpoint minted tokens — which carry the MCP credential — to any caller whenever DIRECTLINE_ALLOWED_ORIGINS was unset or the Origin header was absent, with no boot-time check that the variable was even configured, so no process or device identification occurred before a usable credential was issued. F3 is now CLOSED (Task 7): directline-token.mjs's origin guard now treats the two conditions separately — an unset allow-list refuses with 500 before a token is ever minted, and a missing or non-allow-listed Origin refuses with 403 — so a caller's origin must be established and allow-listed before the MCP-capable credential is issued. Overall status is now CLOSED: both findings this control cites (F2 and F3) are closed. This control has no other open contributors (checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites 3.5.1)."
   },
   "recommendation": "None outstanding for this control. (The MCP auth gate default and Key Vault token resolution, Tasks 4 and 5, and the Direct Line origin guard fail-closed fix, Task 7, are all DONE.) A regression here — the two origin-guard conditions recombined into one, or the allow-list check dropped — would reopen this control.",

@@ -6,7 +6,9 @@
     "status": "CLOSED",
     "evidence": [
       "compliance/findings/2026-08-26-prepublication-review.md#f18",
-      "compliance/findings/2026-08-26-prepublication-review.md#f23"
+      "compliance/findings/2026-08-26-prepublication-review.md#f23",
+      "commit 610d10c -- Task 20 (F18 closed: Purview label policy published)",
+      "commit 7ba45d6 -- Task 25 (F23 closed: three G3 teardown scripts authored, fix round 3)"
     ],
     "assertedBy": "paulcfuqua",
     "assertedAt": "2026-08-27",

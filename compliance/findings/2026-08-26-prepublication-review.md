@@ -13,10 +13,23 @@ four candidates the first pass surfaced but never ran down. Three confirmed as r
 (F16–F18, below); one (`Standard_LRS` on the cost-export storage account) was checked and
 dismissed — see "Deliberately NOT findings."
 
-**Status for every finding below is GAP.** Nothing on this list has been fixed. Each
-finding's `Fix:` describes what closing it requires, not what has been done. The
-per-control assessment records in `compliance/assessment/*.json` cite this document as
-their evidence and carry the same status.
+**Status convention (updated 2026-08-27, Task 23).** Every finding below started life as
+GAP — that is what a finding *is*. As remediation tasks closed them, this document's own
+per-finding `**Status:**` field is kept in sync with current reality rather than frozen at
+discovery-time: a finding reads `CLOSED` once its fix has actually landed, `GAP` for as
+long as it has not. This was already the convention F14 onward; Task 23 applied it
+retroactively to F1–F13 as well, so the field means the same thing everywhere in this
+document now. Each closed finding's `Fix:` section is left as originally written — it
+describes what closing the finding required, which is historical context, not a live
+claim — and the pointer immediately after `**Status:** CLOSED` names the
+`compliance/assessment/*.json` record(s) that carry the full remediation account
+(rationale, evidence, and the closing commit SHA) for that control. Two findings remain
+open: **F13** (five of seven workload RBAC grants land; the sixth needs F19) and **F19**
+itself (deferred to the sponsor — needs a new Function App deploy surface and a G2 spend
+decision against the $200/30-day credit). Six findings (F14, F15, F19, F20, F21, F22)
+map to no NIST SP 800-171 control at all, so this document and the findings-index table's
+`Closed by` column are their *only* durable record — there is no `compliance/assessment/`
+file to additionally point at for those.
 
 ## Index
 
@@ -58,7 +71,8 @@ F19–F21 were surfaced building Task 12 (F13's closing task), same day as the r
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.1, 3.1.2, 3.13.1
 - **Closed by:** Task 6
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.13.1.json`
 
 **Where:** `apps/data-api/src/app.ts:56` ("there is deliberately no Authorization here");
 `app.ts:67-169` (middleware chain — requestId, securityHeaders, cors, requestSpan,
@@ -90,7 +104,8 @@ upstreams.
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.1, 3.5.1, 3.13.1
 - **Closed by:** Tasks 4, 5
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.1.1.json`, `compliance/assessment/3.5.1.json`, `compliance/assessment/3.13.1.json`
 
 **Where:** `apps/mcp-tools/src/auth-gate.ts:123-147` (throws only when
 `backendMode === 'cloud'`); `config.ts:156` (`env.MLS_TOOL_BACKENDS ?? "local"`);
@@ -123,7 +138,8 @@ param.
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.1, 3.5.1
 - **Closed by:** Task 7
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.1.1.json`, `compliance/assessment/3.5.1.json`
 
 **Where:** `apps/directline-token/src/functions/directline-token.mjs:60-67`, `:94-99`:
 `if (allowed.length > 0 && origin && !allowed.includes(origin)) return 403`
@@ -161,7 +177,8 @@ Fabric CU.
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.3, 3.13.16
 - **Closed by:** Task 8
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.1.3.json`, `compliance/assessment/3.13.16.json`
 
 **Where:** `infra/bicep/platform/main.bicep:344` (`output appInsightsConnectionString`,
 annotated "not a secret"); `.github/workflows/layer-06-platform.yml:192-197`
@@ -201,7 +218,8 @@ artifact upload.
 - **Confidence:** CONFIRMED (reproduced)
 - **Controls:** 3.12.3, 3.14.1
 - **Closed by:** Task 3
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.12.3.json`, `compliance/assessment/3.14.1.json`
 
 **Where:** `.github/workflows/lint-ci.yml:196-202` —
 `for script in .github/scripts/*.mjs; do node --check "${script}"; done` under
@@ -232,7 +250,8 @@ nothing is worse than no step.
 - **Confidence:** CONFIRMED
 - **Controls:** 3.12.1, 3.12.3
 - **Closed by:** Task 9
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.12.1.json`, `compliance/assessment/3.12.3.json`
 
 **Where:** `scripts/bootstrap/01-root-oidc.ps1` — `Initialize-FederatedCredential` is
 called exactly twice, `:352` and `:354`, BOTH with `$deployer.id`. The verifier block
@@ -259,7 +278,8 @@ unimplementable as shipped.
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.5, 3.1.6, 3.1.7
 - **Closed by:** Task 9
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.1.5.json`, `compliance/assessment/3.1.6.json`, `compliance/assessment/3.1.7.json`
 
 **Where:** `01-root-oidc.ps1:354-355` federates `repo:<r>:environment:demo` to the
 deployer; `:358` grants that deployer OWNER on the subscription. `verify-l1.yml:69-72`
@@ -295,7 +315,8 @@ it; deployment-branch policy on both restricting to main; assert it in `verify-g
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.5
 - **Closed by:** Task 10
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.1.5.json`
 
 **Where:** `scripts/bootstrap/01-root-oidc.ps1:69`.
 
@@ -322,7 +343,8 @@ register.
 - **Confidence:** CONFIRMED
 - **Controls:** 3.3.1, 3.3.2, 3.3.5
 - **Closed by:** Task 13
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.3.1.json`, `compliance/assessment/3.3.2.json`, `compliance/assessment/3.3.5.json`
 
 **Verified:** grep for `diagnosticSettings|auditingSettings|az monitor diagnostic` across
 all Bicep, YAML and PowerShell returns ZERO matches.
@@ -358,7 +380,8 @@ bounds the cost.
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.5
 - **Closed by:** Task 11
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.1.5.json`
 
 **Where:** `infra/bicep/landing-zone/main.bicep:225` (`enforcementMode: 'DoNotEnforce'`)
 and `:228` (`roleDefinitionIds: [contributorRoleId]` with `identity: 'SystemAssigned'`).
@@ -385,7 +408,8 @@ validates.
 - **Confidence:** CONFIRMED (path traced end to end)
 - **Controls:** 3.14.1
 - **Closed by:** Task 14
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.14.1.json`
 
 **Where:** `apps/control-tower/src/AdaptiveCardView.tsx:194-202` (Action.OpenUrl) and
 `:123-127` (Image). `str()` at `:60` checks only "non-empty string".
@@ -431,7 +455,8 @@ Dockerfiles.
 - **Confidence:** CONFIRMED (reproduced against the real gate)
 - **Controls:** 3.14.1
 - **Closed by:** Task 15
-- **Status:** GAP
+- **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/3.14.1.json`
 
 **Where:** `apps/mcp-tools/src/tools/sql-dialect.ts:154-166` (nesting), `:229-265` (all
 three checks run on the SCRUBBED text), `:267` (returns the RAW text).
@@ -474,6 +499,7 @@ an unclosed comment, quote, backtick or bracket. Make nesting dialect-aware.
 - **Controls:** 3.1.1, 3.1.2, 3.1.5
 - **Closed by:** Task 12
 - **Status:** GAP
+- **Open because:** six of seven workload RBAC grants have landed (Task 12, commit 344063b; Task 17, commit 08ff769); the seventh (cost-ingest -> Storage Blob Data Reader) is blocked on F19, which has no Function App or identity to grant it to. See `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.1.5.json`.
 
 **Verified:** ZERO `az role assignment` invocations across `.github/`, `scripts/`,
 `infra/`, `data/`. ZERO `roleAssignments:` parameters to any AVM module. The ONLY
@@ -647,6 +673,7 @@ Contributor" is correspondingly DONE; F13 itself stays OPEN on F19 alone (see
   CMMC assessors)
 - **Closed by:** Task 18
 - **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/CP-9.json`
 
 **Where:** `infra/bicep/platform/main.bicep:236-285` (`module sqlServer`), specifically
 the `databases` array at `:264-282`. No `shortTermRetentionPolicy`,
@@ -720,6 +747,7 @@ existed; all pass after the fix. CP-9 closes outright — F16 was its sole contr
 - **Controls:** SI-4, IR-4 (NIST SP 800-53 Rev 5 — both tailored out of 800-171)
 - **Closed by:** Task 19
 - **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/SI-4.json`, `compliance/assessment/IR-4.json`
 
 **Verified:** grep for `metricAlerts|scheduledQueryRules|actionGroups|activityLogAlert`
 across every `.bicep`, `.ps1` and `.yml`/`.yaml` file in the repo returns ZERO matches.
@@ -831,6 +859,7 @@ contributor (see `compliance/assessment/SI-4.json`, `compliance/assessment/IR-4.
 - **Controls:** CM-6 (NIST SP 800-53 Rev 5 — tailored out of 800-171)
 - **Closed by:** Task 20
 - **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/CM-6.json`
 
 **Where:** `infra/purview/labels.ps1` — `Initialize-SensitivityLabel` (`:85-116`) calls
 only `New-Label` (`:111`, create path) and `Set-Label` (`:104`, drift-update path);
@@ -920,6 +949,7 @@ all pass after the fix. CM-6 closes outright — F18 was its sole contributor (s
 - **Controls:** none — no 800-171 control (availability/completeness)
 - **Closed by:** not assigned
 - **Status:** GAP
+- **Open because:** deferred to the sponsor. Closing it means provisioning `apps/cost-ingest` as a real Azure Function App with its own identity -- a new deploy surface and a G2 spend decision against the $200/30-day credit, not a call a remediation task can make. No `compliance/assessment/` record exists for F19 (it maps to no NIST SP 800-171 control); this entry and the findings-index table's `Closed by` column are its only durable record.
 
 **Where:** `.github/workflows/infra-up.yml:31` — "WHERE THE FINOPS LEG LIVES. `apps/cost-ingest` (Cost Management daily export → storage → consumption Function → lakehouse `cost_daily`) is an L6 resource and deploys inside layer-06-platform.yml alongside the export wiring it consumes." `apps/cost-ingest/README.md:143`'s RBAC table says the identity's grants are "granted by L6's Bicep".
 
@@ -1029,6 +1059,7 @@ Covered by `verification/tests/app-ci-smoke-test.Tests.ps1` — a workflow-shape
 - **Controls:** CM-6 (NIST SP 800-53 Rev 5 — tailored out of 800-171, the same control F18 maps to)
 - **Closed by:** Task 25
 - **Status:** CLOSED
+- **Remediation record:** `compliance/assessment/CM-6.json`
 
 **Where:** `docs/runbooks/kill-rebuild.md` § 7 is a NUMBERED OPERATOR PROCEDURE for G3
 full-tenant teardown / handback. Steps 1, 2 and 4 instructed a human to run

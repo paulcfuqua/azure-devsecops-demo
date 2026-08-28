@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     L6 Verifier audit - ACA environment, SQL serverless, observability, cost exports. READ-ONLY.

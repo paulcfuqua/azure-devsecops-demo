@@ -5,10 +5,12 @@
   "assertion": {
     "status": "CLOSED",
     "evidence": [
-      "compliance/findings/2026-08-26-prepublication-review.md#f17"
+      "compliance/findings/2026-08-26-prepublication-review.md#f17",
+      "commit fe7e2c3 -- Task 19 (F17 closed: action group + two scheduledQueryRules added)",
+      "commit 8b25816 -- Task 19 fix round (corrected the false F1-F3 detection-coverage claim; documented MLS_ALERT_EMAIL)"
     ],
     "assertedBy": "paulcfuqua",
-    "assertedAt": "2026-08-26",
+    "assertedAt": "2026-08-27",
     "rationale": "F17 (Task 19): a detected event now has somewhere to go before any incident-handling procedure can act on it. infra/bicep/platform/main.bicep adds a Microsoft.Insights/actionGroups (email receiver) plus two Microsoft.Insights/scheduledQueryRules -- a Key Vault AuditEvent denied-result spike and an Azure SQL failed-login spike -- both wired to that action group and both querying the Log Analytics workspace F9 routes diagnostics to. These are the detection trigger IR-4's incident-handling capability needs; they are deliberately not a full incident-response runbook (out of this finding's scope), but the gap this control's rationale named -- zero automated trigger, visibility only to someone who thinks to run a manual KQL query -- is closed. scripts/bootstrap/03-budget.ps1 gained an optional -ActionGroupResourceId parameter so the same action group can be shared with the existing cost-budget notifications (F15/Task 17), one page-out path for both cost and security signals, applied on a re-run once L6 has deployed the action group (G0, where the budget script runs, precedes L6 on every infra-up.yml pass). IR-4 is tailored out of NIST SP 800-171 but is a CMMC-probed 800-53 family; F17 was this control's sole contributor, and with F17 closed this control closes outright. Checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites IR-4."
   },
   "recommendation": "None outstanding for this control. A regression here -- the action group or either scheduledQueryRule removed without replacement -- would reopen it. Building out a fuller incident-response runbook (containment, eradication, lessons-learned) remains a legitimate future addition but is not required to close this finding's gap.",

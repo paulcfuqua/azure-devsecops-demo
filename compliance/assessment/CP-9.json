@@ -5,10 +5,11 @@
   "assertion": {
     "status": "CLOSED",
     "evidence": [
-      "compliance/findings/2026-08-26-prepublication-review.md#f16"
+      "compliance/findings/2026-08-26-prepublication-review.md#f16",
+      "commit f3dc62d -- Task 18 (F16 closed: backupShortTermRetentionPolicy + requestedBackupStorageRedundancy pinned)"
     ],
     "assertedBy": "paulcfuqua",
-    "assertedAt": "2026-08-26",
+    "assertedAt": "2026-08-27",
     "rationale": "F16 (Task 18): infra/bicep/platform/main.bicep's databases array entry now sets backupShortTermRetentionPolicy: { retentionDays: sqlBackupRetentionDays } (default 7) and requestedBackupStorageRedundancy: sqlBackupStorageRedundancy (default 'Local', matching the single-region design the allowedLocations policy otherwise pins for live resources). The brief's own assumed property name, shortTermRetentionPolicy, does not exist on the avm/res/sql/server@0.22.0 module (confirmed via az bicep build, BCP037) -- the real property is backupShortTermRetentionPolicy; requestedBackupStorageRedundancy was named correctly as-is. No backupLongTermRetentionPolicy is set: the database holds seeded synthetic data with a deterministic regenerator (data/seed/), not data an LTR vault needs to protect, so adding one was deliberately left out of this finding's scope. verification/layer-06-audit.ps1 gains a V6.5 criterion (Test-SqlBackupPosture) that ARM-GETs both values -- requestedBackupStorageRedundancy from az sql db show, retentionDays from the child backupShortTermRetentionPolicies/default resource via az resource show -- and fails on any drift from the template-pinned values, the same treatment V6.1 already gives every other SQL property that matters to the master plan. V6.5 is not a master-plan criterion, so it is documented in docs/runbooks/layers/L06.md Section Validation cycle but not added to the master-plan-scoped traceability table in docs/runbooks/layers/README.md. CP-9 is tailored out of NIST SP 800-171 but is exactly what CMMC assessors probe next; F16 was its sole contributor, and with F16 closed this control closes outright. Checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites CP-9."
   },
   "recommendation": "None outstanding for this control. A regression here -- backupShortTermRetentionPolicy or requestedBackupStorageRedundancy removed from the databases array entry, V6.5 deleted from verification/layer-06-audit.ps1 without replacement, or the pinned values (7 days / Local) silently changed without an accompanying decision -- would reopen it.",

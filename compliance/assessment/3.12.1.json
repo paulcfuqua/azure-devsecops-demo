@@ -5,10 +5,11 @@
   "assertion": {
     "status": "CLOSED",
     "evidence": [
-      "compliance/findings/2026-08-26-prepublication-review.md#f6"
+      "compliance/findings/2026-08-26-prepublication-review.md#f6",
+      "commit 5527354 -- Task 9 (F6 closed: mls-verifier given its own federated credential)"
     ],
     "assertedBy": "paulcfuqua",
-    "assertedAt": "2026-08-26",
+    "assertedAt": "2026-08-27",
     "rationale": "F6: Initialize-FederatedCredential was invoked exactly twice in bootstrap, both times for the deployer — the mls-verifier identity that is supposed to run every layer's independent security-control assessment had no federated credential at all. Every azure/login with AZURE_VERIFIER_CLIENT_ID failed AADSTS70021, so the periodic control assessment CLAUDE.md describes as the core verification mechanism could not execute, and verify-g0.ps1's Test-VerifierApp only checked the app REGISTRATION exists, so G0 reported green over a verifier that could not authenticate. F6 is now CLOSED (Task 9): 01-root-oidc.ps1 creates a federated credential for mls-verifier itself, with subject repo:<owner>/<repo>:environment:verify; Test-VerifierApp in verify-g0.ps1 now asserts that credential exists AND that its subject is not also federated to the deployer, so G0 can no longer report green on a verifier that cannot authenticate. This control has no other open contributor (checked: no other finding in compliance/findings/2026-08-26-prepublication-review.md cites 3.12.1)."
   },
   "recommendation": "None outstanding for this control. (mls-verifier's own federated credential, and Test-VerifierApp's assertion of its existence and distinctness from the deployer, are DONE — Task 9.) A regression here — the verifier's credential deleted, or Test-VerifierApp weakened back to checking only app-registration presence — would reopen this control.",

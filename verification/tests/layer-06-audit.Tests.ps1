@@ -1,4 +1,4 @@
-# Pester tests for verification/layer-06-audit.ps1 - every az call mocked; zero cloud calls.
+﻿# Pester tests for verification/layer-06-audit.ps1 - every az call mocked; zero cloud calls.
 
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'

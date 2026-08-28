@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # F9 (compliance/findings/2026-08-26-prepublication-review.md#f9, Task 13): a
 # grep for diagnosticSettings|auditingSettings|az monitor diagnostic across
 # every Bicep, YAML and PowerShell file in the repo returned ZERO matches.
@@ -60,9 +60,9 @@ Describe 'platform diagnostics route to Log Analytics (F9)' {
     }
 
     It 'every diagnosticSettings entry points at the Log Analytics workspace' {
-        $matches = [regex]::Matches($script:MainBicep, 'diagnosticSettings:\s*\[[^\]]*\]')
-        $matches.Count | Should -BeGreaterOrEqual 4
-        foreach ($m in $matches) {
+        $settingMatches = [regex]::Matches($script:MainBicep, 'diagnosticSettings:\s*\[[^\]]*\]')
+        $settingMatches.Count | Should -BeGreaterOrEqual 4
+        foreach ($m in $settingMatches) {
             $m.Value | Should -Match 'logAnalytics\.outputs\.resourceId'
         }
     }
