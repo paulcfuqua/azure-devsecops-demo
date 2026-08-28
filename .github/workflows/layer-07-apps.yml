@@ -134,12 +134,60 @@ jobs:
       MLS_FABRIC_SQL_ENDPOINT: ${{ vars.MLS_SQL_ENDPOINT }}
       MLS_FABRIC_DATABASE: ${{ vars.MLS_LAKEHOUSE_NAME || 'mls_operations' }}
       MLS_GITHUB_REPO: ${{ github.repository }}
-      # Entra application (client) ID for the compliance app's Easy Auth
-      # config. NOT a secret (main.bicep's compliance app block) — a client ID
+      # Entra application (client) IDs for the three human-facing apps' Easy
+      # Auth configs. NOT secrets (main.bicep's EASY AUTH block) — a client ID
       # is a public identifier, the same trust class as AZURE_CLIENT_ID above.
+      #
+      # An UNDEFINED GitHub variable expands to the EMPTY STRING here, not to
+      # nothing, so readEnvironmentVariable in demo.bicepparam sees a variable
+      # that IS set and never returns its 'unset' default (F26). The template
+      # fails closed on both spellings, and the step below refuses the deploy
+      # outright rather than shipping three apps nobody can reach (F25).
       MLS_COMPLIANCE_CLIENT_ID: ${{ vars.MLS_COMPLIANCE_CLIENT_ID }}
+      MLS_LAUNCH_OPS_CLIENT_ID: ${{ vars.MLS_LAUNCH_OPS_CLIENT_ID }}
+      MLS_CONTROL_TOWER_CLIENT_ID: ${{ vars.MLS_CONTROL_TOWER_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
+
+      # F25/F26. The three dashboards are login-gated, and Easy Auth needs an
+      # Entra app registration per app (infra/entra/manifest.json, created at
+      # L3). Without a client ID main.bicep deploys that app INTERNAL rather
+      # than open to the internet — correct, but a demo nobody can reach is
+      # worse feedback than a refusal, so refuse here and say exactly what to
+      # set. Do NOT "fix" a failure here by removing authConfig: control-tower
+      # proxies /api/ straight to data-api, whose identity holds Security
+      # Reader at subscription scope (F25).
+      - name: Require an Entra client ID for every externally-reachable app
+        env:
+          MISSING_HINT: docs/runbooks/g0-bootstrap.md § C9 and docs/runbooks/layers/L03.md
+        run: |
+          set -euo pipefail
+          missing=()
+          for var in MLS_LAUNCH_OPS_CLIENT_ID MLS_CONTROL_TOWER_CLIENT_ID MLS_COMPLIANCE_CLIENT_ID; do
+            value="$(printenv "${var}" || true)"
+            if [ -z "${value}" ] || [ "${value}" = 'unset' ]; then
+              missing+=("${var}")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=Easy Auth client IDs missing::Not deploying. Unset: ${missing[*]}. See ${MISSING_HINT}."
+            {
+              echo "### L7 refused to deploy — Easy Auth is not configured"
+              echo
+              echo "Unset repository/environment variables: \`${missing[*]}\`"
+              echo
+              echo "Since F25 the launch-ops, control-tower and compliance dashboards are"
+              echo "**login-gated**: each needs the application (client) ID of its Entra app"
+              echo "registration (\`infra/entra/manifest.json\`, created at L3). These are"
+              echo "variables, not secrets — a client ID is a public identifier."
+              echo
+              echo "Set them and re-run. Never work around this by removing \`authConfig\`:"
+              echo "control-tower proxies \`/api/\` straight to \`data-api\`, whose identity holds"
+              echo "**Security Reader at subscription scope**."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+          echo 'All three Easy Auth client IDs are set.'
 
       - id: names
         uses: ./.github/actions/naming

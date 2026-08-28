@@ -123,7 +123,15 @@ jobs:
       SQL_AAD_ADMIN_OBJECT_ID: ${{ vars.SQL_AAD_ADMIN_OBJECT_ID }}
       # Set to `recover` in the demo environment when replaying against a
       # soft-deleted vault (kill/rebuild — see the L6 playbook rollback note).
-      KEY_VAULT_CREATE_MODE: ${{ vars.KEY_VAULT_CREATE_MODE }}
+      #
+      # The `|| 'default'` is load-bearing and is F26's sibling case: an
+      # UNDEFINED GitHub variable expands to the EMPTY STRING, so without it
+      # this env var is set-but-empty, `readEnvironmentVariable(...,'default')`
+      # in demo.bicepparam returns '' rather than its default, and the
+      # @allowed(['default','recover']) on main.bicep's keyVaultCreateMode
+      # rejects it — BCP033 at bicepparam compile time, for every adopter who
+      # has not set the variable, which is all of them on a first run.
+      KEY_VAULT_CREATE_MODE: ${{ vars.KEY_VAULT_CREATE_MODE || 'default' }}
       # F17 (compliance/findings/2026-08-26-prepublication-review.md#f17, Task 19):
       # email receiver for the L6 security action group. Optional — see the
       # "Warn if the security action group has no email receiver" step below for

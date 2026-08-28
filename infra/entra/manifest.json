@@ -100,6 +100,11 @@
       "displayName": "mls-mcp-tools-demo-app",
       "signInAudience": "AzureADMyOrg",
       "notes": "MCP tool server the Copilot Studio agent attaches to (apps/mcp-tools)"
+    },
+    {
+      "displayName": "mls-compliance-demo-app",
+      "signInAudience": "AzureADMyOrg",
+      "notes": "Compliance board (apps/compliance). Added by F25: Container Apps Easy Auth on the three human-facing dashboards needs one app registration each, and this was the one the manifest never declared - g0-bootstrap.md's own box said so. Its application (client) id goes into the MLS_COMPLIANCE_CLIENT_ID variable; the launch-ops and control-tower registrations above now feed MLS_LAUNCH_OPS_CLIENT_ID and MLS_CONTROL_TOWER_CLIENT_ID the same way. Each app's Easy Auth redirect URI is https://<that app's ingress fqdn>/.auth/login/aad/callback, which only exists after L7 - see docs/runbooks/layers/L03.md."
     }
   ],
   "conditionalAccessPolicies": [

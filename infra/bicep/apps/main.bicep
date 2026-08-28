@@ -259,8 +259,14 @@ param complianceTargetPort int = 80
 @description('Image content digest for the compliance app, stamped as MLS_IMAGE_DIGEST so V7.1-style build binding is possible even though this app is deliberately outside V7.1\'s own -AppName sweep (see the compliance app block below). "unset" is the honest placeholder.')
 param complianceImageDigest string = 'unset'
 
-@description('Entra application (client) ID Easy Auth validates compliance-app sign-ins against. NOT a secret — an OAuth client ID is a public identifier (CLAUDE.md hard rule 5 treats tenant/subscription IDs the same way), and no client secret is ever configured for this provider (see the compliance app block below for why one is not needed). The Entra app registration itself is the Identity workstream\'s to create (L2-L4), not this template\'s; "unset" is a deliberately invalid clientId so a deploy run ahead of that registration fails loudly instead of shipping an Easy Auth block nobody can ever pass.')
+@description('Entra application (client) ID Easy Auth validates compliance-app sign-ins against. NOT a secret — an OAuth client ID is a public identifier (CLAUDE.md hard rule 5 treats tenant/subscription IDs the same way), and no client secret is ever configured for this provider (see the compliance app block below for why one is not needed). The Entra app registration itself is the Identity workstream\'s to create (L2-L4), not this template\'s. "unset" (and the empty string a GitHub vars.* expansion produces for an undefined variable) means NOT CONFIGURED, and the app then deploys with INTERNAL ingress and no authConfig rather than externally without one — see the EASY AUTH block below (F25/F26).')
 param complianceEntraClientId string = 'unset'
+
+@description('Entra application (client) ID Easy Auth validates launch-ops sign-ins against (F25). Same trust class and same not-configured semantics as complianceEntraClientId above: NOT a secret, and "unset"/empty makes launch-ops deploy INTERNAL rather than open to the internet. The registration is mls-launch-ops-demo-app in infra/entra/manifest.json, created at L3.')
+param launchOpsEntraClientId string = 'unset'
+
+@description('Entra application (client) ID Easy Auth validates control-tower sign-ins against (F25). Same trust class and same not-configured semantics as complianceEntraClientId above: NOT a secret, and "unset"/empty makes control-tower deploy INTERNAL rather than open to the internet. The registration is mls-control-tower-demo-app in infra/entra/manifest.json, created at L3.')
+param controlTowerEntraClientId string = 'unset'
 
 @description('[derived] Replica ceiling — enough for a demo burst, small enough to cap active spend.')
 param maxReplicas int = 2
@@ -550,6 +556,89 @@ module dataApiSecurityReaderGrant 'modules/workload-role-assignments.bicep' = {
 //     -VerifierPrincipalId. Unrelated to this layer's workload identities.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// EASY AUTH — the three human-facing apps (F25, and F26's enforcement half)
+//
+// F25 (compliance/findings/2026-08-26-prepublication-review.md#f25). F1 made
+// data-api INTERNAL and its own Fix text said "both frontends already proxy
+// /api/ server-side" as though that closed the hole. It did not: both frontend
+// nginx templates blind-proxy `location /api/ { proxy_pass ${DATA_API_ORIGIN}/; }`
+// (apps/control-tower/nginx.conf.template, apps/launch-ops/nginx.conf.template)
+// and both apps were EXTERNAL with no authConfig, so
+//     GET https://<control-tower-fqdn>/api/feeds/secure-score
+// reached data-api with no credential at all — and data-api's identity holds
+// Security Reader at SUBSCRIPTION scope plus Log Analytics Reader. An anonymous
+// caller read the adopter's real Defender for Cloud secure score. Internal
+// ingress on the callee is not a control when a public caller proxies to it.
+//
+// Token-gating the proxy was considered and REJECTED: nginx would inject the
+// token for anonymous callers too, so it protects nothing. The only real fix is
+// authenticating the frontends, which is what this block does. THE DEMO'S
+// ACCESS MODEL CHANGED as a result — the dashboards are login-gated now, and
+// README.md, SECURITY.md and docs/runbooks/g0-bootstrap.md say so.
+//
+// FAIL-CLOSED, IN THE TEMPLATE, NOT ONLY IN THE WORKFLOW (F26). Each app's
+// ingressExternal is now the SAME expression as "does this app have a client ID
+// to authenticate against", so there is no reachable combination of parameters
+// that publishes one of these three apps to the internet without Easy Auth in
+// front of it. A missing client ID costs you a demo you cannot reach from
+// outside the environment; it can never cost you an open dashboard.
+// .github/workflows/layer-07-apps.yml additionally refuses to deploy at all
+// when any of the three variables is unset, so the usual outcome is a loud
+// pre-deploy failure rather than a silently internal app.
+// ---------------------------------------------------------------------------
+
+@description('True when an Entra client ID is actually configured. BOTH sentinels matter: readEnvironmentVariable returns its default only when the variable is UNDEFINED, and a GitHub Actions vars.* expansion for an undefined variable produces the EMPTY STRING, which is defined — so the parameter arrives as "" and never as the "unset" default (F26; verified against Bicep CLI 0.46.1: unset -> "unset", empty -> ""). Anything that is neither empty nor the sentinel is treated as configured; the template does not validate GUID shape, ARM does.')
+func isEntraClientIdConfigured(clientId string) bool => !empty(clientId) && clientId != 'unset'
+
+@description('[derived] v2.0 issuer, built from environment()/tenant() rather than a hardcoded host — az bicep\'s linter (no-hardcoded-env-urls) refuses a literal login.microsoftonline.com, and this also keeps the template cloud-portable rather than Azure-public-only.')
+var easyAuthIssuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
+
+@description('Container Apps built-in authentication (Microsoft.App/containerApps/authConfigs), one shape for all three human-facing apps. It sits IN FRONT of the container at the platform/ingress layer — an unauthenticated request never reaches nginx at all, which is the whole point: these are static SPAs with no server, nowhere to keep a secret and nowhere to enforce a policy of their own. NO CLIENT SECRET ANYWHERE (CLAUDE.md hard rule 5): neither a stored client-secret setting name nor a client-secret certificate thumbprint is configured. Those exist for a CONFIDENTIAL client that calls a downstream API on the signed-in user\'s behalf, or that persists provider tokens in Easy Auth\'s token store for reuse. These apps do neither — each asks exactly one question, "is this caller signed in to our tenant" — and Microsoft documents the Entra provider as fully usable without a client secret for precisely that scenario (learn.microsoft.com/azure/container-apps/authentication). unauthenticatedClientAction is a pinned literal: the platform must never fall through to serving an unauthenticated request. excludedPaths is the ONLY hole, and it is a caller-supplied allowlist rather than a default — see each call site for what it opens and why.')
+func entraEasyAuthConfig(clientId string, issuer string, excludedPaths array) object => {
+  platform: {
+    enabled: true
+  }
+  globalValidation: {
+    unauthenticatedClientAction: 'RedirectToLoginPage'
+    redirectToProvider: 'azureactivedirectory'
+    excludedPaths: excludedPaths
+  }
+  identityProviders: {
+    azureActiveDirectory: {
+      enabled: true
+      registration: {
+        clientId: clientId
+        openIdIssuer: issuer
+      }
+    }
+  }
+  login: {
+    // No downstream API is ever called on the signed-in user's behalf, so no
+    // provider token is worth persisting, and nothing here needs a
+    // storage-account-backed token store.
+    tokenStore: {
+      enabled: false
+    }
+  }
+  httpSettings: {
+    requireHttps: true
+  }
+}
+
+var launchOpsAuthConfigured = isEntraClientIdConfigured(launchOpsEntraClientId)
+var controlTowerAuthConfigured = isEntraClientIdConfigured(controlTowerEntraClientId)
+var complianceAuthConfigured = isEntraClientIdConfigured(complianceEntraClientId)
+
+// The ONLY paths served without a session, on the two apps V7.1 sweeps.
+// /healthz returns `ok <MLS_IMAGE_DIGEST>` and nothing else (see each app's
+// nginx.conf.template): it is the build marker V7.1 binds "endpoint is up" to
+// "endpoint serves the audited build" with, and V7.1 issues that GET
+// unauthenticated from a GitHub-hosted runner. It carries no tenant data and
+// reaches no upstream — in particular it is NOT under /api/, so excluding it
+// does not re-open the data-api path this whole block exists to close.
+var easyAuthExcludedPaths = ['/healthz']
+
 // ------------------------------------------------------------------ container apps
 
 // data-api first: both frontends take DATA_API_ORIGIN from its FQDN, so Bicep
@@ -612,10 +701,21 @@ module launchOpsApp 'br/public:avm/res/app/container-app:0.23.0' = {
     location: location
     tags: tagsLaunchOps
     environmentResourceId: caeResourceId
-    ingressExternal: true // frontend: public
+    // EXTERNAL ONLY WHEN EASY AUTH IS CONFIGURED (F25). This is the same
+    // expression as authConfig's guard below, deliberately: before Task 26 this
+    // read `ingressExternal: true // frontend: public`, and "public" meant
+    // anonymous — including anonymous /api/ proxied straight through to
+    // data-api's Security-Reader-holding identity. See the EASY AUTH block above.
+    ingressExternal: launchOpsAuthConfigured
     ingressTargetPort: launchOpsTargetPort
     ingressAllowInsecure: false
     scaleSettings: scaleToZero
+    // null, not an empty object: the AVM module creates the authConfig child
+    // resource on `not(empty(authConfig))`, so null is how you say "no auth
+    // config" — and it is only ever reachable together with internal ingress.
+    authConfig: launchOpsAuthConfigured
+      ? entraEasyAuthConfig(launchOpsEntraClientId, easyAuthIssuer, easyAuthExcludedPaths)
+      : null
     containers: [
       {
         name: naming.appKeys.launchOps
@@ -655,10 +755,18 @@ module controlTowerApp 'br/public:avm/res/app/container-app:0.23.0' = {
     location: location
     tags: tagsControlTower
     environmentResourceId: caeResourceId
-    ingressExternal: true // frontend: public
+    // EXTERNAL ONLY WHEN EASY AUTH IS CONFIGURED (F25) — same guard as
+    // authConfig below. This app is the one F25 was demonstrated against:
+    // GET https://<fqdn>/api/feeds/secure-score returned the adopter's live
+    // Defender for Cloud posture to any anonymous caller. See the EASY AUTH
+    // block above.
+    ingressExternal: controlTowerAuthConfigured
     ingressTargetPort: controlTowerTargetPort
     ingressAllowInsecure: false
     scaleSettings: scaleToZero
+    authConfig: controlTowerAuthConfigured
+      ? entraEasyAuthConfig(controlTowerEntraClientId, easyAuthIssuer, easyAuthExcludedPaths)
+      : null
     containers: [
       {
         name: naming.appKeys.controlTower
@@ -784,17 +892,18 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
 //
 // mls-compliance-demo-ca — the board that shows the estate's OWN compliance
 // posture (design brief section 5.1). Structurally it is a static SPA exactly
-// like control-tower/launch-ops (nginx serving a Vite build), but it is a
-// THIRD shape from an access-control standpoint:
+// like control-tower/launch-ops (nginx serving a Vite build), and since F25 it
+// has the SAME access-control shape as those two rather than a third one:
 //   data-api       INTERNAL-ONLY — nothing outside the CAE has any business
 //                  calling it (F1/Task 6).
 //   launch-ops,
-//   control-tower  EXTERNAL, OPEN — public marketing/ops dashboards; anyone
-//                  reaching the FQDN is the intended audience.
-//   compliance     EXTERNAL, GATED — human-facing like the two above, but the
+//   control-tower,
+//   compliance     EXTERNAL AND EASY-AUTH GATED — human-facing, but the
 //                  audience is "someone on this program", not "the internet".
-//                  A NIST control-family board is not something to leave
-//                  anonymously reachable.
+//                  Until F25 the first two were EXTERNAL AND OPEN, and their
+//                  nginx /api/ proxy made data-api's internal ingress
+//                  meaningless; see the EASY AUTH block above the container
+//                  apps section for the full account.
 //
 // EASY AUTH, NOT AN APPLICATION GATE. The app holds no session, no user store
 // and no auth code of its own (apps/compliance has no server — it is nginx
@@ -802,10 +911,9 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
 // (Microsoft.App/containerApps/authConfigs) sits in FRONT of the container at
 // the platform/ingress layer, so an unauthenticated request never reaches
 // nginx at all — there is nowhere in a static SPA to keep a secret or enforce
-// a policy, so the platform enforces it instead. Why no client secret is
-// configured, and why the client ID parameter below is not itself a secret,
-// is explained inline next to authConfig in the module below rather than
-// repeated here.
+// a policy, so the platform enforces it instead. The config itself, and why no
+// client secret is configured, now live in entraEasyAuthConfig() above, which
+// all three human-facing apps share.
 //
 // NO IDENTITY, NO RBAC GRANTS. Unlike data-api/mcp-tools this app calls no
 // Azure data plane at all — the catalog and every compliance/state/*.json
@@ -831,72 +939,27 @@ module complianceApp 'br/public:avm/res/app/container-app:0.23.0' = {
     location: location
     tags: tagsCompliance
     environmentResourceId: caeResourceId
-    ingressExternal: true // human-facing, but gated by Easy Auth below — not public
+    // EXTERNAL ONLY WHEN EASY AUTH IS CONFIGURED — the same guard as authConfig
+    // below, and the fix for F26: before Task 26 this read `ingressExternal:
+    // true` unconditionally, and the runbook claimed that leaving
+    // MLS_COMPLIANCE_CLIENT_ID unset made "ARM reject the deployment outright".
+    // It did not. `${{ vars.MLS_COMPLIANCE_CLIENT_ID }}` for an undefined
+    // GitHub variable expands to the EMPTY STRING, so readEnvironmentVariable
+    // saw a variable that WAS set, returned '', and never reached its 'unset'
+    // default — leaving a NIST control-family board anonymously reachable
+    // behind an Easy Auth block with an empty clientId.
+    ingressExternal: complianceAuthConfigured
     ingressTargetPort: complianceTargetPort
     ingressAllowInsecure: false
     scaleSettings: scaleToZero
-    // Container Apps built-in authentication (Microsoft.App/containerApps/
-    // authConfigs). Sits IN FRONT of the container at the platform/ingress
-    // layer — an unauthenticated request never reaches nginx at all, which is
-    // the whole point: this is platform configuration, not an application
-    // gate (apps/compliance has no server and nowhere to keep a secret or
-    // enforce a policy of its own). unauthenticatedClientAction:
-    // 'RedirectToLoginPage' is the ARM name for the portal's "Require
-    // authentication" toggle, and it is a pinned literal — the platform must
-    // never fall through to serving an unauthenticated request.
-    authConfig: {
-      platform: {
-        enabled: true
-      }
-      globalValidation: {
-        unauthenticatedClientAction: 'RedirectToLoginPage'
-        redirectToProvider: 'azureactivedirectory'
-      }
-      identityProviders: {
-        azureActiveDirectory: {
-          enabled: true
-          registration: {
-            // complianceEntraClientId IS NOT A SECRET — an OAuth "application
-            // (client) ID" is a public identifier (visible in the browser's
-            // own redirect URL during login), the same trust class CLAUDE.md
-            // hard rule 5 already puts tenant/subscription IDs in. The Entra
-            // app registration itself is the Identity workstream's to create
-            // (L2-L4), not this layer's; 'unset' is a deliberately invalid
-            // GUID so a deploy run ahead of that registration fails the ARM
-            // deployment outright instead of shipping an Easy Auth block
-            // nobody can ever pass.
-            clientId: complianceEntraClientId
-            // v2.0 issuer, built from environment()/tenant() rather than a
-            // hardcoded host — az bicep's linter (no-hardcoded-env-urls)
-            // refuses a literal login.microsoftonline.com, and this also
-            // keeps the template cloud-portable rather than Azure-public-only.
-            //
-            // NO CLIENT SECRET ANYWHERE (hard rule 5: no secrets in the repo,
-            // none in CI): neither a stored client-secret setting name nor a
-            // client-secret certificate thumbprint is configured below. Those
-            // exist for a CONFIDENTIAL client that calls a downstream API (Graph, etc.)
-            // on the signed-in user's behalf, or that persists provider
-            // tokens in Easy Auth's token store for reuse. This app does
-            // neither — it asks exactly one question, "is this caller signed
-            // in to our tenant" — and Microsoft documents the Entra provider
-            // as fully usable without a client secret for precisely that
-            // scenario (learn.microsoft.com/azure/container-apps/authentication).
-            openIdIssuer: '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
-          }
-        }
-      }
-      login: {
-        // No downstream API is ever called on the signed-in user's behalf,
-        // so no provider token is worth persisting, and nothing here needs a
-        // storage-account-backed token store.
-        tokenStore: {
-          enabled: false
-        }
-      }
-      httpSettings: {
-        requireHttps: true
-      }
-    }
+    // Shared with launch-ops and control-tower since F25 — see
+    // entraEasyAuthConfig() above for the whole configuration and its rationale.
+    // /healthz is excluded there for V7.1's benefit; this app is outside V7.1's
+    // sweep (see complianceAppName below) but shares the shape so there is one
+    // Easy Auth configuration in this template to review rather than three.
+    authConfig: complianceAuthConfigured
+      ? entraEasyAuthConfig(complianceEntraClientId, easyAuthIssuer, easyAuthExcludedPaths)
+      : null
     // No managed identity, no secrets: this app reads only what was baked
     // into its image at build time and needs no Azure data-plane credential.
     containers: [
@@ -1003,11 +1066,18 @@ module vulnLabWitnessApp 'br/public:avm/res/app/container-app:0.23.0' = {
 
 // ------------------------------------------------------------------ outputs
 
-@description('Public FQDN of launch-ops.')
+@description('FQDN of launch-ops. EXTERNAL and Easy-Auth gated when launchOpsEntraClientId is configured; an INTERNAL (in-environment only) FQDN when it is not — see frontendAuthStatus below and the EASY AUTH block above the container apps section (F25).')
 output launchOpsFqdn string = launchOpsApp.outputs.fqdn
 
-@description('Public FQDN of control-tower.')
+@description('FQDN of control-tower. EXTERNAL and Easy-Auth gated when controlTowerEntraClientId is configured; an INTERNAL (in-environment only) FQDN when it is not — see frontendAuthStatus below and the EASY AUTH block above the container apps section (F25).')
 output controlTowerFqdn string = controlTowerApp.outputs.fqdn
+
+@description('Which human-facing apps actually got Easy Auth, and therefore which ones are externally reachable at all (F25/F26). true = external + Entra sign-in required; false = NO client ID was supplied, so the app deployed INTERNAL to the Container Apps environment and V7.1 will not be able to reach it. .github/workflows/layer-07-apps.yml refuses to deploy when any of these would be false, so a false here means the template was deployed by some other path.')
+output frontendAuthStatus object = {
+  launchOps: launchOpsAuthConfigured
+  controlTower: controlTowerAuthConfigured
+  compliance: complianceAuthConfigured
+}
 
 @description('Public FQDN of the MCP tool server (always external — Copilot Studio must reach it).')
 output mcpToolsFqdn string = mcpToolsApp.outputs.fqdn
@@ -1044,7 +1114,7 @@ output vulnLabWitnessResourceId string = vulnLabWitnessApp.outputs.resourceId
 @description('Name of the compliance container app (mls-compliance-demo-ca) — deliberately not in containerAppNames; see that output\'s description. app-compliance-ci.yml\'s deploy job resolves this same name independently via the naming composite action (ca-compliance) rather than reading it from here, the same relationship app-control-tower-ci.yml already has with controlTowerName.')
 output complianceAppName string = complianceName
 
-@description('Public HTTPS FQDN of the compliance app. Reaching it without an authenticated Entra session redirects to login rather than serving the board.')
+@description('HTTPS FQDN of the compliance app. Reaching it without an authenticated Entra session redirects to login rather than serving the board. INTERNAL to the Container Apps environment when complianceEntraClientId is not configured (F26) — see frontendAuthStatus.')
 output complianceFqdn string = complianceApp.outputs.fqdn
 
 @description('MLS_IMAGE_DIGEST as deployed, per app. This is the deploy run\'s record of what each endpoint should be serving; the L7 workflow writes it into the manifest V7.1 compares against /healthz.')

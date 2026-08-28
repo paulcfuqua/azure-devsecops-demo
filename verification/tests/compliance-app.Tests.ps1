@@ -62,6 +62,19 @@ BeforeAll {
         ($script:ComplianceModuleBlock -split "`n") | ForEach-Object { $_ -replace '//.*$', '' }
     ) -join "`n"
 
+    # ---- isolate the shared Easy Auth builder (main.bicep) --------------------
+    # Since F25 the authConfig object is not inline in each module: all three
+    # human-facing apps call entraEasyAuthConfig(), so the assertions about what
+    # Easy Auth is CONFIGURED to do run against that function, and the assertions
+    # about whether a given app uses it run against that app's module block.
+    if ($script:MainBicep -notmatch '(?ms)^func entraEasyAuthConfig\(.*?\n\}') {
+        throw 'Could not isolate the entraEasyAuthConfig function in main.bicep.'
+    }
+    $script:EasyAuthFunc = $Matches[0]
+    $script:EasyAuthFuncCode = (
+        ($script:EasyAuthFunc -split "`n") | ForEach-Object { $_ -replace '//.*$', '' }
+    ) -join "`n"
+
     # ---- isolate the containerAppNames output block (main.bicep) --------------
     if ($script:MainBicep -notmatch '(?ms)^output containerAppNames object = \{.*?\n\}') {
         throw 'Could not isolate the containerAppNames output block in main.bicep.'
@@ -101,9 +114,11 @@ BeforeAll {
 
 Describe 'Task 13: compliance container app behind Easy Auth' {
     It 'requires authentication on the compliance app' {
-        # The task-13 brief's own Step 1 failing test, verbatim.
+        # The task-13 brief's own Step 1 failing test, verbatim except that the
+        # configuration now lives in the shared entraEasyAuthConfig() builder (F25).
         $script:ComplianceModuleBlock | Should -Match 'authConfig'
-        $script:ComplianceModuleBlock | Should -Match "unauthenticatedClientAction:\s*'RedirectToLoginPage'"
+        $script:ComplianceModuleBlock | Should -Match 'entraEasyAuthConfig\(complianceEntraClientId'
+        $script:EasyAuthFunc | Should -Match "unauthenticatedClientAction:\s*'RedirectToLoginPage'"
     }
 
     It 'scales to zero like its siblings' {
@@ -111,36 +126,50 @@ Describe 'Task 13: compliance container app behind Easy Auth' {
     }
 
     It 'has Easy Auth configured in actual code, not merely described in a comment' {
-        # Re-run the brief's own two assertions against the COMMENT-STRIPPED
-        # copy. A module block that only ever said these words in prose (and
-        # left authConfig unset) would fail here even though it passes the
-        # test above.
-        $script:ComplianceModuleCode | Should -Match 'authConfig:\s*\{'
-        $script:ComplianceModuleCode | Should -Match "unauthenticatedClientAction:\s*'RedirectToLoginPage'"
-        $script:ComplianceModuleCode | Should -Match 'globalValidation:\s*\{'
-        $script:ComplianceModuleCode | Should -Match 'azureActiveDirectory:\s*\{'
-        $script:ComplianceModuleCode | Should -Match 'enabled:\s*true'
+        # Re-run the brief's own assertions against COMMENT-STRIPPED copies. A
+        # module block or builder that only ever said these words in prose would
+        # fail here even though it passes the test above.
+        $script:ComplianceModuleCode | Should -Match 'authConfig:'
+        $script:ComplianceModuleCode | Should -Match 'entraEasyAuthConfig\('
+        $script:EasyAuthFuncCode | Should -Match "unauthenticatedClientAction:\s*'RedirectToLoginPage'"
+        $script:EasyAuthFuncCode | Should -Match 'globalValidation:\s*\{'
+        $script:EasyAuthFuncCode | Should -Match 'azureActiveDirectory:\s*\{'
+        $script:EasyAuthFuncCode | Should -Match 'enabled:\s*true'
+        $script:EasyAuthFuncCode | Should -Match 'requireHttps:\s*true'
     }
 
-    It 'serves external, HTTPS-only ingress (human-facing, gated by Easy Auth rather than left internal)' {
-        $script:ComplianceModuleBlock | Should -Match 'ingressExternal: true'
+    It 'ties external ingress to Easy Auth being configured, never to a bare true (F26)' {
+        # Before F26 this read `ingressExternal: true` unconditionally, and the
+        # runbook claimed an unset MLS_COMPLIANCE_CLIENT_ID made ARM reject the
+        # deployment. It did not: an undefined GitHub variable expands to the empty
+        # string, so the board would have gone up open.
+        $script:ComplianceModuleCode | Should -Match 'ingressExternal: complianceAuthConfigured'
+        $script:ComplianceModuleCode | Should -Not -Match 'ingressExternal: true'
         $script:ComplianceModuleBlock | Should -Match 'ingressAllowInsecure: false'
+        $script:MainBicep | Should -Match 'var complianceAuthConfigured = isEntraClientIdConfigured\(complianceEntraClientId\)'
     }
 
     It 'configures no client secret for the Entra provider' {
         # The whole point of Task 13's Easy Auth shape: a client ID (not a
         # secret) is enough for "is this caller signed in", and nothing here
-        # should reach for the confidential-client properties.
-        $script:ComplianceModuleBlock | Should -Not -Match 'clientSecretSettingName'
-        $script:ComplianceModuleBlock | Should -Not -Match 'clientSecretCertificateThumbprint'
+        # should reach for the confidential-client properties. Asserted on the
+        # shared builder as well as the module, since that is where the provider
+        # registration now lives.
+        foreach ($block in @($script:ComplianceModuleBlock, $script:EasyAuthFunc)) {
+            $block | Should -Not -Match 'clientSecretSettingName'
+            $block | Should -Not -Match 'clientSecretCertificateThumbprint'
+        }
         $script:ComplianceModuleBlock | Should -Not -Match '(?m)^\s*secrets:'
+        $script:EasyAuthFuncCode | Should -Match 'tokenStore:\s*\{\s*enabled:\s*false'
     }
 
     It 'passes the client ID as a parameter reference, never a literal GUID' {
-        $script:ComplianceModuleBlock | Should -Match 'clientId: complianceEntraClientId'
+        $script:ComplianceModuleCode | Should -Match 'entraEasyAuthConfig\(complianceEntraClientId,'
+        $script:EasyAuthFuncCode | Should -Match 'clientId: clientId'
         # A literal-looking GUID here would mean someone hardcoded a real
         # tenant's app ID into source instead of leaving it a parameter.
         $script:ComplianceModuleBlock | Should -Not -Match 'clientId:\s*''[0-9a-fA-F]{8}-'
+        $script:EasyAuthFunc | Should -Not -Match 'clientId:\s*''[0-9a-fA-F]{8}-'
     }
 
     It 'grants no managed identity and no RBAC — the app reads only baked-in files' {

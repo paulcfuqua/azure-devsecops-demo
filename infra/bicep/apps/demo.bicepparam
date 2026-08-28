@@ -64,12 +64,21 @@ param mcpToolsImageDigest = readEnvironmentVariable('MCP_TOOLS_IMAGE_DIGEST', 'u
 param dataApiImageDigest = readEnvironmentVariable('DATA_API_IMAGE_DIGEST', 'unset')
 param complianceImageDigest = readEnvironmentVariable('COMPLIANCE_IMAGE_DIGEST', 'unset')
 
-// Entra application (client) ID Easy Auth validates compliance-app sign-ins
-// against. NOT a secret (see main.bicep's compliance app block) — the same
+// Entra application (client) IDs Easy Auth validates sign-ins against, one per
+// human-facing app. NOT secrets (see main.bicep's EASY AUTH block) — the same
 // non-secret-environment-variable pattern as MLS_GITHUB_REPO / MLS_OWNER.
-// The Entra app registration is Identity's to create; 'unset' is a
-// deliberately invalid clientId so an out-of-order deploy fails loudly.
+//
+// 'unset' is the sentinel for "no registration yet", but it is NOT the only one
+// that matters, and assuming it was is F26: a GitHub Actions `vars.X` expansion
+// for an undefined variable produces the EMPTY STRING, which is a variable that
+// IS set, so readEnvironmentVariable returns '' and never reaches the default
+// below. main.bicep's isEntraClientIdConfigured() therefore treats empty AND
+// 'unset' as not-configured, and an app with no client ID deploys INTERNAL
+// instead of open (F25). Verified against Bicep CLI 0.46.1: variable unset ->
+// "unset"; variable set to the empty string -> "".
 param complianceEntraClientId = readEnvironmentVariable('MLS_COMPLIANCE_CLIENT_ID', 'unset')
+param launchOpsEntraClientId = readEnvironmentVariable('MLS_LAUNCH_OPS_CLIENT_ID', 'unset')
+param controlTowerEntraClientId = readEnvironmentVariable('MLS_CONTROL_TOWER_CLIENT_ID', 'unset')
 
 // data-api backend selection. Empty = decide from whether L5 handed us a Fabric
 // SQL analytics endpoint; MLS_DATA_BACKENDS forces it either way.

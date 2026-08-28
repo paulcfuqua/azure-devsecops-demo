@@ -127,10 +127,19 @@ Describe 'layer-03-audit' {
         }
 
         It 'expects exactly the manifest counts' {
+            # Counts come FROM the manifest, not from literals: F25 added a fourth app
+            # registration (mls-compliance-demo-app, for the compliance board's Easy
+            # Auth) and this assertion's hardcoded "3 app registrations" was the only
+            # thing in the repo that went red for it. The manifest is the source of
+            # truth for V3.1, so the test reads it the same way the audit does.
             $context = Invoke-AuditForTest
-            (Get-Row -Context $context -Id 'V3.1').Expected | Should -BeLike '*5 users*'
-            (Get-Row -Context $context -Id 'V3.1').Expected | Should -BeLike '*4 groups*'
-            (Get-Row -Context $context -Id 'V3.1').Expected | Should -BeLike '*3 app registrations*'
+            $expected = (Get-Row -Context $context -Id 'V3.1').Expected
+            $expected | Should -BeLike "*$(@($script:Manifest.users).Count) users*"
+            $expected | Should -BeLike "*$(@($script:Manifest.groups).Count) groups*"
+            $expected | Should -BeLike "*$(@($script:Manifest.appRegistrations).Count) app registrations*"
+            # Guard against the counts silently collapsing to zero if the manifest
+            # ever fails to parse: the demo has five users, four groups, four apps.
+            @($script:Manifest.appRegistrations).Count | Should -Be 4
         }
     }
 
