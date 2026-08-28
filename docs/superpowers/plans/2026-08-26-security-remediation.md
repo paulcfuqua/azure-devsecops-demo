@@ -1582,7 +1582,21 @@ not done." L2, L3 and L4 each fail that rule today.
 
 - [ ] **Step 1: Write the failing tests**
 
-One test file per script. Assert behaviour, not source text. The shape for each:
+One test file per script. Assert behaviour, not source text.
+
+**Mirror each layer's own apply script; do not invent a new access pattern.**
+`infra/entra/apply-entra.ps1` does NOT use the `Remove-Mg*` cmdlets — it funnels
+every Graph call through two helpers: `Invoke-GraphApi` (`-Method GET|POST|PATCH|DELETE`,
+`-Path`, `-AllowNotFound`) and `Invoke-GraphMutation` (`-Target`, `-Action`,
+`-Method`, `-Path`, already `SupportsShouldProcess`). The Entra teardown must reuse
+that pair: `Invoke-GraphMutation -Method DELETE` gives `-WhatIf` gating for free, and
+`Invoke-GraphApi -AllowNotFound` gives the idempotent already-absent behaviour for
+free. `infra/purview/labels.ps1` uses S&C cmdlets (`Get-Label`, `Get-LabelPolicy`,
+`Initialize-LabelPolicy`) — the Purview teardown mirrors those with `Remove-LabelPolicy`
+then `Remove-Label`. There is no `infra/policy/` directory and no L2 apply script at
+all: L2 deploys `infra/bicep/landing-zone/main.bicep` at `targetScope =
+'managementGroup'` via `az deployment mg create`, so that teardown is new ground —
+follow the repo's `az` CLI convention and check `$LASTEXITCODE` explicitly. The shape for each:
 
 One test file per script. Assert behaviour, not source text.
 
@@ -1601,18 +1615,6 @@ The shape for each:
 ```powershell
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
-
-    # Microsoft.Graph is not loaded in tests: stand-ins so teardown.ps1 binds
-    # against the real names and Should -Invoke can inspect the arguments.
-    function Remove-MgUser {
-        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
-            Justification = 'Stand-in for the Microsoft.Graph cmdlet of the same name. Empty body, changes no state.')]
-        [CmdletBinding()]
-        param([Parameter(Mandatory)][string]$UserId)
-    }
-    # ... same shape for Remove-MgGroup, Remove-MgApplication,
-    #     Remove-MgIdentityConditionalAccessPolicy, and the Get-Mg* lookups.
-
     . "$PSScriptRoot/../teardown.ps1"
 }
 
@@ -1626,33 +1628,42 @@ Describe 'infra/entra/teardown.ps1' {
     }
 
     It 'deletes nothing under -WhatIf' {
-        Mock Remove-MgUser {}; Mock Remove-MgGroup {}
+        Mock Invoke-GraphApi { @{ value = @(@{ id = 'x'; displayName = 'y' }) } }
         Invoke-Main -WhatIf
-        Should -Invoke Remove-MgUser -Exactly 0
-        Should -Invoke Remove-MgGroup -Exactly 0
+        # Invoke-GraphMutation is ShouldProcess-gated, so under -WhatIf it
+        # returns without ever reaching Invoke-GraphApi with a DELETE.
+        Should -Invoke Invoke-GraphApi -Exactly 0 -ParameterFilter { $Method -eq 'DELETE' }
     }
 
     It 'treats an already-absent object as a no-op, not an error' {
-        Mock Get-MgUser { $null }
+        Mock Invoke-GraphApi { $null }
         { Invoke-Main -Confirm:$false } | Should -Not -Throw
     }
 
     It 'removes in reverse-dependency order: CA policies, then app registrations, then groups, then users' {
         $order = [System.Collections.Generic.List[string]]::new()
-        Mock Remove-MgIdentityConditionalAccessPolicy { $order.Add('ca') }
-        Mock Remove-MgApplication { $order.Add('app') }
-        Mock Remove-MgGroup { $order.Add('group') }
-        Mock Remove-MgUser { $order.Add('user') }
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'DELETE') {
+                $order.Add(($Path -split '/')[0])
+                return $null
+            }
+            return @{ value = @(@{ id = 'id-1'; displayName = 'n' }) }
+        }
         Invoke-Main -Confirm:$false
-        ($order | Select-Object -Unique) -join ',' | Should -Be 'ca,app,group,user'
+        ($order | Select-Object -Unique) -join ',' |
+            Should -Be 'identity,applications,groups,users'
     }
 
     It 'deletes only what the manifest lists' {
         $deleted = [System.Collections.Generic.List[string]]::new()
-        Mock Remove-MgUser { $deleted.Add($UserId) }
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'DELETE') { $deleted.Add($Path); return $null }
+            return @{ value = @(@{ id = 'id-1'; displayName = 'n' }) }
+        }
         Invoke-Main -Confirm:$false
         $manifest = Get-Content "$PSScriptRoot/../manifest.json" -Raw | ConvertFrom-Json
-        $deleted.Count | Should -Be $manifest.users.Count
+        $userDeletes = @($deleted | Where-Object { $_ -like 'users/*' })
+        $userDeletes.Count | Should -Be $manifest.users.Count
     }
 }
 ```
