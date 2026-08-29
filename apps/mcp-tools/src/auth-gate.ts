@@ -72,6 +72,33 @@ export interface InboundAuth {
  * `timingSafeEqual` throws when the buffers differ in length, and length itself
  * leaks. Hashing both sides first gives two fixed-width (32-byte) digests, so
  * the comparison is both safe to call and free of a length side channel.
+ *
+ * ── Why SHA-256 here is not the thing CodeQL thinks it is ───────────────────
+ * CodeQL raises js/insufficient-password-hash (HIGH) on the two `createHash`
+ * calls below: "Password from a call to get is hashed insecurely." The rule is
+ * right about the shape and wrong about the situation, so the alert is
+ * dismissed as a false positive rather than silenced in code.
+ *
+ * That rule exists to stop passwords being STORED under a fast hash, where an
+ * attacker who steals the store can brute-force human-chosen secrets offline.
+ * Every part of that threat is absent here:
+ *
+ *   - nothing is stored. Both digests are computed per request, compared, and
+ *     dropped; neither is written, logged, or returned (see the module doc's
+ *     hard-rule-5 note and /healthz, which reports posture and never the
+ *     token).
+ *   - the input is not a password. It is `mcp-auth-token`, a machine-generated
+ *     high-entropy value the platform injects from Key Vault. There is no
+ *     dictionary to run against it.
+ *   - the hash is not the security control. `timingSafeEqual` is. The digests
+ *     exist only to make two arbitrary-length strings the same width so that
+ *     comparison is legal and leaks no length.
+ *
+ * Substituting a deliberately slow KDF -- the rule's suggested remedy -- would
+ * make this worse, not better: it runs on every request to a public endpoint,
+ * so a per-request scrypt is a denial-of-service amplifier handed to anyone who
+ * can send an unauthenticated POST. The cost of a wrong "fix" here is higher
+ * than the finding it would close.
  */
 export function secretsMatch(supplied: string, expected: string): boolean {
   const a = createHash("sha256").update(supplied, "utf8").digest();
@@ -89,7 +116,23 @@ export function secretsMatch(supplied: string, expected: string): boolean {
 export function presentedCredential(req: Request): string | undefined {
   const header = req.get("authorization");
   if (header) {
-    const match = /^Bearer[ \t]+(.+)$/i.exec(header.trim());
+    // `[^ \t]` on the first captured character is load-bearing, not tidiness.
+    //
+    // This was `/^Bearer[ \t]+(.+)$/i`, and CodeQL raised it as a HIGH
+    // js/polynomial-redos: "may run slow on strings starting with 'bearer\t'
+    // and with many repetitions of '\t\t'". `[ \t]+` and `.+` can both match a
+    // run of spaces and tabs, so for a header carrying n whitespace characters
+    // there are O(n) ways to split it between the two, and the anchored `$`
+    // makes the engine try every one before it can fail. One long header burns
+    // quadratic CPU on an endpoint that is public by design -- cheap to send,
+    // expensive to refuse.
+    //
+    // Requiring the capture to begin with a non-space makes the split unique,
+    // so the match is linear and cannot backtrack. Behaviour is unchanged for
+    // every real credential. The one difference: an all-whitespace bearer value
+    // now falls through to x-api-key instead of being returned as the empty
+    // string, which is the better answer anyway -- "" was never a credential.
+    const match = /^Bearer[ \t]+([^ \t].*)$/i.exec(header.trim());
     // match[1] types as possibly-undefined under noUncheckedIndexedAccess even though a
     // successful exec of this pattern always carries the group. Read it once and check,
     // rather than asserting non-null.

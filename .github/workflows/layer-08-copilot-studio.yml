@@ -126,7 +126,7 @@ jobs:
       verifier: ${{ steps.verifier.outputs.configured }}
       solution: ${{ steps.source.outputs.present }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Required: identity + the Power Platform DEMO environment URL. Without these
       # there is nowhere to import, so every downstream job is skipped.
@@ -200,7 +200,7 @@ jobs:
       POWERPLATFORM_ENVIRONMENT_URL: ${{ vars.POWERPLATFORM_ENVIRONMENT_URL }}
       SOLUTION_NAME: ${{ inputs.solution_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # OIDC federated login. `pac auth create --managedIdentity` below resolves its
       # credential through DefaultAzureCredential, which reads the AZURE_* environment
@@ -312,7 +312,7 @@ jobs:
     env:
       FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC, mls-github-deployer)
         uses: azure/login@v2
@@ -428,12 +428,12 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -519,7 +519,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming
@@ -553,7 +553,7 @@ jobs:
         id: artifact
         if: ${{ needs.preflight.outputs.verifier == 'true' && needs.eval.result == 'success' }}
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: layer-08-agent-eval
           path: l8-eval

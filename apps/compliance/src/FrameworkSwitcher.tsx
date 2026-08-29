@@ -1,5 +1,6 @@
 import { Tab, TabList, type SelectTabData, type SelectTabEvent } from "@fluentui/react-components";
 import type { FrameworkId } from "./types";
+import type { JSX } from "react";
 
 /** Human labels for the four framework ids the catalog's `mappings` key on.
  * Reference data, not a resource name -- CLAUDE.md's naming rule is about

@@ -116,6 +116,8 @@ no".
 | [F38](#f38) | Three shipped images sat sixteen months behind Alpine's security updates on an end-of-line `nginx` tag, and no ecosystem was watching `FROM` lines | medium | CONFIRMED | 3.4.1, 3.14.1 | F33's Trivy repin, first real scan |
 | [F39](#f39) | The Trivy CRITICAL gate and the F22 smoke test were **advisory**: not one of the five image jobs was a required status check | high | CONFIRMED | 3.4.3, 3.14.1 | raised and closed with F37/F38 |
 | [F40](#f40) | `dependabot.yml` told adopters to switch OFF the only fix generator the seeded CVEs have — known-wrong and left in place for four days | medium | CONFIRMED | — (adoptability; L10 showpiece) | raised and closed with F39 |
+| [F41](#f41) | The compliance state artifact became its own trigger: seven orphaned branches, and `main`'s state stamped seven commits behind | medium | CONFIRMED (observed) | 3.12.3 | raised and closed 2026-08-29 |
+| [F42](#f42) | Polynomial ReDoS in the inbound `Authorization` parse — the gate in front of a deliberately public endpoint | high | CONFIRMED (measured) | 3.13.1, 3.14.1 | CodeQL, raised and closed 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2256,3 +2258,132 @@ bullet no longer records a known-stale comment; it records that the comment was 
 and what following it would have cost. Verified against the live repository: `GET
 /repos/{o}/{r}/automated-security-fixes` returns `{"enabled": true, "paused": false}`,
 which is what both documents now say it should be.
+
+
+## F41
+
+**The compliance state artifact became its own trigger: merging it re-ran the workflow that produced it, and seven abandoned branches had accumulated while `main`'s state sat seven commits behind**
+
+- **Severity:** medium (no control is weakened; the flagship deliverable's published provenance is stale and the loop is unbounded)
+- **Confidence:** CONFIRMED — observed, not predicted. Merging PR #44 triggered `compliance.yml` at 03:56 on the merge commit `97beb7f`.
+- **Controls:** 3.12.3 (monitor security controls on an ongoing basis — the board is that monitoring's output)
+- **Closed by:** raised and closed 2026-08-29
+- **Status:** CLOSED
+
+**Found while:** merging [F37](#f37)/[F38](#f38) and noticing seven
+`compliance-state/*` branches on the remote, one per push to `main` since branch
+protection was enabled.
+
+**Two defects, one cause.** `compliance.yml`'s commit job used to push the artifact
+straight to `main` with `GITHUB_TOKEN`, and that route was loop-free *by construction*:
+"events triggered by the GITHUB_TOKEN will not create a new workflow run" — GitHub's
+recursion guard, which the step's own comment still names as the thing it relies on.
+Branch protection ended that route. The direct push is now refused, and the workflow
+falls back — deliberately, and documented — to pushing a branch and asking a human to
+open the pull request, because opening one itself needs "Allow GitHub Actions to create
+and approve pull requests" and that same toggle grants self-approval.
+
+1. **Nobody clicked.** Seven branches, and `compliance/state/` on `main` stamped
+   `9d7a0b1` while `main` moved on seven times. The headline counts never changed
+   (0 COMPLIANT / 15 PARTIAL / 1 GAP / 94 NOT_ASSESSED of 110), so nothing looked
+   wrong — but the provenance stamp and the evidence behind 3.14.1 were stale, and
+   `apps/compliance` bakes that exact file into its image at build time.
+2. **Clicking would not have ended it.** `on: push: branches: [main]` carried no path
+   filter, and a pull-request merge is a *human* push, which does trigger workflows. The
+   artifact stamps itself with `github.sha`, so the regenerated file always differs from
+   the one just merged: commit, refused push, new branch, new PR. One more every time
+   someone merges the last one. This is what PR #44's merge demonstrated.
+
+**Fix.** `paths-ignore: compliance/state/**` on the push trigger. Regenerating a file
+because that file changed is circular; the nightly cron is untouched and is what actually
+keeps the artifact fresh.
+
+**What this does not do, stated plainly.** It does not make the route automatic. The
+artifact still lands by a human-opened pull request, because this repository will not
+enable the Actions setting that would let a workflow open — and therefore approve — its
+own. What it does is bound the work: one pull request per real change, instead of one per
+merge forever.
+
+## F42
+
+**Polynomial ReDoS in the inbound `Authorization` parse — on the gate standing in front of an endpoint that is public by design**
+
+- **Severity:** high (CodeQL's own rating; the endpoint is externally reachable in every deployed configuration and the parse runs before authentication)
+- **Confidence:** CONFIRMED — measured, not inferred: 7ms at 2k whitespace characters, 59ms at 6k, 201ms at 12k, ~5.1s at 60k. Quadratic.
+- **Controls:** 3.13.1 (protect communications at system boundaries), 3.14.1 (flaw remediation)
+- **Closed by:** CodeQL alert #1, raised and closed 2026-08-29
+- **Status:** CLOSED
+
+**Found while:** reading the repository's own open CodeQL alerts during the dependency
+sweep. Nine were open; seven are quality rules or the deliberate `apps/vuln-lab` seeds.
+Two were on real production code, and both were in the same file:
+`apps/mcp-tools/src/auth-gate.ts`, the inbound gate whose module doc opens by explaining
+that the container app runs `ingressExternal: true` unconditionally.
+
+**Where.** `presentedCredential` parsed the header with `/^Bearer[ \t]+(.+)$/i`.
+`[ \t]+` and `.+` can both match a run of spaces and tabs, so a header carrying n
+whitespace characters has O(n) ways to split it between them, and the anchored `$` forces
+the engine to try every one before the match can fail. One header, one unauthenticated
+POST, seconds of CPU — on an endpoint whose whole threat model is that anyone who finds
+the FQDN can reach it.
+
+**Fix.** `/^Bearer[ \t]+([^ \t].*)$/i`. Requiring the capture to begin with a non-space
+makes the split unique, so the match is linear: a flat 0.03ms on the same inputs.
+Behaviour is unchanged for every real credential; an all-whitespace bearer value now falls
+through to `x-api-key` rather than being returned as `""`, which was never a credential.
+
+**THE FIRST REGRESSION TEST WAS HOLLOW, and only mutation testing found it.** It sent
+`"Bearer" + "\t".repeat(200_000)` and asserted a time bound — and passed with the
+vulnerable pattern restored, because `header.trim()` runs before the regex and strips
+every trailing tab, leaving it to match `"Bearer"` and fail instantly. A guard that cannot
+fail is worse than no guard, and nothing but the mutation would have said so. What
+actually backtracks needs a whitespace run that survives `trim` **and** a tail the pattern
+cannot match to the anchor: `.` does not match a newline and there is no `m` flag, so
+`"a\nb"` makes `$` unreachable. The corrected test uses 60k tabs plus that tail and a
+1000ms bound; re-mutated, the vulnerable pattern fails it at **5099ms**. This is the third
+hollow test this register has recorded ([F27](#f27) matched comment text, and one of the
+controller's own commits asserted with literal backspace characters) and the second caught
+only by deliberately breaking the code under it.
+
+**The second alert on the same file is a false positive, and is dismissed as one rather
+than silenced.** CodeQL raised `js/insufficient-password-hash` (HIGH) on the two
+`createHash("sha256")` calls in `secretsMatch`. The rule is right about the shape and
+wrong about the situation: nothing is stored — both digests are computed per request,
+compared and dropped; the input is `mcp-auth-token`, a machine-generated high-entropy
+value injected from Key Vault, not a human-chosen password with a dictionary behind it;
+and the hash is not the control, `timingSafeEqual` is — the digests exist only to make two
+arbitrary-length strings the same width so the comparison is legal and leaks no length.
+The rule's suggested remedy would make things worse: a per-request slow KDF on a public
+endpoint is a denial-of-service amplifier handed to any unauthenticated caller. Alert #3
+is dismissed in GitHub with reason `false positive` and that rationale, and the full
+argument is written above `secretsMatch` so the next reader does not have to reconstruct
+it from a dismissal comment.
+
+**A verification failure from the same sweep, recorded because it is the same shape as
+the findings around it.** The dependency sweep that produced F41 and F42 also bumped
+TypeScript from 5.9 to 7.0.2 across seven workspaces. It was verified with `typecheck`
+and `npm test`, both of which passed everywhere, and committed on that basis. It was
+wrong. `npm run build` — a gate this repository already has, and one CI runs on every
+pull request — fails in `apps/shared/spec-renderer`: `tsup` bundles
+`rollup-plugin-dts@6.1.1`, which embeds `typescript@5.7.3`, and it dies generating the
+declaration bundle with `TypeError: Cannot read properties of undefined (reading
+'useCaseSensitiveFileNames')`. tsup 8.5.1 is the current release; there is no version
+that supports TypeScript 7 yet. The JavaScript output built fine, so nothing but the
+declaration step ever complained.
+
+Three commits carried that claim before the build gate was run. Nobody was misled,
+because it never left the branch — but the mechanism is exactly [F22](#f22)'s, exactly
+[F33](#f33)'s and exactly [F39](#f39)'s, and this time the person skipping the available
+gate was the one writing the findings about skipping available gates. **A gate you own
+and do not run is indistinguishable from a gate that does not exist.** TypeScript stays
+at ^5.9.3; Dependabot's six TypeScript 7 pull requests should be closed with this reason
+rather than merged when they are re-proposed.
+
+Two dependency majors that DID hold are worth naming for the same reason, because both
+first appeared to fail for the same wrong reason. React 19 and vite 8 each left two
+copies of themselves in the tree — a hoisted 18.3.1 / 6.4.3 beside the nested 19.2.8 /
+8.2.2 — which is [F37](#f37)'s shape a third and fourth time. `overrides` did not
+dislodge either across two lockfile regenerations; `npm dedupe` collapsed both to a
+single copy immediately. vite 8 had been abandoned once on the strength of the failed
+`overrides` attempt before `npm dedupe` was tried on React and turned out to be the tool
+that works.

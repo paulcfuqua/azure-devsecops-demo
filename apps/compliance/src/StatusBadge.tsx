@@ -1,5 +1,6 @@
 import { Badge, type BadgeProps } from "@fluentui/react-components";
 import type { ControlStatus } from "./types";
+import type { JSX } from "react";
 
 /**
  * Status -> Badge colour. NOT_ASSESSED ("we have not looked") must never

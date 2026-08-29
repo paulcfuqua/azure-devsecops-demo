@@ -80,7 +80,7 @@ jobs:
       configured: ${{ steps.guard.outputs.configured }}
       verifier: ${{ steps.verifier.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -139,7 +139,7 @@ jobs:
       # what leaving it unset costs.
       MLS_ALERT_EMAIL: ${{ vars.MLS_ALERT_EMAIL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming
@@ -494,7 +494,7 @@ jobs:
       # not cost L6 its Verifier sign-off. Failures are annotated and summarised,
       # never swallowed.
       # ---------------------------------------------------------------------
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: ${{ !inputs.dry_run }}
         with:
           node-version: '24'
@@ -660,7 +660,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verifier identity not configured
         if: ${{ needs.preflight.outputs.verifier != 'true' }}

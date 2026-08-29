@@ -13,7 +13,7 @@ name: app-compliance-ci
 # Unlike the other three frontends, this app also needs compliance/catalog and
 # compliance/state/*.json (Task 8's committed artifact) to be checked out
 # before `vite build` runs — they are ordinary repo files, not generated here,
-# so a plain actions/checkout@v4 already covers it; the Dockerfile COPYs them
+# so a plain actions/checkout@v7 already covers it; the Dockerfile COPYs them
 # into the image build context separately (apps/compliance/Dockerfile).
 #
 # ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ jobs:
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -108,9 +108,9 @@ jobs:
     name: build and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -148,7 +148,7 @@ jobs:
       # knows it to the deploy step that stamps it on the app.
       digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Compute the GHCR reference
         id: tag
@@ -178,7 +178,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=compliance
 
       - name: Trivy gate — fail the build on CRITICAL
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ steps.tag.outputs.image }}
           format: table
@@ -189,7 +189,7 @@ jobs:
 
       - name: Trivy SARIF for the Security tab (non-blocking)
         if: ${{ always() && github.event_name != 'pull_request' }}
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ steps.tag.outputs.image }}
           format: sarif
@@ -275,7 +275,7 @@ jobs:
 
       - name: Log in to GHCR
         if: ${{ github.event_name != 'pull_request' }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -305,7 +305,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming

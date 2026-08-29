@@ -103,13 +103,13 @@ jobs:
           - name: vuln-lab
             path: apps/vuln-lab
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Keeps GITHUB_TOKEN out of .git/config while npm ci below executes
           # third-party install scripts. Nothing in this job pushes.
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -157,7 +157,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           # anchore/sbom-action uploads one artifact per matrix entry, named by
           # its `artifact-name`. A glob pattern collects all of them into one
