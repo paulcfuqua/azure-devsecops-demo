@@ -1,0 +1,79 @@
+# gitleaks configuration.
+#
+# WHY THIS FILE EXISTS, AND WHY IT IS AS NARROW AS IT IS
+#
+# `.github/workflows/gitleaks.yml` scans full history and fails the build on any
+# finding, deliberately with no allowlist — a secret scanner people have learned
+# to ignore is worse than no scanner, so nothing here may be broad enough to hide
+# a real credential.
+#
+# The first public push tripped exactly one finding:
+#
+#     Finding: 'User Access Administrator' = 'REDACTED'
+#
+# That is `verification/tests/workload-rbac.Tests.ps1` and
+# `verification/tests/cost-ingest.Tests.ps1` mapping an Azure built-in role NAME
+# to its role definition ID. gitleaks' generic-api-key rule sees `name = '<guid>'`
+# and cannot tell a published constant from a credential.
+#
+# Azure built-in role definition IDs are PUBLIC, documented, and identical in
+# every tenant on earth — Microsoft lists them at
+# learn.microsoft.com/azure/role-based-access-control/built-in-roles. They are
+# not secret, cannot be rotated, and grant nothing to whoever reads them.
+#
+# Those tables exist because a review proved the previous tests "verified" least
+# privilege by matching COMMENT TEXT: every occurrence of 'Security Reader' in
+# the Bicep was inside a `//` or an `@description()`, so changing a grant to Owner
+# left the whole suite green. Asserting the GUID is what made the test real. The
+# security fix is what tripped the scanner.
+#
+# So this allowlist is BY VALUE, not by file, path or rule. Each entry below is a
+# specific published constant. Any other secret in these same files — a token, a
+# key, a connection string, a GUID that is not on this list — still fails the
+# build, which is the property worth keeping.
+
+title = "meridian-launch-systems"
+
+[extend]
+useDefault = true
+
+[[rules]]
+  id = "generic-api-key"
+  [rules.allowlist]
+    description = """
+      Azure built-in role definition IDs. Public constants, identical in every
+      tenant, documented by Microsoft. Listed individually so that only these
+      exact values are exempt.
+    """
+    regexes = [
+      # Owner
+      '''8e3af657-a8ff-443c-a75c-2fe8c4bcb635''',
+      # Contributor
+      '''b24988ac-6180-42a0-ab88-20f7382dd24c''',
+      # User Access Administrator
+      '''18d7d88d-d35e-4fb5-a5c3-7773c20a72d9''',
+      # Reader
+      '''acdd72a7-3385-48ef-bd42-f606fba81ae7''',
+      # Security Reader
+      '''39bc4728-0917-49c7-9d2c-d95423bc2eb4''',
+      # Log Analytics Reader
+      '''73c42c96-874c-492b-b04d-ab87d138a893''',
+      # Cost Management Reader
+      '''72fafb9e-0641-4937-9268-a91bfd8191a3''',
+      # Monitoring Metrics Publisher
+      '''3913510d-42f4-4e42-8a64-420c390055eb''',
+      # Key Vault Secrets User
+      '''4633458b-17de-408a-b874-0445c86b69e6''',
+      # Storage Blob Data Reader
+      '''2a2b9908-6ea1-4ae2-8e65-a410df84e7d1''',
+      # Storage Blob Data Contributor
+      '''ba92f5b4-2d11-453d-a403-e96b0029c9fe''',
+      # Storage Blob Data Owner
+      '''b7e6dc6d-f1e8-4753-8033-0f276bb0955b''',
+      # Storage Queue Data Contributor
+      '''974c5e8b-45b9-4653-ba55-5f855dd0fb88''',
+      # Storage Table Data Contributor
+      '''0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3''',
+      # Storage Account Contributor
+      '''17d1049b-9a84-46fb-8f53-869881c3d3ab''',
+    ]

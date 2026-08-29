@@ -203,6 +203,24 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
+      # data/generated/ is gitignored by design (CLAUDE.md: never commit generated
+      # data), and apps/data-api's LOCAL backend reads it. Without this step the
+      # data-api suite fails on a clean checkout with backend_not_configured (503)
+      # while passing on any machine that happens to have run the generators - which
+      # is exactly what happened on this repository's first public push. Three other
+      # workflows already generate it; this one did not.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Generate the deterministic dataset the LOCAL backend serves
+        working-directory: data
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r generators/requirements.txt
+          python -m generators build
+
       - name: Build (renderer first — the apps import it)
         run: npm run build
 

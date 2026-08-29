@@ -196,4 +196,27 @@ jobs:
           branch="compliance-state/${MLS_COMMIT}"
           git switch -c "${branch}"
           git push --set-upstream origin "${branch}"
-          gh pr create --base main --head "${branch}"             --title "verify(compliance): state at ${MLS_COMMIT}"             --body 'Automated compliance state artifact. Counts by status and provenance; deliberately no blended percentage.'
+          # The branch is pushed, so the artifact is safe either way. Opening the PR
+          # is best-effort on purpose: creating one requires the repository setting
+          # "Allow GitHub Actions to create and approve pull requests", and that single
+          # toggle also grants APPROVAL. A workflow able to approve its own pull request
+          # defeats the review requirement this fallback exists to respect, so the
+          # setting stays off and this step degrades to telling a human where to click.
+          # Observed on the first public run: the branch pushed, `gh pr create` returned
+          # "GitHub Actions is not permitted to create or approve pull requests", and the
+          # job failed for a reason nobody needed to act on urgently.
+          if gh pr create --base main --head "${branch}"               --title "verify(compliance): state at ${MLS_COMMIT}"               --body 'Automated compliance state artifact. Counts by status and provenance; deliberately no blended percentage.'; then
+            echo 'Pull request opened.'
+            exit 0
+          fi
+
+          echo "::warning title=Compliance state is on a branch, awaiting a pull request::The artifact was committed and pushed to ${branch}, but this workflow cannot open the pull request: creating one needs 'Allow GitHub Actions to create and approve pull requests', which also grants approval and is deliberately disabled. Open it by hand - nothing is lost."
+          {
+            echo "### Compliance state pushed to a branch"
+            echo
+            echo "Branch: \`${branch}\`"
+            echo
+            echo "Open the pull request: <https://github.com/${GITHUB_REPOSITORY}/pull/new/${branch}>"
+            echo
+            echo "This is not a failure. Direct pushes to \`main\` are refused by branch protection, which is working as intended, and this workflow will not enable the Actions setting that would let it open the PR itself, because the same setting also lets a workflow approve one."
+          } >> "${GITHUB_STEP_SUMMARY}"
