@@ -1052,7 +1052,7 @@ jobs:
       # validate:golden` from the audited commit. Without the toolchain and the
       # workspace install that criterion fails on a missing binary rather than on
       # a bad fixture.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: ${{ needs.preflight.outputs.verifier == 'true' }}
         with:
           node-version: '24'

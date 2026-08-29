@@ -494,7 +494,7 @@ jobs:
       # not cost L6 its Verifier sign-off. Failures are annotated and summarised,
       # never swallowed.
       # ---------------------------------------------------------------------
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: ${{ !inputs.dry_run }}
         with:
           node-version: '24'
