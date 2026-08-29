@@ -15,7 +15,7 @@
 # and no API key of any kind: all orchestration happens in Copilot Studio.
 
 # ---------- build ----------
-FROM node:24-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 WORKDIR /repo/apps/mcp-tools
 
 COPY apps/mcp-tools/package.json apps/mcp-tools/package-lock.json ./
@@ -29,7 +29,7 @@ RUN npm run build
 RUN npm prune --omit=dev --ignore-scripts
 
 # ---------- runtime ----------
-FROM node:24-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     PORT=8080
 WORKDIR /repo/apps/mcp-tools
