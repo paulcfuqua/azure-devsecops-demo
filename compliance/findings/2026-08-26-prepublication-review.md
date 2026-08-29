@@ -2945,6 +2945,42 @@ audit uses `Get-MlsProperty`, and the test's own comment claimed it found the gr
 same way"), and `$script:DomainVariable` read in an `AfterAll` that had silently restored
 nothing for months. 535 verification tests now pass under production strict mode.
 
+### AMENDMENT, same day: the fix was half done
+
+The change above removed `Set-StrictMode -Off` from `verification/tests/` and stopped there.
+**Fourteen more harnesses outside that directory still disabled it** - `scripts/tests/`,
+`scripts/bootstrap/tests/`, and every `infra/*/tests/` - against sixteen production scripts
+that set `-Version Latest`. Removing those fourteen surfaced **41 failures**, four of them
+genuine production defects that had been latent the entire time:
+
+- **`verify-g0.ps1`'s catch block crashed the gate instead of recording a FAIL row.** It read
+  `$check.Informational` on eleven hashtables where only one declares the key, so the handler
+  that exists to turn a broken check into a reportable one was itself a terminating error. It
+  had never fired only because no check had thrown yet.
+- **`Get-FieldArray` in `apply-entra.ps1` did not return an array** - the function whose
+  docstring is *"a field that is meant to be a list, as an array"*. An invalid manifest
+  therefore reported `The property 'Count' cannot be found on this object` instead of naming
+  the offending field.
+- **`Test-FabricCapacity`** wrapped only the `Where-Object` half of a pipeline that then ran
+  through `ForEach-Object`, so a tenant with exactly one non-Fabric capacity - a PP3, the
+  precise case the check exists for - threw instead of reporting it.
+- **`create-data-agent.ps1`** assigned an `if` expression whose branches each wrapped in
+  `@()`; assignment unrolls the branch result, undoing the wrap. An unseeded lakehouse
+  reported a type error instead of "seed the lakehouse (L5) before running L8".
+
+That is one defect in **four syntactic disguises**: `return @()`, an `@()` around part of a
+pipeline, an `if`-expression unrolled on assignment, and a property read on a hashtable
+without the key. F49's static guard caught none of them, because it checks named helpers in
+`verification/` and these are anonymous expressions elsewhere.
+
+**The comma-operator dead end was re-derived and re-discarded.** `return ,@(...)` was tried
+again on `Get-FieldArray`, broke nineteen tests again - the comma operator's whole purpose is
+preventing enumeration, so callers that pipe the result bind `$_` to the entire array - and
+was reverted to call-site wrapping again. The reasoning is now recorded in the function's own
+comment, where the next person will be standing when they reach for it.
+
+906 tests now pass with every harness in its script's own language mode.
+
 ### What this says about the method
 
 [F46](#f46) established that a gate should be assumed wrong until it has run against

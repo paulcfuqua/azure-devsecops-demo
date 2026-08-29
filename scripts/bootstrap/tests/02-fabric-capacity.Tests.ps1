@@ -4,7 +4,8 @@ BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     $script:Sub = '00000000-0000-0000-0000-000000000000'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '02-fabric-capacity.ps1')
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     function Invoke-F2ForTest {
         # -AsWhatIf, not -WhatIf: a parameter literally named WhatIf on a function that

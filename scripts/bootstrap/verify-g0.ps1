@@ -389,8 +389,15 @@ function Test-FabricCapacity {
     # none of them runs Fabric workloads.
     $fabricCapable = @($capacities | Where-Object { $_ -and $_.sku -match '^F[A-Z]*\d+$' })
     if ($fabricCapable.Count -eq 0) {
-        $others = @($capacities | Where-Object { $_ -and $_.sku }) |
-            ForEach-Object { "$($_.displayName) [$($_.sku)]" }
+        # The @() must wrap the WHOLE pipeline. It used to wrap only the Where-Object,
+        # and the ForEach-Object after it unrolled the result again - so with exactly one
+        # non-Fabric capacity (a PP3, which is the case this check exists for) $others was
+        # a bare string and .Count below threw under StrictMode. F49's call-site invariant,
+        # in an anonymous pipeline rather than a named helper, which is why F49's static
+        # guard did not see it.
+        $others = @($capacities |
+                Where-Object { $_ -and $_.sku } |
+                ForEach-Object { "$($_.displayName) [$($_.sku)]" })
         if ($others.Count -gt 0) {
             return New-CheckResult -Check 'FabricCapacity' -Passed $false -Detail (
                 "no FABRIC capacity: found $($others -join ', '), which is Power BI only. " +
@@ -652,7 +659,14 @@ function Invoke-Main {
             & $check.Run
         }
         catch {
-            New-CheckResult -Check $check.Name -Passed $false -Informational:([bool]$check.Informational) `
+            # ContainsKey, not $check.Informational: only EntraDiagnostics declares the key,
+            # so reading it on the other ten hashtables is a terminating error under the
+            # Set-StrictMode -Version Latest this script sets at line 73. That made the
+            # CATCH BLOCK ITSELF throw - the gate crashed instead of recording a FAIL row,
+            # on exactly the path that exists to turn a broken check into a reportable one.
+            # Never fired only because no check had thrown yet (F49).
+            $informational = $check.ContainsKey('Informational') -and [bool]$check.Informational
+            New-CheckResult -Check $check.Name -Passed $false -Informational:$informational `
                 -Detail "check errored: $($_.Exception.Message)"
         }
     }

@@ -35,7 +35,8 @@ BeforeAll {
     }
 
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'teardown.ps1')
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     # Names come from the script's own prefix resolution (naming.bicep), never from a
     # literal here: F32's whole point is that the labels are <prefix>-prefixed, and a

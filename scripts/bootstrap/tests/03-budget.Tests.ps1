@@ -5,7 +5,8 @@ BeforeAll {
     $script:Sub = '00000000-0000-0000-0000-000000000000'
     $script:Email = 'sponsor@example.com'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '03-budget.ps1') -SubscriptionId $script:Sub -Email $script:Email
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     function New-MatchingBudget {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
