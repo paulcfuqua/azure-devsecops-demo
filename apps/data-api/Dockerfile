@@ -51,7 +51,11 @@ RUN npm run build --workspace apps/data-api
 # both simpler and provably the same resolution.
 FROM deps AS prod-deps
 WORKDIR /repo
-RUN npm ci --workspace apps/data-api --include-workspace-root --omit=dev --ignore-scripts
+# The mkdir is not redundant. It guarantees apps/data-api/node_modules exists
+# so the runtime stage's COPY of that path is always valid -- a Docker COPY
+# whose source is missing fails the build, and whether npm creates a nested
+# tree at all is a function of the lockfile, not of this Dockerfile.
+RUN npm ci --workspace apps/data-api --include-workspace-root --omit=dev --ignore-scripts     && mkdir -p /repo/apps/data-api/node_modules
 
 # ---------- runtime ----------
 FROM node:24-bookworm-slim AS runtime
@@ -59,9 +63,27 @@ ENV NODE_ENV=production \
     PORT=8080
 WORKDIR /repo/apps/data-api
 
-# Workspace dependencies hoist to the repo root, so both trees come across and
-# WORKDIR stays inside the workspace for Node's upward module resolution.
+# TWO dependency trees have to come across, not one. npm hoists what it can to
+# /repo/node_modules, but a workspace pinning a version that conflicts with the
+# hoisted one gets a NESTED copy under apps/data-api/node_modules -- and this
+# app does: its exact pin of @azure/monitor-opentelemetry-exporter@1.0.0-beta.32
+# drags four @opentelemetry packages down with it, five non-dev packages in all.
+#
+# An earlier revision copied only the root tree, on the assumption that
+# "workspace dependencies hoist to the repo root". They do, except when they
+# cannot. The image built, pushed and passed its Trivy scan, then died on the
+# first line of real work:
+#
+#   Error [ERR_MODULE_NOT_FOUND]: Cannot find package
+#   '@azure/monitor-opentelemetry-exporter' imported from
+#   /repo/apps/data-api/dist/telemetry/otel.js
+#
+# No test in the repository could have caught it, because nothing ran the
+# image -- which is precisely why F22's smoke test now boots it in CI and calls
+# its own /healthz before the merge. Copy both trees and let Node resolve
+# upward from WORKDIR: the nested tree first, the hoisted one as fallthrough.
 COPY --from=prod-deps /repo/node_modules /repo/node_modules
+COPY --from=prod-deps /repo/apps/data-api/node_modules ./node_modules
 COPY --from=build /repo/apps/data-api/dist ./dist
 COPY apps/data-api/package.json ./package.json
 COPY apps/data-api/fixtures ./fixtures
