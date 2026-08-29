@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "framework": "nist-800-171r2",
   "frameworkName": "NIST SP 800-171 Revision 2",
-  "collectedAt": "2026-08-29T02:13:31Z",
-  "commit": "9d7a0b1fde6735516ee5f35feaf0fd81b5509207",
-  "commitShort": "9d7a0b1",
+  "collectedAt": "2026-08-29T03:42:21Z",
+  "commit": "cd6a6b0bc018b93a5b5d17851710bb5dba89e31e",
+  "commitShort": "cd6a6b0",
   "workingTreeClean": true,
   "notes": {
     "supportingEvidence": "supportingEvidence holds evidence that was collected for the control and did NOT drive its status. What drove the status is statusBasis, which is the working the derivation itself returned; evidence[] is the subset of collected records that participated in it. Every record in the register declares an empty criteria list today, so every control takes the authored path and no collected evidence participates anywhere - it is rendered as context, and only as context.",
@@ -166,7 +166,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.1.1, asserted by paulcfuqua on 2026-08-28, citing 15 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.1.1.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -246,7 +246,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.1.2, asserted by paulcfuqua on 2026-08-28, citing 9 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.1.2.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -314,7 +314,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.1.3, asserted by paulcfuqua on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.1.3.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -403,7 +403,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.1.5, asserted by paulcfuqua on 2026-08-28, citing 9 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.1.5.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -470,7 +470,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.1.6, asserted by paulcfuqua on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.1.6.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -531,7 +531,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.1.7, asserted by paulcfuqua on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.1.7.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -1037,7 +1037,7 @@
           "status": "pass",
           "observed": "9 diagnosticSettings declaration(s) across 3 Bicep template(s) under infra/bicep/platform/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": "infra/bicep/platform",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": false
         },
@@ -1047,7 +1047,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.3.1, asserted by paulcfuqua on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.3.1.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -1112,7 +1112,7 @@
           "status": "pass",
           "observed": "isAzureMonitorTargetEnabled: true is declared on a SQL auditing settings resource under infra/bicep/platform/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": "infra/bicep/platform",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": false
         },
@@ -1122,7 +1122,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.3.2, asserted by paulcfuqua on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.3.2.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -1229,7 +1229,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.3.5, asserted by paulcfuqua on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.3.5.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -1478,7 +1478,7 @@
           "status": "fail",
           "observed": "No .github/rulesets/ directory exists; branch protection is not documented as committed configuration. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": null,
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": false
         }
@@ -1626,7 +1626,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.5.1, asserted by paulcfuqua on 2026-08-27, citing 5 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.5.1.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -1719,7 +1719,7 @@
           "status": "fail",
           "observed": "Register asserts GAP for 3.5.3, asserted by paulcfuqua on 2026-08-29, citing 9 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.5.3.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -2659,7 +2659,7 @@
           "status": "pass",
           "observed": "codeql.yml declares a schedule: trigger, so analysis runs on a cadence independent of pushes. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": ".github/workflows/codeql.yml",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": false
         }
@@ -2731,7 +2731,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.12.1, asserted by paulcfuqua on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.12.1.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -2818,7 +2818,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.12.3, asserted by paulcfuqua on 2026-08-27, citing 3 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.12.3.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -2909,7 +2909,7 @@
           "status": "pass",
           "observed": "All 5 app Dockerfile(s) under apps/*/ declare a USER directive. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": "apps",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": false
         },
@@ -2919,7 +2919,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.13.1, asserted by paulcfuqua on 2026-08-28, citing 7 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.13.1.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -3323,7 +3323,7 @@
           "status": "pass",
           "observed": "gitleaks.yml exists and checks out with fetch-depth: 0 (full history scanned). This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": ".github/workflows/gitleaks.yml",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": false
         },
@@ -3333,7 +3333,7 @@
           "status": "pass",
           "observed": "No secret-shaped output names found across 10 Bicep template(s) under infra/bicep/. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": "infra/bicep",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": false
         },
@@ -3343,7 +3343,7 @@
           "status": "pass",
           "observed": "Register asserts CLOSED for 3.13.16, asserted by paulcfuqua on 2026-08-27, citing 2 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.13.16.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -3387,13 +3387,13 @@
       },
       "status": "PARTIAL",
       "provenance": "asserted",
-      "observed": "the register asserts CLOSED (no known open finding) citing 6 evidence reference(s); nothing here was machine-verified",
+      "observed": "the register asserts CLOSED (no known open finding) citing 11 evidence reference(s); nothing here was machine-verified",
       "statusBasis": [
         {
           "kind": "assertion",
           "criterion": null,
           "outcome": null,
-          "detail": "the register asserts CLOSED (no known open finding) citing 6 evidence reference(s); nothing here was machine-verified",
+          "detail": "the register asserts CLOSED (no known open finding) citing 11 evidence reference(s); nothing here was machine-verified",
           "source": "assessment-register",
           "artifact": null,
           "collectedAt": null
@@ -3405,9 +3405,9 @@
           "source": "repo-static",
           "criterion": null,
           "status": "pass",
-          "observed": "dependabot.yml declares 11 package-ecosystem entry(ies): npm, npm, npm, npm, npm, npm, npm, npm, npm, pip, github-actions. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
+          "observed": "dependabot.yml declares 16 package-ecosystem entry(ies): npm, npm, npm, npm, npm, npm, npm, npm, npm, pip, github-actions, docker, docker, docker, docker, docker. This describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence anything runs.",
           "artifact": ".github/dependabot.yml",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": false
         },
@@ -3415,9 +3415,9 @@
           "source": "manual",
           "criterion": null,
           "status": "pass",
-          "observed": "Register asserts CLOSED for 3.14.1, asserted by paulcfuqua on 2026-08-27, citing 6 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
+          "observed": "Register asserts CLOSED for 3.14.1, asserted by paulcfuqua on 2026-08-28, citing 11 evidence reference(s). This is an authored assertion, not a machine-verified observation.",
           "artifact": "compliance/assessment/3.14.1.json",
-          "collectedAt": "2026-08-29T02:13:31Z",
+          "collectedAt": "2026-08-29T03:42:20Z",
           "participatedInStatus": false,
           "duplicatesStatusBasis": true
         }
@@ -3427,9 +3427,9 @@
         "applicability": "applicable",
         "registerStatus": "CLOSED",
         "assertedBy": "paulcfuqua",
-        "assertedAt": "2026-08-27",
+        "assertedAt": "2026-08-28",
         "gapSeverity": "none",
-        "recommendation": "None outstanding for this control. (Deleting lint-ci's dead node-test step, Task 3/3.12.3; the Adaptive Card URL allowlist, CSP and non-root nginx user, Task 14; and the dialect-aware structural-validity check in the SQL gate, Task 15, are all DONE.) A regression here — the lint-ci node leg reintroduced and silently broken again, an unguarded Action/element url or a CSP relaxation, or scrubSql's nesting reverted to dialect-blind — would reopen this control.",
+        "recommendation": "None outstanding for this control. (Deleting lint-ci's dead node-test step, Task 3/3.12.3; the Adaptive Card URL allowlist, CSP and non-root nginx user, Task 14; and the dialect-aware structural-validity check in the SQL gate, Task 15, are all DONE.) A regression here — the lint-ci node leg reintroduced and silently broken again, an unguarded Action/element url or a CSP relaxation, or scrubSql's nesting reverted to dialect-blind — would reopen this control. ADDENDUM (2026-08-28): also DONE for F37 (apps/data-api/Dockerfile copies both dependency trees) and F38 (nginx pinned to 1.31-alpine; docker ecosystem added to .github/dependabot.yml). A regression in either -- the nested workspace node_modules dropped from the image again, or a base-image pin left to go end-of-line unwatched -- would reopen this control.",
         "references": [
           ".github/workflows/lint-ci.yml:196-202",
           "apps/control-tower/src/AdaptiveCardView.tsx:64-87",
@@ -3444,7 +3444,10 @@
           "apps/mcp-tools/tests/sql-dialect.test.ts",
           "apps/mcp-tools/src/data/lakehouse.ts:118",
           "apps/mcp-tools/src/data/lakehouse.ts:122",
-          "apps/mcp-tools/src/data/lakehouse.ts:134"
+          "apps/mcp-tools/src/data/lakehouse.ts:134",
+          "apps/data-api/Dockerfile",
+          "apps/compliance/Dockerfile",
+          ".github/dependabot.yml"
         ]
       }
     },
