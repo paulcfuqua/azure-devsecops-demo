@@ -38,13 +38,31 @@ on:
       - package.json
       - package-lock.json
       - .github/workflows/app-mcp-tools-ci.yml
+  # NO `paths:` FILTER HERE, AND THAT IS THE POINT. Read this before adding one
+  # back.
+  #
+  # The `image` job below is the only thing in this repository that runs the
+  # Trivy CRITICAL gate and F22's boot smoke test. Both were advisory until
+  # 2026-08-28: the branch ruleset's required checks were lint-ci, CodeQL,
+  # gitleaks and pytest, and not one image job. A pull request whose container
+  # image failed to scan, or could not start at all, satisfied every rule the
+  # ruleset had. That is not hypothetical -- PR #37, which fixed exactly those
+  # two defects, could itself have been merged with both still in it.
+  #
+  # Making the image job a REQUIRED check is what closes that, and a required
+  # check must be able to report on every pull request. A `paths:`-filtered
+  # workflow does not run at all when the filter misses, GitHub never receives
+  # a conclusion for the context, and the pull request stays pending forever.
+  # So the filter comes off the `pull_request` trigger and stays on `push`,
+  # where nothing is gated on it and skipping the work is free.
+  #
+  # The cost is one container build per pull request. It is not a push: this
+  # job's build step is `push: false` on pull requests and the GHCR login and
+  # push steps are `if: github.event_name != 'pull_request'`, so a pull-request
+  # run writes nothing to the registry and consumes only Actions time, which is
+  # free on a public repository.
   pull_request:
     branches: [main]
-    paths:
-      - apps/mcp-tools/**
-      - package.json
-      - package-lock.json
-      - .github/workflows/app-mcp-tools-ci.yml
   workflow_dispatch:
 
 permissions:
@@ -123,7 +141,11 @@ jobs:
           retention-days: 14
 
   image:
-    name: container build, scan and push
+    # Named per app, not just "container build, scan and push": all five
+    # app-*-ci.yml workflows run this job on every pull request now, and a
+    # required status check is matched by the check run's NAME. Five check
+    # runs sharing one name cannot be required unambiguously.
+    name: container build, scan and push (mcp-tools)
     needs: build-test
     runs-on: ubuntu-latest
     permissions:

@@ -108,6 +108,111 @@ $script:Apps = foreach ($def in $script:AppDefs) {
     }
 }
 
+# ---------------------------------------------------------------------------
+# F39: the two gates above have to be able to BIND, not merely to run.
+#
+# Until 2026-08-28 the branch ruleset's required checks were lint-ci, CodeQL,
+# gitleaks and pytest. Not one image job. The Trivy CRITICAL gate and the F22
+# smoke test both ran and both reported, and a pull request could be merged
+# with either of them red -- which is what "advisory" means. PR #37, the change
+# that fixed a container image that could not start and three images sixteen
+# months behind on security updates, could itself have been merged with both
+# defects still in it.
+#
+# Two workflow properties are what let those checks be required, and both are
+# the kind of thing a later edit undoes without meaning to:
+#
+#   1. The `pull_request` trigger carries NO `paths:` filter. A required check
+#      whose workflow does not run reports no conclusion, and GitHub leaves the
+#      pull request pending forever rather than passing it. Re-adding a filter
+#      here does not weaken a gate visibly -- it deadlocks every pull request
+#      that misses the filter, and the tempting "fix" for that is to drop the
+#      requirement, which is how the gate quietly stops binding again.
+#   2. The image job's display NAME is unique across the five workflows. A
+#      required status check is matched by the check run's name; five runs
+#      called "container build, scan and push" cannot be required one by one.
+#
+# The `push:` filter is deliberately NOT removed and is asserted to survive:
+# nothing is gated on a push run, so skipping the work there is free.
+$script:OnBlocks = foreach ($app in $script:Apps) {
+    $text = Get-Content -LiteralPath $app.Path -Raw
+
+    # The `on:` mapping runs from the `on:` line to the next top-level key.
+    $onBlock = ''
+    if ($text -match '(?ms)^on:\r?\n(.*?)(?=^\S)') { $onBlock = $Matches[1] }
+
+    # Within it, each trigger's own body runs to the next two-space key.
+    $pushBody = ''
+    if ($onBlock -match '(?ms)^  push:\r?\n(.*?)(?=^  \S)') { $pushBody = $Matches[1] }
+    $prBody = ''
+    if ($onBlock -match '(?ms)^  pull_request:\r?\n(.*?)(?=^  \S)') { $prBody = $Matches[1] }
+
+    # Everything between `image:` and its `steps:` -- the job's own keys, where
+    # an `if:` would live.
+    $imageHeader = ''
+    if ($text -match '(?ms)^  image:\r?\n(.*?)(?=^    steps:)') { $imageHeader = $Matches[1] }
+
+    $jobName = ''
+    if ($imageHeader -match '(?m)^    name:\s*(.+?)\s*$') { $jobName = $Matches[1] }
+
+    @{
+        Name        = $app.Name
+        File        = $app.File
+        OnBlock     = $onBlock
+        PushBody    = $pushBody
+        PrBody      = $prBody
+        ImageHeader = $imageHeader
+        JobName     = $jobName
+    }
+}
+
+# Pester 5 evaluates this file's top level in the DISCOVERY phase only, so run-
+# phase blocks cannot read $script:OnBlocks. Every value an It needs therefore
+# travels in through -ForEach, which is the pattern the rest of this file uses.
+$script:AllImageJobNames = @(@{ Names = @($script:OnBlocks | ForEach-Object { $_.JobName }) })
+
+Describe 'the image gates are required-checkable, not merely present (F39)' {
+    Context '<Name>' -ForEach $script:OnBlocks {
+        It 'parses an `on:` block with both a push and a pull_request trigger' {
+            # Guards every assertion below: a regex that matched nothing would
+            # otherwise make an empty string satisfy "has no paths: filter".
+            $OnBlock | Should -Not -BeNullOrEmpty
+            $PushBody | Should -Not -BeNullOrEmpty
+            $PrBody | Should -Not -BeNullOrEmpty
+            $PrBody | Should -Match 'branches:'
+        }
+
+        It 'has NO paths: filter on pull_request, so the check reports on every PR' {
+            $PrBody | Should -Not -Match '(?m)^\s*paths(-ignore)?:'
+        }
+
+        It 'keeps the paths: filter on push, where nothing is gated on the run' {
+            $PushBody | Should -Match '(?m)^\s*paths:'
+        }
+
+        It 'names the image job after its app, so the check run name is unique' {
+            $JobName | Should -Be "container build, scan and push ($Name)"
+        }
+
+        It 'leaves the image job unconditional, so it cannot skip out of a required check' {
+            # `needs: build-test` is fine -- a skip caused by a failed dependency
+            # blocks the PR, which is the wanted outcome. An `if:` on the job
+            # itself is not: a job that evaluates to false reports "skipped", a
+            # skipped required check does not satisfy the rule, and the PR
+            # deadlocks instead of failing honestly.
+            $ImageHeader | Should -Not -BeNullOrEmpty
+            $ImageHeader | Should -Not -Match '(?m)^    if:'
+        }
+    }
+
+    Context 'across all five app workflows' -ForEach $script:AllImageJobNames {
+        It 'gives every image job a distinct check-run name' {
+            $Names.Count | Should -Be 5
+            @($Names | Sort-Object -Unique).Count | Should -Be 5
+        }
+    }
+}
+
 Describe 'app CI smoke-tests the built container image before merge (F22)' {
     Context '<Name>' -ForEach $script:Apps {
         It 'has a step named "Smoke-test the image ... (F22)" in the image job' {

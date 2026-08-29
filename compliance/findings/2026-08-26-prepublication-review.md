@@ -23,12 +23,14 @@ document now. Each closed finding's `Fix:` section is left as originally written
 describes what closing the finding required, which is historical context, not a live
 claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
-(rationale, evidence, and the closing commit SHA) for that control. **No finding in this document is open.** The last two were **F13** and **F19**, and they were
-one problem wearing two labels: F13's seventh workload RBAC grant had no principal to be
-written against because F19 meant `apps/cost-ingest` had no Function App and no identity.
-Both closed on 2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own
-Fix text below says not to build the Function App without that authorisation, and it was
-given rather than assumed.
+(rationale, evidence, and the closing commit SHA) for that control. **No finding in this
+document is open.** The last two to close were [F37](#f37) and [F38](#f38), both raised
+and both fixed on 2026-08-28. Before them, **F13** and **F19** were one problem wearing
+two labels: F13's seventh workload RBAC grant had no principal to be written against
+because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
+2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own Fix text below
+says not to build the Function App without that authorisation, and it was given rather
+than assumed.
 
 **F25–F36 addendum (2026-08-28, the final pre-publication audit).** Twelve more findings,
 raised by a last pass done specifically in the position of *a stranger cloning this repo
@@ -45,6 +47,30 @@ claim was corrected rather than quietly deleted — [F28](#f28), [F29](#f29) and
 (F14, F15, F19, F20, F21, F22, F29, F36) map to no NIST SP 800-171 control at all, so this
 document and the findings-index table's `Closed by` column are their *only* durable record
 — there is no `compliance/assessment/` file to additionally point at for those.
+
+**F37–F38 addendum (2026-08-28, after publication).** Two findings that no audit pass
+produced, because no reading of this repository could have produced them. Both were
+raised by CI checks that had existed but had never executed: [F22](#f22)'s container
+smoke test, written the same day, and [F33](#f33)'s Trivy gate, which had been pinned to
+an action ref that did not resolve and so had been passing without scanning anything.
+[F37](#f37) is a `data-api` image that builds, pushes, scans clean and then cannot start;
+[F38](#f38) is three images pinned to an `nginx` tag that stopped receiving base rebuilds
+sixteen months ago while keeping its name. Neither was visible in the source tree — one
+lived in a container image, the other in a registry's rebuild history. They are the
+strongest argument this document makes for its own method: **a gate should be assumed
+inert until its first failure proves otherwise**, and running the estate's own checks for
+real is not a formality after the audit, it is a distinct audit lens. Both are closed, and
+both map to 3.14.1; [F38](#f38) also maps to 3.4.1, which has no
+`compliance/assessment/` record of its own — as is already the case for [F30](#f30) and
+[F33](#f33).
+
+**F39 (2026-08-28, immediately after).** Turning the F37/F38 lens on the fixes themselves
+produced a third finding, and the worst of the three: the two checks that caught them
+**could not have blocked either one from merging**. See [F39](#f39). This is the same
+shape as [F25](#f25) (a closed finding's own fix text became the bypass) and [F26](#f26)
+(a guard asserted and never fired), and it is the third time in this register that the
+question worth asking was not "does the control exist" but "what happens when it says
+no".
 
 ## Index
 
@@ -86,6 +112,10 @@ document and the findings-index table's `Closed by` column are their *only* dura
 | [F34](#f34) | `.superpowers/` (3.3 MB of transcripts) excluded only by a nested ignore file | medium | CONFIRMED | 3.1.3 | final pre-publication audit |
 | [F35](#f35) | Subscription-wide DENY policy nowhere stated as requiring a dedicated, empty subscription | medium | CONFIRMED | CM-6 | final pre-publication audit |
 | [F36](#f36) | F25's fix made the estate undeployable: L7 refused to run without three hand-set client IDs, and the redirect URIs could not exist until it had | high | CONFIRMED | — (availability/adoptability) | final pre-publication audit |
+| [F37](#f37) | The `data-api` image cannot start: the runtime stage copies only the hoisted `node_modules`, and five of its non-dev packages are not hoisted — the same pin also held a `runtime`-scope CVE in the tree | high | CONFIRMED (reproduced in CI) | 3.14.1 | F22's smoke test, first run |
+| [F38](#f38) | Three shipped images sat sixteen months behind Alpine's security updates on an end-of-line `nginx` tag, and no ecosystem was watching `FROM` lines | medium | CONFIRMED | 3.4.1, 3.14.1 | F33's Trivy repin, first real scan |
+| [F39](#f39) | The Trivy CRITICAL gate and the F22 smoke test were **advisory**: not one of the five image jobs was a required status check | high | CONFIRMED | 3.4.3, 3.14.1 | raised and closed with F37/F38 |
+| [F40](#f40) | `dependabot.yml` told adopters to switch OFF the only fix generator the seeded CVEs have — known-wrong and left in place for four days | medium | CONFIRMED | — (adoptability; L10 showpiece) | raised and closed with F39 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -1940,3 +1970,289 @@ missing, a duplicate registration, a failing CLI call, a fresh registration, a
 registration with an unrelated URI already listed, a registration already carrying this
 URI, and an app with no client ID — and the workflow shape is asserted by
 `verification/tests/frontend-auth.Tests.ps1` (25 new assertions, mutation-tested).
+
+
+## F37
+
+**The `data-api` image could not start: five non-dev packages resolve into the workspace's own `node_modules`, and the runtime stage copied only the hoisted tree**
+
+- **Severity:** high (the serving layer both frontends fetch from never answers a request)
+- **Confidence:** CONFIRMED (reproduced in CI — the image was built, booted, and died)
+- **Controls:** 3.14.1 (a flaw identified and corrected); the defect itself is availability, not confidentiality
+- **Closed by:** [F22](#f22)'s smoke test, on its first run
+- **Status:** CLOSED
+
+**Found while:** watching the checks that [F22](#f22) and [F33](#f33) had just made
+executable for the first time. Neither this finding nor [F38](#f38) was raised by a
+person reading code.
+
+**Where:** `apps/data-api/Dockerfile`, runtime stage. It copied one dependency tree:
+
+```dockerfile
+# Workspace dependencies hoist to the repo root, so both trees come across and
+# WORKDIR stays inside the workspace for Node's upward module resolution.
+COPY --from=prod-deps /repo/node_modules /repo/node_modules
+```
+
+The comment is the defect. Workspace dependencies hoist to the repo root *except when
+they cannot*: `apps/data-api` pins `@azure/monitor-opentelemetry-exporter` at exactly
+`1.0.0-beta.32`, the root tree hoists `1.0.0-beta.44`, and npm resolves the conflict by
+nesting — so that package plus `@opentelemetry/api-logs`, `@opentelemetry/core`,
+`@opentelemetry/sdk-logs` and a nested `@opentelemetry/resources` live in
+`apps/data-api/node_modules`. Five non-dev packages, none of them copied.
+
+**Impact.** The image built cleanly, pushed to GHCR, and passed its Trivy scan with zero
+findings — a scan of an image that cannot execute. On boot:
+
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@azure/monitor-opentelemetry-exporter'
+imported from /repo/apps/data-api/dist/telemetry/otel.js
+```
+
+`dist/index.js` reaches the telemetry module before it binds a port, so the container
+exits immediately and Container Apps would have crash-looped the revision. Every
+control-tower and launch-ops panel reads from this API. Had the estate been deployed
+before F22's test existed, this is what the first deploy would have produced.
+
+**Fix.** Copy both trees, and stop depending on hoisting being total:
+
+```dockerfile
+COPY --from=prod-deps /repo/node_modules /repo/node_modules
+COPY --from=prod-deps /repo/apps/data-api/node_modules ./node_modules
+```
+
+Node resolves upward from `WORKDIR`, so it reads the nested tree first and falls through
+to the hoisted one — which is the resolution order npm built the two trees for. The
+`prod-deps` stage now also `mkdir -p`s the nested path, because whether npm creates it at
+all is a property of the lockfile, and a Docker `COPY` whose source is missing fails the
+build.
+
+**Found alongside it, from the same root cause.** The exact pin is not just what made the
+image nest — it is what kept a vulnerable package in the tree. Of the twenty-one
+`@opentelemetry/core` copies the lockfile resolved, twenty were 2.9.0 or 2.10.0 and one
+was **2.0.0**: the nested copy, dragged in by the beta.32 exporter. GitHub had an open
+Dependabot alert on it, CVE-2026-54285 (unbounded memory allocation in W3C Baggage
+propagation, `< 2.8.0`), scope `runtime`, and the fix above would have shipped that exact
+copy into the image. Moving the pin to `1.0.0-beta.44` — the version already resolved at
+the root, required by `@azure/monitor-opentelemetry` — dedupes the whole subtree: one
+exporter copy, no nested tree under `apps/data-api` at all, and no `@opentelemetry/core`
+below 2.8.0 anywhere in the lockfile. `AzureMonitorTraceExporter` is the only symbol
+`src/telemetry/otel.ts` imports from it; typecheck, build and all 295 data-api tests
+(27 of them telemetry) pass unchanged on beta.44.
+
+The Dockerfile fix stays even though nothing nests any more, and that is deliberate: it
+is not a workaround for this pin, it is the correct way to copy a workspace's production
+tree. Whether npm nests is a property of the lockfile on any given day, and the next
+version conflict must not be able to reproduce this. The `mkdir -p` in `prod-deps` is
+what makes the `COPY` valid in the state the tree is now actually in — an empty nested
+directory.
+
+**Why nothing caught it.** Not one build-time or test-time check could see it. `npm ci`,
+`tsc`, `vitest` and the typecheck all pass against a working tree that has both
+directories present, which is every developer machine and every CI runner — the
+`package.json` pin that caused the nesting is a defect only in combination with a
+Dockerfile that copies one of the two trees, and neither half is wrong on its own. The
+failure existed only in the image, and until [F22](#f22) nothing in this repository ever
+ran an image. `apps/mcp-tools` was
+checked for the same shape and does not have it: it carries a standalone lockfile,
+installs into `apps/mcp-tools/node_modules`, and copies that directory wholesale.
+
+## F38
+
+**Three shipped images sat sixteen months behind Alpine's security updates, on an `nginx` tag that had stopped being rebuilt without ever changing its name**
+
+- **Severity:** medium (the CVE reached is not exploitable on the platform these images run; the sixteen-month gap is the finding)
+- **Confidence:** CONFIRMED
+- **Controls:** 3.4.1 (baseline configuration), 3.14.1 (flaw remediation)
+- **Closed by:** [F33](#f33)'s Trivy repin, on its first real scan
+- **Status:** CLOSED
+
+**Found while:** the same watch as [F37](#f37). [F33](#f33) recorded that
+`aquasecurity/trivy-action@0.28.0` resolved to no ref at all, which meant every "Trivy
+gate — fail the build on CRITICAL" step in this repository had been passing without
+scanning anything. Repinning it to a commit SHA made the gate real, and its first
+execution failed:
+
+```
+libcrypto3  CVE-2026-31789  CRITICAL  fixed  3.3.3-r0 -> 3.3.7-r0  openssl: heap buffer
+libssl3                                                            overflow on 32-bit
+```
+
+**Where:** `apps/compliance/Dockerfile`, `apps/control-tower/Dockerfile` and
+`apps/launch-ops/Dockerfile`, each `FROM nginx:1.27-alpine`.
+
+**What is NOT the finding.** CVE-2026-31789 is a heap overflow parsing oversized X.509
+certificates *on 32-bit systems*. These images are `linux/amd64`. Reported as an
+exploitable exposure it would be an overstatement, and this register does not make
+overstatements.
+
+**What is.** Why a package that far out of date was in a shipped image at all. Docker
+Hub last rebuilt `nginx:1.27-alpine` on **2025-04-16**. 1.27 is an end-of-line release:
+the tag keeps its name indefinitely while quietly ceasing to receive base rebuilds, so
+`FROM nginx:1.27-alpine` in August 2026 pulls a bit-for-bit copy of an April 2025
+filesystem. Sixteen months of Alpine security updates — all of them, not only this
+openssl fix — were absent from three images this repository publishes, and the pin gave
+every appearance of being a responsible one. A version pin naming a dead line is
+indistinguishable from a maintained one by inspection.
+
+**Fix**, in two parts:
+
+1. **`nginx:1.31-alpine`** — current mainline, rebuilt 2026-08-20 — in all three
+   Dockerfiles. The three non-root fixes below each `FROM` (deleting `user  nginx;`,
+   redirecting the pid file to `/tmp`, creating and chowning `/var/cache/nginx`) are
+   unchanged, and are no longer merely asserted to work: [F22](#f22)'s smoke test boots
+   each image and fails the build if the app is not served, which is what a silently
+   skipped `envsubst` pass or an unwritable pid path produces.
+2. **A `docker` ecosystem in `.github/dependabot.yml`**, which is the part that matters.
+   The file had `npm` (nine directories), `pip` and `github-actions` — and nothing
+   reading a `FROM` line, in a repository whose own Dependabot header warns that a wrong
+   directory glob means no PRs ever fire. Five entries now cover the five app
+   Dockerfiles, one per directory rather than a `directories:` glob, so each path is
+   checkable by eye. That converts "the base image went stale" from something a scanner
+   discovers after publication into a bump PR that arrives on a Monday.
+
+**The pattern F37 and F38 share, and it is the one worth keeping.** Both were found by
+checks that had existed for some time and had never executed — F22's smoke test because
+it was only written on 2026-08-28, F33's Trivy gate because it was pinned to a
+nonexistent ref. Neither defect was reachable by reading the repository: one lived in a
+container image, the other in a registry's rebuild history. Every gate here should be
+assumed inert until its first failure proves otherwise, and these two findings are that
+proof arriving.
+
+
+## F39
+
+**The Trivy CRITICAL gate and the F22 smoke test were advisory: not one of the five image jobs was a required status check, so a pull request could merge with either of them red**
+
+- **Severity:** high (every container-image security and correctness gate in the repository was non-binding)
+- **Confidence:** CONFIRMED (read directly off the live ruleset)
+- **Controls:** 3.4.3 (track, review, approve or disapprove, and log changes), 3.14.1 (flaw remediation — a flaw-finding gate that cannot block is not remediation)
+- **Closed by:** raised and closed alongside [F37](#f37) and [F38](#f38)
+- **Status:** CLOSED
+
+**Found while:** preparing to merge the F37/F38 fixes, by asking what the branch ruleset
+would actually have done if those checks had stayed red.
+
+**Where:** the `main protection` ruleset. Its `required_status_checks` were exactly seven:
+
+```
+PSScriptAnalyzer + Pester        analyze (javascript-typescript)
+vitest (npm workspace)           analyze (python)
+actionlint (workflows)           scan history for secrets
+pytest (data generators)
+```
+
+Every one of those is a lint, test or static-analysis check. **No image job.** The Trivy
+CRITICAL gate and F22's boot smoke test live only in the five `app-*-ci.yml` workflows,
+they ran, they reported — and nothing consumed the result. A red image check on a pull
+request was a red mark next to a green merge button.
+
+**Impact, concretely.** The pull request that fixed [F37](#f37) and [F38](#f38) could have
+been merged with both defects still in it. So could the commits that introduced them.
+`app-compliance-ci` had been failing on `main` for a full day, and `main` is the branch
+this repository publishes: the ruleset had nothing to say about it. The gates were doing
+their job perfectly and the repository was not listening.
+
+**Why it was not simply "add five checks to the ruleset".** The five workflows carried
+`paths:` filters on both their `push` and `pull_request` triggers. A required check whose
+workflow does not run never reports a conclusion, and GitHub holds the pull request
+pending rather than passing it — so requiring a path-filtered check deadlocks every pull
+request the filter misses. The tempting fix for *that* is to drop the requirement again,
+which is how a gate quietly stops binding a second time.
+
+**Fix**, in three parts:
+
+1. **The `paths:` filter comes off the `pull_request` trigger** in all five workflows and
+   stays on `push`. Nothing is gated on a push run, so skipping work there is free; on a
+   pull request the check must be able to report. The cost is one container build per
+   pull request and it is not a push — the build step is `push: false` on pull requests
+   and both the GHCR login and push steps are `if: github.event_name != 'pull_request'`,
+   verified step by step across all five workflows rather than assumed. A pull-request run
+   writes nothing to the registry and spends only Actions time, which is free on a public
+   repository.
+2. **Each image job is named after its app** — `container build, scan and push
+   (compliance)` and so on. A required status check is matched by the check run's *name*,
+   and five check runs sharing one name cannot be required individually.
+3. **All five names are added to the ruleset's required checks**, taking it from seven
+   required checks to twelve.
+
+**Asserted by test, and mutation-tested.** `verification/tests/app-ci-smoke-test.Tests.ps1`
+gains 26 assertions (F39 block) covering all five properties this rests on: the
+`pull_request` trigger has no `paths:`/`paths-ignore:` key, the `push` trigger still has
+one, the image job's name matches its app, all five names are distinct, and the image job
+carries no job-level `if:` (a job that evaluates false reports *skipped*, and a skipped
+required check deadlocks the pull request instead of failing it honestly). Five surgical
+mutations were run against those assertions — re-adding a `pull_request` `paths:` filter,
+collapsing a job back to the shared name, colliding two names, adding an `if:` to an image
+job, and stripping the `push` filter — and each was caught by the assertion meant to catch
+it. The suite went from 81 to 107 tests on that file, 762 to 788 across
+`verification/tests` and `compliance/tests`.
+
+**What this does not fix, stated plainly.**
+
+*The ruleset still has an admin bypass.* `bypass_actors` is
+`[{RepositoryRole 5, bypass_mode: always}]` — the repository admin. So "required" means
+required of Dependabot, of `--auto` merges, of any outside contributor, and of the merge
+button's normal path; it does **not** mean the owner is physically prevented from merging
+red. That escape hatch is deliberate on a single-owner demo repository — removing it can
+lock the owner out of their own default branch — but the honest statement of what changed
+is *the gate can now block*, not *the gate cannot be overridden*. The five checks were
+non-binding on everyone before this; they are now binding on everyone except one person
+who has to choose to override them and leaves a record when they do.
+
+*Self-heal is unchanged.* A heal pull request touching `apps/vuln-lab/**` now builds and
+scans five images it does not change — wasted work rather than a hazard — and still scans
+no image of its own, exactly as `self-heal.yml`'s header already states ([F29](#f29)).
+
+*There is a rebase window.* Open Dependabot pull requests raised before this change report
+the old check name and will sit pending on the five new ones until Dependabot rebases them
+onto the new `main`.
+
+
+## F40
+
+**`dependabot.yml` instructed adopters to disable Dependabot security updates — the only fix generator the L10 showpiece has — and the contradiction was documented rather than fixed**
+
+- **Severity:** medium (no security control is weakened; an adopter following it silently loses half the self-healing showpiece)
+- **Confidence:** CONFIRMED (both files read against the live repository setting and against `self-heal.yml`'s dependabot lane)
+- **Controls:** — (adoptability)
+- **Closed by:** raised and closed alongside [F39](#f39)
+- **Status:** CLOSED
+
+**Found while:** checking why three Dependabot pull requests existed against
+`apps/vuln-lab` when `dependabot.yml` sets `open-pull-requests-limit: 0` for that
+directory. They exist because that option caps *version* updates only — GitHub documents
+that "security update pull requests are not subject to this limit" — so the three PRs are
+the showpiece working, not a leak.
+
+**Where:** `.github/dependabot.yml`, the `/apps/vuln-lab` entry, which said:
+
+> Same reasoning applies to the repo-level "Dependabot security updates" setting: leave it
+> OFF, or it will race self-heal.yml for these three CVEs.
+
+That is pre-amendment guidance and it is wrong twice over. The 2026-08-24 amendment made
+the setting **ON** deliberately: Copilot Autofix does not generate fixes for dependency
+alerts, and no API can request a security-update PR on demand, so Dependabot's own PR is
+the *only* fix generator that exists for the three seeded `apps/vuln-lab` CVEs. And
+`self-heal.yml` no longer races it — its "Dependabot security update -> gauntlet" job
+finds Dependabot's PR and arms auto-merge on it, which is the documented design in
+`.github/README.md` § "Repository settings this layer assumes".
+
+**What makes this a finding rather than a typo.** The contradiction was already known.
+`.github/README.md` carried a bullet reading *"Stale comment, other workstream's file:
+`dependabot.yml` still carries a pre-amendment comment instructing that security updates
+be left off. That guidance is now wrong; the file belongs to L9 and was not edited
+here."* So for four days the repository shipped a wrong instruction, a correct
+instruction, and a note explaining that the wrong one was known to be wrong and had not
+been corrected because of workstream ownership. In a repository whose entire premise is
+being cloned into someone else's tenant, workstream ownership is not a reason to leave a
+harmful instruction in place — an adopter reads the comment next to the setting, not the
+disclaimer three files away.
+
+**Fix.** `dependabot.yml`'s comment now states the correct behaviour and says why: the
+limit caps version updates only, security-update PRs are exempt by design, the repo-level
+setting must be **ON**, and self-heal adopts the resulting PR. `.github/README.md`'s
+bullet no longer records a known-stale comment; it records that the comment was corrected
+and what following it would have cost. Verified against the live repository: `GET
+/repos/{o}/{r}/automated-security-fixes` returns `{"enabled": true, "paused": false}`,
+which is what both documents now say it should be.
