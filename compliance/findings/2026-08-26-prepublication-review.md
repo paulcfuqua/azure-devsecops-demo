@@ -73,6 +73,39 @@ shape as [F25](#f25) (a closed finding's own fix text became the bypass) and [F2
 question worth asking was not "does the control exist" but "what happens when it says
 no".
 
+## What this register has learned about verification
+
+Thirty-six of these findings came from reading: audits, reviews, CI, and gates. The eighteen
+after them came from **doing the thing once** - standing up a real tenant on 2026-08-29 and
+then deploying into it. They are worth reading as one argument, because each widens the same
+claim by one step:
+
+| | |
+|---|---|
+| [F46](#f46) | **Mocks are not the cloud.** 1,352 passing assertions, and the first real tenant produced nine defects in an hour - three of them wrong answers inside the gate whose job is refusing a tenant that is not ready. |
+| [F49](#f49) | **A test is not production configuration.** Twelve audit scripts set `Set-StrictMode -Version Latest`; every one of their harnesses turned it off. The suite was thorough inside a language mode the Verifier never runs in. |
+| [F51](#f51) | **A gate that never passes is not a gate.** `up.ps1 -DryRun` could not exit 0 on a fresh estate - the one case a plan exists for - so its red result carried no information and was read as wallpaper, including in the run where it sat beside a genuine failure. |
+| [F52](#f52) | **A plan is not a deployment.** Three green `what-if` runs preceded a deploy that failed on a policy GUID that does not exist, because what-if computes a resource delta and never resolves a definition id. |
+| [F53](#f53) | **A value with more than one source has no source.** The estate's region was written in sixteen places, and the one an operator would naturally set was outranked by fifteen nobody reads. |
+
+Two practical rules come out of that, and both earned their place the expensive way.
+
+**Ask where a value comes from, not whether it is correct.** The two costliest defects of the
+final day - a fabricated policy GUID ([F52](#f52)) and a region with sixteen sources
+([F53](#f53)) - were both surfaced by that question and by nothing else: not by a diff, not
+by a failing test, and not by the plan, which was green. A value with one honest source can be
+checked; a value with sixteen cannot.
+
+**A constant that names something in another system must be verified against that system.**
+Three separate findings are the same mistake in different clothes: the Fabric SKU asserted
+three times from memory and documentation before the API said `FTL4` ([F46](#f46)), an OIDC
+subject constructed by hand rather than read from GitHub ([F48](#f48)), and a policy
+definition id that was never real ([F52](#f52)). Twenty-three such constants are pinned in
+this repository. Exactly one was wrong, which is why nothing noticed: the other twenty-two
+made the practice look safe.
+
+---
+
 ## Index
 
 | # | Finding | Severity | Confidence | Controls | Closed by |
