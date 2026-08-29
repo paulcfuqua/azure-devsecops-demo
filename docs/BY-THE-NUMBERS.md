@@ -21,25 +21,25 @@ on every push, so the file counts below are one commit older than the tip by des
 
 | | |
 |---|---|
-| **Tracked files** | **558** (550 authored + 5 lockfiles + 3 PDF briefs) |
-| **Authored lines** | **107,656** |
-| **Automated tests** | **2,154 passing, 0 failing** |
-| **Master-plan verification criteria** | **43**, each traced 1:1 from plan → playbook → audit script |
+| **Tracked files** | **567** (559 authored + 5 lockfiles + 3 PDF briefs) |
+| **Authored lines** | **118,314** |
+| **Automated tests** | **2,342 passing, 0 failing** |
+| **Verification criteria** | **45** implemented as Verifier audit assertions (V1.1–V11.5), plus **6** more (V12.1–V12.6) that L12 enforces through CI gates rather than a deployed-state audit — a deviation `docs/runbooks/layers/L12.md` states plainly rather than papering over |
 | **NIST SP 800-171 requirements rendered** | **110** — of which **0 COMPLIANT**, and that is the honest answer |
-| **Commits** | 112 at the point measured |
+| **Commits** | 162 at the point measured |
 | **Cloud writes** | **0** |
 
-## Tests: 2,260
+## Tests: 2,342
 
 | Runner | Scope | Tests |
 |---|---|---|
-| Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, fuse scripts, the 11 Verifier audits, **and the compliance platform's catalog / collectors / derivation / emitter** | **1,277** |
-| Vitest | mcp-tools 322 · data-api 295 · control-tower 98 · spec-renderer 59 · compliance 50 · launch-ops 33 | **857** |
+| Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, fuse scripts, the 11 Verifier audits, **and the compliance platform's catalog / collectors / derivation / emitter** | **1,352** |
+| Vitest | mcp-tools 329 · data-api 295 · control-tower 98 · spec-renderer 59 · compliance 50 · launch-ops 33 | **864** |
 | `node --test` | cost-ingest 84 · directline-token 12 | **96** |
 | pytest | data generators, determinism and schema parity | **30** |
 
-**169 of the 550 authored files are test files — 30,209 lines, roughly one line of test
-for every 2.6 lines of everything else.** Every cloud call in all 2,260 is mocked; the
+**172 of the 559 authored files are test files — 32,408 lines, roughly one line of test
+for every 2.7 lines of everything else.** Every cloud call in all 2,342 is mocked; the
 suite has never contacted Azure, Graph, Fabric or GitHub.
 
 Two gates sit alongside them and are not counted as "tests" because they are not test
@@ -53,14 +53,14 @@ allowlist exactly in both directions.
 
 | Language | Files | Lines | What it is |
 |---|---|---|---|
-| PowerShell (`.ps1`) | 86 | 26,607 | bootstrap, Entra/Purview/Fabric automation, seeding, the 11 audits, the compliance collectors and state emitter, the fuse |
-| TypeScript | 129 | 23,902 | MCP tool server (6 tools), data API, providers, telemetry, Functions |
-| JSON | 106 | 15,979 | the 110-requirement NIST catalog, manifests, schemas, fixtures, the emitted compliance state |
-| Markdown | 57 | 15,021 | brief, specs, plans, 12 layer playbooks, runbooks, the 24-finding security review |
-| YAML | 37 | 9,111 | 24 workflows + 3 composite actions + Dependabot |
-| TSX | 36 | 4,459 | Fluent UI renderer and three app shells |
-| PowerShell modules | 7 | 4,153 | the audit engine, the compliance derivation, Fabric REST client, seed libraries |
-| Bicep (+ params) | 19 | 2,823 | landing zone, platform, apps — on Azure Verified Modules |
+| PowerShell (`.ps1`) | 89 | 29,363 | bootstrap, Entra/Purview/Fabric automation, seeding, the 11 audits, the compliance collectors and state emitter, the fuse |
+| TypeScript | 129 | 24,091 | MCP tool server (6 tools), data API, providers, telemetry, Functions |
+| JSON | 108 | 19,959 | the 110-requirement NIST catalog, manifests, schemas, fixtures, the emitted compliance state |
+| Markdown | 57 | 16,683 | brief, specs, plans, 12 layer playbooks, runbooks, the 44-finding security review |
+| YAML | 37 | 10,127 | 24 workflows + 3 composite actions + Dependabot |
+| TSX | 36 | 4,551 | Fluent UI renderer and three app shells |
+| PowerShell modules | 7 | 4,182 | the audit engine, the compliance derivation, Fabric REST client, seed libraries |
+| Bicep (+ params) | 21 | 3,508 | landing zone, platform, apps — on Azure Verified Modules |
 | HTML | 6 | 1,394 | app shells and nginx templates |
 | Python | 14 | 1,363 | deterministic synthetic-data generators |
 | JS / MJS | 10 | 943 | validators, seeded CodeQL flaws |
@@ -70,11 +70,11 @@ allowlist exactly in both directions.
 
 | Area | Files | Lines | |
 |---|---|---|---|
-| `apps/` | 251 | 33,576 | 8 packages: 3 frontends, MCP server, data API, 2 Functions, shared renderer (+ the vulnerable lab) |
-| `compliance/` | 94 | 21,064 | the NIST catalog, the assessment register, the 24-finding review, 5 collectors, the derivation, the emitter, the committed state |
-| `infra/` | 38 | 10,931 | Bicep, Entra manifest, Purview labels, Fabric REST, Copilot Studio ALM |
-| `docs/` | 32 | 10,575 | decision record, specs, plans, 12 playbooks, runbooks |
-| `verification/` | 35 | 10,157 | the Verifier's audit engine and 11 layer audits |
+| `apps/` | 251 | 34,019 | 8 packages: 3 frontends, MCP server, data API, 2 Functions, shared renderer (+ the vulnerable lab) |
+| `compliance/` | 96 | 26,096 | the NIST catalog, the assessment register, the 44-finding review, 5 collectors, the derivation, the emitter, the committed state |
+| `infra/` | 40 | 12,624 | Bicep, Entra manifest, Purview labels, Fabric REST, Copilot Studio ALM |
+| `docs/` | 32 | 11,010 | decision record, specs, plans, 12 playbooks, runbooks |
+| `verification/` | 38 | 11,997 | the Verifier's audit engine and 11 layer audits |
 | `.github/` | 30 | 9,349 | 24 workflows: layer deploys, per-app CI, DevSecOps chain, self-healing, compliance collection |
 | `data/` | 42 | 5,980 | generators, SQL schema, lakehouse loaders |
 | `scripts/` | 14 | 5,184 | G0 bootstrap, the `up`/`down` fuse, Defender toggle |

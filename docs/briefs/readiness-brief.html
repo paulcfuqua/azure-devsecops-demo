@@ -245,6 +245,17 @@
     color: var(--ink-soft);
   }
 
+  /* The precise-exception paragraph under a claim. Deliberately quieter than the
+     claim it qualifies, but present on the page rather than in a footnote: an
+     unqualified "no secrets" is how finding F28 happened. */
+  .claims p.qualifier {
+    margin-top: .45rem;
+    font-size: .88rem;
+    color: var(--ink-soft);
+    border-left: 2px solid var(--rule, #d8dee6);
+    padding-left: .6rem;
+  }
+
   @media (max-width: 46rem) {
     .claims > li { grid-template-columns: 1fr; gap: .3rem; }
   }
@@ -561,8 +572,9 @@
 
     <ul class="claims">
       <li>
-        <h3>No stored cloud credentials, anywhere</h3>
-        <p>Every pipeline authenticates to Azure by workload identity federation; every service authenticates to Azure data planes by managed identity. The Azure SQL server enforces Entra-only authentication, so no database password exists to leak. Continuous integration holds no secret at all — a property that is asserted, not assumed.</p>
+        <h3>No stored Azure credentials</h3>
+        <p>Every pipeline authenticates to Azure by workload identity federation; every service authenticates to Azure data planes by managed identity. The Azure SQL server enforces Entra-only authentication, so no database password exists to leak. Nothing authenticating to Azure is a stored secret, and the repository itself holds none at all — a full-history scanner fails the build on any finding.</p>
+        <p class="qualifier">Six long-lived credentials do exist, and naming them is the point: two Entra app certificates, because Security &amp; Compliance PowerShell has no federated path; two GitHub tokens, because a <code>GITHUB_TOKEN</code> push does not trigger workflows; and two values in Key Vault, read at run time. None of them authenticates to Azure, none is in the repository, and all six are listed in the incident-response rotation text. An earlier revision of this page said continuous integration &ldquo;holds no secret at all&rdquo;. That was false, it is recorded as finding F28, and it is corrected here rather than quietly dropped.</p>
       </li>
       <li>
         <h3>Infrastructure on Azure Verified Modules</h3>

@@ -118,6 +118,8 @@ no".
 | [F40](#f40) | `dependabot.yml` told adopters to switch OFF the only fix generator the seeded CVEs have — known-wrong and left in place for four days | medium | CONFIRMED | — (adoptability; L10 showpiece) | raised and closed with F39 |
 | [F41](#f41) | The compliance state artifact became its own trigger: seven orphaned branches, and `main`'s state stamped seven commits behind | medium | CONFIRMED (observed) | 3.12.3 | raised and closed 2026-08-29 |
 | [F42](#f42) | Polynomial ReDoS in the inbound `Authorization` parse — the gate in front of a deliberately public endpoint | high | CONFIRMED (measured) | 3.13.1, 3.14.1 | CodeQL, raised and closed 2026-08-29 |
+| [F43](#f43) | The G0 gate's own definition asserts two verifications `verify-g0.ps1` does not perform, and `PURVIEW_APP_ID` was documented nowhere | high | CONFIRMED | — (adoptability; blocks nothing until the clock is running, then costs days) | G0 rehearsal, 2026-08-29 |
+| [F44](#f44) | The published leadership brief still carried F28's exact false claim — "continuous integration holds no secret at all" | high | CONFIRMED | 3.1.3 | doc refresh, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2387,3 +2389,133 @@ dislodge either across two lockfile regenerations; `npm dedupe` collapsed both t
 single copy immediately. vite 8 had been abandoned once on the strength of the failed
 `overrides` attempt before `npm dedupe` was tried on React and turned out to be the tool
 that works.
+
+
+## F43
+
+**The G0 gate's own definition asserts two verifications that `verify-g0.ps1` does not perform, and one required variable was documented nowhere at all**
+
+- **Severity:** high (nothing is broken today; every item costs irreplaceable budget once the 30-day clock is running)
+- **Confidence:** CONFIRMED — each item read directly off the script it describes
+- **Controls:** — (adoptability)
+- **Closed by:** the G0 rehearsal, 2026-08-29
+- **Status:** CLOSED
+
+**Found while:** rehearsing G0 deliberately *before* the Azure free-trial clock starts.
+The four bootstrap scripts are 1,489 lines with 63 passing Pester tests, all against
+mocks, and **not one line has ever executed against a real tenant** — the same
+never-actually-ran condition as [F22](#f22), [F33](#f33) and [F39](#f39). A defect found
+on day 3 of 30 costs budget that cannot be bought back; found now it costs an afternoon.
+Five defects surfaced, and the two serious ones are both in `§ D`, the section that
+*defines* what "G0 complete" means.
+
+**1. `§ D` claimed a Power Platform verification that does not exist (high).** It said a
+green `verify-g0.ps1` confirms "a production-or-sandbox Power Platform environment linked
+to a Copilot Studio pay-as-you-go billing plan on this subscription". There is no such
+check: `grep -i powerplatform scripts/bootstrap/verify-g0.ps1` returns nothing. The script
+runs exactly ten checks and none of them touches Power Platform. C5 is fifteen minutes of
+portal work that blocks L8 entirely, and an operator who skipped it would have read a
+green gate as confirmation.
+
+**2. `§ D` overstated the Fabric check (medium).** It said "Fabric capacity visible with SP
+API access on". The check calls the Fabric API **as the logged-in human**, not as
+`mls-github-deployer`, so it proves your account can see a capacity and says nothing about
+whether service principals can call Fabric at all — which is exactly what C4's toggle
+switches on. The check's own output has always been honest about this; it prints
+`(SP API toggle is portal-verified)`. The runbook was not.
+
+**3. `PURVIEW_APP_ID` was documented in no runbook in this repository (medium).**
+`layer-04-purview.yml` gates its apply job on all three of `PURVIEW_APP_ID`,
+`PURVIEW_ORGANIZATION` and `PURVIEW_CERT_BASE64`; C9b's table named only the certificate
+pair. An operator could set precisely what the runbook asked for, watch L4 run green, and
+still have no sensitivity labels applied — [F18](#f18)'s effect reached by a different
+route. It fails safe, which is why nothing broke loudly, but "fails safe" and "does what
+you asked" are different things.
+
+**4. `§ C` item 3 understated `mls-verifier`'s Graph permissions (low).** It named Reader +
+`Directory.Read.All`. The script has always granted `Policy.Read.All` as well, which is
+what lets V3.3 read Conditional Access policy state — the enforced-MFA audit cannot see
+the policy without it. An inaccurate least-privilege inventory in a compliance demo is
+worth more than a low severity suggests.
+
+**5. `§ C` item 8 omitted the forecast budget alerts (low).** It named actual alerts at
+50/80/100% and not the forecast alerts at 50/80% that `03-budget.ps1` also creates. The
+forecast pair is the half that warns before the money is gone rather than after.
+
+**Fix.** `§ D` now enumerates all ten checks in a table instead of describing them in
+prose, and states plainly that **C4 and C5 are verified by nothing** and must be confirmed
+by eye. `PURVIEW_APP_ID` is documented with the `gh variable set` line and a warning that
+all three values are required. Items 3 and 8 now match their scripts.
+
+**What was deliberately NOT done.** An eleventh check against the Power Platform admin API
+(`api.bap.microsoft.com/.../scopes/admin/environments`) would close item 1 properly and is
+not shipped, because it cannot be exercised before a tenant exists. Shipping an untested
+check into the gate would be this register's most-repeated defect committed knowingly. The
+honest gap is documented instead.
+
+**What the rehearsal did NOT find, which is worth recording too.** `up.ps1`'s
+"refuses to dispatch until the first four variables exist" claim is exactly true, and the
+four it requires are the four C9 lists first. `01-root-oidc.ps1` matches every claim `§ C`
+item 3 makes about federation subjects, the `demo`/`verify` split and the five deployer
+Graph permissions. C9 does tell you to create both GitHub environments. The scripts are in
+better shape than the prose describing them — which is the opposite of the usual direction
+here, and the reason the audit was worth doing rather than assumed.
+
+## F44
+
+**The published leadership brief still carried F28's exact false claim, in the document most likely to be handed to someone**
+
+- **Severity:** high (a security claim, stated to an external audience, that this register had already recorded as false)
+- **Confidence:** CONFIRMED
+- **Controls:** 3.1.3 (control the flow of CUI — here, the accuracy of what is asserted about credential handling)
+- **Closed by:** the documentation refresh, 2026-08-29
+- **Status:** CLOSED
+
+**Found while:** refreshing the presentation documents for staleness after the dependency
+sweep. The search was for out-of-date numbers. It found a false security claim instead.
+
+**Where.** `docs/briefs/readiness-brief.html` — seven pages, exported to
+`Meridian-Readiness-Brief.pdf`, audience "engineering, security and operations
+leadership" — under the heading *"No stored cloud credentials, anywhere"*:
+
+> Continuous integration holds no secret at all — a property that is asserted, not assumed.
+
+That sentence is [F28](#f28) verbatim. F28 is titled *"'No secrets in CI' is false — six
+long-lived credentials"*, it is marked CLOSED, and `CLAUDE.md`'s hard rule 5 names it
+explicitly: *"CI is not secret-free, and claiming it was is finding F28."* The claim was
+corrected across the repository on 2026-08-28 and **this document was never swept**, so
+the one artifact designed to be printed and handed to people kept the version that had
+already been found false. "A property that is asserted, not assumed" made it worse: it
+claimed rigour for the part that was wrong.
+
+**Also wrong, in the board one-pager** (`board-one-pager.html`, one page, audience "board
+/ executive committee"): its five-number stat block said **1,428 automated tests** against
+an actual 2,342, **43 independently verified controls** against an actual 45 (V1.1–V11.5),
+and **"0 Stored cloud credentials"** — the same over-broad claim as the readiness brief,
+compressed to three words on the single page an executive reads.
+
+**Fix.** The readiness brief's heading becomes "No stored Azure credentials"; the body
+keeps the true part (nothing authenticating to **Azure** is a stored secret — federation
+and managed identity throughout, Entra-only SQL) and gains a qualifier paragraph naming
+all six long-lived credentials, why each exists, and that an earlier revision said
+otherwise. The one-pager's stat block is corrected to 45 / 2,342 / "0 Stored **Azure**
+credentials", which is the strong claim that happens to be true. **Both PDFs were
+regenerated** — an HTML fix alone would have left the false sentence in the artifact that
+actually circulates. Page counts are unchanged (1 / 7 / 5), so `docs/briefs/README.md`
+stays accurate. `kickoff-prompt.html` is deliberately untouched: its README declares it a
+document of record, not a description of the current system.
+
+**The stale numbers found alongside it**, all corrected: `docs/BY-THE-NUMBERS.md` (tracked
+files, authored lines, every per-language and per-directory row, and a headline that
+disagreed with its own section heading — 2,154 against 2,260); `README.md`'s gate table
+and key-documents line; `compliance/README.md`'s finding count; and the G0 runbook's
+"Pester 597".
+
+**The pattern, and the one durable defence against it.** `compliance/README.md`'s finding
+count has now gone stale **twice** — it said "24 findings" until 2026-08-28, was corrected
+to 36, and was stale again within a day at 42. A count written in prose beside a file that
+grows will be wrong again, and the third correction will not be the last. What has *never*
+drifted is the structure, because `compliance/tests/register.Tests.ps1` derives the finding
+numbers from the document and asserts they run contiguously from F1 rather than trusting
+any sentence about how many there are. Prose counts are checked by whoever remembers;
+derived counts are checked every run.

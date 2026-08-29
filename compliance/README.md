@@ -53,14 +53,21 @@ repository neither configures nor verifies.
   implementation task against the compliance-platform spec (§8, item 1), not part of the
   spec itself.
 - **`findings/2026-08-26-prepublication-review.md`** — the narrative record of the
-  36 findings behind that register (F1-F36): severity, confidence, `file:line`, the concrete
+  44 findings behind that register (F1-F44): severity, confidence, `file:line`, the concrete
   attack path, impact (including cost where relevant), and the fix. Each
   `compliance/assessment/*.json` file's `assertion.evidence` cites one or more anchors
-  into this document. Eight findings (F14, F15, F19, F20, F21, F22, F29, F36) map to no
-  800-171 control and are recorded here only, not as assessment files, so they don't fall
-  through the gap between the security and compliance framings. (This paragraph said
-  "24 findings (F1-F24)" until 2026-08-28; the 2026-08-28 addendum added F25-F36 and the
-  count was never updated with it.)
+  into this document. Eleven findings (F14, F15, F19, F20, F21, F22, F29, F36, F40, F43,
+  F44) map to no 800-171 control and are recorded here only, not as assessment files, so
+  they don't fall through the gap between the security and compliance framings.
+
+  **This count has now gone stale twice, which is worth leaving on the page.** It read
+  "24 findings (F1-F24)" until 2026-08-28, when the F25-F36 addendum landed without
+  updating it. The correction itself then went stale within a day: F37-F42 were added on
+  2026-08-29 and this paragraph still said 36. A number written in prose beside a file
+  that grows is a number that will be wrong again — the durable fix is
+  `compliance/tests/register.Tests.ps1`, which derives the count from the document rather
+  than trusting any sentence about it, and which is why the *structure* has never drifted
+  even while the prose did.
 - **`catalog/`** — the full 110-requirement NIST SP 800-171 Rev 2 catalog with its mappings
   to 800-53 Rev 5, CMMC 2.0 and FAR 52.204-21, in the schema from spec §3.1. This is
   **authored reference data**: it carries no status field and asserts nothing about this

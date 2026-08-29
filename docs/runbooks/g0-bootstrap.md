@@ -61,13 +61,13 @@ are **missing/unverified** and block the layer noted.
 
 > **Pester 6 note (2026-08-26).** Both `lint-ci.yml` and this runbook say
 > `-MinimumVersion 5.5.0`, which today resolves to **Pester 6.1.0**, a major version the
-> 597 tests were never written against. That is no longer an assumption: the full CI
-> invocation was replayed locally on 6.1.0 and returned **597 passed / 0 failed**, with
+> suites were never written against. That is no longer an assumption: the full CI
+> invocation was replayed locally on 6.1.0 and returned **1,352 passed / 0 failed**, with
 > PSScriptAnalyzer clean at Error/Warning/**Information**. If a future Pester release does
 > break the suites, pin `-MaximumVersion` in `lint-ci.yml` rather than editing tests.
 >
-> Local gate replay on this machine, 2026-08-26: Pester 597/597 · PSScriptAnalyzer 0 ·
-> `npm test` exit 0 (7 workspaces) · pytest 30/30. Still zero cloud writes.
+> Local gate replay on this machine, 2026-08-29: Pester 1,352/1,352 · PSScriptAnalyzer 0 ·
+> `npm test` exit 0 (8 workspaces, 960 tests) · pytest 30/30. Still zero cloud writes.
 
 ## B. Trial-rate strategy (answers "can I do this at a demo/trial rate?")
 
@@ -264,9 +264,12 @@ it is still about sign-in risk and auto-labeling, nothing else.
    admin-consent URL for Graph application permissions (`User.ReadWrite.All`,
    `Group.ReadWrite.All`, `Application.ReadWrite.OwnedBy` — narrowed from `.All`,
    2026-08-26 finding F8 —, `Policy.ReadWrite.ConditionalAccess`, `Directory.Read.All`)
-   — you click consent; and creates the read-only `mls-verifier` app (Reader +
-   `Directory.Read.All`) with its **own** federated credential on a distinct `verify`
+   — you click consent; and creates the read-only `mls-verifier` app (Reader + `Directory.Read.All` +
+   **`Policy.Read.All`**) with its **own** federated credential on a distinct `verify`
    environment, never `demo` (2026-08-26 findings F6/F7 — see item C9 below).
+   `Policy.Read.All` is what lets the Verifier read Conditional Access policy state
+   read-only; V3.3's enforced-MFA audit cannot see the policy without it. This line used
+   to name only `Directory.Read.All` — the script has always granted both (finding F43).
 4. ⚠ **Fabric SP API toggle:** in the Fabric admin portal enable **"Service principals
    can use Fabric APIs"** and add `mls-github-deployer` as admin on the trial capacity
    (~2 min, portal-only).
@@ -316,7 +319,9 @@ it is still about sign-in risk and auto-labeling, nothing else.
    secret and it never goes near CI or the repo: GitHub Actions still authenticates by
    federation with no stored secret at all.
 8. ⚠ **Budget guard:** run `scripts/bootstrap/03-budget.ps1` — $75/month budget with
-   alerts at 50/80/100% to your email. Backstop behind gate G4's cost-anomaly trigger.
+   **actual** alerts at 50/80/100% and **forecast** alerts at 50/80%, to your email. The
+   forecast pair is the half that warns you before the money is gone rather than after;
+   this line used to name only the actual alerts (finding F43). Backstop behind gate G4's cost-anomaly trigger.
    Copilot Studio's meter bills to this same subscription, so it sits inside this budget.
 9. ⚠ **Populate the `demo` GitHub environment** with the variables (and the two
    certificate secrets) in the tables below. `scripts/up.ps1` refuses to dispatch a
@@ -661,10 +666,28 @@ environment (2026-08-26 findings F6/F7) — set them with `--env verify`, not `-
 
 | Secret | Needed by | If absent |
 |---|---|---|
-| `PURVIEW_CERT_BASE64` (+ `PURVIEW_CERT_PASSWORD`) | the L4 **deploy** job's `Connect-IPPSSession` (env `demo`) | `labels.ps1` stays a human-run step under your login — the L04 playbook's documented degrade path. Nothing fails |
+| `PURVIEW_CERT_BASE64` (+ `PURVIEW_CERT_PASSWORD`) | the L4 **deploy** job's `Connect-IPPSSession` (env `demo`). **Needs the `PURVIEW_APP_ID` and `PURVIEW_ORGANIZATION` *variables* set too — see the note below this table; all three are required or the job skips** | `labels.ps1` stays a human-run step under your login — the L04 playbook's documented degrade path. Nothing fails |
 | `MLS_VERIFIER_CERT_BASE64` (+ `MLS_VERIFIER_CERT_PASSWORD`) | the L4 **audit**'s own read-only S&C session as `mls-verifier` (env `verify`), and the L3/L4 child audits V11.2 re-runs after a teardown | L4 verification skips with a NOTICE, and V11.2 records SKIP via `-SkipChildAudit`. Neither is a pass — the labels are simply unverified |
 | `MLS_VERIFIER_GH_TOKEN` | the Verifier's GitHub reads (V1.x, V7.4, V9.1–V9.4, V10.1, V10.2), all in `verify`-environment jobs | the audits fall back to the run-scoped `GITHUB_TOKEN`, which GitHub mints per run and stores nowhere. That covers everything **except Dependabot alerts**, which that token is refused on — so V10.2 reports an unreadable trail rather than a passing one. A fine-grained PAT with `security_events: read` closes it |
 | `SELF_HEAL_TOKEN` | `self-heal.yml`'s PR authoring (env `demo`) | PRs are authored by `GITHUB_TOKEN`, whose `pull_request` runs start approval-required, so auto-merge cannot fire unattended. Parked sponsor decision |
+
+**THE PURVIEW PATH NEEDS THREE VALUES, NOT TWO, AND ONE OF THEM WAS DOCUMENTED NOWHERE.**
+`layer-04-purview.yml` gates its apply job on all three of `PURVIEW_APP_ID`,
+`PURVIEW_ORGANIZATION` and `PURVIEW_CERT_BASE64` being non-empty; any one missing sets
+`scc=false`, skips the apply job, and prints a notice. `PURVIEW_APP_ID` — the **variable**
+holding the Entra app registration's application (client) ID for the Security & Compliance
+app-only identity — appeared in no runbook in this repository until finding F43. So an
+operator could set exactly what this table asked for, see a green L4 run, and still have
+no labels applied: F18's effect, reached by a different route.
+
+```
+gh variable set PURVIEW_APP_ID     --env demo --body '<app registration client id>'
+gh variable set PURVIEW_ORGANIZATION --env demo --body '<tenant>.onmicrosoft.com'
+```
+
+It fails safe, which is why nothing broke loudly — but "fails safe" and "does what you
+asked" are different things, and the whole point of L4 is that the label taxonomy is
+applied rather than aspirational.
 
 Both certificates are the same shape: export the app's certificate as a PFX and store it
 base64-encoded. Set the password secret only if the PFX has one.
@@ -675,14 +698,47 @@ gh secret set MLS_VERIFIER_CERT_BASE64 --env verify < <(base64 -w0 mls-verifier.
 
 ## D. What "G0 complete" means
 
-The Orchestrator re-runs `scripts/bootstrap/verify-g0.ps1` (read-only) and gets: a
-logged-in CLI context; `mls-github-deployer` with federation + Owner + consented Graph
-permissions; `mls-verifier` present with its own federated credential whose subject is
-distinct from the deployer's (2026-08-26 findings F6/F7); Fabric capacity visible with SP
-API access on; trial licenses assigned; a production-or-sandbox Power Platform environment
-linked to a
-Copilot Studio pay-as-you-go billing plan on this subscription; budget in place. Only
-then does Layer 1 deploy.
+The Orchestrator re-runs `scripts/bootstrap/verify-g0.ps1` (read-only). It runs
+**exactly ten checks**, and this list is now enumerated rather than described, because the
+prose that stood here claimed two verifications the script does not perform (finding F43):
+
+| # | Check | Asserts |
+|---|---|---|
+| 1 | `CliLogin` | `az` logged in, active subscription is the expected one |
+| 2 | `DeployerApp` | `mls-github-deployer` registration exists |
+| 3 | `Federation` | its federated credential carries the `environment:demo` subject |
+| 4 | `OwnerRole` | its service principal holds Owner at subscription scope |
+| 5 | `GraphConsent` | all five application permissions are consented |
+| 6 | `VerifierApp` | `mls-verifier` exists with a federated subject **distinct** from the deployer's (F6/F7) |
+| 7 | `FabricCapacity` | a capacity is visible to **you** through the Fabric API |
+| 8 | `Licenses` | M365 E5 and EMS E5 present tenant-wide with ≥1 unit consumed |
+| 9 | `Budget` | the budget exists at the expected amount with the expected thresholds |
+| 10 | `EntraDiagnostics` | *informational only* — tenant diagnostics route SignInLogs + AuditLogs to Log Analytics (F9). Never affects the exit code |
+
+**TWO STEPS ARE NOT VERIFIED BY ANYTHING, and a green run does not cover them.** Both are
+portal work with no read path this script can use under your login, so you must confirm
+them by eye:
+
+* **C4, the Fabric "Service principals can use Fabric APIs" toggle.** Check 7 calls the
+  Fabric API as *you*, the logged-in human — not as `mls-github-deployer`. It proves a
+  capacity exists and that **your** account can see it. It says nothing about whether the
+  deployer SP can call Fabric at all, which is precisely what C4 switches on. The check's
+  own output admits this — it prints `(SP API toggle is portal-verified)`. Skip C4 and
+  this check still passes; **L5 is where you find out.**
+* **C5, the Power Platform environment and Copilot Studio pay-as-you-go billing plan.**
+  There is no check for it. The text here used to assert one, which was false: `grep -i
+  powerplatform scripts/bootstrap/verify-g0.ps1` returns nothing. Skip C5 and G0 reports
+  green; **L8 is where you find out.**
+
+An eleventh check against the Power Platform admin API
+(`api.bap.microsoft.com/.../scopes/admin/environments`) would close the second gap and is
+deliberately **not** shipped, because it cannot be exercised before a tenant exists and
+this repository has now been bitten four times by code that looked correct because nothing
+ever ran it (findings F22, F33, F39 and F43's own TypeScript-7 note). An untested check
+that always fails is worse than an honest gap.
+
+Only when the ten checks are green **and** C4 and C5 are confirmed by eye does Layer 1
+deploy.
 
 Items C6, C7, C10 and 13 are **not** G0-complete blockers for Layer 1 — C7 cannot even be
 done
