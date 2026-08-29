@@ -37,13 +37,19 @@ infra/bicep/
 
 | Layer | Template | Deployment scope | Command (run by the layer workflow, never locally) |
 |---|---|---|---|
-| **L2** | `landing-zone/main.bicep` | Tenant root management group | `az deployment mg create --management-group-id <tenantRoot> --location $AZURE_LOCATION` |
+| **L2** | `landing-zone/main.bicep` | Management group `mls` | `az deployment mg create --management-group-id mls --location $AZURE_LOCATION` |
 | **L6** | `platform/main.bicep` | Subscription | `az deployment sub create --location $AZURE_LOCATION` |
 | **L7** | `apps/main.bicep` | Resource group `mls-rg-apps` | `az deployment group create --resource-group mls-rg-apps` |
 
 ### L2 — landing zone (`landing-zone/main.bicep`)
 
-- Management group `mls` under the tenant root; demo subscription placed beneath it.
+- **Not deployed at the tenant root.** Creating management group `mls` and placing
+  the demo subscription beneath it are the only root-scope writes L2 needs, and
+  `layer-02-landing-zone.yml` makes both imperatively (`az account management-group
+  create` / `subscription add`) before this template runs. Azure makes an MG
+  creator its Owner, so the deployer then owns the scope it deploys into and needs
+  no tenant-root RBAC -- no Global Administrator elevation for anyone cloning this
+  repo, and no service principal left holding Owner at `/`. See finding F47.
 - **Tag deny on RGs:** five `Require a tag on resource groups` assignments (`env`, `app`,
   `costCenter`, `owner`, `dataClassification`) plus one
   `Require a tag and its value on resource groups` pinning `managedBy=iac`.
@@ -179,7 +185,6 @@ Every resource that has an AVM module uses one, pinned to an explicit version.
 
 | Purpose | AVM module | Version |
 |---|---|---|
-| Management group | `avm/res/management/management-group` | 0.2.0 |
 | Policy assignments (all 15) | `avm/ptn/authorization/policy-assignment` | 0.5.3 |
 | Resource groups (all 4) | `avm/res/resources/resource-group` | 0.4.4 |
 | Log Analytics workspace | `avm/res/operational-insights/workspace` | 0.16.1 |
@@ -198,15 +203,11 @@ Every resource that has an AVM module uses one, pinned to an explicit version.
 
 ## Raw resources — and why each one is raw
 
-Eight, each because **no AVM module covers the case**. This section is the estate's
+Seven, each because **no AVM module covers the case**. This section is the estate's
 inventory of every privileged grant expressed outside AVM, so it is deliberately
 exhaustive -- an omission here is a grant nobody is reviewing:
 
-1. **`Microsoft.Management/managementGroups/subscriptions`**
-   (`landing-zone/main.bicep`) — placing the demo subscription under MG `mls`. The
-   management-group AVM module creates the group but does not move subscriptions into
-   it, and no separate AVM module exists for the association.
-2. **`Microsoft.Authorization/roleAssignments` scoped to an existing Key Vault**
+1. **`Microsoft.Authorization/roleAssignments` scoped to an existing Key Vault**
    (`apps/modules/key-vault-secrets-user-role.bicep`) — **referenced again, as of Task 5
    (2026-08-26).** It originally existed solely to let the copilot app read
    `anthropic-api-key`, and went unreferenced with that app and secret at the 2026-08-24
@@ -220,10 +221,10 @@ exhaustive -- an omission here is a grant nobody is reviewing:
    *inside* each resource module, which cannot work here — the vault is deployed at L6,
    long before the L7 identity exists, and `avm/ptn/authorization/role-assignment` targets
    MG/subscription/RG scope, not a single resource.
-3. **`Microsoft.Insights/components` (`existing`)** (`apps/main.bicep`) — an
+2. **`Microsoft.Insights/components` (`existing`)** (`apps/main.bicep`) — an
    `existing` reference to read the L6 App Insights connection string, not a deployment.
    AVM modules deploy resources; they cannot express an `existing` lookup.
-4. **`Microsoft.Authorization/roleAssignments` at SUBSCRIPTION scope**
+3. **`Microsoft.Authorization/roleAssignments` at SUBSCRIPTION scope**
    (`apps/modules/workload-role-assignments.bicep`) — added by Task 12 (finding F13,
    `compliance/findings/2026-08-26-prepublication-review.md#f13`). Two grants, both
    read-only and both needed because the data they read is subscription-wide and has no
@@ -234,15 +235,15 @@ exhaustive -- an omission here is a grant nobody is reviewing:
      are subscription-scoped.
    AVM's role-assignment pattern module targets a resource or resource group; neither
    covers a subscription-scoped assignment made from a resource-group deployment.
-5. **`Microsoft.Authorization/roleAssignments` scoped to the Log Analytics workspace**
+4. **`Microsoft.Authorization/roleAssignments` scoped to the Log Analytics workspace**
    (`apps/modules/log-analytics-reader-role.bicep`) — Log Analytics Reader for both app
    identities, so the control tower can query the workspace L6 created. Cross-resource-
    group scope, which the AVM workspace module's own `roleAssignments` parameter cannot
    express from this deployment.
-6. **`Microsoft.Authorization/roleAssignments` for Monitoring Metrics Publisher**
+5. **`Microsoft.Authorization/roleAssignments` for Monitoring Metrics Publisher**
    (`apps/modules/monitoring-metrics-publisher-role.bicep`) — lets the apps emit custom
    metrics to their own App Insights component, which lives in another resource group.
-7. **`Microsoft.Authorization/roleAssignments` scoped to a single BLOB CONTAINER**
+6. **`Microsoft.Authorization/roleAssignments` scoped to a single BLOB CONTAINER**
    (`platform/modules/blob-container-role.bicep`) — added by F19. **Storage Blob Data
    Reader** for the cost-ingest Function's identity on the `cost-exports` container, and
    the last of F13's seven documented workload grants. AVM's storage-account module
@@ -250,7 +251,7 @@ exhaustive -- an omission here is a grant nobody is reviewing:
    grant in it, and the container is not separately addressable through its outputs, so
    the narrower scope can only be expressed as a raw assignment against an `existing`
    container.
-8. **`Microsoft.Authorization/roleAssignments` scoped to a whole storage account**
+7. **`Microsoft.Authorization/roleAssignments` scoped to a whole storage account**
    (`platform/modules/storage-account-role.bicep`) — also F19, and deliberately a
    *different file* from the one above so the scope of a grant is legible from which
    module a call site invokes. Three roles, all on the Function's own runtime storage
@@ -296,7 +297,7 @@ reversible by changing one parameter or one line of `naming.bicep`.
 - **[derived] Storage account names strip hyphens** (`mlscostdemost`) — storage requires
   3–24 lowercase alphanumerics, so the hyphenated convention cannot apply. A second one,
   `mlsfuncdemost` (role segment `func`), holds the cost-ingest Function's runtime state
-  and deployment package; see raw resource 8 above for why it is not the cost-export
+  and deployment package; see raw resource 7 above for why it is not the cost-export
   account.
 - **[derived] `func` and `plan` type segments** for the F19 Function App
   (`mls-cost-ingest-demo-func`) and its Flex Consumption plan

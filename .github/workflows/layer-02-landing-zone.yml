@@ -128,8 +128,12 @@ jobs:
           MG_NAME: ${{ steps.names.outputs.management-group }}
         run: |
           set -euo pipefail
+          # Targets MG <prefix>, never the tenant root. The step above already made
+          # the only two root-scope writes L2 needs (create the MG, place the sub),
+          # and Azure makes an MG's creator its Owner -- so the deployer owns this
+          # scope and needs no tenant-root RBAC at all. See F47.
           az deployment mg what-if \
-            --management-group-id "${AZURE_TENANT_ID}" \
+            --management-group-id "${MG_NAME}" \
             --location "${AZURE_LOCATION}" \
             --template-file infra/bicep/landing-zone/main.bicep \
             --parameters infra/bicep/landing-zone/demo.bicepparam \
@@ -139,12 +143,14 @@ jobs:
 
       - name: Deploy the landing zone
         if: ${{ !inputs.dry_run }}
+        env:
+          MG_NAME: ${{ steps.names.outputs.management-group }}
         run: |
           set -euo pipefail
-          # Deployed at the TENANT ROOT management group (id == tenant id), which is
-          # where infra/bicep/landing-zone/main.bicep creates MG <prefix> beneath.
+          # Deployed AT management group <prefix> (see the what-if step's note), which
+          # infra/bicep/landing-zone/main.bicep declares as its own target scope.
           az deployment mg create \
-            --management-group-id "${AZURE_TENANT_ID}" \
+            --management-group-id "${MG_NAME}" \
             --location "${AZURE_LOCATION}" \
             --template-file infra/bicep/landing-zone/main.bicep \
             --parameters infra/bicep/landing-zone/demo.bicepparam \

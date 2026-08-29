@@ -24,8 +24,8 @@ describes what closing the finding required, which is historical context, not a 
 claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
-document is open.** The last two to close were [F37](#f37) and [F38](#f38), both raised
-and both fixed on 2026-08-28. Before them, **F13** and **F19** were one problem wearing
+document is open.** The most recent to close were [F46](#f46), [F47](#f47) and
+[F48](#f48), all raised and all fixed on 2026-08-29 during the first live tenant bring-up. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
 2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own Fix text below
@@ -122,6 +122,8 @@ no".
 | [F44](#f44) | The published leadership brief still carried F28's exact false claim — "continuous integration holds no secret at all" | high | CONFIRMED | 3.1.3 | doc refresh, 2026-08-29 |
 | [F45](#f45) | All fourteen labels `dependabot.yml` declares were never created, so every Dependabot PR carried an error comment — 42 of them | low | CONFIRMED (counted) | — (operability) | raised and closed 2026-08-29 |
 | [F46](#f46) | Nine defects the first real tenant exposed in an hour, including **three wrong results in the G0 gate itself** — two false fails and a false pass | high | CONFIRMED (observed against a live tenant) | 3.12.3, 3.14.1 | tenant bring-up, 2026-08-29 |
+| [F47](#f47) | L2 deployed at the **tenant root** management group, so the first live plan run failed and the documented remedy was Global Administrator elevation plus a standing root-scope Owner service principal - neither of which L2 ever needed | high | CONFIRMED (observed, run 33264310126) | 3.1.2, 3.1.5 | first live plan run, 2026-08-29 |
+| [F48](#f48) | `01-root-oidc.ps1` built the OIDC subject claim by hand, but GitHub now presents an **immutable-identifier** subject - so the first real federated login failed and every workflow was locked out of Azure | high | CONFIRMED (AADSTS700213, then green) | 3.5.1, 3.5.2 | first live OIDC login, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2703,3 +2705,150 @@ The register's standing lesson has been *"a gate should be assumed inert until i
 failure proves otherwise"* ([F39](#f39)). F46 sharpens it: **a gate should be assumed wrong
 until it has run against production reality, however green its mocks are.** Sixty-three
 passing tests against a mocked `az` proved only that the script's control flow works.
+
+
+---
+
+## F47
+
+**L2 asked for Owner at the tenant root, and the layer never needed it**
+
+- **Severity:** high (the documented remedy was a standing root-scope Owner service principal, plus a Global Administrator elevation step for every adopter)
+- **Confidence:** CONFIRMED - observed in workflow run 33264310126 against the live tenant, then read back out of that run's own log
+- **Controls:** 3.1.2 (limit access to permitted transactions and functions), 3.1.5 (least privilege)
+- **Closed by:** retargeting the deployment; no grant was made
+- **Status:** CLOSED
+
+**Found while:** running `scripts/up.ps1 -DryRun` for the first time against a real
+subscription. `L2 landing zone` failed:
+
+```
+AuthorizationFailed: The client '***' with object id '8c7d66f3-...' does not have
+authorization to perform action 'Microsoft.Resources/deployments/whatIf/action' over
+scope '/providers/Microsoft.Management/managementGroups/c3571944-...'
+```
+
+`infra/bicep/landing-zone/main.bicep` is `targetScope = 'managementGroup'` and
+`layer-02-landing-zone.yml` deployed it with `--management-group-id "${AZURE_TENANT_ID}"`
+- the **tenant root**, where `mls-github-deployer` held nothing. `docs/runbooks/layers/L02.md`
+had predicted exactly this as failure mode 1 and prescribed the remedy: *"this is a G0 gap
+- the human re-runs the relevant `01-root-oidc.ps1` grant step (elevated tenant-root
+access is a human-only action)."* Neither `01-root-oidc.ps1` nor `docs/runbooks/g0-bootstrap.md`
+contains any such step, or mentions management groups at all. So the runbook named the
+failure, named a remedy, and pointed at a bootstrap step that does not exist.
+
+**The remedy was also wrong.** Azure's one-time *elevate access* toggle plus
+`Management Group Contributor` at the root is the obvious reading, and it does not even
+work: that role's action list is management-group operations and `Microsoft.Authorization/*/read`
+- no `Microsoft.Resources/deployments/*`, so the deployment still fails. Making it work
+means **Owner at `/`**, permanently, for a CI service principal, in a repository whose
+purpose is to demonstrate least privilege. Every stranger cloning this would have needed
+Global Administrator and a tenant-wide elevation to run L2.
+
+### What the run log actually showed
+
+Reading the failed job rather than reasoning about it:
+
+```
+Management group mls already exists.
+"id": "/providers/Microsoft.Management/managementGroups/mls/subscriptions/a8f2925d-..."
+```
+
+The deployer had **already created the management group and already placed the
+subscription** - the two operations that supposedly needed root - with zero tenant-root
+RBAC. Azure permits any directory principal to create a management group beneath the root
+by default, and makes the creator its Owner. That is where the deployer's
+`Owner` on `/providers/Microsoft.Management/managementGroups/mls` came from; nothing in
+`scripts/bootstrap/` grants it, which had been quietly puzzling.
+
+And the template did not need root scope for anything else: every policy assignment in it
+is already `scope: managementGroup(mgName)`. The only two root-scope declarations - the
+AVM management-group module and the `managementGroups/subscriptions` placement - were
+**redundant with the workflow steps that had already succeeded three steps earlier**.
+
+**Fix:** deploy the template at MG `mls` instead of the root, and delete the two redundant
+declarations (`infra/bicep/landing-zone/main.bicep`, `layer-02-landing-zone.yml`). No role
+assignment was created, no elevation performed, and the toggle that had been opened in the
+portal was closed unused. `infra/bicep/README.md` drops the AVM management-group module and
+one raw resource (eight to seven); `docs/runbooks/layers/L02.md` failure mode 1 is rewritten
+to describe the condition that can actually occur - a tenant with *Require write permissions
+for creating new management groups* enabled - and to say explicitly that granting Owner at
+`/` is a worse outcome than the outage.
+
+### What this says about the method
+
+F46's lesson was that a gate is wrong until it runs against production reality. F47 is the
+same lesson pointed at a **runbook**: L02.md's failure mode 1 was written by reasoning
+about what the layer would need, it named a real symptom, and both its diagnosis ("a G0
+gap") and its remedy ("re-run the grant step") were wrong - the grant step did not exist
+and the grant was not needed. A predicted failure mode that has never been observed is a
+hypothesis, and this one had been sitting in the playbook being trusted.
+
+The near miss is the part worth keeping: the documented path led to granting a CI service
+principal Owner over every current and future subscription in the tenant. It would have
+worked. The demo would have deployed. And the estate would have carried, permanently, the
+exact standing privilege its own compliance register exists to catch - installed by
+following its own runbook.
+
+
+---
+
+## F48
+
+**The bootstrap constructed GitHub's OIDC subject claim instead of asking GitHub for it**
+
+- **Severity:** high (the whole "no stored Azure credential" design rests on this one string matching; it fails closed, locking every workflow out of the subscription)
+- **Confidence:** CONFIRMED - `AADSTS700213` observed on the first real federated login, fixed, and the same login observed green afterwards
+- **Controls:** 3.5.1 (identify processes acting on behalf of users), 3.5.2 (authenticate those identities)
+- **Closed by:** `Get-GitHubSubClaimPrefix` in `scripts/bootstrap/01-root-oidc.ps1`
+- **Status:** CLOSED
+
+**Found while:** the first OIDC login of the first real deployment run. Azure refused the
+token:
+
+```
+AADSTS700213: No matching federated identity record found for presented assertion subject
+'repo:paulcfuqua@51541817/azure-devsecops-demo@1347346268:environment:demo'
+```
+
+`01-root-oidc.ps1` registered exactly one federated credential per app, with a subject it
+assembled itself: `"repo:${Repository}:environment:${EnvironmentName}"`. GitHub now embeds
+**immutable actor identifiers** - the numeric owner id and repository id - in the subject
+claim, so that renaming an organisation or a repository cannot silently redirect an
+existing federated trust to whoever claims the freed-up name. The hand-built string is the
+old shape, and it no longer matches.
+
+**The flag that describes this behaviour was wrong about it.** GitHub reports the prefix it
+will present at `GET /repos/{owner}/{repo}/actions/oidc/customization/sub`. That endpoint
+returned `use_immutable_subject: false` on this repository **while GitHub was presenting
+the immutable subject** - so code that branches on the boolean gets the wrong answer. The
+`sub_claim_prefix` field in the same response is correct. Read the prefix; ignore the flag.
+
+**Fix:** `Get-GitHubSubClaimPrefix` asks GitHub what subject it will present, and the script
+registers **both** forms - classic and immutable - for the deployer and the verifier.
+Registering both rather than replacing one with the other is deliberate: GitHub is evidently
+mid-transition, and an app that accepts only the form GitHub happens to send today breaks
+silently the day that changes. Neither subject widens the trust; both name the same
+repository and the same environment, which is the property [F7](#f7) cares about. When `gh`
+is unavailable or the field is absent the script registers the classic subject alone, which
+is the previous behaviour.
+
+**Follow-up, deliberately not done in the same change:** `verify-g0.ps1`'s `Federation`
+check still asserts only that *a* credential carries `environment:demo`. It passed while
+this defect was live and would pass again, because it never asks GitHub which subject will
+actually be presented. The check that would have caught this is the one that resolves
+`sub_claim_prefix` and asserts a credential matching it. Held back deliberately: adding a
+new G0 check hours before a live deployment is how [F46](#f46)'s false FAILs happened, and
+this one wants its own mutation test.
+
+### What this says about the method
+
+Same shape as [F46](#f46)'s Fabric SKU, and worth pairing with it: in both cases the code
+**constructed a value that belongs to another system**, and in both cases the constructed
+value was wrong in a way no amount of reading could have settled - the Fabric docs say `F4`
+where the API says `FTL4`; GitHub's own flag says `false` where GitHub's own tokens say
+otherwise. The authoritative value is the one the API returns. Ask, do not derive.
+
+The failure mode is also worth noting for anyone debugging this: `AADSTS700213` names the
+subject that was **presented** but not the ones that are **registered**, so the error tells
+you half of a comparison. The fix is only obvious once you print the other half.

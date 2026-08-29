@@ -2,7 +2,7 @@
 // the subscription ID and region are read from environment variables that the
 // layer-02 workflow exports from the GitHub `demo` environment. The empty /
 // placeholder defaults keep local `bicep build-params` green with no env set —
-// an empty subscription ID compiles but skips subscription placement + NIST.
+// an empty subscription ID compiles but skips the NIST assignment.
 using './main.bicep'
 
 param demoSubscriptionId = readEnvironmentVariable('AZURE_SUBSCRIPTION_ID', '')
