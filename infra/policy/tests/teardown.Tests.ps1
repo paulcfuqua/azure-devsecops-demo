@@ -34,7 +34,8 @@ BeforeAll {
 
     $script:RealNamingFile = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '../bicep/naming.bicep'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'teardown.ps1')
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     function Invoke-TeardownForTest {
         param([switch]$AsWhatIf, [switch]$AsAllowAutomation, [string]$SubscriptionId = '11111111-1111-1111-1111-111111111111')

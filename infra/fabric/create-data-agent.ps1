@@ -310,7 +310,13 @@ function Invoke-Main {
 
     # ---- tables to bind -------------------------------------------------------------
     $tables = @(Get-FabricTable -Token $Token -WorkspaceId $workspace.id -LakehouseId $lakehouse.id)
-    $tableNames = if ($TableName.Count -gt 0) { @($TableName) } else { @($tables | ForEach-Object { $_.name }) }
+    # The @() goes around the WHOLE if-expression. An if used as an expression writes its
+    # branch to the pipeline, and assignment unrolls that - so the @() inside each branch
+    # was undone on the way out, and $tableNames was $null for zero tables and a bare
+    # string for one. .Count then threw, and an unseeded lakehouse reported "The property
+    # 'Count' cannot be found on this object" instead of the actionable message below.
+    # Fourth syntactic disguise of the same defect in this codebase (F49).
+    $tableNames = @(if (@($TableName).Count -gt 0) { $TableName } else { $tables | ForEach-Object { $_.name } })
     if ($tableNames.Count -eq 0) {
         throw "Lakehouse '$LakehouseName' reports no tables. A data agent bound to nothing answers nothing - seed the lakehouse (L5) before running L8."
     }

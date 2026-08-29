@@ -5,7 +5,8 @@ BeforeAll {
     $script:Sub = '00000000-0000-0000-0000-000000000000'
     $script:Tenant = '11111111-1111-1111-1111-111111111111'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '01-root-oidc.ps1') -SubscriptionId $script:Sub
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     # Derived, not a second copy - see the note in verify-g0.Tests.ps1 (F50). The
     # individual roles are asserted by name below, where getting them wrong is the point.

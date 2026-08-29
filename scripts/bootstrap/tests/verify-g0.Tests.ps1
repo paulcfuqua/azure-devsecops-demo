@@ -4,7 +4,8 @@ BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     $script:Sub = '00000000-0000-0000-0000-000000000000'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'verify-g0.ps1') -SubscriptionId $script:Sub
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     # Derived from the script's own map, not a second hardcoded copy of it: a fixture
     # that lists the ids separately drifts the moment the map gains one, which is exactly

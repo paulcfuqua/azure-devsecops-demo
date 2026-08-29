@@ -4,7 +4,8 @@ BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     $script:ManifestPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'manifest.json'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'apply-entra.ps1')
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     function Get-FreshManifest {
         return Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
@@ -35,7 +36,12 @@ BeforeAll {
     $script:EnforcedCaCount = $script:EnforcedPolicy.Count
     # Found by FLAG, exactly as apply-entra.ps1 finds it: naming the group here would
     # hard-code the company prefix and would let a rename disarm the guard silently.
-    $script:BreakGlassGroupName = @(@($manifest.groups | Where-Object { $_.breakGlass }).displayName)
+    # Get-Field, not $_.breakGlass: only one of the five manifest groups carries the key,
+    # and a bare property read on the other four is a terminating error under the
+    # Set-StrictMode -Version Latest apply-entra.ps1 sets. This is how the script itself
+    # finds them (apply-entra.ps1:228), which is the point of the flag-not-name rule (F49).
+    $script:BreakGlassGroupName = @(@($manifest.groups |
+                Where-Object { [bool](Get-Field -Object $_ -Name 'breakGlass') }).displayName)
 }
 
 AfterAll {

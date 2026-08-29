@@ -67,7 +67,8 @@ BeforeAll {
     }
 
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'labels.ps1')
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     # Prefixed, and derived from the script's own naming.bicep parse rather than
     # written out here: F32. A test carrying its own copy of the bare generic names

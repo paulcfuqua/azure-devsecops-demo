@@ -9,7 +9,8 @@ BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     Import-Module (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'fabric-api.psm1') -Force
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'teardown-items.ps1') -Token 'tok-dummy'
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     $script:Workspace = [pscustomobject]@{ id = 'w1'; displayName = 'mls-operations' }
 

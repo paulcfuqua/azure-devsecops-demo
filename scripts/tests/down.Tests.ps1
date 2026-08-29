@@ -9,7 +9,8 @@
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'down.ps1')
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the script under test sets -Version Latest and CI runs it
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     $script:Repo = 'paulcfuqua/azure-devsecops-demo'
     $script:RealNamingFile = Join-Path -Path $PSScriptRoot -ChildPath '..' `

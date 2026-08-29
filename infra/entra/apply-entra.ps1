@@ -186,6 +186,17 @@ function Get-FieldArray {
        array. `@(Get-Field ...)` cannot do this: @($null) is a one-element array holding
        $null, so a missing key would read as a list of one nothing. #>
     param($Object, [Parameter(Mandatory)][string]$Name)
+    #
+    # The docstring above is right about @($null) and still describes a function that does
+    # not return an array: PowerShell unrolls on return, so `return @()` emits nothing (the
+    # caller gets $null) and `return @($one)` emits the bare scalar. Callers doing .Count
+    # then throw under the StrictMode this script sets.
+    #
+    # `return ,@(...)` was tried and REVERTED: preventing enumeration is exactly what the
+    # comma operator does, so the three callers that PIPE this result had $_ bound to the
+    # whole array instead of each element, and manifest validation started rejecting the
+    # shipped manifest. Same dead end as F49, re-derived and re-discarded here. The wrap
+    # belongs at every call site that ASSIGNS the result; piping callers are already fine.
     $value = Get-Field -Object $Object -Name $Name
     if ($null -eq $value) { return @() }
     return @($value)
@@ -305,13 +316,13 @@ function Assert-ManifestSchema {
         $conditions = Get-Field -Object $policy -Name 'conditions'
         $applications = Get-Field -Object $conditions -Name 'applications'
         $users = Get-Field -Object $conditions -Name 'users'
-        $includeByName = Get-FieldArray -Object $applications -Name 'includeApplicationsByDisplayName'
+        $includeByName = @(Get-FieldArray -Object $applications -Name 'includeApplicationsByDisplayName')
         foreach ($name in $includeByName) {
             if ($applicationName -notcontains $name) {
                 $problems.Add("conditionalAccessPolicies[$index] includeApplicationsByDisplayName '$name' does not match any appRegistrations[].displayName")
             }
         }
-        $excludeByName = Get-FieldArray -Object $users -Name 'excludeGroupsByDisplayName'
+        $excludeByName = @(Get-FieldArray -Object $users -Name 'excludeGroupsByDisplayName')
         foreach ($name in $excludeByName) {
             if ($groupName -notcontains $name) {
                 $problems.Add("conditionalAccessPolicies[$index] excludeGroupsByDisplayName '$name' does not match any groups[].displayName")
@@ -326,7 +337,7 @@ function Assert-ManifestSchema {
             if (-not @($excludeByName | Where-Object { $breakGlassName -contains $_ })) {
                 $problems.Add("conditionalAccessPolicies[$index] has state 'enabled' but excludes no break-glass group - an enforced policy must exclude a group flagged 'breakGlass': true or a misconfiguration locks the tenant owner out with no recovery path")
             }
-            $include = Get-FieldArray -Object $applications -Name 'includeApplications'
+            $include = @(Get-FieldArray -Object $applications -Name 'includeApplications')
             if ($include -contains 'All' -or $includeByName -contains 'All') {
                 $problems.Add("conditionalAccessPolicies[$index] has state 'enabled' and targets every application ('All') - an enforced policy must name the applications it covers")
             }
