@@ -73,6 +73,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+Import-Module (Join-Path -Path $PSScriptRoot -ChildPath 'MlsBootstrap.psm1') -Force
+
 $script:GraphConsentedRoles = [ordered]@{
     'User.ReadWrite.All'                 = '741f803b-c850-494e-b5df-cde7c675a1ca'
     'Group.ReadWrite.All'                = '62a82d76-70ea-41e2-9197-370581804d09'
@@ -236,10 +238,28 @@ function Test-Federation {
     # no longer creates a branch-ref credential, so this audit must not expect one either -
     # a leftover expectation here would fail G0 forever on a correctly-fixed deployer.
     $expectedSubject = "repo:${Repository}:environment:$EnvironmentName"
-    if ($subjects -contains $expectedSubject) {
-        return New-CheckResult -Check 'Federation' -Passed $true -Detail 'environment subject present'
+    $missing = @()
+    if ($subjects -notcontains $expectedSubject) { $missing += $expectedSubject }
+
+    # ASK GITHUB WHICH SUBJECT IT WILL SEND (F48). Checking only the hand-built classic
+    # form is how this gate passed a deployer whose first real OIDC login was refused with
+    # AADSTS700213: GitHub now embeds immutable owner/repo ids in the subject claim. The
+    # prefix is read, never constructed, and never inferred from `use_immutable_subject` -
+    # this repo's GitHub reported that flag false while sending the immutable subject.
+    # A tenant whose GitHub presents no immutable prefix is not failed for lacking a
+    # credential it will never need.
+    $prefix = Get-GitHubSubClaimPrefix -Repository $Repository
+    if ($prefix) {
+        $immutableSubject = "${prefix}:environment:$EnvironmentName"
+        if ($subjects -notcontains $immutableSubject) { $missing += $immutableSubject }
     }
-    return New-CheckResult -Check 'Federation' -Passed $false -Detail "missing subject: $expectedSubject"
+
+    if ($missing.Count -eq 0) {
+        $detail = if ($prefix) { 'environment subject present, both classic and immutable forms' }
+        else { 'environment subject present' }
+        return New-CheckResult -Check 'Federation' -Passed $true -Detail $detail
+    }
+    return New-CheckResult -Check 'Federation' -Passed $false -Detail "missing subject: $($missing -join '; ')"
 }
 
 function Test-OwnerRole {
@@ -393,12 +413,40 @@ function Test-FabricCapacity {
     return New-CheckResult -Check 'FabricCapacity' -Passed $false -Detail 'no Fabric capacity visible (start the trial or run 02-fabric-capacity.ps1 -Mode F2)'
 }
 
+function Get-MlsSettingSecurityGroup {
+    <# enabledSecurityGroups is absent on an org-wide setting and empty on some tenants;
+       both mean "everyone", so both must come back as an empty collection. #>
+    param([Parameter(Mandatory)]$Setting)
+    if ($Setting.PSObject.Properties.Name -notcontains 'enabledSecurityGroups') { return @() }
+    return @($Setting.enabledSecurityGroups | Where-Object { $_ })
+}
+
+function Test-DeployerInGroup {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$GroupId,
+        [Parameter(Mandatory)][string]$DeployerAppName
+    )
+    if ([string]::IsNullOrWhiteSpace($GroupId)) { return $false }
+    $app = Get-AdAppByName -DisplayName $DeployerAppName
+    if (-not $app) { return $false }
+    $sp = Get-ServicePrincipalByAppId -AppId $app.appId
+    if (-not $sp) { return $false }
+    $result = Invoke-AzCli -Arguments @(
+        'ad', 'group', 'member', 'check', '--group', $GroupId, '--member-id', $sp.id, '--output', 'json'
+    ) -AllowFailure
+    # Unreadable is NOT membership: an unanswerable question fails the check rather than
+    # passing it, because the cost of a false PASS here is a broken L5 (F46).
+    if (-not $result) { return $false }
+    return [bool]$result.value
+}
+
 function Test-FabricServicePrincipal {
     <#
         C4, checked rather than trusted. Informational is deliberately NOT set: unlike
         EntraDiagnostics (F9), this one has a layer gate waiting on it -- L5 cannot
         create its workspace without it -- so it belongs in the exit code.
     #>
+    param([Parameter(Mandatory)][string]$DeployerAppName)
     $response = Invoke-AzCli -Arguments @(
         'rest', '--method', 'get',
         '--url', 'https://api.fabric.microsoft.com/v1/admin/tenantsettings',
@@ -417,29 +465,49 @@ function Test-FabricServicePrincipal {
             -Detail 'could not read Fabric tenant settings (needs a Fabric or Global administrator login)'
     }
 
+    # The whole setting object, not just its enabled flag: a setting can be enabled for
+    # SPECIFIC SECURITY GROUPS, and the API reports enabled=true either way (F50).
     $state = @{}
     foreach ($setting in $settings) {
-        if ($setting.settingName) { $state[[string]$setting.settingName] = [bool]$setting.enabled }
+        if ($setting.settingName) { $state[[string]$setting.settingName] = $setting }
     }
 
     $missing = @()
+    $unscoped = @()
     foreach ($name in $script:RequiredFabricSpSettings.Keys) {
         if (-not $state.ContainsKey($name)) {
             $missing += "$name (not present in this tenant's settings)"
-        } elseif (-not $state[$name]) {
+            continue
+        }
+        if (-not [bool]$state[$name].enabled) {
             $missing += "$name - $($script:RequiredFabricSpSettings[$name])"
+            continue
+        }
+        # ENABLED IS NOT THE SAME AS ENABLED FOR US. Reading the flag alone would green-light
+        # G0 while L5 fails at New-FabricWorkspace, which is the false-PASS shape F46 caught
+        # in the capacity check. If the setting is scoped, confirm the deployer is inside it.
+        $groups = @(Get-MlsSettingSecurityGroup -Setting $state[$name])
+        if ($groups.Count -eq 0) { continue }
+        $memberOf = @($groups | Where-Object { Test-DeployerInGroup -GroupId $_.graphId -DeployerAppName $DeployerAppName })
+        if ($memberOf.Count -eq 0) {
+            $names = @($groups | ForEach-Object { if ($_.name) { $_.name } else { $_.graphId } })
+            $unscoped += "$name is enabled only for security group(s) $($names -join ', '), which '$DeployerAppName' is not a member of"
         }
     }
     if ($missing.Count -gt 0) {
         return New-CheckResult -Check 'FabricSpAccess' -Passed $false `
             -Detail "C4 incomplete, disabled: $($missing -join '; ')"
     }
+    if ($unscoped.Count -gt 0) {
+        return New-CheckResult -Check 'FabricSpAccess' -Passed $false `
+            -Detail "C4 incomplete, scoped away from the deployer: $($unscoped -join '; ')"
+    }
 
     # Enabled admin-API access is not a failure of C4 -- the estate still works --
     # but it is privilege nobody asked for, so say so rather than pass silently.
     $extra = @()
     foreach ($name in $script:ForbiddenFabricSpSettings.Keys) {
-        if ($state[$name]) { $extra += $script:ForbiddenFabricSpSettings[$name] }
+        if ($state.ContainsKey($name) -and [bool]$state[$name].enabled) { $extra += $script:ForbiddenFabricSpSettings[$name] }
     }
     if ($extra.Count -gt 0) {
         return New-CheckResult -Check 'FabricSpAccess' -Passed $true `
@@ -574,7 +642,7 @@ function Invoke-Main {
         @{ Name = 'GraphConsent'; Run = { Test-GraphConsent -DeployerAppName $DeployerAppName } }
         @{ Name = 'VerifierApp'; Run = { Test-VerifierApp -VerifierAppName $VerifierAppName -DeployerAppName $DeployerAppName -Repository $Repository -VerifierEnvironmentName $VerifierEnvironmentName } }
         @{ Name = 'FabricCapacity'; Run = { Test-FabricCapacity } }
-        @{ Name = 'FabricSpAccess'; Run = { Test-FabricServicePrincipal } }
+        @{ Name = 'FabricSpAccess'; Run = { Test-FabricServicePrincipal -DeployerAppName $DeployerAppName } }
         @{ Name = 'Licenses'; Run = { Test-License } }
         @{ Name = 'Budget'; Run = { Test-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName -BudgetAmount $BudgetAmount } }
         @{ Name = 'EntraDiagnostics'; Informational = $true; Run = { Test-EntraDiagnostic } }

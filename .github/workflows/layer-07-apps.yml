@@ -419,8 +419,23 @@ jobs:
       - name: What-if the apps deployment
         env:
           RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
+          # In a plan run L6 only what-ifs, so the resource group L7 what-ifs AGAINST does
+          # not exist yet. That is the layering, not a defect -- but failing on it made
+          # `up.ps1 -DryRun` incapable of ever exiting 0, which is a plan whose exit code
+          # carries no information. Dry-run ONLY: outside a plan run a missing resource
+          # group means L6 did not deliver, and that must still fail loudly (F51).
+          if ! az group show --name "${RG_APPS}" >/dev/null 2>&1; then
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "::notice title=L7 what-if skipped::${RG_APPS} does not exist yet - L6 planned it but a dry run creates nothing. There is no deployed state to what-if against."
+              echo "L7 what-if skipped: ${RG_APPS} does not exist (dry run; L6 planned it without creating it)." | tee what-if-l7.txt
+              exit 0
+            fi
+            echo "::error title=Resource group missing::${RG_APPS} does not exist, and this is not a dry run. L6 must create it before L7 runs."
+            exit 1
+          fi
           az deployment group what-if \
             --resource-group "${RG_APPS}" \
             --template-file infra/bicep/apps/main.bicep \
