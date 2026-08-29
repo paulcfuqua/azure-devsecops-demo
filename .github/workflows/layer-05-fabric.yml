@@ -261,6 +261,12 @@ jobs:
       # explicitly keeps the report's Preflight table honest about which fixture
       # was read.
       MLS_EXPECTED_COUNTS: data/generators/tests/expected_counts.json
+      # The audit resolves -FabricCapacityId from this variable. It was never passed,
+      # so V5.x died at argument binding - "Missing an argument for parameter
+      # 'FabricCapacityId'" - on an estate where the variable was set all along. The
+      # notice below already claimed the audit is skipped when it is absent, which made
+      # the omission read like configuration rather than a defect (F52).
+      FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
     steps:
       - uses: actions/checkout@v7
 

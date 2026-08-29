@@ -966,7 +966,13 @@ module sqlFailedLoginAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3.
     criterias: {
       allOf: [
         {
-          query: 'AzureDiagnostics | where ResourceProvider == "MICROSOFT.SQL" and Category == "SQLSecurityAuditEvents" and succeeded_s == "false"'
+          // columnifexists, not a bare `succeeded_s`: AzureDiagnostics is a dynamic-schema
+          // table, so the column does not exist until SQL audit data has actually been
+          // ingested. On a fresh workspace ARM rejects the rule at CREATE time with
+          // "Failed to resolve column or scalar expression named 'succeeded_s'" - the
+          // alert cannot be deployed before the thing it alerts on has happened once,
+          // which on a rebuilt estate is always (F52).
+          query: 'AzureDiagnostics | where ResourceProvider == "MICROSOFT.SQL" and Category == "SQLSecurityAuditEvents" and columnifexists("succeeded_s", "") == "false"'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0

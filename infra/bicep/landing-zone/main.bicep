@@ -63,7 +63,12 @@ var requireTagValueOnRgDefinitionId = tenantResourceId('Microsoft.Authorization/
 // 'Inherit a tag from the resource group if missing'  (modify effect)
 var inheritTagDefinitionId = tenantResourceId('Microsoft.Authorization/policyDefinitions', 'ea3f2387-9b95-492a-a190-fcdc54f7b070')
 // 'Allowed locations'
-var allowedLocationsDefinitionId = tenantResourceId('Microsoft.Authorization/policyDefinitions', 'e56962a6-4747-49cd-b67b-5fbf209ee700')
+// CORRECTED 2026-08-29 (F52). This read ...-5fbf209ee700, which is not a policy
+// definition that exists. Six of the seven ids in this file resolve; this one was
+// fabricated - same first four segments as the real value, invented last segment -
+// and `az deployment mg what-if` PASSED IT three times, because what-if does not
+// resolve policy definition ids. The first real deploy failed on it.
+var allowedLocationsDefinitionId = tenantResourceId('Microsoft.Authorization/policyDefinitions', 'e56962a6-4747-49cd-b67b-bf8b01975c4c')
 // 'Allowed locations for resource groups'
 var allowedLocationsRgDefinitionId = tenantResourceId('Microsoft.Authorization/policyDefinitions', 'e765b5de-1225-4ba3-bd56-1ac6695af988')
 // 'NIST SP 800-53 Rev. 5'  (built-in initiative / policy SET definition)
