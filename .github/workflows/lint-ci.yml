@@ -170,7 +170,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
 
@@ -209,7 +209,7 @@ jobs:
       # while passing on any machine that happens to have run the generators - which
       # is exactly what happened on this repository's first public push. Three other
       # workflows already generate it; this one did not.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
 

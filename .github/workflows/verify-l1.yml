@@ -94,7 +94,7 @@ jobs:
 
       - name: Azure login (OIDC, mls-verifier — Reader / Directory.Read.All)
         if: ${{ needs.preflight.outputs.verifier == 'true' }}
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
