@@ -2187,9 +2187,22 @@ job, and stripping the `push` filter — and each was caught by the assertion me
 it. The suite went from 81 to 107 tests on that file, 762 to 788 across
 `verification/tests` and `compliance/tests`.
 
-**What this does not fix, stated plainly.** A self-heal pull request touching
-`apps/vuln-lab/**` still builds and scans images it does not change, which is wasted work
-rather than a hazard; `self-heal.yml`'s header already states honestly that no image of
-its own is ever scanned on such a pull request ([F29](#f29)), and that remains true. And
-open Dependabot pull requests raised before this change will show the old check names
-until Dependabot rebases them onto the new `main`.
+**What this does not fix, stated plainly.**
+
+*The ruleset still has an admin bypass.* `bypass_actors` is
+`[{RepositoryRole 5, bypass_mode: always}]` — the repository admin. So "required" means
+required of Dependabot, of `--auto` merges, of any outside contributor, and of the merge
+button's normal path; it does **not** mean the owner is physically prevented from merging
+red. That escape hatch is deliberate on a single-owner demo repository — removing it can
+lock the owner out of their own default branch — but the honest statement of what changed
+is *the gate can now block*, not *the gate cannot be overridden*. The five checks were
+non-binding on everyone before this; they are now binding on everyone except one person
+who has to choose to override them and leaves a record when they do.
+
+*Self-heal is unchanged.* A heal pull request touching `apps/vuln-lab/**` now builds and
+scans five images it does not change — wasted work rather than a hazard — and still scans
+no image of its own, exactly as `self-heal.yml`'s header already states ([F29](#f29)).
+
+*There is a rebase window.* Open Dependabot pull requests raised before this change report
+the old check name and will sit pending on the five new ones until Dependabot rebases them
+onto the new `main`.
