@@ -1,4 +1,4 @@
-# Kill/Rebuild Runbook — Standard Cycle and G3 Variant
+# Kill/Rebuild Runbook — Standard Cycle, Region Change, and G3 Variant
 
 Operational runbook for the demo's central trick: destroy the environment on demand,
 rebuild it in under an hour, spend almost nothing in between. The standard cycle is
@@ -184,7 +184,59 @@ time for G0's portal-only steps (trials, Fabric SP toggle). The <60-minute claim
 never applies to this path, and the demo script never depends on it: the standard
 cycle exists precisely so the show can promise the hour.
 
-## 8. Quick reference
+## 8. Changing the estate's region
+
+Not a variable edit. Three things bite, in this order, and two of them are invisible until
+they fail (findings F52, F53, F54).
+
+**First, confirm the target region can actually host the estate.** Azure SQL provisioning is
+restricted per subscription, and trial subscriptions hit it in the busiest regions - which
+are the ones people pick by default:
+
+```bash
+SUB=$(az account show --query id -o tsv)
+for r in centralus westus3 eastus eastus2 westus2; do
+  printf '%-16s ' "$r"
+  az rest --method get     --uri "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.Sql/locations/$r/capabilities?api-version=2021-11-01"     --query status -o tsv
+done
+```
+
+`Available` provisions. `Visible` does not, whatever the region's general availability page
+says. Also check Flex Consumption Functions (`az functionapp list-flexconsumption-locations`)
+and Container Apps, though those are rarely the constraint.
+
+**Second, set it in exactly one place.** The estate's region is
+`vars.AZURE_LOCATION` on the `demo` GitHub environment:
+
+```bash
+gh variable set AZURE_LOCATION --env demo --body <region>
+```
+
+Do **not** pass `-Location` to `up.ps1` to change the estate's region. That parameter is a
+one-off override for a single run; because it is passed as a workflow *input* it outranks the
+environment variable, so an estate "moved" that way silently reverts on the next ordinary
+run. `up.ps1` prints which of the two it is using - read that line.
+
+**Third, expect L2's first deploy in the new region to clear stale records.** A
+management-group deployment's location is immutable, so the previous region's `l2-pa-*`
+records refuse the new one - ten `Conflict`s at once. L2 deletes those records itself before
+deploying; the step is called *Clear management-group deployment records pinned to another
+region* and it emits a `::notice` per record. Deployment records are history, not resources:
+nothing is destroyed and the assignments re-converge in the same run.
+
+**What does not move.** The Fabric trial capacity is provisioned by Microsoft in a region you
+do not choose - East US, on this tenant - and cannot be moved. That is fine: Fabric is
+reached over its own endpoint, not through the Azure region, and the allowed-locations policy
+does not govern it. Purview labels, Entra objects and the management group are tenant-level
+and equally unaffected.
+
+**Do not run `down.ps1` first.** Teardown is not required to change region, and the standard
+cycle deliberately leaves the management group and its assignments in place - which is
+exactly what L2 converges.
+
+---
+
+## 9. Quick reference
 
 ```
 # kill (gate-free, idempotent, run from repo root)

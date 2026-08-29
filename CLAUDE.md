@@ -67,6 +67,20 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   `verification/reports/` and committed.
 - CI targets `ubuntu-latest` (bash). Local orchestration targets PowerShell 7 (`pwsh`).
   Never assume Windows PowerShell 5.1.
+- **A constant that names something in another system is verified against that system, not
+  written from memory.** Policy and role GUIDs, Graph app-role ids, SKU strings, OIDC subject
+  formats: resolve them, and put the resolution in the deploy path so it fails in seconds
+  rather than inside a nested ARM error. Twenty-three such constants are pinned here and
+  exactly one was ever wrong, which is precisely why it survived - see the register's
+  "What this register has learned about verification".
+- **Every value has one source.** Estate-wide settings live in the `demo` GitHub environment
+  (`AZURE_LOCATION` and friends); a default elsewhere silently outranks them, because a
+  workflow input beats an environment variable. When a value looks wrong, ask where it comes
+  from before asking whether it is correct.
+- **A test harness runs in the language mode of the script it tests.** No
+  `Set-StrictMode -Off` in `*.Tests.ps1`, and no test that supplies the answer it is
+  checking - a wrapper, a helper default, or a fixture that re-wraps a return value is not a
+  test, it is a mirror.
 
 ## Naming and tagging
 
