@@ -132,6 +132,38 @@ jobs:
             --subscription "${AZURE_SUBSCRIPTION_ID}" 2>/dev/null \
             || echo "Subscription already placed under ${MG_NAME}."
 
+      - name: Clear management-group deployment records pinned to another region
+        env:
+          MG_NAME: ${{ steps.names.outputs.management-group }}
+        run: |
+          set -euo pipefail
+          # A management-group-scope deployment's LOCATION IS IMMUTABLE. Redeploying the
+          # same deployment name into a different region fails with
+          #   InvalidDeploymentLocation: the deployment 'X' already exists in location 'Y'
+          # and the template's module names are stable by design (they have to be, for
+          # idempotent replay), so every one of them collides at once - ten Conflicts in a
+          # single MultipleErrorsOccurred.
+          #
+          # Deleting a deployment RECORD deletes history, never resources: the policy
+          # assignments those deployments created are untouched and are re-converged by the
+          # deploy step below. So this is safe to run unconditionally, and it only ever
+          # matches records whose location differs from the region now being deployed.
+          #
+          # This matters beyond one estate: F52 established that Azure SQL cannot provision
+          # in several regions on a trial subscription, so changing AZURE_LOCATION is a
+          # thing adopters will have to do, and without this L2 is permanently wedged
+          # afterwards (F54).
+          stale=$(az deployment mg list --management-group-id "${MG_NAME}"             --query "[?location!='${AZURE_LOCATION}'].name" -o tsv 2>/dev/null || true)
+          if [ -z "${stale}" ]; then
+            echo "No management-group deployment records pinned to another region."
+          else
+            echo "${stale}" | while read -r name; do
+              [ -z "${name}" ] && continue
+              echo "::notice title=Clearing stale deployment record::${name} was created in another region; deleting the RECORD (no resources are affected)."
+              az deployment mg delete --management-group-id "${MG_NAME}" --name "${name}" || true
+            done
+          fi
+
       - name: Resolve every built-in policy definition the template pins
         run: |
           set -euo pipefail

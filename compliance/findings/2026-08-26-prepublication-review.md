@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F53](#f53), all raised and all fixed on 2026-08-29 during the first live tenant bring-up
+[F54](#f54), all raised and all fixed on 2026-08-29 during the first live tenant bring-up
 and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -130,6 +130,7 @@ no".
 | [F51](#f51) | `up.ps1 -DryRun` could never exit 0: L7 what-ifs against a resource group that only a real L6 creates, so the plan always failed and its exit code carried no information | medium | CONFIRMED (every plan run to date) | - (operability; the plan is the pre-deploy gate) | plan runs, 2026-08-29 |
 | [F52](#f52) | Five defects the first real deployment exposed, including a **fabricated policy GUID three `what-if` runs passed** and a fail-fast gate where a skipped layer launders into a success, so L2 failed and L6 built 13 resources anyway | high | CONFIRMED (observed, run 33272832687) | 3.12.1, 3.12.3 | first real deploy, 2026-08-29 |
 | [F53](#f53) | The estate region was hardcoded in **16 places** and the workflow input silently outvoted `vars.AZURE_LOCATION`, so setting the environment variable did nothing and the next deploy went back to the region that cannot host it | high | CONFIRMED (observed, run 33275398487 cancelled) | 3.4.1, 3.4.2 | sponsor question, 2026-08-29 |
+| [F54](#f54) | A management-group deployment location is immutable, so changing `AZURE_LOCATION` wedges L2 permanently - ten simultaneous Conflicts on names the template must keep stable | medium | CONFIRMED (observed, run 33277220471) | 3.4.2 | region change, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -3292,3 +3293,57 @@ failing test, and not from the plan, which had been green. That is the second ti
 question about *where something comes from* has surfaced a live defect ([F52](#f52)'s
 fabricated GUID was the first). It is a better question than "is this correct?", because a
 value with one honest source can be checked, and a value with sixteen cannot.
+
+
+---
+
+## F54
+
+**Changing the region wedges the landing zone, permanently, by design**
+
+- **Severity:** medium (L2 cannot deploy again after a region change; no wrong state, but no way forward without manual cleanup)
+- **Confidence:** CONFIRMED - observed in run 33277220471, ten simultaneous Conflicts
+- **Controls:** 3.4.2 (enforce configuration settings)
+- **Closed by:** a cleanup step in `layer-02-landing-zone.yml`
+- **Status:** CLOSED
+
+**Found while:** the first deploy after [F53](#f53) moved the estate to Central US.
+
+```
+MultipleErrorsOccurred: Conflict,Conflict,Conflict,Conflict,Conflict,...
+InvalidDeploymentLocation: Invalid deployment location 'centralus'.
+  The deployment 'L2-PA-REQUIRE-MANAGEDBY' already exists in location 'eastus'.
+```
+
+**A management-group-scope deployment's location is immutable.** The cancelled East US run
+had created ten nested `l2-pa-*` deployment records; redeploying the same names into a
+different region is refused. And the names *must* be stable - they are what makes replay
+idempotent - so every one of them collides at once rather than one informative failure.
+
+The estate was therefore in a state where the region could not be changed *back* either:
+whichever region the records were pinned to was the only one L2 would accept.
+
+**Fix:** L2 now lists management-group deployment records whose location differs from the
+region being deployed, and deletes those records first. Deleting a deployment record deletes
+*history*, never resources - the policy assignments it created are untouched and re-converge
+in the deploy step immediately after. Safe to run unconditionally, and it matches nothing on
+a normal replay.
+
+This is not an edge case for this repository specifically. [F52](#f52) established that
+Azure SQL cannot provision in several regions on a trial subscription, so **changing
+`AZURE_LOCATION` is something adopters will have to do** - and without this, L2 is wedged the
+moment they do.
+
+### What this says about the method
+
+Three findings in a row now trace to one region change: the region had sixteen sources
+([F53](#f53)), the first deploy in the new region was refused by records the previous region
+left behind (F54), and the reason for the change at all was that the original region cannot
+host the estate ([F52](#f52)). None of them is exotic. All three are what happens the first
+time someone does an ordinary thing - move an estate to a different region - that no plan run
+and no test had ever done.
+
+The one genuinely good outcome sits alongside them: **the fail-fast gates from
+[F52](#f52) worked.** L2 failed and L3 through L8 all skipped, where the equivalent failure
+four hours earlier had let L6 build thirteen resources on a landing zone that never applied.
+The run cost 2m43s and produced nothing to clean up.
