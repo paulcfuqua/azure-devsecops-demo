@@ -44,36 +44,81 @@ describe("Board framework views (relabel/filter the same 110 records, no second 
   });
 
   it("the headline and cross-tab denominators match what's actually visible under a filtered framework", () => {
-    // Measured directly from the real artifact: far-52.204-21's 17 CMMC
-    // Level 1 practices break down 12 NOT_ASSESSED / 3 PARTIAL / 2 GAP, all
-    // 5 non-NOT_ASSESSED rows "asserted" (none machine-verified).
+    // The expected breakdown is now MEASURED from the artifact and the catalog
+    // here in the test, not written down as literals. It used to read
+    // [0, 3, 2, 0, 0, 0] for the asserted row -- 3 PARTIAL and 2 GAP -- and went
+    // red on 2026-08-28 when F19 closed F13's seventh workload RBAC grant and
+    // 3.1.1 and 3.1.2, both far-52.204-21 practices, moved GAP -> PARTIAL. That
+    // is the register doing its job, not the board breaking, and a test that has
+    // to be hand-edited every time a finding closes is a test that will
+    // eventually be edited without being understood.
+    //
+    // The measurement below reads the catalog's own far-52.204-21 mapping and
+    // the artifact's own per-control status. It shares no code with the Board,
+    // so it is still an independent check that what is RENDERED equals what is
+    // in the data -- which is the property this test exists for.
+    const STATUS_KEYS = [
+      "COMPLIANT",
+      "PARTIAL",
+      "GAP",
+      "INCONCLUSIVE",
+      "NOT_APPLICABLE",
+      "NOT_ASSESSED",
+    ] as const;
+    const farIds = new Set(
+      fixtureCatalog.requirements
+        .filter((r) => (r.mappings?.["far-52.204-21"] ?? []).length > 0)
+        .map((r) => r.id),
+    );
+    const farRows = fixtureState.controls.filter((c) => farIds.has(c.control));
+    const cellsFor = (provenance: string): number[] =>
+      STATUS_KEYS.map(
+        (status) =>
+          farRows.filter((c) => c.provenance === provenance && c.status === status).length,
+      );
+    const expectedAsserted = cellsFor("asserted");
+    const expectedNone = cellsFor("none");
+    const expectedTotal = farRows.length;
+    const expectedNotAssessed = farRows.filter((c) => c.status === "NOT_ASSESSED").length;
+
+    // Sanity on the measurement itself, so a mis-measurement cannot make the
+    // assertions below vacuously true: the framework really does narrow the
+    // catalog, and every row it selects really is accounted for.
+    expect(expectedTotal).toBeGreaterThan(0);
+    expect(expectedTotal).toBeLessThan(fixtureState.summary.totalRequirements);
+    expect(expectedAsserted.reduce((a, b) => a + b, 0) + expectedNone.reduce((a, b) => a + b, 0)).toBe(
+      expectedTotal,
+    );
+
     render(<Board state={fixtureState} catalog={fixtureCatalog} framework="far-52.204-21" />);
 
-    // The headline's "N of M" no longer reads the fixed 110 -- it reads 17,
-    // and NOT_ASSESSED among those 17 is 12, not the unfiltered 95.
-    expect(screen.getByText(/12 of 17/)).toBeInTheDocument();
+    // The headline's "N of M" no longer reads the fixed 110 -- it reads the
+    // framework's own denominator, and NOT_ASSESSED among those is not the
+    // unfiltered 95.
+    expect(
+      screen.getByText(new RegExp(`${expectedNotAssessed} of ${expectedTotal}`)),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/95 of 110/)).toBeNull();
 
-    // The cross-tab's cells sum to 17, not 110: asserted covers the 3
-    // PARTIAL + 2 GAP rows, "none" covers the 12 NOT_ASSESSED rows, and
-    // every other cell (including machine-verified, entirely) is zero.
+    // The cross-tab's cells sum to the framework's denominator, not 110, and
+    // every machine-verified cell is zero because nothing has been deployed.
     const table = screen.getByRole("table", { name: /provenance and status/i });
     const assertedRow = within(table).getByText("asserted").closest("tr")!;
     const assertedCells = within(assertedRow)
       .getAllByRole("cell")
       .map((cell) => Number(cell.textContent));
     // STATUS_KEYS order: COMPLIANT, PARTIAL, GAP, INCONCLUSIVE, NOT_APPLICABLE, NOT_ASSESSED
-    expect(assertedCells).toEqual([0, 3, 2, 0, 0, 0]);
+    expect(assertedCells).toEqual(expectedAsserted);
     const noneRow = within(table).getByText("none").closest("tr")!;
     const noneCells = within(noneRow)
       .getAllByRole("cell")
       .map((cell) => Number(cell.textContent));
-    expect(noneCells).toEqual([0, 0, 0, 0, 0, 12]);
+    expect(noneCells).toEqual(expectedNone);
     const allCellsAcrossTable = within(table)
       .getAllByRole("cell")
       .map((cell) => Number(cell.textContent));
     const total = allCellsAcrossTable.reduce((sum, n) => sum + n, 0);
-    expect(total).toBe(17);
+    expect(total).toBe(expectedTotal);
 
     // And the active framework is named explicitly, disambiguating the
     // denominator for anyone who reads the number without the context above

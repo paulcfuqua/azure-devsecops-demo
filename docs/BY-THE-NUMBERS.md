@@ -29,17 +29,17 @@ on every push, so the file counts below are one commit older than the tip by des
 | **Commits** | 112 at the point measured |
 | **Cloud writes** | **0** |
 
-## Tests: 2,259
+## Tests: 2,260
 
 | Runner | Scope | Tests |
 |---|---|---|
 | Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, fuse scripts, the 11 Verifier audits, **and the compliance platform's catalog / collectors / derivation / emitter** | **1,277** |
-| Vitest | mcp-tools 321 · data-api 295 · control-tower 98 · spec-renderer 59 · compliance 50 · launch-ops 33 | **856** |
+| Vitest | mcp-tools 322 · data-api 295 · control-tower 98 · spec-renderer 59 · compliance 50 · launch-ops 33 | **857** |
 | `node --test` | cost-ingest 84 · directline-token 12 | **96** |
 | pytest | data generators, determinism and schema parity | **30** |
 
 **169 of the 550 authored files are test files — 30,209 lines, roughly one line of test
-for every 2.6 lines of everything else.** Every cloud call in all 2,259 is mocked; the
+for every 2.6 lines of everything else.** Every cloud call in all 2,260 is mocked; the
 suite has never contacted Azure, Graph, Fabric or GitHub.
 
 Two gates sit alongside them and are not counted as "tests" because they are not test

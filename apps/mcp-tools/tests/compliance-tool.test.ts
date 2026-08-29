@@ -33,8 +33,14 @@ function tempStatePath(): string {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mls-compliance-test-")), "state.json");
 }
 
-/** A control this run's real register asserts GAP for (asserted provenance). */
-const GAP_CONTROL = "3.1.1";
+/** A control this run's real register has an authored assertion for (asserted
+ * provenance). It was named GAP_CONTROL, and 3.1.1 did derive to GAP, until F19
+ * landed F13's seventh workload RBAC grant on 2026-08-28 and 3.1.1's last open
+ * contributor closed. Renamed rather than repointed at some other still-GAP
+ * control: there are none left, and a fixture constant that has to be rotated
+ * every time a finding closes is a fixture constant that encodes the estate
+ * being broken. */
+const ASSERTED_CONTROL = "3.1.1";
 /** A control this run's real register asserts CLOSED for -> derived PARTIAL. */
 const PARTIAL_CONTROL = "3.1.3";
 /** A control nothing has ever touched (none provenance, no assessment file). */
@@ -48,20 +54,34 @@ describe("query_compliance via the tool registry", () => {
   const registry = new ToolRegistry(createLocalBackends());
 
   it("returns a single control with its evidence and recommendation", async () => {
-    const r: any = await registry.execute("query_compliance", { control: GAP_CONTROL });
-    const fixtureRow = fixtureState.controls.find((c) => c.control === GAP_CONTROL)!;
+    const r: any = await registry.execute("query_compliance", { control: ASSERTED_CONTROL });
+    const fixtureRow = fixtureState.controls.find((c) => c.control === ASSERTED_CONTROL)!;
     expect(r.controls).toHaveLength(1);
     expect(r.controls[0].status).toBe(fixtureRow.status);
     expect(r.controls[0].provenance).toBe(fixtureRow.provenance);
     expect(r.controls[0].recommendation).toBeTruthy();
   });
 
-  it("filters by status across the whole catalog", async () => {
-    const r: any = await registry.execute("query_compliance", { status: "GAP" });
-    expect(r.controls.length).toBeGreaterThan(0);
-    expect(r.controls.every((c: any) => c.status === "GAP")).toBe(true);
-    // Matches the artifact's own count exactly -- not a subset, not a superset.
-    expect(r.controls.length).toBe(fixtureState.summary.byStatus.GAP);
+  it("filters by status across the whole catalog, for every status in the vocabulary", async () => {
+    // Was pinned to "GAP" and required at least one match, which quietly made
+    // "some control is failing" a precondition of the test suite passing. It
+    // went red the day the register's last GAP closed (F19, 2026-08-28). The
+    // property that actually matters is stronger and holds at any composition:
+    // for EVERY status, the filter returns exactly the artifact's own count for
+    // it -- not a subset, not a superset -- and a status with zero rows returns
+    // zero rows rather than everything.
+    const statuses = Object.keys(fixtureState.summary.byStatus);
+    expect(statuses.length).toBeGreaterThan(0);
+
+    let matchedSomething = false;
+    for (const status of statuses) {
+      const r: any = await registry.execute("query_compliance", { status });
+      expect(r.controls.every((c: any) => c.status === status)).toBe(true);
+      expect(r.controls.length).toBe((fixtureState.summary.byStatus as any)[status]);
+      if (r.controls.length > 0) matchedSomething = true;
+    }
+    // Non-vacuity, without caring WHICH status is populated.
+    expect(matchedSomething).toBe(true);
   });
 
   it("agrees with the board for every one of the 110 controls (parity)", async () => {
@@ -205,11 +225,11 @@ describe("hazard 4 — outOfCatalogControls never answers for an 800-171 require
 
 describe("hazard 5 — duplicatesStatusBasis records are not counted as evidence", () => {
   it("a manual-collector transcription is dropped from supportingEvidence", () => {
-    const fixtureRow = fixtureState.controls.find((c) => c.control === GAP_CONTROL)!;
+    const fixtureRow = fixtureState.controls.find((c) => c.control === ASSERTED_CONTROL)!;
     const rawDuplicate = fixtureRow.supportingEvidence.find((e) => e.duplicatesStatusBasis === true);
     expect(rawDuplicate).toBeDefined(); // sanity: the fixture really has one to filter
 
-    const result = queryComplianceState(fixtureState, { control: GAP_CONTROL });
+    const result = queryComplianceState(fixtureState, { control: ASSERTED_CONTROL });
     const answer = result.controls[0]!;
     expect(answer.supportingEvidence.some((e) => e.duplicatesStatusBasis === true)).toBe(false);
     expect(answer.evidence.some((e) => e.duplicatesStatusBasis === true)).toBe(false);
@@ -275,9 +295,13 @@ describe("hazard 6 — a missing or malformed artifact never returns an empty-bu
 describe("the 95-unassessed figure is present in any summary answer", () => {
   const cases: Array<[string, import("../src/tools/backends.js").ComplianceQueryParams]> = [
     ["no filter", {}],
-    ["control filter", { control: GAP_CONTROL }],
+    ["control filter", { control: ASSERTED_CONTROL }],
     ["family filter", { family: "3.1" }],
-    ["status filter", { status: "GAP" }],
+    // Deliberately a status with ZERO rows since F19 closed the last GAP: the
+    // 95-unassessed figure must survive a filter that matches nothing, which is
+    // the harder case, not the easier one.
+    ["status filter matching nothing", { status: "GAP" }],
+    ["status filter matching rows", { status: "PARTIAL" }],
     ["out-of-catalog framework filter", { framework: "nist-800-53r5" }],
     ["a control filter that matches nothing", { control: "9.9.9" }],
   ];

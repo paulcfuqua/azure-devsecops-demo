@@ -40,8 +40,22 @@ describe("Board", () => {
   });
 
   it("renders NOT_ASSESSED distinctly from GAP -- not just different text, different treatment", () => {
-    render(<Board state={fixtureState} catalog={fixtureCatalog} framework="nist-800-171r2" />);
-    // 3.5.3 is NOT_ASSESSED and 3.1.1 is GAP in the real artifact.
+    // This used to read 3.1.1 straight out of the real artifact, where it was
+    // GAP. It is PARTIAL now: F19 landed F13's seventh workload RBAC grant on
+    // 2026-08-28 and 3.1.1's last open contributor closed, and the artifact
+    // today contains ZERO GAP rows (summary.byStatus.GAP is 0). Rather than
+    // repoint at another GAP row -- there is none -- this uses cloneState(),
+    // exactly as the machine-verified test above does and for exactly the same
+    // reason: the scenario is real and must stay covered, the real artifact
+    // simply does not currently contain it. The board must keep the two apart
+    // whether or not this estate happens to have a GAP row today.
+    const mutated = cloneState();
+    const gapControl = mutated.controls.find((c) => c.control === "3.1.1")!;
+    expect(gapControl.status).toBe("PARTIAL"); // sanity: real data, before mutation
+    gapControl.status = "GAP";
+
+    render(<Board state={mutated} catalog={fixtureCatalog} framework="nist-800-171r2" />);
+    // 3.5.3 is NOT_ASSESSED in the real artifact; 3.1.1 is GAP by the mutation.
     const notAssessed = within(screen.getByTestId("control-3.5.3")).getByTestId("status");
     const gap = within(screen.getByTestId("control-3.1.1")).getByTestId("status");
     expect(notAssessed).toHaveTextContent("NOT_ASSESSED");
