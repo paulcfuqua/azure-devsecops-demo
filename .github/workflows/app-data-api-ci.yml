@@ -216,7 +216,7 @@ jobs:
 
       - name: Upload the Trivy SARIF
         if: ${{ always() && github.event_name != 'pull_request' && hashFiles('trivy-data-api.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-data-api.sarif
           category: trivy-data-api
