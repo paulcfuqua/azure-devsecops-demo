@@ -6,7 +6,7 @@
 #
 # Built and Trivy-scanned by app-control-tower-ci.yml (Track G / L7); not run locally.
 
-FROM node:24-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /repo
 
 # Manifests first for layer-cached installs.
