@@ -29,7 +29,29 @@ COPY compliance/state compliance/state
 COPY apps/compliance apps/compliance
 RUN npm run build --workspace apps/compliance
 
-FROM nginx:1.27-alpine
+# nginx mainline on Alpine, PINNED TO A MAINTAINED LINE -- which is the whole
+# point of the number, and the reason it moved off 1.27.
+#
+# This image was `nginx:1.27-alpine` until the Trivy gate started working. The
+# gate had been silently inert (the action was pinned to a tag that resolved to
+# no ref), and the first run after it was repinned failed on:
+#
+#   libcrypto3 / libssl3  CVE-2026-31789  CRITICAL  3.3.3-r0 -> fixed 3.3.7-r0
+#
+# The CVE is a heap overflow parsing large X.509 certificates on 32-bit systems,
+# so an amd64 container is not the target -- but the finding is real all the
+# same, because of WHY the package was that old. Docker Hub last rebuilt
+# `1.27-alpine` on 2025-04-16. Alpine shipped the openssl fix long after, and
+# nothing pulled it in: 1.27 is an end-of-line release, and a tag on a dead line
+# stops receiving base rebuilds without ever changing its name. Sixteen months
+# of distro security updates were simply absent from the image.
+#
+# 1.31 is the current mainline (rebuilt 2026-08-20). The durable fix is not this
+# number, though -- it is `.github/dependabot.yml`, which had npm, pip and
+# github-actions ecosystems but no `docker` one, so nothing was ever watching
+# these FROM lines. That entry now exists, and it is what keeps the next pin
+# from rotting for a year in silence.
+FROM nginx:1.31-alpine
 # Template, not a finished config: the nginx entrypoint runs envsubst over
 # /etc/nginx/templates/*.template into /etc/nginx/conf.d/ at container start.
 COPY apps/compliance/nginx.conf.template /etc/nginx/templates/default.conf.template
@@ -47,12 +69,16 @@ ENV MLS_IMAGE_DIGEST=unset
 # data-api and mcp-tools already drop to a non-root user (USER node); the
 # pre-existing frontends (control-tower, launch-ops) ran as root until the
 # remediation plan's Task 14 fixed both. This app ships non-root from its
-# first commit instead of acquiring it in a later remediation. nginx:1.27-alpine
+# first commit instead of acquiring it in a later remediation. nginx:1.31-alpine
 # creates the `nginx` user/group in its base image (see docker-library/docker-nginx)
 # but does not itself run as non-root, so USER nginx alone is not enough.
 # Verified against the actual nginx.org Alpine package contents
-# (nginx-1.28.0-r1.apk, same build recipe as the pinned 1.27 line) -- not
-# assumed -- this needs three fixes, identical to control-tower/launch-ops:
+# (nginx-1.28.0-r1.apk, the same build recipe the 1.31 line uses) -- not
+# assumed -- this needs three fixes, identical to control-tower/launch-ops.
+# The three sed/chown steps below are also no longer only ASSERTED to work:
+# F22's smoke test boots this image in CI and fails the build if the app is
+# not served, which is what a silently-skipped envsubst or an unwritable pid
+# path would produce.
 #   - /etc/nginx/conf.d has to stay writable by `nginx`, or the entrypoint's
 #     envsubst pass over *.template (this Dockerfile's whole reason for
 #     existing) fails closed: 20-envsubst-on-templates.sh checks `[ -w

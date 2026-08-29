@@ -196,7 +196,7 @@ jobs:
           # The failure mode is silent, not loud: if /etc/nginx/conf.d is not
           # writable by `nginx`, the base image's docker-entrypoint.sh skips
           # the envsubst pass over *.template and nginx falls back to the
-          # STOCK "Welcome to nginx!" config baked into nginx:1.27-alpine.
+          # STOCK "Welcome to nginx!" config baked into nginx:1.31-alpine.
           #
           # WHICH HALF OF THIS CHECK CATCHES THAT. Per this app's Dockerfile,
           # stock nginx serves on PORT 80 — only our template ever says

@@ -183,3 +183,76 @@ updates:
     labels:
       - dependencies
       - github-actions
+
+  # --- docker ---------------------------------------------------------------
+  # The ecosystem this file was missing, and the reason a CRITICAL openssl CVE
+  # sat in three shipped images.
+  #
+  # `apps/{compliance,control-tower,launch-ops}/Dockerfile` were pinned to
+  # `nginx:1.27-alpine`. Docker Hub last rebuilt that tag on 2025-04-16; 1.27 is
+  # an end-of-line release, so it kept its name while quietly ceasing to receive
+  # base rebuilds, and sixteen months of Alpine security updates never reached
+  # the image. Nothing complained, because npm, pip and github-actions were the
+  # only ecosystems configured here -- no one was reading the FROM lines at all.
+  # Trivy eventually caught it (CVE-2026-31789, libcrypto3/libssl3), but only
+  # after the finding had shipped.
+  #
+  # Dependabot reads FROM lines and opens a PR when the pinned tag moves, which
+  # turns "the base image went stale" from something a scanner discovers into
+  # something a bump PR prevents. One entry per Dockerfile rather than a
+  # `directories:` glob, deliberately: this file's own header warns that a wrong
+  # glob means no PRs ever fire, and an explicit path is checkable by eye.
+  - package-ecosystem: docker
+    directory: /apps/compliance
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+
+  - package-ecosystem: docker
+    directory: /apps/control-tower
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+
+  - package-ecosystem: docker
+    directory: /apps/launch-ops
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+
+  - package-ecosystem: docker
+    directory: /apps/data-api
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+
+  - package-ecosystem: docker
+    directory: /apps/mcp-tools
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker

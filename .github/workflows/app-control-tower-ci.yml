@@ -191,7 +191,7 @@ jobs:
           # docker-entrypoint.sh skips the envsubst pass over *.template
           # (20-envsubst-on-templates.sh checks `[ -w "$output_dir" ]` and
           # no-ops rather than erroring) and nginx falls back to the STOCK
-          # "Welcome to nginx!" config baked into nginx:1.27-alpine.
+          # "Welcome to nginx!" config baked into nginx:1.31-alpine.
           #
           # WHICH HALF OF THIS CHECK CATCHES THAT (corrected by the Task 24
           # review; the earlier wording claimed a 404 on /healthz). Per this
