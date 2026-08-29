@@ -14,7 +14,22 @@
 #
 # Both matter for the demo, and apps/vuln-lab needs them pulled apart — see its
 # entry below.
-# =============================================================================
+#
+# EVERY `labels:` VALUE BELOW MUST ALSO EXIST AS A REPOSITORY LABEL. This is not
+# obvious and it fails noisily rather than silently: Dependabot cannot create
+# labels, so for each one it cannot find it posts a comment on the pull request —
+#
+#     ### Labels
+#     The following labels could not be found: `dependencies`, `docker`.
+#     Please create them before Dependabot can add them to a pull request.
+#
+# — and applies none of them. All fourteen names used here were declared and never
+# created, so every Dependabot pull request this repository has ever seen carried
+# that comment: 42 of them by 2026-08-29, one per PR, all avoidable (finding F45).
+# The labels now exist. If you add a new one here, create it too:
+#
+#     gh label create <name> --color <hex> --description '<what it marks>'
+# ==============================================================================
 
 version: 2
 

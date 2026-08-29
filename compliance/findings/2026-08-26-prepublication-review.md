@@ -120,6 +120,7 @@ no".
 | [F42](#f42) | Polynomial ReDoS in the inbound `Authorization` parse — the gate in front of a deliberately public endpoint | high | CONFIRMED (measured) | 3.13.1, 3.14.1 | CodeQL, raised and closed 2026-08-29 |
 | [F43](#f43) | The G0 gate's own definition asserts two verifications `verify-g0.ps1` does not perform, and `PURVIEW_APP_ID` was documented nowhere | high | CONFIRMED | — (adoptability; blocks nothing until the clock is running, then costs days) | G0 rehearsal, 2026-08-29 |
 | [F44](#f44) | The published leadership brief still carried F28's exact false claim — "continuous integration holds no secret at all" | high | CONFIRMED | 3.1.3 | doc refresh, 2026-08-29 |
+| [F45](#f45) | All fourteen labels `dependabot.yml` declares were never created, so every Dependabot PR carried an error comment — 42 of them | low | CONFIRMED (counted) | — (operability) | raised and closed 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2519,3 +2520,51 @@ drifted is the structure, because `compliance/tests/register.Tests.ps1` derives 
 numbers from the document and asserts they run contiguously from F1 rather than trusting
 any sentence about how many there are. Prose counts are checked by whoever remembers;
 derived counts are checked every run.
+
+
+## F45
+
+**Every label `dependabot.yml` declares was never created in the repository, so all 42 Dependabot pull requests carried an error comment and none was ever labelled**
+
+- **Severity:** low (no security or correctness impact; it degraded the signal-to-noise of the one channel that reports dependency risk)
+- **Confidence:** CONFIRMED — counted directly: 42 `### Labels` comments across Dependabot's pull requests
+- **Controls:** — (operability)
+- **Closed by:** raised and closed 2026-08-29
+- **Status:** CLOSED
+
+**Found while:** the sponsor asked why they had received so many Dependabot messages. The
+answer was not the volume of pull requests.
+
+**Where.** `.github/dependabot.yml` sets `labels:` on all twelve ecosystem entries,
+naming fourteen distinct labels — `dependencies`, `npm`, `docker`, `python`,
+`github-actions`, the seven per-app names, `vuln-lab` and `do-not-auto-bump`. **None of
+them existed.** The repository carried only GitHub's ten default labels. Dependabot
+cannot create labels, so for every pull request it posted:
+
+```
+### Labels
+The following labels could not be found: `dependencies`, `do-not-auto-bump`, `vuln-lab`.
+Please create them before Dependabot can add them to a pull request.
+```
+
+and applied none of them. Forty-two pull requests, forty-two comments, forty-two
+notifications — every one avoidable, and every one making the channel that reports real
+dependency risk slightly less worth reading. The `docker` entries added on 2026-08-29
+(finding [F38](#f38)) inherited the same defect on the day they were written.
+
+**This is the shape [F30](#f30) and the L09 playbook's "failure mode 5" warn about**, one
+notch less severe: a Dependabot configuration that is syntactically valid, is accepted,
+does something, and does not do the thing it declares. The file's own header opens by
+warning that "wrong directory globs or an ecosystem typo means no alerts ever fire". The
+globs and ecosystems were right. Nobody checked the labels.
+
+**Fix.** All fourteen labels created, with descriptions and a colour scheme that separates
+ecosystem from app from the two warning labels. `dependabot.yml`'s header now states the
+prerequisite in the place someone adding a fifteenth label will read it, with the
+`gh label create` line.
+
+**No test guards this, deliberately.** Every suite in this repository is offline and
+mocked, and asserting a repository's label set requires the live GitHub API. A test that
+needs network access to pass is a test that fails for the wrong reason; the prerequisite is
+documented at the point of use instead. The honest position is that this one is guarded by
+a comment, not a gate.
