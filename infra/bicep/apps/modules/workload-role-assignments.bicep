@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // workload-role-assignments.bicep — grants a principal a built-in role at
 // SUBSCRIPTION scope. Generic over the role: callers pass principalId and
 // roleDefinitionId; each call site names the role in an adjacent comment next
@@ -40,16 +40,24 @@
 // exact shape of ITS siblings (key-vault-secrets-user-role.bicep,
 // monitoring-metrics-publisher-role.bicep).
 //
-// NOT covered here (F13 stays open on these — see apps/main.bicep's F13
+// NOT covered here — covered elsewhere. F13 is CLOSED as of 2026-08-28; these
+// two grants are simply not this module's to make (see apps/main.bicep's F13
 // summary comment):
 //   * Cost Management service -> Storage Blob Data Contributor: owned by
 //     Task 17 (F15). The export's identity is created by
-//     .github/workflows/layer-06-platform.yml's `az costmanagement export
-//     create` step (once that step requests one), not by Bicep — there is no
-//     principalId available here to grant.
-//   * cost-ingest -> Storage Blob Data Reader: blocked on F19 — cost-ingest
-//     has no Function App, and therefore no identity, anywhere in this repo's
-//     IaC despite infra-up.yml:31 claiming otherwise.
+//     .github/workflows/layer-06-platform.yml's `az rest` PUT against the
+//     Exports REST API, not by Bicep — there is no principalId available here
+//     to grant, so that grant is an `az role assignment create` in the same
+//     workflow, scoped to the cost-exports container.
+//   * cost-ingest -> Storage Blob Data Reader: LANDED at L6 (F19, 2026-08-28).
+//     This comment used to say "blocked on F19 — cost-ingest has no Function
+//     App, and therefore no identity, anywhere in this repo's IaC despite
+//     infra-up.yml:31 claiming otherwise", and that was true until F19 built
+//     it. It is now made by infra/bicep/platform/modules/blob-container-role.bicep,
+//     a resource-group-scoped sibling of this module that binds the assignment
+//     to a single BLOB CONTAINER — a scope this module could not express even
+//     if the principal lived here, for the same BCP139 reason its own header
+//     gives for log-analytics-reader-role.bicep being a separate file.
 // =============================================================================
 targetScope = 'subscription'
 

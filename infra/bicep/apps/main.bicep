@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // apps/main.bicep — L7: the four container apps, plus the L10 deployment witness.
 //
 // Deployed at RESOURCE GROUP scope into mls-rg-apps (created at L6):
@@ -521,8 +521,10 @@ module dataApiSecurityReaderGrant 'modules/workload-role-assignments.bicep' = {
 
 // ---------------------------------------------------------------------------
 // F13 STATUS SUMMARY (compliance/findings/2026-08-26-prepublication-review.md
-// #f13, Task 12) — five of the seven documented workload grants are expressed
-// above or below; two are NOT, and F13 stays OPEN because of them:
+// #f13, Task 12) — **F13 IS CLOSED as of 2026-08-28.** All seven documented
+// workload grants are now expressed in code. Five are in this template; the
+// other two are not, for reasons of scope rather than omission, and are listed
+// below with where they actually live. Five expressed here:
 //
 //   * data-api  -> SQL contained-database user   -- data/seed/sql/900-contained-users.sql
 //   * data-api  -> Fabric workspace Viewer        -- infra/fabric/provision-workspace.ps1 (-DataApiPrincipalId)
@@ -532,15 +534,22 @@ module dataApiSecurityReaderGrant 'modules/workload-role-assignments.bicep' = {
 //   * mcp-tools -> Security Reader                -- mcpSecurityReaderGrant, above
 //   * mcp-tools -> Cost Management Reader         -- mcpCostManagementReaderGrant, above
 //
-// NOT expressed here:
+// NOT expressed here — expressed elsewhere, which is a different thing from
+// not expressed at all:
 //   * Cost Management service -> Storage Blob Data Contributor: owned by
 //     Task 17 (F15) — the export's identity is created in
 //     .github/workflows/layer-06-platform.yml, not by Bicep, so there is no
 //     principalId available to this template to grant.
-//   * cost-ingest -> Storage Blob Data Reader: blocked on F19 — cost-ingest
-//     has no Function App, and therefore no identity, anywhere in this
-//     repo's IaC (infra-up.yml:31's claim that it deploys inside
-//     layer-06-platform.yml does not hold).
+//   * cost-ingest -> Storage Blob Data Reader: LANDED at L6 (F19, 2026-08-28).
+//     This comment used to say "blocked on F19 — cost-ingest has no Function
+//     App, and therefore no identity, anywhere in this repo's IaC", and that
+//     was true: infra-up.yml:31 claimed a deploy that did not exist. F19 built
+//     it. infra/bicep/platform/main.bicep now provisions the Function App on a
+//     Flex Consumption plan with its own user-assigned identity and grants that
+//     identity Storage Blob Data Reader scoped to the cost-exports CONTAINER
+//     (platform/modules/blob-container-role.bicep). It is not in this template
+//     because the principal is an L6 resource that lives in mls-rg-ops next to
+//     the storage it reads — not because nothing grants it.
 //
 // Recorded here, fixed elsewhere (different principal, different failure mode
 // — see each finding); both are now CLOSED and neither is expressed in this
