@@ -136,14 +136,27 @@ updates:
   # explicitly covered, so a graph/ecosystem mistake is visible in config review.
   #
   # `open-pull-requests-limit: 0` disables Dependabot's *version-update* PRs for
-  # this directory ONLY. Alerts still fire (they come from the dependency graph,
-  # not this file), which is exactly what the demo needs: the alert is the
-  # trigger, and `self-heal.yml` — not Dependabot — must be the thing that opens
-  # the patch PR. If Dependabot healed the lab first there would be no showpiece.
+  # this directory ONLY. Alerts still fire — they come from the dependency
+  # graph, not from this file — and the alert is the trigger the showpiece
+  # rides.
   #
-  # Same reasoning applies to the repo-level "Dependabot security updates"
-  # setting: leave it OFF, or it will race self-heal.yml for these three CVEs.
-  # See .github/README.md § Repository settings this layer assumes.
+  # It does NOT disable Dependabot's *security-update* PRs, and that is
+  # deliberate. GitHub documents that "security update pull requests are not
+  # subject to this limit", so the three seeded CVEs still get a Dependabot PR
+  # each, and `self-heal.yml`'s `dependabot` lane adopts that PR and arms
+  # auto-merge on it (see its "Dependabot security update -> gauntlet" job).
+  #
+  # CORRECTED 2026-08-28. Until now these lines instructed the reader to leave
+  # the repo-level "Dependabot security updates" setting OFF, "or it will race
+  # self-heal.yml for these three CVEs". That was written before the 2026-08-24
+  # amendment and following it BREAKS the showpiece: Copilot Autofix does not
+  # generate fixes for dependency alerts and no API can request a security-update
+  # PR on demand, so with the setting off there is no fix generator for the lab
+  # at all and self-heal's dependabot lane finds nothing to adopt. The setting
+  # must be **ON** — .github/README.md § "Repository settings this layer assumes"
+  # says so, and has carried a note that this file contradicted it. It no longer
+  # does. In a repository people clone and run, a comment telling them to turn
+  # off the thing the demo needs is not a stale comment, it is a defect.
   - package-ecosystem: npm
     directory: /apps/vuln-lab
     schedule:

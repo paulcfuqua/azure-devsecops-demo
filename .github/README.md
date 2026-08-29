@@ -199,9 +199,11 @@ Set once by the human; the workflows do not (and must not) change them.
   - `open-pull-requests-limit: 0` on `/apps/vuln-lab` in `dependabot.yml` does **not**
     block this: that option caps *version* updates only, and GitHub documents that
     "security update pull requests are not subject to this limit."
-  - **Stale comment, other workstream's file:** `dependabot.yml` still carries a
-    pre-amendment comment instructing that security updates be left off. That guidance
-    is now wrong; the file belongs to L9 and was not edited here.
+  - `dependabot.yml` used to carry a pre-amendment comment instructing that security
+    updates be left off, and this section used to record that as a known-stale comment
+    in another workstream's file. It was corrected on 2026-08-28 rather than left
+    documented-and-wrong: an adopter who followed it would have switched off the only
+    fix generator the seeded CVEs have.
 - **Copilot Autofix: on.** It is "allowed by default and enabled for every repository
   that uses CodeQL", free on public repositories, and consumes no AI credits. Nothing
   needs configuring — but confirm the **Copilot Autofix** checkbox under

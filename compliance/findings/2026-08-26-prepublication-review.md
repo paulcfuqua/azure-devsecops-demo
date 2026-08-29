@@ -115,6 +115,7 @@ no".
 | [F37](#f37) | The `data-api` image cannot start: the runtime stage copies only the hoisted `node_modules`, and five of its non-dev packages are not hoisted — the same pin also held a `runtime`-scope CVE in the tree | high | CONFIRMED (reproduced in CI) | 3.14.1 | F22's smoke test, first run |
 | [F38](#f38) | Three shipped images sat sixteen months behind Alpine's security updates on an end-of-line `nginx` tag, and no ecosystem was watching `FROM` lines | medium | CONFIRMED | 3.4.1, 3.14.1 | F33's Trivy repin, first real scan |
 | [F39](#f39) | The Trivy CRITICAL gate and the F22 smoke test were **advisory**: not one of the five image jobs was a required status check | high | CONFIRMED | 3.4.3, 3.14.1 | raised and closed with F37/F38 |
+| [F40](#f40) | `dependabot.yml` told adopters to switch OFF the only fix generator the seeded CVEs have — known-wrong and left in place for four days | medium | CONFIRMED | — (adoptability; L10 showpiece) | raised and closed with F39 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2206,3 +2207,52 @@ no image of its own, exactly as `self-heal.yml`'s header already states ([F29](#
 *There is a rebase window.* Open Dependabot pull requests raised before this change report
 the old check name and will sit pending on the five new ones until Dependabot rebases them
 onto the new `main`.
+
+
+## F40
+
+**`dependabot.yml` instructed adopters to disable Dependabot security updates — the only fix generator the L10 showpiece has — and the contradiction was documented rather than fixed**
+
+- **Severity:** medium (no security control is weakened; an adopter following it silently loses half the self-healing showpiece)
+- **Confidence:** CONFIRMED (both files read against the live repository setting and against `self-heal.yml`'s dependabot lane)
+- **Controls:** — (adoptability)
+- **Closed by:** raised and closed alongside [F39](#f39)
+- **Status:** CLOSED
+
+**Found while:** checking why three Dependabot pull requests existed against
+`apps/vuln-lab` when `dependabot.yml` sets `open-pull-requests-limit: 0` for that
+directory. They exist because that option caps *version* updates only — GitHub documents
+that "security update pull requests are not subject to this limit" — so the three PRs are
+the showpiece working, not a leak.
+
+**Where:** `.github/dependabot.yml`, the `/apps/vuln-lab` entry, which said:
+
+> Same reasoning applies to the repo-level "Dependabot security updates" setting: leave it
+> OFF, or it will race self-heal.yml for these three CVEs.
+
+That is pre-amendment guidance and it is wrong twice over. The 2026-08-24 amendment made
+the setting **ON** deliberately: Copilot Autofix does not generate fixes for dependency
+alerts, and no API can request a security-update PR on demand, so Dependabot's own PR is
+the *only* fix generator that exists for the three seeded `apps/vuln-lab` CVEs. And
+`self-heal.yml` no longer races it — its "Dependabot security update -> gauntlet" job
+finds Dependabot's PR and arms auto-merge on it, which is the documented design in
+`.github/README.md` § "Repository settings this layer assumes".
+
+**What makes this a finding rather than a typo.** The contradiction was already known.
+`.github/README.md` carried a bullet reading *"Stale comment, other workstream's file:
+`dependabot.yml` still carries a pre-amendment comment instructing that security updates
+be left off. That guidance is now wrong; the file belongs to L9 and was not edited
+here."* So for four days the repository shipped a wrong instruction, a correct
+instruction, and a note explaining that the wrong one was known to be wrong and had not
+been corrected because of workstream ownership. In a repository whose entire premise is
+being cloned into someone else's tenant, workstream ownership is not a reason to leave a
+harmful instruction in place — an adopter reads the comment next to the setting, not the
+disclaimer three files away.
+
+**Fix.** `dependabot.yml`'s comment now states the correct behaviour and says why: the
+limit caps version updates only, security-update PRs are exempt by design, the repo-level
+setting must be **ON**, and self-heal adopts the resulting PR. `.github/README.md`'s
+bullet no longer records a known-stale comment; it records that the comment was corrected
+and what following it would have cost. Verified against the live repository: `GET
+/repos/{o}/{r}/automated-security-fixes` returns `{"enabled": true, "paused": false}`,
+which is what both documents now say it should be.
