@@ -110,7 +110,7 @@ jobs:
       configured: ${{ steps.guard.outputs.configured }}
       missing: ${{ steps.guard.outputs.missing }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:

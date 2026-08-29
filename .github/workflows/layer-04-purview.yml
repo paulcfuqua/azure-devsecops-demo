@@ -58,7 +58,7 @@ jobs:
       verifier: ${{ steps.verifier.outputs.configured }}
       scc: ${{ steps.scc.outputs.available }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -106,7 +106,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install ExchangeOnlineManagement
         shell: pwsh
@@ -175,7 +175,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verifier Security & Compliance credentials not configured
         if: ${{ needs.preflight.outputs.verifier != 'true' }}

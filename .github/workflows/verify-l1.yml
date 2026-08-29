@@ -53,7 +53,7 @@ jobs:
     outputs:
       verifier: ${{ steps.verifier.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: verifier
         uses: ./.github/actions/demo-env-guard
         with:
@@ -84,7 +84,7 @@ jobs:
       # Full history: V1.3 runs `git grep` over the checked-out tree, and a
       # shallow clone is still a complete tree at that ref, which is what the
       # criterion is about — what is committed at the audited commit.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verifier identity not configured
         if: ${{ needs.preflight.outputs.verifier != 'true' }}

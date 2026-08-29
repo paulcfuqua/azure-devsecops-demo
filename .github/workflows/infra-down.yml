@@ -76,7 +76,7 @@ jobs:
       verifier: ${{ steps.verifier.outputs.configured }}
       tenant-audits: ${{ steps.tenant.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -123,7 +123,7 @@ jobs:
     env:
       FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC, mls-github-deployer)
         uses: azure/login@v2
@@ -184,7 +184,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming
@@ -223,7 +223,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming
@@ -333,7 +333,7 @@ jobs:
       MLS_LABEL_GUID_PATH: verification/reports/label-guids.json
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming

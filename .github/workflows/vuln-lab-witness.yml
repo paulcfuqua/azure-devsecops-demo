@@ -97,7 +97,7 @@ jobs:
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -117,7 +117,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming

@@ -54,7 +54,7 @@ jobs:
       configured: ${{ steps.guard.outputs.configured }}
       verifier: ${{ steps.verifier.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -90,7 +90,7 @@ jobs:
     env:
       FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -262,7 +262,7 @@ jobs:
       # was read.
       MLS_EXPECTED_COUNTS: data/generators/tests/expected_counts.json
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verifier identity not configured
         if: ${{ needs.preflight.outputs.verifier != 'true' }}

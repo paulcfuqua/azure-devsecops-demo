@@ -156,7 +156,7 @@ jobs:
       configured: ${{ steps.guard.outputs.configured }}
       verifier: ${{ steps.verifier.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -287,7 +287,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build the seeded CRITICAL image
         env:
@@ -380,7 +380,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build the pinned rebuild
         env:
@@ -442,7 +442,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Create (or reuse) the release
         id: tag
@@ -514,7 +514,7 @@ jobs:
     env:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC, mls-github-deployer)
         id: login
@@ -647,7 +647,7 @@ jobs:
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
       GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verifier identity not configured
         if: ${{ needs.preflight.outputs.verifier != 'true' }}

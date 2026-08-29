@@ -89,7 +89,7 @@ jobs:
       configured: ${{ steps.guard.outputs.configured }}
       verifier: ${{ steps.verifier.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -149,7 +149,7 @@ jobs:
       # and never returns its 'unset' default (F26). main.bicep fails closed on
       # both spellings: no client ID means INTERNAL ingress and no authConfig.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming
@@ -1037,7 +1037,7 @@ jobs:
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
       GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming
