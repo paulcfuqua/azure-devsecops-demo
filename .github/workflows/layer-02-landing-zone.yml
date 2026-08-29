@@ -160,16 +160,43 @@ jobs:
           # in several regions on a trial subscription, so changing AZURE_LOCATION is a
           # thing adopters will have to do, and without this L2 is permanently wedged
           # afterwards (F54).
-          stale=$(az deployment mg list --management-group-id "${MG_NAME}"             --query "[?location!='${AZURE_LOCATION}'].name" -o tsv 2>/dev/null || true)
-          if [ -z "${stale}" ]; then
-            echo "No management-group deployment records pinned to another region."
-          else
-            echo "${stale}" | while read -r name; do
-              [ -z "${name}" ] && continue
-              echo "::notice title=Clearing stale deployment record::${name} was created in another region; deleting the RECORD (no resources are affected)."
-              az deployment mg delete --management-group-id "${MG_NAME}" --name "${name}" || true
+          # ONE AT A TIME, WITH RETRIES, AND BOTH SCOPES.
+          #
+          # `az deployment ... delete` is asynchronous: a second delete issued while the
+          # first is still settling returns "Operation returned an invalid status 'Bad
+          # Request'". A plain loop therefore removes only the LAST record and reports
+          # nothing wrong - and a `|| true` would leave the rest behind silently for the
+          # next deploy to fail on.
+          #
+          # Both scopes matter. The template deploys at the management group, but the AVM
+          # policy-assignment module fans out to SUBSCRIPTION scope for the NIST assignment
+          # (`pol-asi-sub-*`), and L6's own records live there too. Clearing only the MG
+          # records left exactly one conflict behind and cost a full deploy to find.
+          drain() {
+            scope="$1"; listCmd="$2"; delCmd="$3"; attempt=0
+            while [ "${attempt}" -lt 25 ]; do
+              remaining=$(eval "${listCmd}" 2>/dev/null || true)
+              [ -z "${remaining}" ] && break
+              name=$(echo "${remaining}" | head -n 1)
+              echo "::notice title=Clearing stale deployment record::${name} (${scope}) was created in another region; deleting the RECORD - no resources are affected."
+              eval "${delCmd} '${name}'" >/dev/null 2>&1 || true
+              attempt=$((attempt + 1))
+              sleep 5
             done
-          fi
+            if [ -n "$(eval "${listCmd}" 2>/dev/null || true)" ]; then
+              echo "::error title=Stale deployment records remain::Could not clear every ${scope} record pinned to another region; the deploy below would fail on them."
+              return 1
+            fi
+            echo "No ${scope} deployment records pinned to another region."
+          }
+
+          drain 'management group' \
+            "az deployment mg list --management-group-id '${MG_NAME}' --query \"[?location!='${AZURE_LOCATION}'].name\" -o tsv" \
+            "az deployment mg delete --management-group-id '${MG_NAME}' --name"
+
+          drain 'subscription' \
+            "az deployment sub list --subscription '${AZURE_SUBSCRIPTION_ID}' --query \"[?location!='${AZURE_LOCATION}'].name\" -o tsv" \
+            "az deployment sub delete --subscription '${AZURE_SUBSCRIPTION_ID}' --name"
 
       - name: Resolve every built-in policy definition the template pins
         run: |
