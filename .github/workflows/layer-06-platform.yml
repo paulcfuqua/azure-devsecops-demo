@@ -630,7 +630,7 @@ jobs:
 
       - name: Upload L6 artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-06-platform
           # l6-manifest.json is deliberately NOT here (F4, Task 8): it carries
@@ -760,7 +760,7 @@ jobs:
 
       - name: Upload audit report
         if: ${{ always() && (steps.audit.outputs.ran == 'true' || steps.recheck.outputs.ran == 'true') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-06-audit-report-${{ inputs.verify_only && 'recheck' || 'layer' }}
           path: verification/reports/
