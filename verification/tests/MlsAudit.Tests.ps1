@@ -590,3 +590,52 @@ Describe 'domain helpers' {
         $backwards.Problem | Should -BeLike '*precedes*'
     }
 }
+
+Describe 'Get-MlsCollection distinguishes an empty collection from a one-item one' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..' 'MlsAudit.psm1') -Force
+    }
+
+    It 'returns zero items for an empty <Shape> collection' -ForEach @(
+        @{ Shape = 'value';      Response = [pscustomobject]@{ value = @() } }
+        @{ Shape = 'data';       Response = [pscustomobject]@{ data = @() } }
+        @{ Shape = 'jobs';       Response = [pscustomobject]@{ jobs = @() } }
+        @{ Shape = 'check_runs'; Response = [pscustomobject]@{ check_runs = @() } }
+        @{ Shape = 'hashtable';  Response = @{ value = @() } }
+    ) {
+        # An empty collection used to fall through to `return @($Response)` and report
+        # Count = 1 - the wrapper object itself - because PowerShell unrolls @() to
+        # $null on return, making an empty key indistinguishable from an absent one.
+        # Every audit that counts a filtered Graph or gh response then read an ABSENT
+        # object as PRESENT. The Verifier failing toward passing is the worst
+        # direction available to it.
+        @(Get-MlsCollection -Response $Response).Count | Should -Be 0
+    }
+
+    It 'still returns the items of a populated collection' {
+        $response = [pscustomobject]@{ value = @(
+                [pscustomobject]@{ id = 'a' }
+                [pscustomobject]@{ id = 'b' }
+            ) }
+        $items = @(Get-MlsCollection -Response $response)
+        $items.Count | Should -Be 2
+        $items[0].id | Should -Be 'a'
+    }
+
+    It 'still wraps a bare object that carries no collection key' {
+        $items = @(Get-MlsCollection -Response ([pscustomobject]@{ id = 'solo' }))
+        $items.Count | Should -Be 1
+        $items[0].id | Should -Be 'solo'
+    }
+
+    It 'returns zero items for a null response' {
+        @(Get-MlsCollection -Response $null).Count | Should -Be 0
+    }
+
+    It 'an empty collection is not mistaken for a one-item one' {
+        # The property the bug violated, stated directly.
+        $empty = @(Get-MlsCollection -Response ([pscustomobject]@{ value = @() }))
+        $single = @(Get-MlsCollection -Response ([pscustomobject]@{ value = @([pscustomobject]@{ id = 'x' }) }))
+        $empty.Count | Should -Not -Be $single.Count
+    }
+}

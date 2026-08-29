@@ -156,10 +156,38 @@ function Get-MlsCollection {
     param($Response)
     if ($null -eq $Response) { return @() }
     foreach ($key in @('value', 'data', 'jobs', 'check_runs')) {
-        $found = Get-MlsProperty -InputObject $Response -Name $key
-        if ($null -ne $found) { return @($found) }
+        # Test for the KEY, not for a non-null value. PowerShell unrolls an empty
+        # array on return, so `Get-MlsProperty` handed back $null for `{value: []}`
+        # exactly as it does for a response with no `value` key at all - the loop
+        # fell through and the function returned @($Response), the wrapper itself.
+        #
+        # An EMPTY collection therefore reported Count = 1, indistinguishable from a
+        # one-item collection. Every caller that counts a filtered Graph or gh
+        # response read an ABSENT object as PRESENT: a missing group, a missing app
+        # registration, a missing federated credential, an empty group's membership.
+        # That is the Verifier - the estate's sign-off gate - failing in the
+        # direction of passing. Found when an empty break-glass group read as
+        # holding one member.
+        if (Test-MlsHasProperty -InputObject $Response -Name $key) {
+            return @(Get-MlsProperty -InputObject $Response -Name $key)
+        }
     }
     return @($Response)
+}
+
+function Test-MlsHasProperty {
+    <#
+    .SYNOPSIS
+        Does this object carry this key at all, whatever its value? Distinguishes an
+        absent key from one holding $null, an empty array or an empty string - which
+        a plain `-ne $null` test cannot.
+    #>
+    param($InputObject, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $InputObject) { return $false }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        return (@($InputObject.Keys) -contains $Name)
+    }
+    return $null -ne $InputObject.PSObject.Properties[$Name]
 }
 
 function Format-MlsValue {
@@ -1330,6 +1358,7 @@ Export-ModuleMember -Function @(
     'Write-MlsStatus',
     'Get-MlsProperty',
     'Get-MlsCollection',
+    'Test-MlsHasProperty',
     'Format-MlsValue',
     'Format-MlsCell',
     'Test-MlsSetEquality',
