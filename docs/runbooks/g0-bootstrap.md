@@ -370,6 +370,16 @@ it is still about sign-in risk and auto-labeling, nothing else.
    `Policy.Read.All` is what lets the Verifier read Conditional Access policy state
    read-only; V3.3's enforced-MFA audit cannot see the policy without it. This line used
    to name only `Directory.Read.All` — the script has always granted both (finding F43).
+
+   > **Each app gets TWO federated credentials, not one (finding F48).** GitHub now
+   > presents a subject carrying **immutable actor identifiers** -
+   > `repo:<owner>@<ownerId>/<repo>@<repoId>:environment:demo` - and a credential
+   > registered on the classic `repo:<owner>/<repo>:...` form alone is refused with
+   > `AADSTS700213`. The script asks GitHub which form it will send
+   > (`sub_claim_prefix`) and registers both. Do not trust the API's
+   > `use_immutable_subject` flag: this repo returned `false` while GitHub was
+   > sending the immutable subject.
+
 4. ⚠ **Fabric service-principal settings.** This step used to read *"enable «Service
    principals can use Fabric APIs»"*. **No setting has that name.** It is five settings
    under **Admin portal → Tenant settings → Developer settings**, and getting the wrong
@@ -829,7 +839,7 @@ prose that stood here claimed two verifications the script does not perform (fin
 |---|---|---|
 | 1 | `CliLogin` | `az` logged in, active subscription is the expected one |
 | 2 | `DeployerApp` | `mls-github-deployer` registration exists |
-| 3 | `Federation` | its federated credential carries the `environment:demo` subject |
+| 3 | `Federation` | its federated credential carries the `environment:demo` subject. **Does not yet assert the immutable-identifier subject GitHub actually presents** - see F48 |
 | 4 | `OwnerRole` | its service principal holds Owner at subscription scope |
 | 5 | `GraphConsent` | all five application permissions are consented |
 | 6 | `VerifierApp` | `mls-verifier` exists with a federated subject **distinct** from the deployer's (F6/F7) |

@@ -40,6 +40,11 @@ AfterAll {
 Describe '01-root-oidc' {
     BeforeEach {
         Mock Write-Status {}
+        # MUST be mocked, or every test in this file makes a live `gh api` call to
+        # GitHub. Default $null = "GitHub presents the classic subject", which is the
+        # behaviour every pre-2026-08-29 assertion below was written against; the
+        # immutable-subject case has its own context at the end of the file.
+        Mock Get-GitHubSubClaimPrefix { $null }
         $script:CapturedFedSubjects = @()
         $script:CapturedGraphPayloads = @()
         Mock Invoke-AzCli {
