@@ -17,7 +17,9 @@
     ~$260/mo if left running). Do NOT run -Mode F2 without explicit G2 approval from the
     human sponsor (state cost delta + duration first). Trial mode is $0 and gate-free.
 
-    Gate: G0 (human bootstrap). Agents author this file; they never execute it.
+    Gate: G0 bootstrap. Agents may run this in -Mode Trial (sponsor amendment
+    2026-08-29). -Mode F2 is UNCHANGED and still G2: it waits for a human, with the cost
+    delta and duration stated first. Delegating execution does not delegate spending.
 
 .EXAMPLE
     ./02-fabric-capacity.ps1                    # prints trial instructions

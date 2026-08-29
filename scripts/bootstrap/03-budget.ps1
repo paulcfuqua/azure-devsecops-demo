@@ -34,7 +34,8 @@
     contact.
 
 .NOTES
-    Gate: G0 (human bootstrap). Agents author this file; they never execute it.
+    Gate: G0 bootstrap. Agents may run this (sponsor amendment 2026-08-29). Creating a
+    budget is a spend GUARD, not a spend increase, so it is not G2.
 
 .EXAMPLE
     ./03-budget.ps1 -SubscriptionId <sub> -Email you@example.com -WhatIf

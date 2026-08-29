@@ -6,14 +6,35 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
 
 ## Hard rules
 
-1. **No Azure/Entra/Fabric/GitHub-org writes** unless (a) G1 is approved, (b) your layer
-   is unblocked by the Orchestrator, and (c) the previous layer has Verifier sign-off.
-   Authoring code is always allowed; executing deployments is not.
-2. **Gates:** G0 human bootstrap; G1 one-time plan approval; G2 any spend-profile
-   increase (state cost delta + duration, wait for human); G3 tenant-level deletions
-   (Entra objects, labels, Fabric workspace, OIDC federation); G4 exception escalation
-   (layer fails verification twice, cost anomaly, credential failure, lead deadlock).
-   RG-scoped teardown of demo resources is gate-free by design.
+1. **Agents execute the estate. Two things still stop them: money and deletion.**
+   *(Sponsor amendment 2026-08-29 — supersedes the original rule, which read "No
+   Azure/Entra/Fabric/GitHub-org writes …  Authoring code is always allowed; executing
+   deployments is not." G0 was human-run and every bootstrap script said "Agents author
+   this file; they never execute it.")*
+
+   **Agent-created and agent-managed infrastructure is now the demo**, not a thing the
+   demo describes. Azure, Entra, Fabric and GitHub writes are allowed once (a) G1 is
+   approved, (b) your layer is unblocked by the Orchestrator, and (c) the previous layer
+   has Verifier sign-off — including the G0 bootstrap scripts under
+   `scripts/bootstrap/`, which agents may now run.
+
+   The two carve-outs are not caution, they are the point. An agent that can spend a
+   sponsor's money without asking, or delete tenant objects it cannot recreate, is
+   demonstrating something nobody wants to buy:
+   - **G2 still binds.** Any spend-profile increase waits for a human, with the cost
+     delta and duration stated first. Resuming a paid Fabric capacity is G2 *per resume*.
+   - **G3 still binds.** The three tenant-level teardown scripts
+     (`infra/{entra,policy,purview}/teardown.ps1`) keep refusing to run unattended in CI
+     without `-AllowAutomation`, and no workflow passes it.
+
+   The Verifier's independence is unchanged: it runs only code in `verification/`, as
+   `mls-verifier`, never as the deployer.
+2. **Gates:** G0 bootstrap (agent-run since 2026-08-29; previously human-only); G1
+   one-time plan approval; G2 any spend-profile increase (state cost delta + duration,
+   wait for human); G3 tenant-level deletions (Entra objects, labels, Fabric workspace,
+   OIDC federation); G4 exception escalation (layer fails verification twice, cost
+   anomaly, credential failure, lead deadlock). RG-scoped teardown of demo resources is
+   gate-free by design.
 3. **Escalation chain:** IC → workstream lead → Orchestrator → human. Only the
    Orchestrator messages the human; the Verifier may bypass it only when the Orchestrator
    itself is the problem.
