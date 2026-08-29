@@ -32,6 +32,27 @@ name: compliance
 on:
   push:
     branches: [main]
+    # A push that changes ONLY the state artifact must not recompute the state
+    # artifact. Regenerating a file BECAUSE it changed is circular, and here the
+    # circle closes into a loop that does not terminate.
+    #
+    # Why it did not loop before, and does now. The commit job used to push
+    # straight to main with GITHUB_TOKEN, and "events triggered by the
+    # GITHUB_TOKEN will not create a new workflow run" -- GitHub's own recursion
+    # guard, which the step below still names as the thing it relies on. Branch
+    # protection ended that route: the direct push is refused and the artifact
+    # arrives by pull request instead. Merging a pull request is a HUMAN push,
+    # and human pushes do trigger workflows.
+    #
+    # So without this filter: merge the state PR -> compliance re-runs -> the
+    # artifact's own `commit` field is now the merge SHA, so it differs from
+    # what was just merged -> commit, direct push refused, new branch, new PR.
+    # One more every time someone merges the last one.
+    #
+    # The nightly cron is unaffected and is what keeps the artifact fresh; this
+    # filter only stops the state artifact from being its own trigger.
+    paths-ignore:
+      - compliance/state/**
   schedule:
     # 02:17 UTC nightly. Off the hour deliberately: the top of the hour is when
     # GitHub's scheduler is most contended and a run is most likely to be delayed.
