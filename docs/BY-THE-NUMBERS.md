@@ -29,17 +29,17 @@ on every push, so the file counts below are one commit older than the tip by des
 | **Commits** | 112 at the point measured |
 | **Cloud writes** | **0** |
 
-## Tests: 2,154
+## Tests: 2,259
 
 | Runner | Scope | Tests |
 |---|---|---|
-| Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, fuse scripts, the 11 Verifier audits, **and the compliance platform's catalog / collectors / derivation / emitter** | **1,172** |
+| Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, fuse scripts, the 11 Verifier audits, **and the compliance platform's catalog / collectors / derivation / emitter** | **1,277** |
 | Vitest | mcp-tools 321 · data-api 295 · control-tower 98 · spec-renderer 59 · compliance 50 · launch-ops 33 | **856** |
 | `node --test` | cost-ingest 84 · directline-token 12 | **96** |
 | pytest | data generators, determinism and schema parity | **30** |
 
 **169 of the 550 authored files are test files — 30,209 lines, roughly one line of test
-for every 2.6 lines of everything else.** Every cloud call in all 2,154 is mocked; the
+for every 2.6 lines of everything else.** Every cloud call in all 2,259 is mocked; the
 suite has never contacted Azure, Graph, Fabric or GitHub.
 
 Two gates sit alongside them and are not counted as "tests" because they are not test
@@ -91,10 +91,13 @@ numbers say more:
   that has never been deployed, that is the only truthful board there is. The platform is
   built so a human's strongest written claim cannot derive to `COMPLIANT`, and so that no
   blended percentage exists anywhere to paper over the difference.
-- **24 pre-publication security findings**, each with severity, `file:line`, an attack
+- **36 pre-publication security findings**, each with severity, `file:line`, an attack
   path and a fix — found by reviewing this repository before publishing it, and closed on
-  this branch. Sixteen of the nineteen control records now assert `CLOSED`; three do not,
-  and they are the three `GAP` rows on the board.
+  this branch. **All nineteen control records now assert `CLOSED`**, so there are zero
+  `GAP` rows on the board — and `CLOSED` still means only "no known open finding", which
+  is why the ceiling those rows reach is `PARTIAL` and not `COMPLIANT`. The last one to
+  close was F13's seventh workload RBAC grant, which had no principal to be granted to
+  until F19 provisioned `apps/cost-ingest` as a real Function App.
 - **10 defects caught by re-verifying subagent work** rather than trusting it — including
   a shared audit action that piped every audit through `tee`, so a failing audit could
   never fail its layer, and a Layer 1 criterion that was structurally unpassable.

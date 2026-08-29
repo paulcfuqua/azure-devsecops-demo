@@ -14,26 +14,36 @@ static board behind Container Apps Easy Auth) and the query half is `query_compl
 the sixth tool on `apps/mcp-tools` — both read the artifact emitted here, and neither
 holds a second copy of the logic.
 
-**What the board says on this estate, today: 0 COMPLIANT, 12 PARTIAL, 3 GAP, 0
+**What the board says on this estate, today: 0 COMPLIANT, 15 PARTIAL, 0 GAP, 0
 INCONCLUSIVE, 0 NOT_APPLICABLE, 95 NOT_ASSESSED of 110**, plus the 4 out-of-catalog rows
 described below. Nothing here has ever been deployed, so nothing could have been
 observed; a green board at this point would mean the platform had invented a claim.
+
+The three rows that moved from GAP to PARTIAL on 2026-08-28 are 3.1.1, 3.1.2 and 3.1.5,
+and **PARTIAL is the ceiling an authored assertion can reach** — see **Derived
+vocabulary** below. Their last open contributor was F13's seventh workload RBAC grant,
+which had no principal to be written against until F19 provisioned `apps/cost-ingest` as
+a real Function App. Zero GAP does not mean the estate is compliant; it means no finding
+this review raised is still open against a control, on a system that has never run.
 
 ## What exists today
 
 - **`assessment/`** — one `<control-id>.json` per NIST SP 800-171 control that the
   2026-08-26 pre-publication security review found a gap against, in the schema from
-  spec §3.2. Each file asserts a `status` (see **Register vocabulary** below). As of the
-  2026-08-26 remediation branch, 16 of 19 assert `CLOSED` and the rest remain `GAP`. This is the **remediation register**: the first
+  spec §3.2. Each file asserts a `status` (see **Register vocabulary** below). As of
+  2026-08-28, **all 19 assert `CLOSED`** — which says only that no known open finding
+  stands against any of them, never that the controls are met. This is the **remediation register**: the first
   implementation task against the compliance-platform spec (§8, item 1), not part of the
   spec itself.
 - **`findings/2026-08-26-prepublication-review.md`** — the narrative record of the
-  24 findings behind that register (F1-F24): severity, confidence, `file:line`, the concrete
+  36 findings behind that register (F1-F36): severity, confidence, `file:line`, the concrete
   attack path, impact (including cost where relevant), and the fix. Each
   `compliance/assessment/*.json` file's `assertion.evidence` cites one or more anchors
-  into this document. Six findings (F14, F15, F19, F20, F21, F22) map to no 800-171 control
-  and are recorded here only, not as assessment files, so they don't fall through the
-  gap between the security and compliance framings.
+  into this document. Eight findings (F14, F15, F19, F20, F21, F22, F29, F36) map to no
+  800-171 control and are recorded here only, not as assessment files, so they don't fall
+  through the gap between the security and compliance framings. (This paragraph said
+  "24 findings (F1-F24)" until 2026-08-28; the 2026-08-28 addendum added F25-F36 and the
+  count was never updated with it.)
 - **`catalog/`** — the full 110-requirement NIST SP 800-171 Rev 2 catalog with its mappings
   to 800-53 Rev 5, CMMC 2.0 and FAR 52.204-21, in the schema from spec §3.1. This is
   **authored reference data**: it carries no status field and asserts nothing about this

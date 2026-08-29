@@ -1,4 +1,4 @@
-# compliance/tests/derivation.Tests.ps1
+﻿# compliance/tests/derivation.Tests.ps1
 #
 # Get-MlsControlStatus is the one place a control's rendered status and its
 # provenance are decided, so this suite is heavier than the code volume suggests.
@@ -610,6 +610,16 @@ Describe 'the real remediation register' {
     It 'maps every authored CLOSED to PARTIAL and every authored GAP to GAP' {
         # Counts derived from the files, never hardcoded, so this cannot go stale as the
         # register changes.
+        #
+        # `$expectedGap | Should -BeGreaterThan 0` used to sit alongside the partial
+        # guard below, and it went red the day the register's last GAP closed (F19,
+        # 2026-08-28 - the seventh workload RBAC grant, which was F13's last open
+        # contributor against 3.1.1/3.1.2/3.1.5). That assertion was checking the
+        # register's COMPOSITION, not this function's MAPPING: it encoded "some finding
+        # is always open", which is not a property the derivation has or should have.
+        # The non-vacuity it was there to provide is now supplied by a synthetic GAP
+        # record below, which exercises the same branch without requiring the estate to
+        # stay broken for the test to pass.
         $expectedPartial = 0
         $expectedGap = 0
         $actualPartial = 0
@@ -629,9 +639,24 @@ Describe 'the real remediation register' {
             }
         }
         $expectedPartial | Should -BeGreaterThan 0
-        $expectedGap     | Should -BeGreaterThan 0
         $actualPartial   | Should -Be $expectedPartial
         $actualGap       | Should -Be $expectedGap
+
+        # The GAP branch, exercised on a record shaped exactly like a real one. This is
+        # what keeps the mapping honest once every committed record reads CLOSED.
+        $syntheticGap = @{
+            control       = '3.1.1'
+            applicability = 'applicable'
+            criteria      = @()
+            assertion     = @{
+                status   = 'GAP'
+                evidence = @('compliance/findings/2026-08-26-prepublication-review.md#f13')
+            }
+        }
+        $gapResult = Get-MlsControlStatus -Requirement @{ id = '3.1.1' } `
+            -Assessment $syntheticGap -Evidence @()
+        $gapResult.Status     | Should -Be 'GAP'
+        $gapResult.Provenance | Should -Be 'asserted'
     }
 }
 

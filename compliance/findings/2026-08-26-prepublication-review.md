@@ -23,10 +23,12 @@ document now. Each closed finding's `Fix:` section is left as originally written
 describes what closing the finding required, which is historical context, not a live
 claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
-(rationale, evidence, and the closing commit SHA) for that control. Two findings remain
-open: **F13** (five of seven workload RBAC grants land; the sixth needs F19) and **F19**
-itself (deferred to the sponsor — needs a new Function App deploy surface and a G2 spend
-decision against the $200/30-day credit).
+(rationale, evidence, and the closing commit SHA) for that control. **No finding in this document is open.** The last two were **F13** and **F19**, and they were
+one problem wearing two labels: F13's seventh workload RBAC grant had no principal to be
+written against because F19 meant `apps/cost-ingest` had no Function App and no identity.
+Both closed on 2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own
+Fix text below says not to build the Function App without that authorisation, and it was
+given rather than assumed.
 
 **F25–F36 addendum (2026-08-28, the final pre-publication audit).** Twelve more findings,
 raised by a last pass done specifically in the position of *a stranger cloning this repo
@@ -60,13 +62,13 @@ document and the findings-index table's `Closed by` column are their *only* dura
 | [F10](#f10) | NIST policy identity holds standing Contributor | medium | CONFIRMED | 3.1.5 | Task 11 |
 | [F11](#f11) | `javascript:` href accepted in Adaptive Cards; no CSP | high | CONFIRMED (path traced end to end) | 3.14.1 | Task 14 |
 | [F12](#f12) | SQL gate: unterminated comment/quote swallows the tail | medium | CONFIRMED (reproduced) | 3.14.1 | Task 15 |
-| [F13](#f13) | Zero workload RBAC expressed in IaC | high | CONFIRMED | 3.1.1, 3.1.2, 3.1.5 | Task 12 |
+| [F13](#f13) | Zero workload RBAC expressed in IaC | high | CONFIRMED | 3.1.1, 3.1.2, 3.1.5 | Task 12, then F24, then F19 |
 | [F14](#f14) | self-heal branch-squatting kill switch + missing ref filter | medium | CONFIRMED | — (availability) | Task 16 |
 | [F15](#f15) | Cost export non-functional | medium | CONFIRMED | — (cost control) | Task 17 |
 | [F16](#f16) | Azure SQL backup posture never decided or verified | medium | CONFIRMED | CP-9 | Task 18 |
 | [F17](#f17) | Zero alert rules or action groups anywhere in the estate | high | CONFIRMED | SI-4, IR-4 | Task 19 |
 | [F18](#f18) | Sensitivity labels published nowhere — a taxonomy, not a control | medium | CONFIRMED | CM-6 | Task 20 |
-| [F19](#f19) | cost-ingest documented as deployed; deploys nowhere | medium | CONFIRMED | — (availability/completeness) | *deferred to sponsor — needs a Function App (new deploy surface + a G2 spend decision)* |
+| [F19](#f19) | cost-ingest documented as deployed; deploys nowhere | medium | CONFIRMED | — (availability/completeness) | F19 remediation (commit c33f06e) |
 | [F20](#f20) | data-api's contained-user grant is expressed but never applies | medium | CONFIRMED | — (availability) | Task 22 |
 | [F21](#f21) | mls-verifier's documented Fabric workspace Viewer grant does not exist | high | CONFIRMED | — (availability — breaks the Verifier's sign-off gate) | Task 21 |
 | [F22](#f22) | Container images never smoke-tested in CI | medium | CONFIRMED | — (availability) | Task 24 |
@@ -534,9 +536,10 @@ an unclosed comment, quote, backtick or bracket. Make nesting dialect-aware.
 - **Severity:** high
 - **Confidence:** CONFIRMED
 - **Controls:** 3.1.1, 3.1.2, 3.1.5
-- **Closed by:** Task 12
-- **Status:** GAP
-- **Open because:** six of seven workload RBAC grants have now landed. Five landed in Task 12 (commit 344063b) and Task 17 (commit 08ff769); the sixth -- data-api -> Fabric workspace Viewer -- was *expressed but never invoked* until F24 wired it, because `provision-workspace.ps1`'s `-DataApiPrincipalId` parameter had no caller and structurally could not have one at L5. The seventh (cost-ingest -> Storage Blob Data Reader) remains blocked on F19, which has no Function App or identity to grant it to. An earlier revision of this line claimed six had landed while the data-api Fabric grant was still unwired; that was wrong and F24 records it. See `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.1.5.json`.
+- **Closed by:** Task 12, then F24, then F19
+- **Status:** CLOSED
+- **Closed (2026-08-28, commit c33f06e):** all seven of the documented workload RBAC grants are now expressed in code. Five landed in Task 12 (commit 344063b) and Task 17 (commit 08ff769); the sixth -- data-api -> Fabric workspace Viewer -- was *expressed but never invoked* until F24 wired it; the seventh -- cost-ingest -> Storage Blob Data Reader -- landed with F19, which provisioned the Function App and the user-assigned identity that grant needed a principal for. It is scoped to the `cost-exports` **container**, not the account, in `infra/bicep/platform/modules/blob-container-role.bicep`. `key-vault-secrets-user-role.bicep`, the third clause of the Fix below, was repurposed rather than deleted at Task 5 (F2's infra half). **NOT claimed, and carried forward as a recommendation rather than quietly dropped:** the Fix's middle clause -- "add a V7.x criterion asserting each principal holds exactly its expected roles and no others" -- is still unimplemented. Nothing in this estate has ever been deployed, so a live-tenant criterion has never had anything to assert against; what exists instead is static, repo-level: `verification/tests/workload-rbac.Tests.ps1` and `verification/tests/cost-ingest.Tests.ps1` assert each grant by role definition GUID and by scope, and both refuse any GUID outside the documented set. That is a guard on what the repository *declares*, not on what a tenant *holds*, and the two are not the same claim. See `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.1.5.json`.
+- **Superseded status line, kept because the register's history is part of its value:** "six of seven workload RBAC grants have now landed. Five landed in Task 12 (commit 344063b) and Task 17 (commit 08ff769); the sixth -- data-api -> Fabric workspace Viewer -- was *expressed but never invoked* until F24 wired it, because `provision-workspace.ps1`'s `-DataApiPrincipalId` parameter had no caller and structurally could not have one at L5. The seventh (cost-ingest -> Storage Blob Data Reader) remains blocked on F19, which has no Function App or identity to grant it to." — true until 2026-08-28, superseded by the line above. An earlier revision of this line claimed six had landed while the data-api Fabric grant was still unwired; that was wrong and F24 records it. See `compliance/assessment/3.1.1.json`, `compliance/assessment/3.1.2.json`, `compliance/assessment/3.1.5.json`.
 
 **Verified:** ZERO `az role assignment` invocations across `.github/`, `scripts/`,
 `infra/`, `data/`. ZERO `roleAssignments:` parameters to any AVM module. The ONLY
@@ -984,9 +987,9 @@ all pass after the fix. CM-6 closes outright — F18 was its sole contributor (s
 - **Severity:** medium
 - **Confidence:** CONFIRMED
 - **Controls:** none — no 800-171 control (availability/completeness)
-- **Closed by:** not assigned
-- **Status:** GAP
-- **Open because:** deferred to the sponsor. Closing it means provisioning `apps/cost-ingest` as a real Azure Function App with its own identity -- a new deploy surface and a G2 spend decision against the $200/30-day credit, not a call a remediation task can make. No `compliance/assessment/` record exists for F19 (it maps to no NIST SP 800-171 control); this entry and the findings-index table's `Closed by` column are its only durable record.
+- **Closed by:** F19 remediation (commit c33f06e)
+- **Status:** CLOSED
+- **Note on the record:** no `compliance/assessment/` record exists for F19 (it maps to no NIST SP 800-171 control); this entry and the findings-index table's `Closed by` column are its only durable record. It is nonetheless cited in `compliance/assessment/3.1.1.json`, `3.1.2.json` and `3.1.5.json` as the finding whose closure let F13's seventh grant exist at all.
 
 **Where:** `.github/workflows/infra-up.yml:31` — "WHERE THE FINOPS LEG LIVES. `apps/cost-ingest` (Cost Management daily export → storage → consumption Function → lakehouse `cost_daily`) is an L6 resource and deploys inside layer-06-platform.yml alongside the export wiring it consumes." `apps/cost-ingest/README.md:143`'s RBAC table says the identity's grants are "granted by L6's Bicep".
 
@@ -997,6 +1000,20 @@ all pass after the fix. CM-6 closes outright — F18 was its sole contributor (s
 **Impact:** cost-ingest is not on the critical demo path and nothing silently mis-secures as a result of this gap on its own — it simply will not exist when `apps/cost-ingest` or `infra-up.yml`'s own commentary says it will. A sponsor or adopter who reads `infra-up.yml:31` or the README's RBAC table and concludes the FinOps leg is live would be wrong; the daily Cost Management export (once Task 17/F15 lands) would write to storage with nothing downstream ever reading it into the lakehouse.
 
 **Fix:** either provision `apps/cost-ingest` as a real Azure Function App with its own user-assigned identity (new deploy surface, new spend decision against the sponsor's 30-day credit — a G2-shaped decision, not a remediation-task one), or correct `infra-up.yml:31` and the README's RBAC table to state plainly that the Function does not deploy yet. Do not build the Function App as part of closing F13 or F19 without that decision being made explicitly.
+
+**Closed (2026-08-28, commit c33f06e) — the first branch of that Fix, on explicit sponsor authorisation.** The Fix above forbids building the Function App without an explicit decision; the sponsor gave one, so this is the built branch and not the documentation branch.
+
+*What was built.* `infra/bicep/platform/main.bicep` now provisions, all in `mls-rg-ops` beside the cost-export storage it reads: the Function App, a **Flex Consumption (FC1)** plan, a **user-assigned identity** (`<prefix>-cost-ingest-<env>-id`), a second, empty storage account for the Functions runtime, an Event Grid system topic on the cost-export account, and four role assignments. `.github/workflows/layer-06-platform.yml` publishes the code and creates the blob-created event subscription; `.github/workflows/layer-07-apps.yml` issues the Fabric workspace grant. `infra-up.yml:31`'s claim is now true, and says so in its own text.
+
+*The spend decision, stated so it can be checked rather than trusted.* Idle cost is **unchanged**. Flex Consumption has no per-plan charge and bills only execution GB-seconds; the plan declares **no `alwaysReady` instances**, which is the single setting on that plan that would bill at rest, and adding one later is a G2 change rather than a tuning change. The workload is one Cost Management export a day — roughly 30 invocations a month of a few seconds each at the smallest (512 MB) instance size, inside the monthly free grant. The two supporting resources are an empty `Standard_LRS` storage account (cents; it holds host bookkeeping and the deployment package, never export data) and an Event Grid system topic (the first 100,000 operations a month are free; this uses about 30). Against the $200/30-day credit the delta is at the noise floor, which is why this did not turn into a G2 escalation in practice — but the authorisation was obtained regardless, because the Fix text required it.
+
+*Why Flex Consumption and not the plan the README used to name.* The app's own `src/config.ts` states that no setting it reads may be a credential (CLAUDE.md hard rule 5), and a Functions host needs an `AzureWebJobsStorage` connection. Per Microsoft's plan matrix, Flex Consumption supports managed identity for host storage **and uses no Azure Files at all**; the legacy Consumption and Elastic Premium plans support managed identity for blobs/queues/tables but still require `WEBSITE_AZUREFILESCONNECTIONSTRING`, a shared-key connection string their own guidance says to hide in Key Vault. Hiding a credential is not the same as not having one. The only other plan with full managed-identity host storage is Dedicated, whose cheapest usable tier bills ~$13/month around the clock — 6.5% of the whole credit, permanently, for 30 executions.
+
+*Two consequences, stated rather than buried.* (1) Flex Consumption supports **only** the Event Grid-based blob trigger, so `apps/cost-ingest/src/functions/cost-ingest.ts` now declares `source: "EventGrid"` and the event subscription is created by the workflow — it cannot be Bicep, because its webhook URL embeds the app's `blobs_extension` system key, which does not exist until the site does and which `listKeys` would both fail on at `what-if` time and print into a public workflow log (F4's failure mode). The key is masked and never written to an output, a job summary or an artifact. (2) The Functions host needs **account-wide** blob, queue and table access to its own storage, so the runtime deliberately uses a **second** storage account: consolidating onto the cost-export account would have handed the identity Owner-class blob access to the very container F13's seventh grant narrows it to, making that grant decorative.
+
+*A latent defect found while doing it.* The trigger's container fallback read `costexports`, a container nothing in this estate creates — L6's Bicep, the export definition and the L6 audit's V6.3 all use `cost-exports`. L6 sets `COST_EXPORT_CONTAINER` explicitly so the fallback was never going to be reached here, but a fallback naming a container nobody creates is a trigger that silently never fires. Corrected. It is the same one-hyphen mismatch [F15](#f15) already fixed once on the export side.
+
+*What is verified, and what is not.* `verification/tests/cost-ingest.Tests.ps1` (43 assertions) checks the Bicep and workflow shape against comment-stripped sources (F27): the Storage Blob Data Reader **GUID** and the **container** scope, that the account-wide host roles bind only to the runtime account, that no forbidden GUID appears anywhere, that no connection string or Azure Files setting is introduced, that the plan carries no always-ready instances, and that the system key is masked and never persisted. `infra/fabric/tests/provision-workspace.Tests.ps1` gained six assertions on the Fabric role string per principal. Three surgical mutations were run and each turned exactly the intended assertions red — widening the container grant to account scope (1 red), dropping the user-assigned identity (1 red), widening the Fabric role to Member (6 red). **Not claimed:** nothing here has been deployed. No Azure, Entra or Fabric call was made to build or test it; the evidence is authored IaC and static tests over this repository, not a running system, and the end-to-end path (Cost Management's first export can take 24 h — L06 V6.3) remains unexercised by design.
 
 ---
 
