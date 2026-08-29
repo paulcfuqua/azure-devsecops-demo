@@ -39,7 +39,7 @@ on:
         description: Unused by L3 (Entra is tenant-scoped); accepted so infra-up can call every layer uniformly.
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run only the -WhatIf plan job; do not apply.
         type: boolean
@@ -51,7 +51,7 @@ on:
         description: Unused by L3 (Entra is tenant-scoped).
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run only the -WhatIf plan job; do not apply.
         type: boolean

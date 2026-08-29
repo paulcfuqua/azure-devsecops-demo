@@ -55,7 +55,7 @@ on:
         description: Unused by L8 (Power Platform and Fabric are tenant-scoped); accepted for uniform layer calls.
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run the import/provision scripts with -WhatIf and make no writes.
         type: boolean
@@ -86,7 +86,7 @@ on:
         description: Unused by L8 (Power Platform and Fabric are tenant-scoped).
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run the import/provision scripts with -WhatIf and make no writes.
         type: boolean

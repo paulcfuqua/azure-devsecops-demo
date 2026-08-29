@@ -7,7 +7,7 @@
 // before the first app image is published.
 using './main.bicep'
 
-param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus2')
+param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus')
 
 param launchOpsImage = readEnvironmentVariable(
   'LAUNCH_OPS_IMAGE',

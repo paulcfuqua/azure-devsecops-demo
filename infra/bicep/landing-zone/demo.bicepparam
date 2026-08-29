@@ -7,9 +7,9 @@ using './main.bicep'
 
 param demoSubscriptionId = readEnvironmentVariable('AZURE_SUBSCRIPTION_ID', '')
 
-param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus2')
+param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus')
 
 // [derived] Single-region guardrail: the demo lives entirely in AZURE_LOCATION.
 param allowedLocations = [
-  readEnvironmentVariable('AZURE_LOCATION', 'eastus2')
+  readEnvironmentVariable('AZURE_LOCATION', 'eastus')
 ]

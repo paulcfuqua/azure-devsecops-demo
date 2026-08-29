@@ -25,7 +25,7 @@ on:
         description: Azure region for the platform deployment.
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run `az deployment sub what-if` only; make no writes.
         type: boolean
@@ -45,7 +45,7 @@ on:
         description: Azure region for the platform deployment.
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run `az deployment sub what-if` only; make no writes.
         type: boolean

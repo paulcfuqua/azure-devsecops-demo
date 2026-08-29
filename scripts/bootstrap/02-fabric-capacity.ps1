@@ -39,7 +39,7 @@ param(
     [ValidatePattern('^[a-z][a-z0-9]{2,62}$')]
     [string]$CapacityName = 'mlsfabricdemo',
 
-    [string]$Location = 'eastus2',
+    [string]$Location = 'eastus',
 
     # Value of the policy-enforced `owner` tag. Neutral fallback on purpose: this is a
     # public reference repo, and a hardcoded personal handle would tag every downstream

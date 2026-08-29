@@ -35,7 +35,7 @@ on:
         description: Azure region for the apps deployment.
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run `az deployment group what-if` only; make no writes.
         type: boolean
@@ -59,7 +59,7 @@ on:
         description: Azure region for the apps deployment.
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run `az deployment group what-if` only; make no writes.
         type: boolean

@@ -98,7 +98,7 @@ param(
 
     [string]$Layers = 'all',
 
-    [string]$Location = 'eastus2',
+    [string]$Location = 'eastus',
 
     [string]$ImageTag = '',
 
