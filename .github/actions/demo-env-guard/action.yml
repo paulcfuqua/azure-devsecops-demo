@@ -20,17 +20,23 @@ description: >-
 # only inspects the values the caller passes in and NEVER prints them.
 # ---------------------------------------------------------------------------
 
+# NOTE: input descriptions must not contain ${{ }} expressions. GitHub evaluates
+# them during template validation, before the action runs and outside any job's
+# context, so a `vars.*` reference here fails EVERY workflow that uses this action
+# with "Unrecognized named-value: 'vars'". That is what happened on this
+# repository's first real CI run - the guard had never executed before. The values
+# still come from vars.*; the CALLER reads them and passes them as inputs.
 inputs:
   client-id:
-    description: '${{ vars.AZURE_CLIENT_ID }} read from the demo environment.'
+    description: 'AZURE_CLIENT_ID, read by the caller from the demo environment and passed in.'
     required: false
     default: ''
   tenant-id:
-    description: '${{ vars.AZURE_TENANT_ID }} read from the demo environment.'
+    description: 'AZURE_TENANT_ID, read by the caller from the demo environment and passed in.'
     required: false
     default: ''
   subscription-id:
-    description: '${{ vars.AZURE_SUBSCRIPTION_ID }} read from the demo environment.'
+    description: 'AZURE_SUBSCRIPTION_ID, read by the caller from the demo environment and passed in.'
     required: false
     default: ''
   additional:

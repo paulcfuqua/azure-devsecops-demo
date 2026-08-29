@@ -318,7 +318,7 @@ jobs:
       - name: Trivy must reject the seeded CRITICAL
         id: scan
         continue-on-error: true
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: mls-trivy-negative:seeded
           format: table
@@ -328,7 +328,7 @@ jobs:
           exit-code: '1'
 
       - name: Record what Trivy actually found
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: mls-trivy-negative:seeded
           format: json
@@ -408,7 +408,7 @@ jobs:
           docker build --tag mls-trivy-negative:pinned "${work}"
 
       - name: Trivy must accept the pinned rebuild
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: mls-trivy-negative:pinned
           format: table
