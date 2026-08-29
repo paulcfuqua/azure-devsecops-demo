@@ -54,7 +54,8 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 authored, tested and wired —
 [completion report](verification/reports/phase-q-completion.md), preceded by
 [Phase P](verification/reports/phase-p-completion.md). Two plans have landed since, on
-this branch: a pre-publication security review that closed 24 findings, and the
+this branch: a pre-publication security review that closed 24 findings — the register
+has since grown to **44** as later passes, and the repository's own CI, found more — and the
 **compliance platform** (showpiece #4 below) that renders them against NIST SP 800-171.
 
 What exists: data generators and seeding, the SQL schema, the Fabric lakehouse loaders,
@@ -68,8 +69,8 @@ Gates, measured 2026-08-28 rather than remembered:
 
 | Gate | Result |
 |---|---|
-| Pester (PowerShell 7) over `scripts infra data verification compliance` | **1,172 passed, 0 failed** |
-| `npm test` across 8 workspaces | **952 passed, 0 failed** |
+| Pester (PowerShell 7) over `scripts infra data verification compliance` | **1,352 passed, 0 failed** |
+| `npm test` across 8 workspaces | **960 passed, 0 failed** |
 | `npm run typecheck` across 7 workspaces | **exit 0** |
 | pytest (`data/generators`) | **30 passed** |
 | PSScriptAnalyzer, Error + Warning, over `scripts infra verification data compliance .github` | **0 findings** |
@@ -99,7 +100,7 @@ Decisions in force: monorepo, dual E5 trials, Fabric trial capacity first; the
 
 ## Key documents
 
-- [By the numbers](docs/BY-THE-NUMBERS.md) — what it took: files, lines, 2,154 tests
+- [By the numbers](docs/BY-THE-NUMBERS.md) — what it took: files, lines, 2,342 tests
 - [Project brief (decision record)](docs/BRIEF.md)
 - [Design spec + pressure-test findings](docs/superpowers/specs/2026-08-22-azure-devsecops-demo-design.md)
 - [Copilot Studio amendment (in force)](docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md)
