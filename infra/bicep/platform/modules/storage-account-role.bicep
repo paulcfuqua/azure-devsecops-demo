@@ -10,7 +10,8 @@
 // instead of having to check whether an optional parameter was passed.
 //
 // USED ONLY FOR THE FUNCTIONS HOST'S OWN RUNTIME STORAGE ACCOUNT
-// (platform/main.bicep's functionRuntimeStorage, `mls…func…st`), never for the
+// (platform/main.bicep's functionRuntimeStorage, named by naming.bicep's
+// storageAccountName(prefix, 'func', env)), never for the
 // cost-export account. The Azure Functions host needs account-wide blob, queue
 // and table access to its `AzureWebJobsStorage` account — it creates and
 // manages the `azure-webjobs-hosts` container, singleton lease blobs, the
