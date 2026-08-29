@@ -347,7 +347,7 @@ jobs:
       # `gh pr merge` and friends have a git remote to resolve the repository
       # from. The patch itself is committed by GitHub through the autofix API,
       # never from this working tree.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Assert the alert's most recent instance is on the default branch
         id: ref-check
@@ -772,7 +772,7 @@ jobs:
         ${{ vars.MLS_L10_DEPENDABOT_ALERTS }}
         ${{ needs.select.outputs.kind == 'dependabot' && needs.select.outputs.number || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: names
         uses: ./.github/actions/naming

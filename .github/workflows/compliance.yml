@@ -74,7 +74,7 @@ jobs:
     name: collect compliance state
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Collect the state artifact
         id: collect
@@ -158,11 +158,11 @@ jobs:
     steps:
       # fetch-depth: 0 because the push-retry below rebases, and `git pull --rebase`
       # on the default shallow clone is the fragile half of that retry.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: compliance-state
           path: compliance/state

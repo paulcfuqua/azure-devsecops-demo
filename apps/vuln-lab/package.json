@@ -11,8 +11,8 @@
     "audit:expected": "npm audit --json"
   },
   "dependencies": {
-    "json5": "2.2.0",
-    "minimist": "1.2.5",
-    "semver": "7.5.1"
+    "json5": "2.2.2",
+    "minimist": "1.2.8",
+    "semver": "7.5.2"
   }
 }

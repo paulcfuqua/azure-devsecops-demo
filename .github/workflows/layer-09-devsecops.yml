@@ -156,7 +156,7 @@ jobs:
       configured: ${{ steps.guard.outputs.configured }}
       verifier: ${{ steps.verifier.outputs.configured }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: guard
         uses: ./.github/actions/demo-env-guard
         with:
@@ -287,7 +287,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build the seeded CRITICAL image
         env:
@@ -318,7 +318,7 @@ jobs:
       - name: Trivy must reject the seeded CRITICAL
         id: scan
         continue-on-error: true
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: mls-trivy-negative:seeded
           format: table
@@ -328,7 +328,7 @@ jobs:
           exit-code: '1'
 
       - name: Record what Trivy actually found
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: mls-trivy-negative:seeded
           format: json
@@ -380,7 +380,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build the pinned rebuild
         env:
@@ -408,7 +408,7 @@ jobs:
           docker build --tag mls-trivy-negative:pinned "${work}"
 
       - name: Trivy must accept the pinned rebuild
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: mls-trivy-negative:pinned
           format: table
@@ -442,7 +442,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Create (or reuse) the release
         id: tag
@@ -514,7 +514,7 @@ jobs:
     env:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC, mls-github-deployer)
         id: login
@@ -647,7 +647,7 @@ jobs:
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
       GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verifier identity not configured
         if: ${{ needs.preflight.outputs.verifier != 'true' }}
@@ -671,7 +671,7 @@ jobs:
       - name: Pre-stage the ZAP report for the audit
         if: ${{ needs.preflight.outputs.verifier == 'true' && needs.zap.result == 'success' }}
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: zap-baseline-report
           path: ${{ runner.temp }}/mls-l9-audit/zap-${{ github.run_id }}
