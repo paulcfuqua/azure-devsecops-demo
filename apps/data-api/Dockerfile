@@ -16,7 +16,7 @@
 # Key Vault at start — never baked into this image and never in the repo.
 
 # ---------- dependencies (with dev deps, to compile) ----------
-FROM node:24-bookworm-slim AS deps
+FROM node:26-bookworm-slim AS deps
 WORKDIR /repo
 
 # Manifests only, so a source edit does not invalidate the install layer.
@@ -60,7 +60,7 @@ RUN npm ci --workspace apps/data-api --include-workspace-root --omit=dev --ignor
     && mkdir -p /repo/apps/data-api/node_modules
 
 # ---------- runtime ----------
-FROM node:24-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     PORT=8080
 WORKDIR /repo/apps/data-api
