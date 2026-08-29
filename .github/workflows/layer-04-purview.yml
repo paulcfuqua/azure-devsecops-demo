@@ -26,7 +26,7 @@ on:
         description: Unused by L4 (labels are tenant-scoped); accepted for uniform layer calls.
         type: string
         required: false
-        default: eastus
+        default: ''
       dry_run:
         description: Run labels.ps1 with -WhatIf only.
         type: boolean
@@ -38,7 +38,7 @@ on:
         description: Unused by L4 (labels are tenant-scoped).
         type: string
         required: false
-        default: eastus
+        default: ''
       dry_run:
         description: Run labels.ps1 with -WhatIf only.
         type: boolean

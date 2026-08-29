@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F52](#f52), all raised and all fixed on 2026-08-29 during the first live tenant bring-up
+[F53](#f53), all raised and all fixed on 2026-08-29 during the first live tenant bring-up
 and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -129,6 +129,7 @@ no".
 | [F50](#f50) | `Policy.ReadWrite.ConditionalAccess` does not imply READ for an application permission, so L3 could author Conditional Access policies it was forbidden to look at - and died on the idempotency read before reaching the write it did have rights for | high | CONFIRMED (403 against the live tenant) | 3.1.2, 3.5.2 | first L3 plan, 2026-08-29 |
 | [F51](#f51) | `up.ps1 -DryRun` could never exit 0: L7 what-ifs against a resource group that only a real L6 creates, so the plan always failed and its exit code carried no information | medium | CONFIRMED (every plan run to date) | - (operability; the plan is the pre-deploy gate) | plan runs, 2026-08-29 |
 | [F52](#f52) | Five defects the first real deployment exposed, including a **fabricated policy GUID three `what-if` runs passed** and a fail-fast gate where a skipped layer launders into a success, so L2 failed and L6 built 13 resources anyway | high | CONFIRMED (observed, run 33272832687) | 3.12.1, 3.12.3 | first real deploy, 2026-08-29 |
+| [F53](#f53) | The estate region was hardcoded in **16 places** and the workflow input silently outvoted `vars.AZURE_LOCATION`, so setting the environment variable did nothing and the next deploy went back to the region that cannot host it | high | CONFIRMED (observed, run 33275398487 cancelled) | 3.4.1, 3.4.2 | sponsor question, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -3234,3 +3235,60 @@ cloud ([F46](#f46)), a test is not production configuration ([F49](#f49)), a gat
 fails is untested ([F51](#f51)), and now **a plan is not a deployment**. Each was found the
 same way - by running the real thing once - and each had survived every check that came before
 it.
+
+
+---
+
+## F53
+
+**Setting the region did nothing, because sixteen hardcoded defaults outvoted it**
+
+- **Severity:** high (the deploy silently targeted a region where Azure SQL cannot provision, immediately after that region was changed to fix exactly that)
+- **Confidence:** CONFIRMED - caught in flight; run 33275398487 was cancelled mid-deploy
+- **Controls:** 3.4.1 (baseline configuration), 3.4.2 (enforce configuration settings)
+- **Closed by:** removing every region literal from the deploy path, plus a mutation-tested guard
+- **Status:** CLOSED
+
+**Found while:** the sponsor asked, immediately after the region change, *"Did we hardcode the
+zones? should that also be in the github environment variables?"* The answer was yes and yes,
+and the deploy acting on the new region was already running.
+
+`vars.AZURE_LOCATION` had just been set to `centralus`. `scripts/up.ps1` declared
+`[string]$Location = 'eastus'` and passes that value as a **workflow input** - and an input
+always beats the environment variable a layer would otherwise read. Every one of the eight
+layer workflows also carried `default: eastus`, fifteen occurrences in all. So the estate's
+region had sixteen sources and the environment variable was not one of them: the run
+dispatched thirty seconds after `AZURE_LOCATION=centralus` was set went to **East US**, the
+region [F52](#f52) had just established cannot provision Azure SQL on this subscription.
+
+It was cancelled with L2 already succeeded - which means the allowed-locations policy had been
+assigned with `eastus`, so the estate's own guardrail would then have denied the Central US
+deploy it was about to attempt. A misconfiguration that arranges for the correct
+configuration to be rejected.
+
+**Why it was built that way, which is the part worth keeping.** A reusable-workflow caller
+job cannot declare `environment:`, so `infra-up.yml` genuinely cannot see an environment
+variable at all - `vars.AZURE_LOCATION` is unresolvable in the very file that fans out to
+every layer. The `default: eastus` was a reasonable answer to a real constraint. The fix is
+to resolve it one level down, in the layer jobs, which DO declare `environment: demo`:
+`${{ inputs.location || vars.AZURE_LOCATION }}`. An explicit input still overrides, for a
+one-off.
+
+**Fix:** all fifteen workflow defaults emptied, `up.ps1`'s parameter defaulted to empty, and
+the three layers that consume a region now fall back to the environment variable.
+`verification/tests/no-hardcoded-region.Tests.ps1` asserts all three properties, and was
+mutation-tested by reinstating each one: every mutation is caught by its own assertion and no
+other.
+
+### What this says about the method
+
+The register keeps finding the same shape at wider and wider scope, and this one widens it
+again: **a value with more than one source has no source.** [F50](#f50) was a count written
+twice, once as a map and once as prose. This is a region written sixteen times, where the
+one place an operator would naturally set it was outranked by fifteen places nobody reads.
+
+The sponsor found it by asking where a value lived - not by reading a diff, not from a
+failing test, and not from the plan, which had been green. That is the second time today a
+question about *where something comes from* has surfaced a live defect ([F52](#f52)'s
+fabricated GUID was the first). It is a better question than "is this correct?", because a
+value with one honest source can be checked, and a value with sixteen cannot.

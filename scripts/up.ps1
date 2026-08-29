@@ -98,7 +98,13 @@ param(
 
     [string]$Layers = 'all',
 
-    [string]$Location = 'eastus',
+    # EMPTY BY DEFAULT, and deliberately so. This used to read 'eastus', which is a
+    # region the estate cannot deploy into on a trial subscription (F52) - and because
+    # this value is passed as a workflow INPUT it silently overrode
+    # vars.AZURE_LOCATION, so setting the demo environment variable appeared to do
+    # nothing. Empty means "use the demo environment's AZURE_LOCATION", which is the
+    # single source of truth; pass -Location only to override it for one run (F53).
+    [string]$Location = '',
 
     [string]$ImageTag = '',
 
@@ -670,7 +676,7 @@ function Invoke-Main {
     Write-Status "  workflow  $($script:WorkflowFile)"
     Write-Status "  mode      $Mode"
     Write-Status "  layers    $Layers"
-    Write-Status "  location  $Location"
+    Write-Status "  location  $(if ($Location) { "$Location (explicit override)" } else { "(from the demo environment's AZURE_LOCATION)" })"
     Write-Status "  dry_run   $($DryRun.IsPresent)"
     Write-Status "  image_tag $(if ($ImageTag) { $ImageTag } else { '(placeholder image)' })"
     Write-Status "  command   gh $($ghArgs -join ' ')" -Color DarkGray

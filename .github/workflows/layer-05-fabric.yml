@@ -23,7 +23,7 @@ on:
         description: Unused by L5 (Fabric is capacity-scoped); accepted for uniform layer calls.
         type: string
         required: false
-        default: eastus
+        default: ''
       dry_run:
         description: Run provision-workspace.ps1 with -WhatIf and skip the seed.
         type: boolean
@@ -35,7 +35,7 @@ on:
         description: Unused by L5 (Fabric is capacity-scoped).
         type: string
         required: false
-        default: eastus
+        default: ''
       dry_run:
         description: Run provision-workspace.ps1 with -WhatIf and skip the seed.
         type: boolean
