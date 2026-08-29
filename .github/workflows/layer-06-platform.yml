@@ -25,7 +25,7 @@ on:
         description: Azure region for the platform deployment.
         type: string
         required: false
-        default: eastus
+        default: ''
       dry_run:
         description: Run `az deployment sub what-if` only; make no writes.
         type: boolean
@@ -45,7 +45,7 @@ on:
         description: Azure region for the platform deployment.
         type: string
         required: false
-        default: eastus
+        default: ''
       dry_run:
         description: Run `az deployment sub what-if` only; make no writes.
         type: boolean
@@ -118,7 +118,12 @@ jobs:
       sql-last-touched: ${{ steps.seeded.outputs.sql-last-touched }}
     env:
       # Consumed by infra/bicep/platform/demo.bicepparam via readEnvironmentVariable().
-      AZURE_LOCATION: ${{ inputs.location }}
+      # vars.AZURE_LOCATION is the single source of truth for the estate's region.
+      # It is resolved HERE, not in infra-up.yml, because a reusable-workflow caller
+      # job cannot declare `environment:` and therefore cannot see an environment
+      # variable at all - which is why every layer used to carry `default: eastus`
+      # instead. An explicit `location` input still overrides, for a one-off (F53).
+      AZURE_LOCATION: ${{ inputs.location || vars.AZURE_LOCATION }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       SQL_AAD_ADMIN_LOGIN: ${{ vars.SQL_AAD_ADMIN_LOGIN }}
       SQL_AAD_ADMIN_OBJECT_ID: ${{ vars.SQL_AAD_ADMIN_OBJECT_ID }}

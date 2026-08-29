@@ -31,10 +31,12 @@ on:
   workflow_call:
     inputs:
       location:
-        description: Azure region for the deployment and the allowed-locations guardrail.
+        description: >-
+          Azure region. EMPTY MEANS "use vars.AZURE_LOCATION from the demo environment",
+          which is the single source of truth; pass a value only to override it (F53).
         type: string
         required: false
-        default: eastus
+        default: ''
       dry_run:
         description: Run `az deployment mg what-if` only; make no writes.
         type: boolean
@@ -43,10 +45,12 @@ on:
   workflow_dispatch:
     inputs:
       location:
-        description: Azure region for the deployment and the allowed-locations guardrail.
+        description: >-
+          Azure region. EMPTY MEANS "use vars.AZURE_LOCATION from the demo environment",
+          which is the single source of truth; pass a value only to override it (F53).
         type: string
         required: false
-        default: eastus
+        default: ''
       dry_run:
         description: Run `az deployment mg what-if` only; make no writes.
         type: boolean
@@ -91,7 +95,12 @@ jobs:
       id-token: write
       contents: read
     env:
-      AZURE_LOCATION: ${{ inputs.location }}
+      # vars.AZURE_LOCATION is the single source of truth for the estate's region.
+      # It is resolved HERE, not in infra-up.yml, because a reusable-workflow caller
+      # job cannot declare `environment:` and therefore cannot see an environment
+      # variable at all - which is why every layer used to carry `default: eastus`
+      # instead. An explicit `location` input still overrides, for a one-off (F53).
+      AZURE_LOCATION: ${{ inputs.location || vars.AZURE_LOCATION }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
     steps:
