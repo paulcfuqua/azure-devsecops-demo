@@ -847,12 +847,12 @@ prose that stood here claimed two verifications the script does not perform (fin
 |---|---|---|
 | 1 | `CliLogin` | `az` logged in, active subscription is the expected one |
 | 2 | `DeployerApp` | `mls-github-deployer` registration exists |
-| 3 | `Federation` | its federated credential carries the `environment:demo` subject. **Does not yet assert the immutable-identifier subject GitHub actually presents** - see F48 |
+| 3 | `Federation` | a federated credential exists for **every subject form GitHub says it will send** - the prefix is read from `sub_claim_prefix`, never constructed (F48) |
 | 4 | `OwnerRole` | its service principal holds Owner at subscription scope |
 | 5 | `GraphConsent` | all **six** application permissions are consented. The count is read from the script's own map, not written in prose, so it cannot drift again (F50) |
 | 6 | `VerifierApp` | `mls-verifier` exists with a federated subject **distinct** from the deployer's (F6/F7) |
 | 7 | `FabricCapacity` | an **F-series** capacity is visible through the Fabric API. The SKU is checked, not just the state (F46) |
-| 8 | `FabricSpAccess` | **C4** — service principals may create workspaces and call Fabric public APIs; the three admin-API settings are off (F46) |
+| 8 | `FabricSpAccess` | **C4** — service principals may create workspaces and call Fabric public APIs; the three admin-API settings are off (F46). Where a setting is scoped to a security group, membership of `mls-github-deployer` is confirmed rather than assumed (F50) |
 | 9 | `Licenses` | the **service plans** the layers consume — `AAD_PREMIUM_P2`, `RMS_S_PREMIUM`, `MFA_PREMIUM` — from whatever SKU provides them, with ≥1 unit consumed (F46) |
 | 10 | `Budget` | the budget exists at the expected amount with the expected thresholds |
 | 11 | `EntraDiagnostics` | *informational only* — tenant diagnostics route SignInLogs + AuditLogs to Log Analytics (F9). Never affects the exit code |

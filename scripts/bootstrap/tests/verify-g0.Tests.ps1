@@ -115,8 +115,20 @@ Describe 'verify-g0' {
                 }
             )
         }
+        # Offline by default, exactly like 01-root-oidc.Tests.ps1: the real helper shells
+        # out to gh, and a test that reaches the network is not a test.
+        $script:SubClaimPrefix = $null
+        Mock Get-GitHubSubClaimPrefix { $script:SubClaimPrefix }
+
+        # graphId -> is the deployer SP a member? Drives `az ad group member check`.
+        $script:GroupMembership = @{}
+
         Mock Invoke-AzCli {
             $joined = $Arguments -join ' '
+            if ($joined -like 'ad group member check*') {
+                $group = Get-AzArgValue $Arguments '--group'
+                return [pscustomobject]@{ value = [bool]$script:GroupMembership[$group] }
+            }
             if ($joined -like 'account show*') { return $script:MockAccount }
             if ($joined -like 'ad app list*') {
                 return $script:Apps[(Get-AzArgValue $Arguments '--display-name')]
@@ -189,6 +201,35 @@ Describe 'verify-g0' {
             $row = Get-Row $results 'Federation'
             $row.Status | Should -Be 'FAIL'
             $row.Detail | Should -BeLike '*environment:demo*'
+        }
+
+        It 'fails when GitHub presents an immutable subject and only the classic one is registered (F48)' {
+            # The defect this closes: the check asserted only the hand-built classic
+            # subject, so it passed on a deployer whose first real OIDC login was refused
+            # with AADSTS700213. A gate that cannot see the failure it is meant to prevent
+            # is the F49 shape again, one check down.
+            $script:SubClaimPrefix = 'repo:paulcfuqua@51541817/azure-devsecops-demo@1347346268'
+            $row = Get-Row (Invoke-VerifyForTest) 'Federation'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*51541817*'
+        }
+
+        It 'passes when both subject forms are registered' {
+            $script:SubClaimPrefix = 'repo:paulcfuqua@51541817/azure-devsecops-demo@1347346268'
+            $script:FedCredsByAppObjectId['dep-obj'] = @(
+                [pscustomobject]@{ subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo' }
+                [pscustomobject]@{ subject = 'repo:paulcfuqua@51541817/azure-devsecops-demo@1347346268:environment:demo' }
+            )
+            $row = Get-Row (Invoke-VerifyForTest) 'Federation'
+            $row.Status | Should -Be 'PASS'
+        }
+
+        It 'still passes on the classic subject alone when GitHub reports no immutable prefix' {
+            # Backward compatible: a tenant whose GitHub does not present the immutable
+            # form must not be failed for lacking a credential it will never need.
+            $script:SubClaimPrefix = $null
+            $row = Get-Row (Invoke-VerifyForTest) 'Federation'
+            $row.Status | Should -Be 'PASS'
         }
 
         It 'flags a verifier with no federated credential at all (2026-08-26 finding F6)' {
@@ -344,6 +385,36 @@ Describe 'verify-g0' {
             $row = Get-Row (Invoke-VerifyForTest) 'FabricSpAccess'
             $row.Status | Should -Be 'FAIL'
             $row.Detail | Should -BeLike '*ServicePrincipalAccessGlobalAPIs*'
+        }
+
+        It 'fails when a required setting is scoped to a security group the deployer is not in (F50)' {
+            # The false PASS this closes: the Fabric API reports enabled=true for a
+            # group-scoped setting regardless of who is in the group. Reading the flag
+            # alone would green-light G0 and leave L5 failing at New-FabricWorkspace.
+            $script:FabricTenantSettings = [pscustomobject]@{
+                tenantSettings = @(
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessGlobalAPIs'; enabled = $true
+                        enabledSecurityGroups = @([pscustomobject]@{ graphId = 'grp-1'; name = 'fabric-sps' }) }
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessPermissionAPIs'; enabled = $true }
+                )
+            }
+            $script:GroupMembership['grp-1'] = $false
+            $row = Get-Row (Invoke-VerifyForTest) 'FabricSpAccess'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*fabric-sps*'
+        }
+
+        It 'passes when the deployer is a member of the scoped security group' {
+            $script:FabricTenantSettings = [pscustomobject]@{
+                tenantSettings = @(
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessGlobalAPIs'; enabled = $true
+                        enabledSecurityGroups = @([pscustomobject]@{ graphId = 'grp-1'; name = 'fabric-sps' }) }
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessPermissionAPIs'; enabled = $true }
+                )
+            }
+            $script:GroupMembership['grp-1'] = $true
+            $row = Get-Row (Invoke-VerifyForTest) 'FabricSpAccess'
+            $row.Status | Should -Be 'PASS'
         }
 
         It 'passes C4 but names admin access nobody asked for' {

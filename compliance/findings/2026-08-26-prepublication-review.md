@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F50](#f50), all raised and all fixed on 2026-08-29 during the first live tenant bring-up. Before them, **F13** and **F19** were one problem wearing
+[F51](#f51), all raised and all fixed on 2026-08-29 during the first live tenant bring-up. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
 2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own Fix text below
@@ -126,6 +126,7 @@ no".
 | [F48](#f48) | `01-root-oidc.ps1` built the OIDC subject claim by hand, but GitHub now presents an **immutable-identifier** subject - so the first real federated login failed and every workflow was locked out of Azure | high | CONFIRMED (AADSTS700213, then green) | 3.5.1, 3.5.2 | first live OIDC login, 2026-08-29 |
 | [F49](#f49) | The Verifier crashed before evaluating a single criterion, and its own 535-test suite could not see it: **12 audit scripts run `Set-StrictMode -Version Latest`; 13 test harnesses ran `Set-StrictMode -Off`** | high | CONFIRMED (observed in CI, reproduced, mutation-tested) | 3.12.1, 3.12.3 | verify-l1 failures on main, 2026-08-29 |
 | [F50](#f50) | `Policy.ReadWrite.ConditionalAccess` does not imply READ for an application permission, so L3 could author Conditional Access policies it was forbidden to look at - and died on the idempotency read before reaching the write it did have rights for | high | CONFIRMED (403 against the live tenant) | 3.1.2, 3.5.2 | first L3 plan, 2026-08-29 |
+| [F51](#f51) | `up.ps1 -DryRun` could never exit 0: L7 what-ifs against a resource group that only a real L6 creates, so the plan always failed and its exit code carried no information | medium | CONFIRMED (every plan run to date) | - (operability; the plan is the pre-deploy gate) | plan runs, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2835,13 +2836,16 @@ repository and the same environment, which is the property [F7](#f7) cares about
 is unavailable or the field is absent the script registers the classic subject alone, which
 is the previous behaviour.
 
-**Follow-up, deliberately not done in the same change:** `verify-g0.ps1`'s `Federation`
-check still asserts only that *a* credential carries `environment:demo`. It passed while
-this defect was live and would pass again, because it never asks GitHub which subject will
-actually be presented. The check that would have caught this is the one that resolves
-`sub_claim_prefix` and asserts a credential matching it. Held back deliberately: adding a
-new G0 check hours before a live deployment is how [F46](#f46)'s false FAILs happened, and
-this one wants its own mutation test.
+**Follow-up, deferred then closed the same day.** `verify-g0.ps1`'s `Federation` check
+asserted only that *a* credential carried `environment:demo`. It passed while this defect
+was live and would have passed again, because it never asked GitHub which subject would
+actually be presented. Held back at first - adding a G0 check hours before a live
+deployment is how [F46](#f46)'s false FAILs happened - and done between runs instead. The
+check now resolves `sub_claim_prefix` through the shared `MlsBootstrap.psm1` and requires a
+credential for each form GitHub says it will send, falling back to the classic subject
+alone where no immutable prefix is reported. Mutation-tested: restoring the old
+classic-only assertion fails the new case and nothing else. Against the live tenant it now
+reads *"environment subject present, both classic and immutable forms"*.
 
 ### What this says about the method
 
@@ -3014,6 +3018,21 @@ consent at all. Both fixtures now derive from the script's own map. Which roles 
 is still pinned by explicit named assertions, where being wrong is the point; the fixture
 only claims "the tenant consented whatever the script asks for."
 
+### A third defect, found while fixing the second
+
+Explaining the Fabric toggle to the sponsor surfaced one more false PASS, in a different
+check. `FabricSpAccess` read each required setting's `enabled` flag - but a Fabric tenant
+setting can be enabled **for specific security groups**, and the API reports `enabled: true`
+either way. Scoping `ServicePrincipalAccessGlobalAPIs` to a group the deployer is not in
+would therefore have produced a **green G0 and an L5 that fails at
+`New-FabricWorkspace`** - the exact false-PASS shape [F46](#f46) caught in the capacity
+check, in the check written to close it.
+
+The check now reads `enabledSecurityGroups`, and where a required setting is scoped it
+resolves the deployer's service principal and asks whether it is actually a member. An
+unreadable answer counts as *not* a member: an unanswerable question fails the check rather
+than passing it, because the cost of a false PASS here is a broken L5. Mutation-tested.
+
 ### What this says about the method
 
 [F49](#f49) was a test suite that could not see a class of bug. F50 is smaller and more
@@ -3026,3 +3045,47 @@ Worth pairing with [F48](#f48): both are the estate assuming it knows what anoth
 means. There, GitHub's subject format; here, Microsoft's scope semantics. In both cases the
 authoritative answer was one API call away and the assumption was reasonable, well-named,
 and wrong.
+
+
+---
+
+## F51
+
+**The plan could never pass, so its exit code said nothing**
+
+- **Severity:** medium (no wrong estate state; the pre-deploy gate simply could not report success)
+- **Confidence:** CONFIRMED - every `up.ps1 -DryRun` run on 2026-08-29 failed this way
+- **Controls:** - (operability)
+- **Closed by:** a dry-run-only skip in `layer-07-apps.yml`
+- **Status:** CLOSED
+
+**Found while:** reading the third plan run of the day, the first in which every other layer
+went green. L7 failed:
+
+```
+ResourceGroupNotFound: Resource group 'mls-rg-apps' could not be found.
+```
+
+L6 creates `mls-rg-apps`. In a plan run L6 only *what-ifs*, so the group does not exist, so
+L7's own what-if has nothing to run against. That is the layering working as designed - but
+the step failed on it unconditionally, which means **`up.ps1 -DryRun` could not exit 0 on
+any estate that had not already been deployed**. The plan is the gate you run *before* the
+first deploy; on a fresh estate, the one case it exists for, it always reported failure.
+
+A gate that always fails is worth exactly as much as one that always passes. It had been
+failing this way in every plan run today, and it read as noise each time precisely because
+it was always there - including in the run where it sat beside the genuine L2 authorization
+failure that turned out to be [F47](#f47).
+
+**Fix:** the what-if step checks for the resource group first. Missing **and** `dry_run` is
+a `::notice` and a clean exit; missing **without** `dry_run` still fails loudly, because
+then L6 genuinely did not deliver what L7 depends on. The skip is scoped to the one
+condition that makes it legitimate rather than tolerating a missing group in general.
+
+### What this says about the method
+
+The estate had three gates reporting on it today, and all three were broken in the same
+direction: [F49](#f49)'s Verifier could not start, [F50](#f50)'s G0 counted in prose, and
+this one could not succeed. None of the three was wrong about the estate - they were wrong
+about *themselves*, and each was invisible for the same reason: **nobody reads a signal that
+never changes.** A red L7 in every plan run is indistinguishable from wallpaper.
