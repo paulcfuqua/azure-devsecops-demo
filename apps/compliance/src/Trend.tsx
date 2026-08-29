@@ -2,6 +2,7 @@ import { Text, Title3, makeStyles, tokens } from "@fluentui/react-components";
 import { useMemo } from "react";
 import type { ComplianceState, ControlStatus, StatusCounts } from "./types";
 import { STATUS_KEYS } from "./types";
+import type { JSX } from "react";
 
 const useStyles = makeStyles({
   matrix: {

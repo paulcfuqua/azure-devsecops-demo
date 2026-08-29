@@ -1,5 +1,6 @@
 import { Badge, type BadgeProps } from "@fluentui/react-components";
 import type { Provenance } from "./types";
+import type { JSX } from "react";
 
 /**
  * Provenance -> Badge colour. This badge shows a SINGLE control row's own

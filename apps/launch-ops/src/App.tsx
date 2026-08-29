@@ -13,6 +13,7 @@ import {
 import { useMemo, useState } from "react";
 import { SpecPanel } from "./SpecPanel";
 import type { DataProvider } from "./providers/types";
+import type { JSX } from "react";
 
 const useStyles = makeStyles({
   shell: {

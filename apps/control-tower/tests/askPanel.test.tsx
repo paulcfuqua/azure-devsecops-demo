@@ -13,6 +13,7 @@ import type {
 } from "../src/agent/types";
 import { LocalProvider } from "../src/providers/LocalProvider";
 import { stubLoader } from "./sampleData";
+import type { JSX } from "react";
 
 function withTheme(node: React.ReactNode): JSX.Element {
   return <FluentProvider theme={webLightTheme}>{node}</FluentProvider>;

@@ -16,6 +16,7 @@ import { FamilyCard, type FamilyCardEntry } from "./FamilyCard";
 import { StatusBadge } from "./StatusBadge";
 import { ProvenanceBadge } from "./ProvenanceBadge";
 import { FRAMEWORK_LABELS } from "./FrameworkSwitcher";
+import type { JSX } from "react";
 
 const useStyles = makeStyles({
   callout: {

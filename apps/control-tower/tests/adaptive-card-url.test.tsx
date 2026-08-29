@@ -3,6 +3,7 @@ import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import { describe, expect, it } from "vitest";
 import { AdaptiveCardView } from "../src/AdaptiveCardView";
 import type { AdaptiveCard } from "../src/agent/types";
+import type { JSX } from "react";
 
 /**
  * F11: Action.OpenUrl.url and Image.url must refuse anything that is not an

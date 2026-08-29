@@ -1,5 +1,6 @@
 import { Button, Link, makeStyles, Text, tokens } from "@fluentui/react-components";
 import type { AdaptiveAction, AdaptiveCard, AdaptiveElement } from "./agent/types";
+import type { JSX } from "react";
 
 /**
  * Adaptive Card view — the governance story, rendered.

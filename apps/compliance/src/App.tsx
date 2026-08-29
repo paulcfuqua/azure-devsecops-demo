@@ -16,6 +16,7 @@ import { Board } from "./Board";
 import { ControlDetail } from "./ControlDetail";
 import { FrameworkSwitcher } from "./FrameworkSwitcher";
 import { Trend } from "./Trend";
+import type { JSX } from "react";
 
 // ============================================================================
 // THE MOUNTING SEAM (read this before touching Board.tsx, ControlDetail.tsx,

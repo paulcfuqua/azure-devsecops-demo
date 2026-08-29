@@ -3,6 +3,7 @@ import type { ControlRow, StatusCounts } from "./types";
 import { STATUS_KEYS } from "./types";
 import { StatusBadge } from "./StatusBadge";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import type { JSX } from "react";
 
 const useStyles = makeStyles({
   card: {

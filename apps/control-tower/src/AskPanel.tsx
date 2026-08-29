@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AdaptiveCardView } from "./AdaptiveCardView";
 import { activityToTurn, appendTurn, userTurn } from "./agent/transcript";
 import type { AdaptiveAction, AgentConnection, AgentProvider, AgentTurn } from "./agent/types";
+import type { JSX } from "react";
 
 const useStyles = makeStyles({
   panel: { display: "flex", flexDirection: "column", gap: "1rem" },

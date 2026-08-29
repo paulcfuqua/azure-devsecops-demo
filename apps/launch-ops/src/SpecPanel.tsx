@@ -6,6 +6,7 @@ import {
 } from "@fluentui/react-components";
 import { SpecRenderer, type Spec } from "@mls/spec-renderer";
 import { useEffect, useState } from "react";
+import type { JSX } from "react";
 
 export interface SpecPanelProps {
   /** Builds the spec for this panel — a bound DataProvider method. */

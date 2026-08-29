@@ -8,6 +8,7 @@ import type {
 } from "./types";
 import { StatusBadge } from "./StatusBadge";
 import { ProvenanceBadge } from "./ProvenanceBadge";
+import type { JSX } from "react";
 
 /**
  * The same http(s)-only allowlist control-tower's AdaptiveCardView.tsx
