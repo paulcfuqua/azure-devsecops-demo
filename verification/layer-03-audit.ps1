@@ -217,8 +217,9 @@ function Test-EnforcedCaPolicy {
     $conditions = Get-MlsProperty -InputObject $Live -Name 'conditions'
     $liveApplication = @(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $conditions -Name 'applications') -Name 'includeApplications')
     # Where-Object { $_ } because @(Get-MlsProperty ...) on an ABSENT key is a one-element
-    # array holding $null, not an empty one - the same PowerShell trap the break-glass
-    # member count guards against below.
+    # array holding $null, not an empty one. That is a plain PowerShell unrolling rule and
+    # is still live - distinct from the Get-MlsCollection wrapper bug commit 918e475 fixed
+    # in the module itself.
     $declaredName = @(Get-MlsProperty -InputObject $declaredApplications -Name 'includeApplicationsByDisplayName' |
             Where-Object { $_ })
     $expectedId = @($declaredName | ForEach-Object { Get-MlsDirectoryObjectId -Resource 'applications' -DisplayName $_ -Property 'appId' })
@@ -266,10 +267,18 @@ function Test-EnforcedCaPolicy {
         $excluded++
         $member = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups/$groupId/members?`$select=id,userPrincipalName,onPremisesSyncEnabled"))
         foreach ($entry in $member) {
-            # A non-empty UPN is what makes this a user account at all. It also fails closed
-            # on Get-MlsCollection's shape quirk: an EMPTY {value:[]} response comes back as
-            # the response wrapper itself in a one-element array, and counting that object
-            # as an emergency-access account would turn an empty break-glass group green.
+            # A non-empty UPN is what makes this a user account at all - a group or a
+            # service principal in the break-glass group is not an emergency-access
+            # credential a human can sign in with.
+            #
+            # It is also belt-and-braces over a bug this check found: Get-MlsCollection
+            # used to return the response WRAPPER for an empty {value:[]}, so an empty
+            # break-glass group read as holding one member and the exclusion passed its
+            # own emergency-access check with nobody behind it. Fixed at the source in
+            # commit 918e475 (Test-MlsHasProperty tests for the key, not a non-null
+            # value), so this guard is no longer load-bearing for that case - it stays
+            # because the UPN test is right on its own terms and because failing closed
+            # here is cheap.
             $upn = "$(Get-MlsProperty -InputObject $entry -Name 'userPrincipalName')"
             if ([string]::IsNullOrWhiteSpace($upn)) { continue }
             if ($personaUpn -contains $upn) { continue }
