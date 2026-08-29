@@ -38,7 +38,7 @@
     "react-dom": "^19.2.8"
   },
   "dependencies": {
-    "@fluentui/react-charts": "^9.3.24",
+    "@fluentui/react-charts": "^9.3.25",
     "@fluentui/react-components": "^9.74.7",
     "ajv": "^8.17.1"
   },
