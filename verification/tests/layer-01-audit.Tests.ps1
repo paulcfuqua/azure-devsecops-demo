@@ -4,7 +4,9 @@
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-01-audit.ps1')
-    Set-StrictMode -Off
+    # NO `Set-StrictMode -Off` here. The audit script sets -Version Latest and CI runs
+    # it that way; a harness that relaxes the language mode cannot see the class of
+    # bug that mode exists to catch, and did not (F49).
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l01-$([guid]::NewGuid().ToString('n'))"
     $script:Repository = 'paulcfuqua/azure-devsecops-demo'
@@ -190,6 +192,27 @@ Describe 'layer-01-audit' {
             $row.Observed | Should -BeLike '*Authorization_RequestDenied*'
             (Get-Row -Context $context -Id 'V1.1').Status | Should -Be 'PASS'
             Get-MlsExitCode -Context $context | Should -Be 1
+        }
+    }
+
+    Context 'no GUID allowlist on disk' {
+        It 'counts zero allowed GUIDs instead of dying before the first criterion' {
+            # Reproduces the CI failure directly: "layer-01-audit could not start: The
+            # property Count cannot be found on this object." Neither allowlist source
+            # exists on a fresh estate - guid-allowlist.txt is not committed, and
+            # reports/label-guids.json is written by L4 - so Get-AllowedGuid emitted an
+            # empty pipeline, which unrolls to nothing, and the preflight read .Count on
+            # it under the Set-StrictMode -Version Latest the script sets at line 42.
+            $emptyRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l01-noallow-$([guid]::NewGuid().ToString('n'))"
+            New-Item -ItemType Directory -Path $emptyRoot -Force | Out-Null
+            try {
+                $context = Invoke-Main -Repository $script:Repository -ReportRoot $script:ReportRoot -RepoRoot $emptyRoot -NoRetry
+                $row = @($context.Preflight | Where-Object { $_.Name -eq 'GUID allowlist entries' })
+                $row.Count | Should -Be 1
+                $row[0].Value | Should -Be '0'
+            } finally {
+                Remove-Item -LiteralPath $emptyRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 

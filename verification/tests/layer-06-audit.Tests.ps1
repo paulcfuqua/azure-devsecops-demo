@@ -3,7 +3,8 @@
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-06-audit.ps1')
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the audit scripts set -Version Latest and CI runs them
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l06-$([guid]::NewGuid().ToString('n'))"
     $script:Subscription = '22222222-2222-2222-2222-222222222222'

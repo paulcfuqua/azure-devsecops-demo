@@ -81,7 +81,7 @@ function Test-DirectoryObjectCount {
     $problem = [System.Collections.Generic.List[string]]::new()
     $observed = [System.Collections.Generic.List[string]]::new()
 
-    $userPrincipalName = Get-ManifestUserPrincipalName -Manifest $Manifest -Domain $Domain
+    $userPrincipalName = @(Get-ManifestUserPrincipalName -Manifest $Manifest -Domain $Domain)
     $resolvedUser = 0
     foreach ($upn in $userPrincipalName) {
         $user = Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/users/$upn"
@@ -92,14 +92,14 @@ function Test-DirectoryObjectCount {
 
     $resolvedGroup = 0
     foreach ($group in $Manifest.groups) {
-        $found = Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($group.displayName)'")
+        $found = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($group.displayName)'"))
         if (@($found).Count -eq 1) { $resolvedGroup++ } else { $problem.Add("group '$($group.displayName)' resolved to $(@($found).Count) objects") }
     }
     $observed.Add("groups $resolvedGroup/$(@($Manifest.groups).Count)")
 
     $resolvedApplication = 0
     foreach ($application in $Manifest.appRegistrations) {
-        $found = Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$($application.displayName)'")
+        $found = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$($application.displayName)'"))
         if (@($found).Count -eq 1) { $resolvedApplication++ } else { $problem.Add("app registration '$($application.displayName)' resolved to $(@($found).Count) objects") }
     }
     $observed.Add("appRegistrations $resolvedApplication/$(@($Manifest.appRegistrations).Count)")
@@ -146,7 +146,7 @@ function Test-GroupMembership {
             $observed.Add("$($group.displayName): membership managed outside the manifest (break-glass; asserted by V3.3)")
             continue
         }
-        $found = Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($group.displayName)'")
+        $found = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($group.displayName)'"))
         if (@($found).Count -ne 1) {
             $problem.Add("group '$($group.displayName)' resolved to $(@($found).Count) objects")
             continue
@@ -177,7 +177,7 @@ function Get-MlsDirectoryObjectId {
         [Parameter(Mandatory)][string]$DisplayName,
         [Parameter(Mandatory)][string]$Property
     )
-    $found = Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/$Resource`?`$filter=displayName eq '$DisplayName'")
+    $found = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/$Resource`?`$filter=displayName eq '$DisplayName'"))
     if (@($found).Count -ne 1) { return $null }
     return Get-MlsProperty -InputObject $found[0] -Name $Property
 }
@@ -316,7 +316,7 @@ function Test-ConditionalAccessState {
     )
     $declared = @($Manifest.conditionalAccessPolicies)
     $expectedName = @($declared | ForEach-Object { $_.displayName })
-    $policies = Get-MlsCollection -Response (Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies')
+    $policies = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies'))
     $relevant = @($policies | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'displayName') -in $expectedName })
     $observed = @($relevant | ForEach-Object {
             "$(Get-MlsProperty -InputObject $_ -Name 'displayName')=$(Get-MlsProperty -InputObject $_ -Name 'state')"
@@ -368,12 +368,12 @@ function Test-LicenseAssignment {
         [Parameter(Mandatory)][string]$Domain,
         [Parameter(Mandatory)][string]$LicenseSkuPartNumber
     )
-    $target = Get-ManifestUserPrincipalName -Manifest $Manifest -Domain $Domain -LicensedOnly
+    $target = @(Get-ManifestUserPrincipalName -Manifest $Manifest -Domain $Domain -LicensedOnly)
     if ($target.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed 'no manifest user is flagged licensed - nothing to assert' `
             -Detail 'Every user carries "licensed": false, so the demo is running fully unlicensed: no sign-in risk feed and no enforceable CA. Deliberate after trial expiry; if it is not deliberate, the flags are wrong.'
     }
-    $skus = Get-MlsCollection -Response (Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/subscribedSkus')
+    $skus = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/subscribedSkus'))
     $sku = @($skus | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'skuPartNumber') -eq $LicenseSkuPartNumber })
     if ($sku.Count -eq 0) {
         return New-MlsCheckResult -Passed $false -Observed "SKU '$LicenseSkuPartNumber' is not present on the tenant" `
@@ -485,7 +485,7 @@ function Invoke-Main {
         -Expected "$(@($reportOnlyPolicy).Count) broad polic(y/ies) [$(@($reportOnlyPolicy | ForEach-Object { $_.displayName }) -join ', ')] State == enabledForReportingButNotEnforced; $(@($enforcedPolicy).Count) polic(y/ies) [$(@($enforcedPolicy | ForEach-Object { $_.displayName }) -join ', ')] State == enabled, granting mfa, scoped to exactly $($enforcedScope -join '/') named application(s) and not 'All', excluding a break-glass group that holds a cloud-only emergency-access account" `
         -Test { Test-ConditionalAccessState -Manifest $manifest -Domain $tenantDomain } | Out-Null
 
-    $licensedUser = Get-ManifestUserPrincipalName -Manifest $manifest -Domain $tenantDomain -LicensedOnly
+    $licensedUser = @(Get-ManifestUserPrincipalName -Manifest $manifest -Domain $tenantDomain -LicensedOnly)
     # -Control @(): license assignment is an entitlement/billing precondition for identity
     # features (Conditional Access, Identity Protection) to be available, not itself an
     # implemented protection. What those features do is evidenced directly by V3.3;

@@ -5,7 +5,8 @@
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-03-audit.ps1')
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the audit scripts set -Version Latest and CI runs them
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l03-$([guid]::NewGuid().ToString('n'))"
     $script:Domain = 'meridianlaunch.onmicrosoft.com'
@@ -14,7 +15,11 @@ BeforeAll {
     $script:SkuId = '99999999-9999-9999-9999-999999999999'
     # By FLAG, never by name - the audit finds it the same way, so a rename cannot quietly
     # leave the guard asserting nothing.
-    $script:BreakGlassGroup = @($script:Manifest.groups | Where-Object { $_.breakGlass })
+    # Get-MlsProperty, not $_.breakGlass: only one of the five manifest groups carries
+    # the key, and a bare property read on the other four is a terminating error under
+    # the StrictMode the audit runs in. This is now literally 'the same way' the audit
+    # finds it (layer-03-audit.ps1:145, :249), which the comment below already claimed.
+    $script:BreakGlassGroup = @($script:Manifest.groups | Where-Object { Get-MlsProperty -InputObject $_ -Name 'breakGlass' })
     $script:EnforcedDeclared = @($script:Manifest.conditionalAccessPolicies | Where-Object { $_.state -eq 'enabled' })[0]
     $script:DomainVariable = @('MLS_TENANT_DOMAIN', 'TENANT_DOMAIN')
     $script:SavedEnvironment = @{}
@@ -386,9 +391,12 @@ Describe 'layer-03-audit' {
     }
 
     Context 'a malformed enforced policy is a finding, not a crash' {
-        # This whole file runs Set-StrictMode -Off, so it would not otherwise notice that
-        # the audit itself runs under -Version Latest, where reading a property the
-        # manifest does not have THROWS. These two put strict mode back on for the call.
+        # These two reach for -Version Latest explicitly, from back when this whole file
+        # ran Set-StrictMode -Off and could not otherwise see that the audit runs under
+        # Latest, where reading a property the manifest does not have THROWS. The -Off
+        # is gone now (F49) and the whole file runs in the audit's own mode, so the
+        # explicit calls below are redundant - kept because they document the intent of
+        # these two cases, which is that mode specifically.
         BeforeEach {
             function New-BrokenManifestPath {
                 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
@@ -412,7 +420,6 @@ Describe 'layer-03-audit' {
             }
             Set-StrictMode -Version Latest
             $context = Invoke-Main -Domain $script:Domain -ManifestPath $path -ReportRoot $script:ReportRoot -NoRetry
-            Set-StrictMode -Off
             $row = Get-Row -Context $context -Id 'V3.3'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*declares no break-glass group exclusion*'
@@ -425,7 +432,6 @@ Describe 'layer-03-audit' {
             }
             Set-StrictMode -Version Latest
             $context = Invoke-Main -Domain $script:Domain -ManifestPath $path -ReportRoot $script:ReportRoot -NoRetry
-            Set-StrictMode -Off
             $row = Get-Row -Context $context -Id 'V3.3'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*names no application*'
