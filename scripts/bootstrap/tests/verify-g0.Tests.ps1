@@ -94,6 +94,17 @@ Describe 'verify-g0' {
             name       = 'mls-monthly-budget'
             properties = [pscustomobject]@{ amount = 75 }
         }
+        # C4, the Fabric service-principal settings (finding F46). Shaped like the
+        # real tenant: the two the estate uses are on, the three admin-API ones off.
+        $script:FabricTenantSettings = [pscustomobject]@{
+            tenantSettings = @(
+                [pscustomobject]@{ settingName = 'ServicePrincipalAccessGlobalAPIs'; enabled = $true }
+                [pscustomobject]@{ settingName = 'ServicePrincipalAccessPermissionAPIs'; enabled = $true }
+                [pscustomobject]@{ settingName = 'AllowServicePrincipalsUseReadAdminAPIs'; enabled = $false }
+                [pscustomobject]@{ settingName = 'AllowServicePrincipalsUseWriteAdminAPIs'; enabled = $false }
+                [pscustomobject]@{ settingName = 'AllowServicePrincipalsCreateAndUseProfiles'; enabled = $false }
+            )
+        }
         $script:EntraDiagnosticSettings = [pscustomobject]@{
             value = @(
                 [pscustomobject]@{
@@ -124,15 +135,16 @@ Describe 'verify-g0' {
             if ($joined -like '*api.fabric.microsoft.com/v1/capacities*') { return $script:FabricCapacities }
             if ($joined -like '*subscribedSkus*') { return $script:Skus }
             if ($joined -like '*Microsoft.Consumption/budgets*') { return $script:Budget }
+            if ($joined -like '*tenantsettings*') { return $script:FabricTenantSettings }
             if ($joined -like '*microsoft.aadiam*') { return $script:EntraDiagnosticSettings }
             return $null
         }
     }
 
     Context 'aggregation - all green' {
-        It 'returns 10 rows, 9 PASS + 1 informational, and a fail count of 0' {
+        It 'returns 11 rows, 10 PASS + 1 informational, and a fail count of 0' {
             $results = Invoke-VerifyForTest
-            @($results).Count | Should -Be 10
+            @($results).Count | Should -Be 11
             @($results | Where-Object { $_.Check -ne 'EntraDiagnostics' -and $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             (Get-Row $results 'EntraDiagnostics').Status | Should -Be 'INFO'
             Get-FailCount -Results $results | Should -Be 0
@@ -319,6 +331,35 @@ Describe 'verify-g0' {
             $row.Detail | Should -Not -BeLike '*PP3*'
         }
 
+        It 'FAILS C4 when service principals cannot create workspaces (F46)' {
+            # The live-tenant defect: ServicePrincipalAccessPermissionAPIs was on and
+            # ServicePrincipalAccessGlobalAPIs was off. L5 calls New-FabricWorkspace,
+            # which the OFF one governs -- the estate would have failed at L5 on a
+            # tenant the old runbook called ready.
+            $script:FabricTenantSettings = [pscustomobject]@{
+                tenantSettings = @(
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessGlobalAPIs'; enabled = $false }
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessPermissionAPIs'; enabled = $true }
+                )
+            }
+            $row = Get-Row (Invoke-VerifyForTest) 'FabricSpAccess'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*ServicePrincipalAccessGlobalAPIs*'
+        }
+
+        It 'passes C4 but names admin access nobody asked for' {
+            $script:FabricTenantSettings = [pscustomobject]@{
+                tenantSettings = @(
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessGlobalAPIs'; enabled = $true }
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessPermissionAPIs'; enabled = $true }
+                    [pscustomobject]@{ settingName = 'AllowServicePrincipalsUseWriteAdminAPIs'; enabled = $true }
+                )
+            }
+            $row = Get-Row (Invoke-VerifyForTest) 'FabricSpAccess'
+            $row.Status | Should -Be 'PASS'
+            $row.Detail | Should -BeLike '*admin access*'
+        }
+
         It 'flags a wrong active subscription' {
             $script:MockAccount.id = '99999999-9999-9999-9999-999999999999'
             $results = Invoke-VerifyForTest
@@ -342,10 +383,13 @@ Describe 'verify-g0' {
         It 'survives az being completely broken (the informational check errors to INFO, not FAIL)' {
             Mock Invoke-AzCli { throw 'az exploded' }
             $results = Invoke-VerifyForTest
-            @($results).Count | Should -Be 10
-            @($results | Where-Object { $_.Status -eq 'FAIL' }).Count | Should -Be 9
+            @($results).Count | Should -Be 11
+            # Ten gate-affecting checks fail; EntraDiagnostics degrades to INFO and is
+            # excluded from the count by design (F9). Was 9 before FabricSpAccess (C4)
+            # became a real check rather than a portal step nobody verified (F46).
+            @($results | Where-Object { $_.Status -eq 'FAIL' }).Count | Should -Be 10
             (Get-Row $results 'EntraDiagnostics').Status | Should -Be 'INFO'
-            Get-FailCount -Results $results | Should -Be 9
+            Get-FailCount -Results $results | Should -Be 10
         }
     }
 

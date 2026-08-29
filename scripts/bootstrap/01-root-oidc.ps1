@@ -33,8 +33,15 @@
     Idempotent: re-running updates existing objects instead of duplicating them.
 
 .NOTES
-    Gate: G0 (human bootstrap). Run only under an interactive `az login` session held by
-    the tenant Global Administrator. Agents author this file; they never execute it.
+    Gate: G0 bootstrap. Runs under an interactive `az login` session held by the tenant
+    Global Administrator. AGENTS MAY RUN THIS (sponsor amendment 2026-08-29: agent-created
+    and agent-managed infrastructure is the demo, not something the demo describes). This
+    line previously read "Agents author this file; they never execute it."
+
+    What did NOT change, and is the reason the amendment is safe to make: G2 still gates
+    every spend increase, and G3 still gates tenant-level deletion -- the three teardown
+    scripts under infra/ refuse to run unattended in CI without -AllowAutomation, and no
+    workflow passes it. See CLAUDE.md rule 1.
 
 .EXAMPLE
     ./01-root-oidc.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -Repository <owner>/<repo> -WhatIf
@@ -423,12 +430,34 @@ function Invoke-Main {
     }
 
     # ---- consent instructions (NEVER automated) ------------------------------------
+    #
+    # THE BROWSER URL BELOW FAILS ON A FRESH APP, and this script used to print only
+    # that (finding F46). The /adminconsent endpoint redirects back to a reply address
+    # after you approve, and neither app registration has one -- nor should it, since
+    # both are daemon identities that never sign a user in. The result is:
+    #
+    #   AADSTS500113: No reply address is registered for the application.
+    #
+    # `az ad app permission admin-consent` grants the same consent through Graph with
+    # no redirect involved, so it is printed FIRST as the path that works. The URL is
+    # kept because it is what the Azure portal shows and someone will look for it, but
+    # it now carries the warning it needed.
     Write-Status "`n== ACTION REQUIRED: admin consent (this script never consents for you) ==" -Color Yellow
     if ($consentUrls.Count -eq 0) {
-        Write-Status '(-WhatIf) Consent URLs will be printed on a real run once the apps exist.' -Color Yellow
+        Write-Status '(-WhatIf) Consent commands will be printed on a real run once the apps exist.' -Color Yellow
+    }
+    if ($consentUrls.Count -gt 0) {
+        Write-Status '  Run these (works without a redirect URI):' -Color Yellow
+        foreach ($name in $consentUrls.Keys) {
+            $appId = ($consentUrls[$name] -split 'client_id=')[-1]
+            Write-Status "    az ad app permission admin-consent --id $appId   # $name" -Color Yellow
+        }
+        Write-Status "`n  The portal consent URLs, for reference. These return AADSTS500113 (`"no reply" -Color DarkGray
+        Write-Status '  address is registered") unless you add a redirect URI these daemon apps do' -Color DarkGray
+        Write-Status '  not otherwise need -- prefer the commands above:' -Color DarkGray
     }
     foreach ($name in $consentUrls.Keys) {
-        Write-Status "  ${name}: $($consentUrls[$name])" -Color Yellow
+        Write-Status "    ${name}: $($consentUrls[$name])" -Color DarkGray
     }
     Write-Status "`nManual step for $VerifierAppName (Get-Label audits, L4/L11 - not scripted here):" -Color Yellow
     Write-Status @"

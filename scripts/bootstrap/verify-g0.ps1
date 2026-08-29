@@ -20,12 +20,18 @@
          (2026-08-26 findings F6/F7 - an app registration existing is not proof the
          identity can authenticate, and a subject shared with the deployer would let a
          verify job mint the Owner-capable deployer's token instead of this one's).
-      7. Fabric capacity reachable via the Fabric REST API (trial or F2). The
-         "service principals can use Fabric APIs" toggle itself is portal-verified
-         (spec F2) - this check runs under the human's token.
-      8. Licenses: an M365 E5 sku (SPE_E5 or ENTERPRISEPREMIUM) and EMS E5
-         (EMSPREMIUM) present with at least one unit consumed.
-      9. $75/month budget exists.
+      7. A FABRIC capacity (F-series sku) reachable via the Fabric REST API. The sku
+         matters, not just the state: a Power BI licence alone provisions a PP3
+         "Premium Per User - Reserved" capacity that is Active and cannot host a
+         lakehouse (finding F46).
+      8. Fabric service-principal access (G0 item C4), read from the Fabric admin
+         tenant-settings API. This line used to say the toggle was "portal-verified"
+         and unverifiable here; that was wrong, and C4 is now checked (F46).
+      9. Licenses: the SERVICE PLANS the layers consume - AAD_PREMIUM_P2,
+         RMS_S_PREMIUM, MFA_PREMIUM - from whatever sku provides them, with at least
+         one unit consumed. Not sku part numbers: Microsoft 365 E5 contains the EMS
+         capabilities and no separate EMSPREMIUM sku exists in such a tenant (F46).
+     10. $75/month budget exists.
 
     Additionally, one INFORMATIONAL (non-gate-failing) check:
       - G0 item 12: the tenant-scoped Entra diagnostic setting routing SignInLogs and
@@ -99,6 +105,36 @@ $script:GraphConsentedRoles = [ordered]@{
 # AAD_PREMIUM (P1) is implied by P2 and not listed separately. RMS_S_PREMIUM2
 # (AIP P2, auto-labeling) is deliberately NOT required: the runbook documents
 # auto-labeling as optional.
+# C4 IS VERIFIABLE AFTER ALL (finding F46, correcting F43).
+#
+# Yesterday's F43 wrote that C4 -- the Fabric service-principal toggle -- has "no
+# read path this script can use under your login" and must be confirmed by eye.
+# That was wrong, and a real tenant disproved it within a day: the Fabric admin
+# API returns every tenant setting to a Fabric/Global administrator at
+#   GET https://api.fabric.microsoft.com/v1/admin/tenantsettings
+#
+# The runbook also described C4 as ONE toggle, "Service principals can use Fabric
+# APIs". No setting has that name any more. It is five, and the distinction
+# matters: infra/fabric/provision-workspace.ps1 calls New-FabricWorkspace, and
+# CREATING a workspace is governed by ServicePrincipalAccessGlobalAPIs, not by
+# the similarly-named ServicePrincipalAccessPermissionAPIs. On the tenant this
+# was written against, the second was on and the first was off -- so L5 would
+# have failed on a tenant whose gate said C4 was satisfied.
+#
+# The three admin-API settings stay OFF and are asserted off, not merely ignored:
+# nothing in this repository calls a Fabric admin API (no `v1/admin` or
+# `myorg/admin` under infra/fabric or verification), so an enabled one is scope
+# this estate did not ask for.
+$script:RequiredFabricSpSettings = [ordered]@{
+    'ServicePrincipalAccessGlobalAPIs'     = 'create workspaces/connections (L5 New-FabricWorkspace)'
+    'ServicePrincipalAccessPermissionAPIs' = 'call Fabric public APIs (L5, L8, V5.x)'
+}
+$script:ForbiddenFabricSpSettings = [ordered]@{
+    'AllowServicePrincipalsUseReadAdminAPIs'    = 'read-only admin APIs'
+    'AllowServicePrincipalsUseWriteAdminAPIs'   = 'admin APIs used for updates'
+    'AllowServicePrincipalsCreateAndUseProfiles' = 'service principal profiles'
+}
+
 $script:RequiredServicePlans = [ordered]@{
     'AAD_PREMIUM_P2' = 'Entra ID P2 (sign-in risk, Identity Protection, risk-based CA)'
     'RMS_S_PREMIUM'  = 'AIP P1 (sensitivity label management, L4)'
@@ -343,14 +379,71 @@ function Test-FabricCapacity {
     $capacities = $fabricCapable
     $active = @($capacities | Where-Object { $_ -and $_.state -eq 'Active' })
     if ($active.Count -ge 1) {
-        $names = ($active | ForEach-Object { $_.displayName }) -join ', '
+        # displayName AND sku: the sku is the half that distinguishes a real Fabric
+        # capacity from the PP3 that a Power BI licence provisions (finding F46).
         $named = @($active | ForEach-Object { "$($_.displayName) [$($_.sku)]" }) -join ', '
-        return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "active Fabric capacity: $named (SP API toggle is portal-verified)"
+        return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "active Fabric capacity: $named (SP API access checked separately by FabricSpAccess)"
     }
     if ($capacities.Count -ge 1) {
         return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "capacity present but not Active (state: $(($capacities | ForEach-Object { $_.state }) -join ', ')) - paused F2 is expected between deploys"
     }
     return New-CheckResult -Check 'FabricCapacity' -Passed $false -Detail 'no Fabric capacity visible (start the trial or run 02-fabric-capacity.ps1 -Mode F2)'
+}
+
+function Test-FabricServicePrincipal {
+    <#
+        C4, checked rather than trusted. Informational is deliberately NOT set: unlike
+        EntraDiagnostics (F9), this one has a layer gate waiting on it -- L5 cannot
+        create its workspace without it -- so it belongs in the exit code.
+    #>
+    $response = Invoke-AzCli -Arguments @(
+        'rest', '--method', 'get',
+        '--url', 'https://api.fabric.microsoft.com/v1/admin/tenantsettings',
+        '--resource', 'https://api.fabric.microsoft.com'
+    ) -AllowFailure
+
+    $settings = @()
+    foreach ($name in 'tenantSettings', 'value') {
+        if ($response -and $response.PSObject.Properties.Name -contains $name) {
+            $settings = @($response.$name)
+            break
+        }
+    }
+    if ($settings.Count -eq 0) {
+        return New-CheckResult -Check 'FabricSpAccess' -Passed $false `
+            -Detail 'could not read Fabric tenant settings (needs a Fabric or Global administrator login)'
+    }
+
+    $state = @{}
+    foreach ($setting in $settings) {
+        if ($setting.settingName) { $state[[string]$setting.settingName] = [bool]$setting.enabled }
+    }
+
+    $missing = @()
+    foreach ($name in $script:RequiredFabricSpSettings.Keys) {
+        if (-not $state.ContainsKey($name)) {
+            $missing += "$name (not present in this tenant's settings)"
+        } elseif (-not $state[$name]) {
+            $missing += "$name - $($script:RequiredFabricSpSettings[$name])"
+        }
+    }
+    if ($missing.Count -gt 0) {
+        return New-CheckResult -Check 'FabricSpAccess' -Passed $false `
+            -Detail "C4 incomplete, disabled: $($missing -join '; ')"
+    }
+
+    # Enabled admin-API access is not a failure of C4 -- the estate still works --
+    # but it is privilege nobody asked for, so say so rather than pass silently.
+    $extra = @()
+    foreach ($name in $script:ForbiddenFabricSpSettings.Keys) {
+        if ($state[$name]) { $extra += $script:ForbiddenFabricSpSettings[$name] }
+    }
+    if ($extra.Count -gt 0) {
+        return New-CheckResult -Check 'FabricSpAccess' -Passed $true `
+            -Detail "C4 satisfied, but service principals also hold unused admin access: $($extra -join '; ')"
+    }
+    return New-CheckResult -Check 'FabricSpAccess' -Passed $true `
+        -Detail 'C4 satisfied: workspace-creation and public-API access on, admin APIs off'
 }
 
 function Test-License {
@@ -478,6 +571,7 @@ function Invoke-Main {
         @{ Name = 'GraphConsent'; Run = { Test-GraphConsent -DeployerAppName $DeployerAppName } }
         @{ Name = 'VerifierApp'; Run = { Test-VerifierApp -VerifierAppName $VerifierAppName -DeployerAppName $DeployerAppName -Repository $Repository -VerifierEnvironmentName $VerifierEnvironmentName } }
         @{ Name = 'FabricCapacity'; Run = { Test-FabricCapacity } }
+        @{ Name = 'FabricSpAccess'; Run = { Test-FabricServicePrincipal } }
         @{ Name = 'Licenses'; Run = { Test-License } }
         @{ Name = 'Budget'; Run = { Test-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName -BudgetAmount $BudgetAmount } }
         @{ Name = 'EntraDiagnostics'; Informational = $true; Run = { Test-EntraDiagnostic } }
