@@ -1,7 +1,9 @@
 name: layer-03-entra
 
 # =============================================================================
-# L3 — Entra: users, groups, app registrations, Conditional Access (report-only).
+# L3 — Entra: users, groups, app registrations, Conditional Access (two report-only
+# policies; one ENFORCED MFA policy over the three dashboards, gated on a break-glass
+# account existing — see docs/runbooks/layers/L03.md).
 # Playbook: docs/runbooks/layers/L03.md   Assets: infra/entra/apply-entra.ps1
 #
 # The apply script is manifest-driven and idempotent create-if-absent /
@@ -181,7 +183,11 @@ jobs:
           Import-Module Microsoft.Graph.Authentication
           Connect-MgGraph -AccessToken (ConvertTo-SecureString $token -AsPlainText -Force) -NoWelcome
           $domain = if ($env:ENTRA_DOMAIN) { $env:ENTRA_DOMAIN } else { '' }
-          # CA policies are created report-only; apply-entra.ps1 refuses `enabled`.
+          # CA policies are created in the state infra/entra/manifest.json declares:
+          # report-only for the two broad All-users/All-applications policies, `enabled`
+          # for mls-ca-require-mfa-dashboards. What apply-entra.ps1 refuses is an ENFORCED
+          # policy with no emergency-access account behind it - it skips that policy,
+          # loudly, and applies everything else (docs/runbooks/g0-bootstrap.md item 13).
           ./infra/entra/apply-entra.ps1 -Domain $domain -Confirm:$false *>&1 |
             Tee-Object -FilePath entra-apply.txt
 

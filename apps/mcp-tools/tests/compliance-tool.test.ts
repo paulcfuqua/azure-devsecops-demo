@@ -292,24 +292,38 @@ describe("hazard 6 — a missing or malformed artifact never returns an empty-bu
   });
 });
 
-describe("the 95-unassessed figure is present in any summary answer", () => {
+describe("the unassessed figure is present in any summary answer", () => {
+  // Read from the artifact, never hard-coded. This suite said "95" in its name and in
+  // its assertion until 2026-08-29, when assessing 3.5.3 (multifactor authentication)
+  // moved one row out of NOT_ASSESSED and the literal went stale - which is the same
+  // class of defect as a hard-coded object count in a layer audit. What the suite is
+  // actually about is that the figure SURVIVES every filter, not what the figure is.
+  const unassessed = fixtureState.summary.byStatus.NOT_ASSESSED;
+  const totalRequirements = fixtureState.summary.totalRequirements;
+
   const cases: Array<[string, import("../src/tools/backends.js").ComplianceQueryParams]> = [
     ["no filter", {}],
     ["control filter", { control: ASSERTED_CONTROL }],
     ["family filter", { family: "3.1" }],
-    // Deliberately a status with ZERO rows since F19 closed the last GAP: the
-    // 95-unassessed figure must survive a filter that matches nothing, which is
-    // the harder case, not the easier one.
-    ["status filter matching nothing", { status: "GAP" }],
     ["status filter matching rows", { status: "PARTIAL" }],
+    // A status with zero rows: the figure must survive a filter that matches nothing,
+    // which is the harder case, not the easier one.
+    ["status filter matching nothing", { status: "COMPLIANT" }],
     ["out-of-catalog framework filter", { framework: "nist-800-53r5" }],
     ["a control filter that matches nothing", { control: "9.9.9" }],
   ];
 
-  it.each(cases)("summary.byStatus.NOT_ASSESSED is 95 for: %s", (_label, params) => {
+  it("the artifact really does have unassessed rows to carry", () => {
+    // Sanity: without this, every assertion below would pass vacuously on an
+    // artifact that had somehow lost its NOT_ASSESSED rows entirely.
+    expect(unassessed).toBeGreaterThan(0);
+    expect(totalRequirements).toBe(110);
+  });
+
+  it.each(cases)("summary.byStatus.NOT_ASSESSED survives: %s", (_label, params) => {
     const result = queryComplianceState(fixtureState, params);
-    expect(result.summary.byStatus.NOT_ASSESSED).toBe(95);
-    expect(result.summary.totalRequirements).toBe(110);
+    expect(result.summary.byStatus.NOT_ASSESSED).toBe(unassessed);
+    expect(result.summary.totalRequirements).toBe(totalRequirements);
   });
 });
 

@@ -11,10 +11,29 @@
                                 'Application.ReadWrite.All','Policy.ReadWrite.ConditionalAccess'
 
     Idempotent create-if-absent / update-on-drift; replaying after a kill/rebuild
-    no-ops in seconds (spec F6). Conditional Access policies are created in
-    report-only mode (state = enabledForReportingButNotEnforced) exactly as the
-    manifest declares. Propagation is handled by POLLING Graph until the new object
-    is readable - never by blind sleeps.
+    no-ops in seconds (spec F6). Conditional Access policies are created in exactly
+    the state the manifest declares - which is report-only
+    (enabledForReportingButNotEnforced) for the two broad All-users/All-applications
+    policies and `enabled` for mls-ca-require-mfa-dashboards, the narrow policy that
+    requires MFA on the three human-facing dashboards. Propagation is handled by
+    POLLING Graph until the new object is readable - never by blind sleeps.
+
+    BREAK GLASS IS A PRECONDITION, NOT A README LINE
+    ------------------------------------------------
+    An `enabled` policy is refused - loudly, and on its own, without stopping the rest
+    of the layer - until a group the manifest flags "breakGlass": true actually holds
+    an emergency-access account: a member that is NOT one of the manifest's fictional
+    demo personas and is not synced from on-premises. That is the whole failure mode a
+    CA policy has: a misconfiguration with no excluded account locks the tenant's owner
+    out of their own tenant with no recovery path. The group is created empty by this
+    script, so the first pass necessarily skips the policy; a human adds the account
+    (docs/runbooks/g0-bootstrap.md item 13) and the next replay creates it.
+
+    The manifest addresses applications and groups by DISPLAY NAME
+    (includeApplicationsByDisplayName / excludeGroupsByDisplayName) because Graph wants
+    object ids that do not exist until this script has run. App registrations and groups
+    are therefore created BEFORE conditional access policies, and their ids are carried
+    forward into the policy body - see Invoke-Main.
 
     UPNs are <userPrincipalNamePrefix>@<domain>; -Domain overrides the manifest's
     placeholder domain (mls.example) with the tenant's real verified domain.
@@ -162,6 +181,16 @@ function Test-Field {
     return $null -ne $Object.PSObject.Properties[$Name]
 }
 
+function Get-FieldArray {
+    <# A field that is meant to be a list, as an array - and an ABSENT field as an EMPTY
+       array. `@(Get-Field ...)` cannot do this: @($null) is a one-element array holding
+       $null, so a missing key would read as a list of one nothing. #>
+    param($Object, [Parameter(Mandatory)][string]$Name)
+    $value = Get-Field -Object $Object -Name $Name
+    if ($null -eq $value) { return @() }
+    return @($value)
+}
+
 function Get-ResponseValue {
     <# Normalize a Graph collection response to an array; an empty `value` stays empty. #>
     param($Response)
@@ -188,6 +217,16 @@ function Get-Manifest {
     catch {
         throw "Manifest at '$Path' is not valid JSON: $($_.Exception.Message)"
     }
+}
+
+function Get-BreakGlassGroupName {
+    <# Display names of every group the manifest flags "breakGlass": true. Found by FLAG,
+       never by name: renaming the group must not be able to silently disarm the guard,
+       and hard-coding the name here would also hard-code the company prefix (CLAUDE.md). #>
+    param([Parameter(Mandatory)]$Manifest)
+    return @(Get-FieldArray -Object $Manifest -Name 'groups' |
+            Where-Object { [bool](Get-Field -Object $_ -Name 'breakGlass') } |
+            ForEach-Object { Get-Field -Object $_ -Name 'displayName' })
 }
 
 function Assert-ManifestSchema {
@@ -242,6 +281,12 @@ function Assert-ManifestSchema {
         $index++
     }
 
+    $applicationName = @(Get-FieldArray -Object $Manifest -Name 'appRegistrations' |
+            ForEach-Object { Get-Field -Object $_ -Name 'displayName' })
+    $groupName = @(Get-FieldArray -Object $Manifest -Name 'groups' |
+            ForEach-Object { Get-Field -Object $_ -Name 'displayName' })
+    $breakGlassName = Get-BreakGlassGroupName -Manifest $Manifest
+
     $index = 0
     foreach ($policy in @(Get-Field -Object $Manifest -Name 'conditionalAccessPolicies')) {
         foreach ($field in @('displayName', 'state', 'conditions', 'grantControls')) {
@@ -252,6 +297,42 @@ function Assert-ManifestSchema {
         $state = Get-Field -Object $policy -Name 'state'
         if ($state -and $script:AllowedCaStates -notcontains $state) {
             $problems.Add("conditionalAccessPolicies[$index] has invalid state '$state' (allowed: $($script:AllowedCaStates -join ', '))")
+        }
+
+        # Every *ByDisplayName reference has to name something this manifest declares -
+        # apply time is far too late to discover a typo, because the resolver would then
+        # silently drop the entry and post a policy with a WIDER scope than authored.
+        $conditions = Get-Field -Object $policy -Name 'conditions'
+        $applications = Get-Field -Object $conditions -Name 'applications'
+        $users = Get-Field -Object $conditions -Name 'users'
+        $includeByName = Get-FieldArray -Object $applications -Name 'includeApplicationsByDisplayName'
+        foreach ($name in $includeByName) {
+            if ($applicationName -notcontains $name) {
+                $problems.Add("conditionalAccessPolicies[$index] includeApplicationsByDisplayName '$name' does not match any appRegistrations[].displayName")
+            }
+        }
+        $excludeByName = Get-FieldArray -Object $users -Name 'excludeGroupsByDisplayName'
+        foreach ($name in $excludeByName) {
+            if ($groupName -notcontains $name) {
+                $problems.Add("conditionalAccessPolicies[$index] excludeGroupsByDisplayName '$name' does not match any groups[].displayName")
+            }
+        }
+
+        # ENFORCED POLICIES CARRY THREE EXTRA RULES, checked here so an unsafe policy is
+        # unrepresentable rather than merely undeployed. Microsoft's own guidance is that
+        # every enforced CA policy excludes at least one emergency-access account; the
+        # other two rules keep an enforced grant from quietly becoming tenant-wide.
+        if ($state -eq 'enabled') {
+            if (-not @($excludeByName | Where-Object { $breakGlassName -contains $_ })) {
+                $problems.Add("conditionalAccessPolicies[$index] has state 'enabled' but excludes no break-glass group - an enforced policy must exclude a group flagged 'breakGlass': true or a misconfiguration locks the tenant owner out with no recovery path")
+            }
+            $include = Get-FieldArray -Object $applications -Name 'includeApplications'
+            if ($include -contains 'All' -or $includeByName -contains 'All') {
+                $problems.Add("conditionalAccessPolicies[$index] has state 'enabled' and targets every application ('All') - an enforced policy must name the applications it covers")
+            }
+            elseif ($includeByName.Count -eq 0) {
+                $problems.Add("conditionalAccessPolicies[$index] has state 'enabled' but names no applications in includeApplicationsByDisplayName")
+            }
         }
         $index++
     }
@@ -413,20 +494,26 @@ function Initialize-GroupMembership {
 }
 
 function Initialize-EntraApplication {
-    <# Create-if-absent / update-on-drift app registration; returns outcome string. #>
+    <# Create-if-absent / update-on-drift app registration. Returns @{ AppId; Outcome }.
+
+       AppId is the application (client) id, NOT the directory object id: it is what
+       Conditional Access `includeApplications` addresses an application by, and carrying
+       it out of here is what lets the CA loop below scope a policy to named applications
+       instead of 'All'. It is $null only under -WhatIf, where nothing was created. #>
     param([Parameter(Mandatory)]$App)
     $displayName = Get-Field -Object $App -Name 'displayName'
     $audience = Get-Field -Object $App -Name 'signInAudience'
     if (-not $audience) { $audience = 'AzureADMyOrg' }
     $existing = Get-EntraApplication -DisplayName $displayName
     if ($existing) {
+        $appId = Get-Field -Object $existing -Name 'appId'
         if ((Get-Field -Object $existing -Name 'signInAudience') -ne $audience) {
             Invoke-GraphMutation -Target $displayName -Action "Update signInAudience -> $audience" `
                 -Method PATCH -Path "applications/$(Get-Field -Object $existing -Name 'id')" `
                 -Body @{ signInAudience = $audience } | Out-Null
-            return 'Updated'
+            return @{ AppId = $appId; Outcome = 'Updated' }
         }
-        return 'Unchanged'
+        return @{ AppId = $appId; Outcome = 'Unchanged' }
     }
     $body = [ordered]@{
         displayName    = $displayName
@@ -435,33 +522,161 @@ function Initialize-EntraApplication {
     $notes = Get-Field -Object $App -Name 'notes'
     if ($notes) { $body['notes'] = $notes }
     $created = Invoke-GraphMutation -Target $displayName -Action 'Create app registration' -Method POST -Path 'applications' -Body $body
-    if ($created) { return 'Created' }
-    return 'WhatIf'
+    if ($created) {
+        return @{ AppId = (Get-Field -Object $created -Name 'appId'); Outcome = 'Created' }
+    }
+    return @{ AppId = $null; Outcome = 'WhatIf' }
+}
+
+function Resolve-CaPolicyCondition {
+    <#
+        Turn the manifest's display-name references into the object ids Graph requires.
+
+        `includeApplicationsByDisplayName` -> `includeApplications` (application/client ids)
+        `excludeGroupsByDisplayName`       -> `excludeGroups`       (group object ids)
+
+        Neither *ByDisplayName key is a Graph field; both exist because the ids do not
+        exist until this run has created the objects. Returns
+        @{ Conditions; Unresolved } - Unresolved naming every reference with no id yet,
+        which under -WhatIf is every one of them (nothing was created).
+    #>
+    param(
+        [Parameter(Mandatory)]$Policy,
+        [Parameter(Mandatory)][hashtable]$AppIdByDisplayName,
+        [Parameter(Mandatory)][hashtable]$GroupIdByDisplayName
+    )
+    $unresolved = [System.Collections.Generic.List[string]]::new()
+    # Round-trip through JSON for a deep, mutable copy: the manifest is PSCustomObject all
+    # the way down and must not be edited in place (it is read again on the next replay).
+    $conditions = Get-Field -Object $Policy -Name 'conditions' | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+    if ($null -eq $conditions) { return @{ Conditions = $null; Unresolved = @('conditions') } }
+
+    $resolve = {
+        param($Container, [string]$FromKey, [string]$ToKey, [hashtable]$Map, [string]$Kind)
+        if ($null -eq $Container -or -not $Container.ContainsKey($FromKey)) { return }
+        $names = @($Container[$FromKey])
+        $Container.Remove($FromKey)
+        $ids = @()
+        if ($Container.ContainsKey($ToKey)) { $ids = @($Container[$ToKey]) }
+        foreach ($name in $names) {
+            if ($Map.ContainsKey($name) -and $Map[$name]) { $ids += $Map[$name]; continue }
+            $unresolved.Add("$Kind '$name'")
+        }
+        $Container[$ToKey] = @($ids)
+    }
+
+    & $resolve $conditions['applications'] 'includeApplicationsByDisplayName' 'includeApplications' $AppIdByDisplayName 'application'
+    & $resolve $conditions['users'] 'excludeGroupsByDisplayName' 'excludeGroups' $GroupIdByDisplayName 'group'
+
+    return @{ Conditions = $conditions; Unresolved = @($unresolved) }
+}
+
+function Test-BreakGlassReady {
+    <#
+        Is there an emergency-access account to fall back on if this policy is wrong?
+
+        Ready means: some break-glass group holds at least one member that is NOT one of
+        this manifest's fictional demo personas (a persona is not an emergency account - no
+        human holds its credential) and is not synced from on-premises (a break-glass
+        account must be cloud-only, or an outage in the sync source takes the recovery path
+        down with it). Returns @{ Ready; Reason }.
+    #>
+    param(
+        [AllowEmptyCollection()][string[]]$GroupName = @(),
+        [Parameter(Mandatory)][hashtable]$GroupIdByDisplayName,
+        [AllowEmptyCollection()][string[]]$DemoUserId = @()
+    )
+    foreach ($name in $GroupName) {
+        if (-not $GroupIdByDisplayName.ContainsKey($name) -or -not $GroupIdByDisplayName[$name]) { continue }
+        $groupId = $GroupIdByDisplayName[$name]
+        $response = Invoke-GraphApi -Method GET -Path "groups/$groupId/members?`$select=id"
+        foreach ($member in @(Get-ResponseValue -Response $response)) {
+            $memberId = Get-Field -Object $member -Name 'id'
+            if (-not $memberId) { continue }
+            if ($DemoUserId -contains $memberId) { continue }
+            $user = Invoke-GraphApi -Method GET -Path "users/$memberId`?`$select=id,userPrincipalName,onPremisesSyncEnabled" -AllowNotFound
+            if ($user -and (Get-Field -Object $user -Name 'onPremisesSyncEnabled') -eq $true) { continue }
+            return @{ Ready = $true; Reason = "break-glass group '$name' holds an emergency-access account" }
+        }
+    }
+    return @{
+        Ready  = $false
+        Reason = "no break-glass group ($($GroupName -join ', ')) holds a cloud-only emergency-access account that is not one of the manifest's demo personas"
+    }
 }
 
 function Initialize-CaPolicy {
     <#
-        Create-if-absent CA policy from the manifest (report-only state comes straight
-        from the manifest); on drift only `state` is re-asserted - condition edits are a
-        deliberate manual/G3 concern.
+        Create-if-absent CA policy from the manifest (the state comes straight from the
+        manifest - report-only for the two broad policies, `enabled` for the dashboard MFA
+        policy); on drift only `state` is re-asserted - condition edits are a deliberate
+        manual/G3 concern.
+
+        An `enabled` policy is REFUSED (outcome 'Blocked') unless a break-glass group holds
+        an emergency-access account. The refusal is per policy: everything else in the
+        layer still applies, the operator is told exactly what to do, and the fail-safe
+        direction is the safe one - no policy means no lockout.
     #>
-    param([Parameter(Mandatory)]$Policy)
+    param(
+        [Parameter(Mandatory)]$Policy,
+        [hashtable]$AppIdByDisplayName = @{},
+        [hashtable]$GroupIdByDisplayName = @{},
+        [AllowEmptyCollection()][string[]]$BreakGlassGroupName = @(),
+        [AllowEmptyCollection()][string[]]$DemoUserId = @()
+    )
     $displayName = Get-Field -Object $Policy -Name 'displayName'
     $desiredState = Get-Field -Object $Policy -Name 'state'
+    $enforced = $desiredState -eq 'enabled'
+
+    # Test-BreakGlassReady reads the tenant, so it is called only on the branches that are
+    # about to enforce something - never on the -WhatIf plan path below, where the group it
+    # would look at has not been created yet and the answer would be meaningless.
+    $breakGlass = @{ Ready = $true; Reason = 'not an enforced policy' }
+
     $existing = Get-CaPolicy -DisplayName $displayName
     if ($existing) {
-        if ((Get-Field -Object $existing -Name 'state') -ne $desiredState) {
-            Invoke-GraphMutation -Target $displayName -Action "Update CA policy state -> $desiredState" `
-                -Method PATCH -Path "identity/conditionalAccess/policies/$(Get-Field -Object $existing -Name 'id')" `
-                -Body @{ state = $desiredState } | Out-Null
-            return 'Updated'
+        if ($enforced) {
+            $breakGlass = Test-BreakGlassReady -GroupName $BreakGlassGroupName `
+                -GroupIdByDisplayName $GroupIdByDisplayName -DemoUserId $DemoUserId
         }
-        return 'Unchanged'
+        if ((Get-Field -Object $existing -Name 'state') -eq $desiredState) {
+            if (-not $breakGlass.Ready) {
+                Write-Warning "CA policy '$displayName' is ENFORCED but $($breakGlass.Reason). Restore an emergency-access account before you need one."
+            }
+            return 'Unchanged'
+        }
+        if (-not $breakGlass.Ready) {
+            Write-Status "REFUSING to enable CA policy '$displayName': $($breakGlass.Reason). See docs/runbooks/g0-bootstrap.md item 13." -Color Red
+            return 'Blocked'
+        }
+        Invoke-GraphMutation -Target $displayName -Action "Update CA policy state -> $desiredState" `
+            -Method PATCH -Path "identity/conditionalAccess/policies/$(Get-Field -Object $existing -Name 'id')" `
+            -Body @{ state = $desiredState } | Out-Null
+        return 'Updated'
     }
+
+    $resolved = Resolve-CaPolicyCondition -Policy $Policy `
+        -AppIdByDisplayName $AppIdByDisplayName -GroupIdByDisplayName $GroupIdByDisplayName
+    if ($resolved.Unresolved.Count -gt 0) {
+        # Only reachable under -WhatIf: the apps and groups a policy names are created
+        # earlier in the same run, so on a real pass every id is already in hand.
+        Write-Status "(-WhatIf) Would create CA policy '$displayName' (state: $desiredState) once these exist: $($resolved.Unresolved -join ', ')" -Color Yellow
+        return 'WhatIf'
+    }
+
+    if ($enforced) {
+        $breakGlass = Test-BreakGlassReady -GroupName $BreakGlassGroupName `
+            -GroupIdByDisplayName $GroupIdByDisplayName -DemoUserId $DemoUserId
+    }
+    if (-not $breakGlass.Ready) {
+        Write-Status "REFUSING to create ENFORCED CA policy '$displayName': $($breakGlass.Reason). See docs/runbooks/g0-bootstrap.md item 13, then re-run this layer." -Color Red
+        return 'Blocked'
+    }
+
     $body = [ordered]@{
         displayName   = $displayName
         state         = $desiredState
-        conditions    = Get-Field -Object $Policy -Name 'conditions'
+        conditions    = $resolved.Conditions
         grantControls = Get-Field -Object $Policy -Name 'grantControls'
     }
     $created = Invoke-GraphMutation -Target $displayName -Action "Create CA policy (state: $desiredState)" `
@@ -497,7 +712,7 @@ function Invoke-Main {
         UsersCreated = 0; UsersUpdated = 0; UsersUnchanged = 0
         GroupsCreated = 0; GroupsUnchanged = 0; MembershipsAdded = 0
         AppsCreated = 0; AppsUpdated = 0; AppsUnchanged = 0
-        CaCreated = 0; CaUpdated = 0; CaUnchanged = 0
+        CaCreated = 0; CaUpdated = 0; CaUnchanged = 0; CaBlocked = 0
         SkippedInWhatIf = 0
     }
 
@@ -517,6 +732,9 @@ function Invoke-Main {
     }
 
     # ---- groups + memberships ------------------------------------------------------
+    # Group ids are kept for the CA loop below: an enforced policy excludes the
+    # break-glass group by object id, and the group has to exist before it can be named.
+    $groupIdByDisplayName = @{}
     foreach ($group in @(Get-Field -Object $manifest -Name 'groups')) {
         $groupName = Get-Field -Object $group -Name 'displayName'
         $result = Initialize-EntraGroup -Group $group `
@@ -530,6 +748,7 @@ function Invoke-Main {
             Write-Status "(-WhatIf) Would then add members to '$groupName': $((Get-Field -Object $group -Name 'members') -join ', ')" -Color Yellow
             continue
         }
+        $groupIdByDisplayName[$groupName] = $result.Id
         $memberIds = @()
         foreach ($member in @(Get-Field -Object $group -Name 'members')) {
             if ($userIdByPrefix.ContainsKey($member)) {
@@ -543,23 +762,41 @@ function Invoke-Main {
     }
 
     # ---- app registrations ---------------------------------------------------------
+    # ORDERING IS LOAD-BEARING, not incidental: mls-ca-require-mfa-dashboards scopes
+    # itself to three named applications, and Conditional Access addresses an application
+    # by its application (client) id - which does not exist until the registration does.
+    # So app registrations are created here, their ids are collected, and only then does
+    # the CA loop below run. A policy whose applications are not yet resolvable is skipped
+    # with a message naming them rather than posted with an empty (= tenant-wide) scope.
+    $appIdByDisplayName = @{}
     foreach ($app in @(Get-Field -Object $manifest -Name 'appRegistrations')) {
-        switch (Initialize-EntraApplication -App $app) {
+        $result = Initialize-EntraApplication -App $app
+        switch ($result.Outcome) {
             'Created' { $summary.AppsCreated++ }
             'Updated' { $summary.AppsUpdated++ }
             'Unchanged' { $summary.AppsUnchanged++ }
             'WhatIf' { $summary.SkippedInWhatIf++ }
         }
+        if ($result.AppId) { $appIdByDisplayName[(Get-Field -Object $app -Name 'displayName')] = $result.AppId }
     }
 
     # ---- conditional access policies ----------------------------------------------
+    $breakGlassGroupName = Get-BreakGlassGroupName -Manifest $manifest
+    $demoUserId = @($userIdByPrefix.Values)
     foreach ($policy in @(Get-Field -Object $manifest -Name 'conditionalAccessPolicies')) {
-        switch (Initialize-CaPolicy -Policy $policy) {
+        $outcome = Initialize-CaPolicy -Policy $policy `
+            -AppIdByDisplayName $appIdByDisplayName -GroupIdByDisplayName $groupIdByDisplayName `
+            -BreakGlassGroupName $breakGlassGroupName -DemoUserId $demoUserId
+        switch ($outcome) {
             'Created' { $summary.CaCreated++ }
             'Updated' { $summary.CaUpdated++ }
             'Unchanged' { $summary.CaUnchanged++ }
+            'Blocked' { $summary.CaBlocked++ }
             'WhatIf' { $summary.SkippedInWhatIf++ }
         }
+    }
+    if ($summary.CaBlocked -gt 0) {
+        Write-Status "$($summary.CaBlocked) enforced CA polic(y/ies) NOT created: no break-glass account exists yet. MFA is NOT being enforced. Add an emergency-access account to the break-glass group ($($breakGlassGroupName -join ', ')) per docs/runbooks/g0-bootstrap.md item 13 and re-run this layer; V3.3 fails until you do." -Color Red
     }
 
     $summaryObject = [pscustomobject]$summary

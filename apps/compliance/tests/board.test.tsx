@@ -40,24 +40,29 @@ describe("Board", () => {
   });
 
   it("renders NOT_ASSESSED distinctly from GAP -- not just different text, different treatment", () => {
-    // This used to read 3.1.1 straight out of the real artifact, where it was
-    // GAP. It is PARTIAL now: F19 landed F13's seventh workload RBAC grant on
-    // 2026-08-28 and 3.1.1's last open contributor closed, and the artifact
-    // today contains ZERO GAP rows (summary.byStatus.GAP is 0). Rather than
-    // repoint at another GAP row -- there is none -- this uses cloneState(),
-    // exactly as the machine-verified test above does and for exactly the same
-    // reason: the scenario is real and must stay covered, the real artifact
-    // simply does not currently contain it. The board must keep the two apart
-    // whether or not this estate happens to have a GAP row today.
-    const mutated = cloneState();
-    const gapControl = mutated.controls.find((c) => c.control === "3.1.1")!;
-    expect(gapControl.status).toBe("PARTIAL"); // sanity: real data, before mutation
-    gapControl.status = "GAP";
+    // Both rows are DERIVED from the artifact rather than named, and that is the
+    // point. This test has been repointed twice already: it read 3.1.1 as GAP until
+    // F19 closed 3.1.1's last contributor, then mutated a clone because the artifact
+    // held no GAP row at all, and as of 2026-08-29 it holds one again (3.5.3,
+    // multifactor authentication: enforced MFA declared for the three dashboards,
+    // privileged accounts deliberately still report-only). Naming a control here
+    // means editing this test every time the board legitimately moves. Deriving it,
+    // with the clone as a fallback for an artifact that has no GAP row, does not.
+    let state = fixtureState;
+    let gapId = fixtureState.controls.find((c) => c.status === "GAP")?.control;
+    if (!gapId) {
+      const mutated = cloneState();
+      const row = mutated.controls.find((c) => c.status !== "NOT_ASSESSED")!;
+      row.status = "GAP";
+      state = mutated;
+      gapId = row.control;
+    }
+    const notAssessedId = state.controls.find((c) => c.status === "NOT_ASSESSED")!.control;
+    expect(notAssessedId).not.toBe(gapId);
 
-    render(<Board state={mutated} catalog={fixtureCatalog} framework="nist-800-171r2" />);
-    // 3.5.3 is NOT_ASSESSED in the real artifact; 3.1.1 is GAP by the mutation.
-    const notAssessed = within(screen.getByTestId("control-3.5.3")).getByTestId("status");
-    const gap = within(screen.getByTestId("control-3.1.1")).getByTestId("status");
+    render(<Board state={state} catalog={fixtureCatalog} framework="nist-800-171r2" />);
+    const notAssessed = within(screen.getByTestId(`control-${notAssessedId}`)).getByTestId("status");
+    const gap = within(screen.getByTestId(`control-${gapId}`)).getByTestId("status");
     expect(notAssessed).toHaveTextContent("NOT_ASSESSED");
     expect(gap).toHaveTextContent("GAP");
     // "We have not looked" (NOT_ASSESSED) must not be a shade of "we looked

@@ -12,6 +12,10 @@ BeforeAll {
     $script:ManifestPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', 'infra', 'entra', 'manifest.json'
     $script:Manifest = Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
     $script:SkuId = '99999999-9999-9999-9999-999999999999'
+    # By FLAG, never by name - the audit finds it the same way, so a rename cannot quietly
+    # leave the guard asserting nothing.
+    $script:BreakGlassGroup = @($script:Manifest.groups | Where-Object { $_.breakGlass })
+    $script:EnforcedDeclared = @($script:Manifest.conditionalAccessPolicies | Where-Object { $_.state -eq 'enabled' })[0]
     $script:DomainVariable = @('MLS_TENANT_DOMAIN', 'TENANT_DOMAIN')
     $script:SavedEnvironment = @{}
     foreach ($name in $script:DomainVariable) { $script:SavedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
@@ -29,6 +33,38 @@ BeforeAll {
     function Get-GroupByName {
         param([string]$Name)
         return @($script:Manifest.groups | Where-Object { $_.displayName -eq $Name })[0]
+    }
+
+    function New-LiveCaPolicy {
+        <# What Graph would return for one manifest policy: the manifest's display-name
+           references resolved to the ids Conditional Access actually stores, so the audit
+           is exercised against the shape it will really see. Every deviation a test wants
+           to make is a $script: toggle rather than a second hand-written policy. #>
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+            Justification = 'Pure builder: returns an in-memory object and changes no state.')]
+        param($Declared)
+        $state = if ($Declared.state -eq 'enabled') { $script:EnforcedState } else { $script:CaState }
+        $policy = [pscustomobject]@{ displayName = $Declared.displayName; state = $state }
+        if ($Declared.state -ne 'enabled') { return $policy }
+
+        $application = $script:EnforcedApplication
+        if ($null -eq $application) {
+            $application = @($Declared.conditions.applications.includeApplicationsByDisplayName | ForEach-Object { "appid-$_" })
+        }
+        $excludeGroup = $script:EnforcedExcludeGroup
+        if ($null -eq $excludeGroup) {
+            $excludeGroup = @($Declared.conditions.users.excludeGroupsByDisplayName | ForEach-Object { "id-$_" })
+        }
+        return [pscustomobject]@{
+            displayName   = $Declared.displayName
+            state         = $state
+            grantControls = [pscustomobject]@{ operator = 'OR'; builtInControls = $script:EnforcedGrant }
+            conditions    = [pscustomobject]@{
+                clientAppTypes = @('all')
+                users          = [pscustomobject]@{ includeUsers = @('All'); excludeGroups = @($excludeGroup) }
+                applications   = [pscustomobject]@{ includeApplications = @($application) }
+            }
+        }
     }
 
     function Get-TestManifestPath {
@@ -65,6 +101,14 @@ Describe 'layer-03-audit' {
         Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
 
         $script:CaState = 'enabledForReportingButNotEnforced'
+        # The enforced dashboard MFA policy, and everything a test might want to break
+        # about it. Defaults describe a correctly deployed tenant.
+        $script:EnforcedState = 'enabled'
+        $script:EnforcedGrant = @('mfa')
+        $script:EnforcedApplication = $null
+        $script:EnforcedExcludeGroup = $null
+        # A real emergency-access account: cloud-only, and not one of the demo personas.
+        $script:BreakGlassMember = @([pscustomobject]@{ id = 'bg-1'; userPrincipalName = "emergency.access@$($script:Domain)" })
         $script:LicenseState = 'Active'
         $script:LicenseError = 'None'
         $script:MissingMember = ''
@@ -75,13 +119,14 @@ Describe 'layer-03-audit' {
                 return [pscustomobject]@{ value = @([pscustomobject]@{ skuPartNumber = 'EMSPREMIUM'; skuId = $script:SkuId }) }
             }
             if ($Uri -like '*conditionalAccess/policies*') {
-                return [pscustomobject]@{ value = @($script:Manifest.conditionalAccessPolicies | ForEach-Object {
-                            [pscustomobject]@{ displayName = $_.displayName; state = $script:CaState }
-                        })
-                }
+                return [pscustomobject]@{ value = @($script:Manifest.conditionalAccessPolicies | ForEach-Object { New-LiveCaPolicy -Declared $_ }) }
             }
             if ($Uri -match '/groups/(?<id>[^/]+)/members') {
                 $groupName = $Matches['id'] -replace '^id-', ''
+                # Break-glass membership is put there by a human, not by the manifest.
+                if ($groupName -in @($script:BreakGlassGroup.displayName)) {
+                    return [pscustomobject]@{ value = @($script:BreakGlassMember) }
+                }
                 $group = Get-GroupByName -Name $groupName
                 $member = @($group.members | Where-Object { $_ -ne $script:MissingMember } | ForEach-Object {
                         [pscustomobject]@{ userPrincipalName = "$_@$($script:Domain)" }
@@ -104,7 +149,11 @@ Describe 'layer-03-audit' {
                 }
             }
             if ($Uri -match "/applications\?.*displayName eq '(?<name>[^']+)'") {
-                return [pscustomobject]@{ value = @([pscustomobject]@{ id = "id-$($Matches['name'])"; displayName = $Matches['name'] }) }
+                # appId as well as id: Conditional Access scopes to the application (client)
+                # id, not the directory object id, and V3.3 compares against exactly that.
+                return [pscustomobject]@{ value = @([pscustomobject]@{
+                            id = "id-$($Matches['name'])"; appId = "appid-$($Matches['name'])"; displayName = $Matches['name']
+                        }) }
             }
             if ($Uri -like '*/users/*licenseAssignmentStates*') {
                 return [pscustomobject]@{
@@ -189,13 +238,17 @@ Describe 'layer-03-audit' {
     }
 
     Context 'a criterion fails on a realistic wrong value' {
-        It 'fails V3.3 immediately when a CA policy is enforced, and flags the safety risk' {
+        It 'fails V3.3 immediately when a BROAD CA policy is enforced, and flags the safety risk' {
+            # $script:CaState drives only the two All-users/All-applications policies. Those
+            # enforced in an adopter's tenant is a lockout; the dashboard MFA policy being
+            # enforced is the point of the layer, and the message says which case this is.
             $script:CaState = 'enabled'
             $context = Invoke-AuditForTest
             $row = Get-Row -Context $context -Id 'V3.3'
             $row.Status | Should -Be 'FAIL'
             $row.Attempt | Should -Be 1
             $row.Detail | Should -BeLike '*SAFETY FLAG*'
+            $row.Observed | Should -BeLike '*mls-ca-require-mfa-admins*'
             Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Exactly -Times 0
         }
 
@@ -222,6 +275,171 @@ Describe 'layer-03-audit' {
             $row = Get-Row -Context $context -Id 'V3.1'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*mls-shadow-admins*'
+        }
+    }
+
+    Context 'V3.3 asserts that MFA is ENFORCED on the dashboards (2026-08-28)' {
+        It 'passes only with the dashboard policy enabled and the broad ones report-only' {
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V3.3'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike "*$($script:EnforcedDeclared.displayName)=enabled*"
+            $row.Observed | Should -BeLike '*mfa*'
+            $row.Observed | Should -BeLike '*break-glass*'
+            $row.Expected | Should -BeLike '*State == enabled*'
+        }
+
+        It 'fails when the dashboard MFA policy is left report-only' {
+            # The regression this whole change exists to prevent: sign-in works, no second
+            # factor is ever asked for, and the old V3.3 called that a PASS.
+            $script:EnforcedState = 'enabledForReportingButNotEnforced'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike "*$($script:EnforcedDeclared.displayName) is 'enabledForReportingButNotEnforced'*"
+            $row.Detail | Should -Not -BeLike '*SAFETY FLAG*'
+        }
+
+        It 'fails when the enforced policy is widened to every application' {
+            $script:EnforcedApplication = @('All')
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike "*ENFORCED against every application*"
+        }
+
+        It 'fails when the enforced policy covers only some of the dashboards' {
+            $script:EnforcedApplication = @("appid-$(@($script:EnforcedDeclared.conditions.applications.includeApplicationsByDisplayName)[0])")
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*application scope missing*'
+        }
+
+        It 'fails when the enforced policy no longer grants mfa' {
+            $script:EnforcedGrant = @('compliantDevice')
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*not mfa*'
+        }
+
+        It 'fails when the break-glass exclusion is gone' {
+            # An enforced policy with nothing excluded is exactly the misconfiguration that
+            # locks a tenant owner out of their own tenant.
+            $script:EnforcedExcludeGroup = @()
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*does NOT exclude break-glass group*'
+        }
+
+        It 'fails when the break-glass group is excluded but empty' {
+            # An exclusion pointing at an empty group only looks like a recovery path.
+            $script:BreakGlassMember = @()
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*no such group holds a cloud-only emergency-access account*'
+        }
+
+        It 'fails when the only break-glass member is one of the fictional demo personas' {
+            $script:BreakGlassMember = @([pscustomobject]@{ id = 'p1'; userPrincipalName = "$($script:Manifest.users[0].userPrincipalNamePrefix)@$($script:Domain)" })
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*emergency-access account*'
+        }
+
+        It 'fails when the only break-glass member is synced from on-premises' {
+            $script:BreakGlassMember = @([pscustomobject]@{ id = 'bg-1'; userPrincipalName = "emergency.access@$($script:Domain)"; onPremisesSyncEnabled = $true })
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*emergency-access account*'
+        }
+
+        It 'still fails, retryably, when the enforced policy was never created at all' {
+            # What the tenant looks like after apply-entra.ps1 REFUSES an enforced policy
+            # for want of a break-glass account: the policy is simply absent.
+            Mock Invoke-MlsGraph {
+                if ($Uri -like '*conditionalAccess/policies*') {
+                    return [pscustomobject]@{ value = @($script:Manifest.conditionalAccessPolicies |
+                                Where-Object { $_.state -ne 'enabled' } | ForEach-Object { New-LiveCaPolicy -Declared $_ }) }
+                }
+                if ($Uri -like '*subscribedSkus*') { return [pscustomobject]@{ value = @([pscustomobject]@{ skuPartNumber = 'EMSPREMIUM'; skuId = $script:SkuId }) } }
+                if ($Uri -like '*/users/*licenseAssignmentStates*') { return [pscustomobject]@{ licenseAssignmentStates = @([pscustomobject]@{ skuId = $script:SkuId; state = 'Active'; error = 'None' }) } }
+                if ($Uri -like '*/users/*') { return [pscustomobject]@{ id = 'u' } }
+                if ($Uri -match '/groups/(?<id>[^/]+)/members') { return [pscustomobject]@{ value = @() } }
+                if ($Uri -like '*/groups?*startswith*') { return [pscustomobject]@{ value = @($script:Manifest.groups | ForEach-Object { [pscustomobject]@{ id = "id-$($_.displayName)"; displayName = $_.displayName } }) } }
+                if ($Uri -match "/groups\?.*displayName eq '(?<name>[^']+)'") { return [pscustomobject]@{ value = @([pscustomobject]@{ id = "id-$($Matches['name'])"; displayName = $Matches['name'] }) } }
+                if ($Uri -like '*/applications?*startswith*') { return [pscustomobject]@{ value = @($script:Manifest.appRegistrations | ForEach-Object { [pscustomobject]@{ id = 'a'; displayName = $_.displayName } }) } }
+                if ($Uri -match "/applications\?.*displayName eq '(?<name>[^']+)'") { return [pscustomobject]@{ value = @([pscustomobject]@{ id = 'a'; appId = "appid-$($Matches['name'])"; displayName = $Matches['name'] }) } }
+                throw "unexpected Graph call: $Uri"
+            }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*manifest CA policies visible*'
+            $row.Detail | Should -BeLike '*break-glass*'
+        }
+
+        It 'maps to no control, deliberately' {
+            # A green V3.3 now proves MFA is enforced for the three dashboards AND, in the
+            # same breath, that mls-ca-require-mfa-admins is report-only - so it does not
+            # demonstrate 3.5.3, which requires MFA for privileged accounts as well.
+            # compliance/assessment/3.5.3.json carries the authored record instead.
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V3.3'
+            @($row.Control).Count | Should -Be 0
+        }
+    }
+
+    Context 'a malformed enforced policy is a finding, not a crash' {
+        # This whole file runs Set-StrictMode -Off, so it would not otherwise notice that
+        # the audit itself runs under -Version Latest, where reading a property the
+        # manifest does not have THROWS. These two put strict mode back on for the call.
+        BeforeEach {
+            function New-BrokenManifestPath {
+                [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+                    Justification = 'Test fixture: writes one temp file under the suite report root.')]
+                param([Parameter(Mandatory)][scriptblock]$Break, [Parameter(Mandatory)][string]$Name)
+                $manifest = Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+                $policy = @($manifest.conditionalAccessPolicies | Where-Object { $_.state -eq 'enabled' })[0]
+                & $Break $policy
+                if (-not (Test-Path -LiteralPath $script:ReportRoot)) {
+                    New-Item -ItemType Directory -Path $script:ReportRoot -Force | Out-Null
+                }
+                $path = Join-Path -Path $script:ReportRoot -ChildPath "$Name.json"
+                $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path -Encoding utf8
+                return $path
+            }
+        }
+
+        It 'names the missing break-glass exclusion instead of throwing on the absent property' {
+            $path = New-BrokenManifestPath -Name 'no-exclusion' -Break {
+                param($Policy) $Policy.conditions.users.PSObject.Properties.Remove('excludeGroupsByDisplayName')
+            }
+            Set-StrictMode -Version Latest
+            $context = Invoke-Main -Domain $script:Domain -ManifestPath $path -ReportRoot $script:ReportRoot -NoRetry
+            Set-StrictMode -Off
+            $row = Get-Row -Context $context -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*declares no break-glass group exclusion*'
+            $row.Observed | Should -Not -BeLike '*check threw*'
+        }
+
+        It 'names an enforced policy that covers no application instead of throwing' {
+            $path = New-BrokenManifestPath -Name 'no-applications' -Break {
+                param($Policy) $Policy.conditions.applications.PSObject.Properties.Remove('includeApplicationsByDisplayName')
+            }
+            Set-StrictMode -Version Latest
+            $context = Invoke-Main -Domain $script:Domain -ManifestPath $path -ReportRoot $script:ReportRoot -NoRetry
+            Set-StrictMode -Off
+            $row = Get-Row -Context $context -Id 'V3.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*names no application*'
+            $row.Observed | Should -Not -BeLike '*check threw*'
+        }
+    }
+
+    Context 'V3.2 and the break-glass group' {
+        It 'does not hold the break-glass group to the manifest membership it deliberately omits' {
+            # The account an adopter is REQUIRED to add would otherwise read as an "extra"
+            # member and fail V3.2 for doing the right thing.
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V3.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*membership managed outside the manifest*'
         }
     }
 

@@ -436,6 +436,57 @@ it is still about sign-in risk and auto-labeling, nothing else.
     see § D. It never blocks G0; it just means a missing setting shows up in the table
     instead of staying invisible until someone goes looking for it.
 
+13. ⚠ **Create the break-glass (emergency access) account** — *added 2026-08-28 with
+    the enforced dashboard MFA policy.* **Out of sequence, like item 12:** it cannot be
+    done until **after** the first L3 run, because the group it belongs to
+    (`mls-break-glass`) does not exist until `apply-entra.ps1` creates it — and the
+    enforced policy is not created until this account exists. That is deliberate: L3 is a
+    two-pass layer the first time, and the second pass is the same dispatch as the first.
+
+    **Why.** `infra/entra/manifest.json` declares `mls-ca-require-mfa-dashboards` with
+    `state: enabled` — a real, enforced Conditional Access policy requiring MFA for every
+    user signing in to `launch-ops`, `control-tower` and the compliance board. Microsoft's
+    guidance for any enforced CA policy is to exclude at least one emergency-access
+    account, and the reason is blunt: a wrong policy, a grant nobody can satisfy, or an
+    MFA service outage otherwise locks **you** out of **your own tenant**, with the
+    portal, the CLI and Graph all behind the same policy and no way back in.
+
+    **What to create** (Microsoft's emergency-access guidance, applied to this estate):
+
+    - **Cloud-only.** A `<something>@<tenant>.onmicrosoft.com` account, never federated
+      and never synced from on-premises — a break-glass account that depends on the sync
+      source dies with it. `apply-entra.ps1` and V3.3 both refuse an account with
+      `onPremisesSyncEnabled = true`.
+    - **Not one of the demo personas.** Dana, Miles, Priya, Sofia and Marcus are
+      fictional and this repository is public (CLAUDE.md rule 4); no human holds their
+      credentials, so none of them is an emergency account. Both the apply script and
+      V3.3 refuse a break-glass group whose only members are manifest personas.
+    - **Excluded from every Conditional Access policy**, not just this one. In this repo
+      the other two policies are report-only, so today only this one has an exclusion to
+      make; the moment you enforce another, exclude the same group.
+    - **Credential stored out of band** — a password manager or a sealed envelope, not
+      this repo, not Key Vault behind the same tenant sign-in, not CI (hard rule 5). Long,
+      random, no expiry surprise.
+    - **Monitored.** Its sign-ins should be rare and every one of them worth a question.
+      With item 12's `SignInLogs` routing in place, alert on any sign-in by it:
+      `SigninLogs | where UserPrincipalName == "<break-glass upn>"`.
+    - Two such accounts, on different authentication paths, is Microsoft's actual
+      recommendation for a production tenant. One is enough for this demo; the group
+      accepts as many as you add.
+
+    Then add it to the group L3 created:
+
+    ```
+    az ad group member add --group mls-break-glass \
+      --member-id "$(az ad user show --id <break-glass upn> --query id -o tsv)"
+    ```
+
+    Re-dispatch `layer-03-entra.yml`. The apply log should now report `CaCreated`
+    including `mls-ca-require-mfa-dashboards` rather than `CaBlocked=1`, and V3.3 should
+    pass. **Until you do this, MFA is not enforced** — the layer applies cleanly and says
+    so in red, and V3.3 fails. That is the intended failure direction: no policy is safer
+    than an enforced policy with no way out of it.
+
 ### C9 — the `demo` and `verify` GitHub environments, variable by variable
 
 These are GitHub **environment variables**, not secrets, and they are never committed
@@ -633,11 +684,16 @@ linked to a
 Copilot Studio pay-as-you-go billing plan on this subscription; budget in place. Only
 then does Layer 1 deploy.
 
-Items C6, C7 and C10 are **not** G0-complete blockers for Layer 1 — C7 cannot even be done
+Items C6, C7, C10 and 13 are **not** G0-complete blockers for Layer 1 — C7 cannot even be
+done
 until L8 has published an agent, C6 is deferred by design while the Fabric capacity
-is on the trial SKU, and C10 cannot run until L3 has created the users it licenses. C6/C7
-block L8 only and C10 blocks L3's V3.4 only; `verify-g0.ps1` reports them as
-informational rather than failing the gate.
+is on the trial SKU, C10 cannot run until L3 has created the users it licenses, and item
+13 cannot run until L3 has created the group. C6/C7
+block L8 only, C10 blocks L3's V3.4 only, and item 13 blocks L3's V3.3 only;
+`verify-g0.ps1` reports them as
+informational rather than failing the gate. Note what item 13 blocking V3.3 means in
+practice: **the enforced MFA policy is not created until you do it**, so an estate that
+skips item 13 has dashboards behind an Entra sign-in with no second factor.
 
 **Item 12 (2026-08-26 finding F9, added Task 23) gets the same treatment, for a different
 reason.** `verify-g0.ps1` now runs a tenth, read-only `EntraDiagnostics` check (`az monitor

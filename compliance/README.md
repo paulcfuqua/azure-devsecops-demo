@@ -14,8 +14,8 @@ static board behind Container Apps Easy Auth) and the query half is `query_compl
 the sixth tool on `apps/mcp-tools` — both read the artifact emitted here, and neither
 holds a second copy of the logic.
 
-**What the board says on this estate, today: 0 COMPLIANT, 15 PARTIAL, 0 GAP, 0
-INCONCLUSIVE, 0 NOT_APPLICABLE, 95 NOT_ASSESSED of 110**, plus the 4 out-of-catalog rows
+**What the board says on this estate, today: 0 COMPLIANT, 15 PARTIAL, 1 GAP, 0
+INCONCLUSIVE, 0 NOT_APPLICABLE, 94 NOT_ASSESSED of 110**, plus the 4 out-of-catalog rows
 described below. Nothing here has ever been deployed, so nothing could have been
 observed; a green board at this point would mean the platform had invented a claim.
 
@@ -23,16 +23,33 @@ The three rows that moved from GAP to PARTIAL on 2026-08-28 are 3.1.1, 3.1.2 and
 and **PARTIAL is the ceiling an authored assertion can reach** — see **Derived
 vocabulary** below. Their last open contributor was F13's seventh workload RBAC grant,
 which had no principal to be written against until F19 provisioned `apps/cost-ingest` as
-a real Function App. Zero GAP does not mean the estate is compliant; it means no finding
-this review raised is still open against a control, on a system that has never run.
+a real Function App.
+
+**The one GAP is 3.5.3 (multifactor authentication), added 2026-08-28, and it is a row
+that moved from NOT_ASSESSED to GAP by being assessed rather than by regressing.** The
+estate now *declares* an enforced Conditional Access policy requiring MFA for every user
+signing in to the three human-facing dashboards, with a break-glass exclusion the apply
+script refuses to proceed without — but 3.5.3 also requires MFA for privileged accounts,
+and the policy that would cover those is deliberately left report-only. One prong
+declared, one prong knowingly not enforced, and nothing deployed either way: `CLOSED`
+would have claimed no known open shortfall stands, while the record's own rationale names
+one. See `assessment/3.5.3.json`, which is explicit about what it does *not* claim. 3.5.4
+(replay-resistant mechanisms) has no record and stays NOT_ASSESSED on purpose: what makes
+an Entra sign-in replay-resistant is the OIDC flow the platform implements, which this
+repository neither configures nor verifies.
 
 ## What exists today
 
-- **`assessment/`** — one `<control-id>.json` per NIST SP 800-171 control that the
-  2026-08-26 pre-publication security review found a gap against, in the schema from
-  spec §3.2. Each file asserts a `status` (see **Register vocabulary** below). As of
-  2026-08-28, **all 19 assert `CLOSED`** — which says only that no known open finding
-  stands against any of them, never that the controls are met. This is the **remediation register**: the first
+- **`assessment/`** — one `<control-id>.json` per control this repository has actually
+  said something about, in the schema from
+  spec §3.2. Each file asserts a `status` (see **Register vocabulary** below). Nineteen
+  of them exist because the 2026-08-26 pre-publication security review found a gap
+  against that control; **3.5.3 is the first that does not** — no finding raised it, it
+  was assessed because the sponsor asked for enforced MFA and the answer had to be
+  recorded honestly. As of
+  2026-08-29, **19 assert `CLOSED` and one (3.5.3) asserts `GAP`** — `CLOSED` saying only
+  that no known open finding
+  stands against those controls, never that they are met. This is the **remediation register**: the first
   implementation task against the compliance-platform spec (§8, item 1), not part of the
   spec itself.
 - **`findings/2026-08-26-prepublication-review.md`** — the narrative record of the
@@ -170,6 +187,15 @@ red.
 Every record in `assessment/` carries `criteria: []` today, so every one takes an
 authored path and the board is `PARTIAL` and `GAP`, never green. The machine-verified
 path is what the collectors populate.
+
+3.5.3 is the clearest illustration of why the mapping is a decision rather than a
+formality: `verification/layer-03-audit.ps1`'s V3.3 now asserts, against a live tenant,
+that the dashboard MFA policy is enforced, grants `mfa`, is scoped to exactly three named
+applications and excludes a populated break-glass group — and it is still mapped to **no**
+control, because the same criterion asserts as a pass condition that the *admin* MFA
+policy is report-only. Claiming a criterion for a control it only half demonstrates is
+the one thing the criteria branch cannot be allowed to do, since it is the only path to
+`COMPLIANT`.
 
 There is deliberately **no "% compliant" figure** anywhere: counts by status and by
 provenance only. A percentage that blends verified and asserted controls is the exact

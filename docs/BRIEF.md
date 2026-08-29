@@ -40,8 +40,8 @@ Three constraints on it are non-negotiable, and are the reason it is worth havin
 2. **No blended percentage, ever.** Counts by status and by provenance, and the
    cross-tabulation of the two. No score, no ratio, no "% compliant".
 3. **The board must be allowed to look bad.** On an estate that has never been deployed it
-   reports **0 COMPLIANT / 95 NOT_ASSESSED of 110**, and says on its own face that nothing
-   has been deployed. That is the deliverable, not a defect to fix before showing anyone.
+   reports **0 COMPLIANT / 94 NOT_ASSESSED / 1 GAP of 110**, and says on its own face that
+   nothing has been deployed. That is the deliverable, not a defect to fix before showing anyone.
 
 This adds no gate. It is read-only, needs no credential, and runs pre-tenant — so it
 touches none of principles 1–5 below and none of the five gates.

@@ -7,10 +7,14 @@
     Implements the four master-plan Verify criteria owned by
     docs/runbooks/layers/L03.md section Validation cycle, and nothing else:
 
-      V3.1  Graph queries confirm object counts (5 users / 4 groups / 3 app registrations,
-            plus a drift sweep for mls-prefixed objects absent from the manifest).
+      V3.1  Graph queries confirm object counts - every users/groups/appRegistrations entry
+            in the manifest, whatever the manifest currently holds, plus a drift sweep for
+            mls-prefixed objects absent from it.
       V3.2  Graph queries confirm group memberships (set equality with the manifest).
-      V3.3  CA policy state == enabledForReportingButNotEnforced.
+      V3.3  Each CA policy is live in the state the manifest declares - the two broad
+            All-users/All-applications policies report-only, mls-ca-require-mfa-dashboards
+            ENFORCED - and the enforced one really does require MFA, on exactly the three
+            dashboard applications, with a populated break-glass exclusion behind it.
       V3.4  License assignment state == success for every user the manifest flags
             "licensed": true (all 5 during the trial; narrows after expiry).
 
@@ -122,7 +126,15 @@ function Test-DirectoryObjectCount {
 }
 
 function Test-GroupMembership {
-    <# V3.2 - each group's member set equals the manifest's list exactly. #>
+    <# V3.2 - each group's member set equals the manifest's list exactly.
+
+       EXCEPT a group flagged "breakGlass": true, whose membership is deliberately NOT in
+       the manifest: an emergency-access account is a real human credential and must never
+       be one of the fictional personas this file declares (CLAUDE.md rule 4), so a human
+       adds it out of band. Asserting set equality there would fail the moment the account
+       an adopter is REQUIRED to create actually exists. Its membership is not unchecked -
+       V3.3 asserts the stronger property, that the group holds a usable emergency-access
+       account, because that is what makes the enforced MFA policy safe to turn on. #>
     param(
         [Parameter(Mandatory)]$Manifest,
         [Parameter(Mandatory)][string]$Domain
@@ -130,6 +142,10 @@ function Test-GroupMembership {
     $problem = [System.Collections.Generic.List[string]]::new()
     $observed = [System.Collections.Generic.List[string]]::new()
     foreach ($group in $Manifest.groups) {
+        if (Get-MlsProperty -InputObject $group -Name 'breakGlass') {
+            $observed.Add("$($group.displayName): membership managed outside the manifest (break-glass; asserted by V3.3)")
+            continue
+        }
         $found = Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=displayName eq '$($group.displayName)'")
         if (@($found).Count -ne 1) {
             $problem.Add("group '$($group.displayName)' resolved to $(@($found).Count) objects")
@@ -152,12 +168,145 @@ function Test-GroupMembership {
         -Detail 'Set equality: a missing member and an extra member both fail (L03.md V3.2).'
 }
 
+function Get-MlsDirectoryObjectId {
+    <# The id Conditional Access addresses an object by, resolved from its display name:
+       `appId` for an application (NOT the directory object id), `id` for a group. Null
+       unless exactly one object matches - two matches is an ambiguity, not a lookup. #>
+    param(
+        [Parameter(Mandatory)][string]$Resource,
+        [Parameter(Mandatory)][string]$DisplayName,
+        [Parameter(Mandatory)][string]$Property
+    )
+    $found = Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/$Resource`?`$filter=displayName eq '$DisplayName'")
+    if (@($found).Count -ne 1) { return $null }
+    return Get-MlsProperty -InputObject $found[0] -Name $Property
+}
+
+function Test-EnforcedCaPolicy {
+    <# The content assertions that only apply to a policy the manifest declares `enabled`.
+       Appends to $Problem; returns a short Observed fragment. Split out because V3.3's
+       two halves are genuinely different questions asked of the same Graph read. #>
+    param(
+        [Parameter(Mandatory)]$Manifest,
+        [Parameter(Mandatory)]$Declared,
+        [Parameter(Mandatory)]$Live,
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Problem,
+        [Parameter(Mandatory)][string]$Domain
+    )
+    $name = $Declared.displayName
+    $note = [System.Collections.Generic.List[string]]::new()
+    # Read the manifest's own optional keys through Get-MlsProperty, never by dotted
+    # access: this script runs under Set-StrictMode -Version Latest, where a missing
+    # property THROWS, and a manifest that declares `enabled` without naming applications
+    # or a break-glass exclusion has to produce a legible finding rather than a stack
+    # trace. (apply-entra.ps1 refuses to apply such a manifest; the audit still has to
+    # describe one honestly if it meets it.)
+    $declaredConditions = Get-MlsProperty -InputObject $Declared -Name 'conditions'
+    $declaredApplications = Get-MlsProperty -InputObject $declaredConditions -Name 'applications'
+    $declaredUsers = Get-MlsProperty -InputObject $declaredConditions -Name 'users'
+
+    # --- the grant itself ---------------------------------------------------------
+    $grant = Get-MlsProperty -InputObject $Live -Name 'grantControls'
+    $builtIn = @(Get-MlsProperty -InputObject $grant -Name 'builtInControls')
+    if ($builtIn -notcontains 'mfa') {
+        $Problem.Add("$name grants [$($builtIn -join ', ')] - not mfa")
+    }
+    else { $note.Add('mfa') }
+
+    # --- scope: exactly the declared applications, and never 'All' -----------------
+    $conditions = Get-MlsProperty -InputObject $Live -Name 'conditions'
+    $liveApplication = @(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $conditions -Name 'applications') -Name 'includeApplications')
+    # Where-Object { $_ } because @(Get-MlsProperty ...) on an ABSENT key is a one-element
+    # array holding $null, not an empty one - the same PowerShell trap the break-glass
+    # member count guards against below.
+    $declaredName = @(Get-MlsProperty -InputObject $declaredApplications -Name 'includeApplicationsByDisplayName' |
+            Where-Object { $_ })
+    $expectedId = @($declaredName | ForEach-Object { Get-MlsDirectoryObjectId -Resource 'applications' -DisplayName $_ -Property 'appId' })
+    if ($liveApplication -contains 'All') {
+        $Problem.Add("$name is ENFORCED against every application ('All') - it must name the applications it covers")
+    }
+    elseif ($declaredName.Count -eq 0) {
+        $Problem.Add("$name is ENFORCED but the manifest names no application for it to cover")
+    }
+    elseif (@($expectedId | Where-Object { $_ }).Count -ne $declaredName.Count) {
+        $Problem.Add("${name}: could not resolve every declared application ($($declaredName -join ', ')) to an appId")
+    }
+    else {
+        $comparison = Test-MlsSetEquality -Actual $liveApplication -Expected $expectedId
+        if (-not $comparison.Equal) {
+            $Problem.Add("${name} application scope missing [$($comparison.Missing -join ', ')] extra [$($comparison.Extra -join ', ')]")
+        }
+        else { $note.Add("$($declaredName.Count) app(s)") }
+    }
+
+    # --- the break-glass exclusion, and whether it is worth anything ---------------
+    # An exclusion pointing at an EMPTY group is not an emergency-access path; it just
+    # looks like one. So the group is read, and its members have to be real: a fictional
+    # demo persona is nobody's credential, and an on-premises-synced account takes the
+    # recovery path down with whatever it syncs from.
+    $liveExclusion = @(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $conditions -Name 'users') -Name 'excludeGroups')
+    $breakGlassName = @($Manifest.groups | Where-Object { Get-MlsProperty -InputObject $_ -Name 'breakGlass' } |
+            ForEach-Object { $_.displayName })
+    $declaredExclusion = @(Get-MlsProperty -InputObject $declaredUsers -Name 'excludeGroupsByDisplayName' |
+            Where-Object { $breakGlassName -contains $_ })
+    if ($declaredExclusion.Count -eq 0) {
+        $Problem.Add("$name declares no break-glass group exclusion in the manifest")
+        return ($note -join '; ')
+    }
+    $excluded = 0
+    $emergencyAccount = 0
+    $personaUpn = @($Manifest.users | ForEach-Object { "$($_.userPrincipalNamePrefix)@$Domain" })
+    foreach ($groupName in $declaredExclusion) {
+        $groupId = Get-MlsDirectoryObjectId -Resource 'groups' -DisplayName $groupName -Property 'id'
+        if (-not $groupId) { $Problem.Add("$name excludes '$groupName', which does not resolve to exactly one group"); continue }
+        if ($liveExclusion -notcontains $groupId) {
+            $Problem.Add("$name does NOT exclude break-glass group '$groupName' - an enforced policy with no emergency-access exclusion can lock the tenant owner out")
+            continue
+        }
+        $excluded++
+        $member = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups/$groupId/members?`$select=id,userPrincipalName,onPremisesSyncEnabled"))
+        foreach ($entry in $member) {
+            # A non-empty UPN is what makes this a user account at all. It also fails closed
+            # on Get-MlsCollection's shape quirk: an EMPTY {value:[]} response comes back as
+            # the response wrapper itself in a one-element array, and counting that object
+            # as an emergency-access account would turn an empty break-glass group green.
+            $upn = "$(Get-MlsProperty -InputObject $entry -Name 'userPrincipalName')"
+            if ([string]::IsNullOrWhiteSpace($upn)) { continue }
+            if ($personaUpn -contains $upn) { continue }
+            if ((Get-MlsProperty -InputObject $entry -Name 'onPremisesSyncEnabled') -eq $true) { continue }
+            $emergencyAccount++
+        }
+    }
+    if ($excluded -gt 0 -and $emergencyAccount -eq 0) {
+        $Problem.Add("$name excludes [$($declaredExclusion -join ', ')] but no such group holds a cloud-only emergency-access account - the exclusion protects nobody")
+    }
+    if ($excluded -gt 0 -and $emergencyAccount -gt 0) {
+        $note.Add("break-glass $($declaredExclusion -join ', '): $emergencyAccount account(s)")
+    }
+    return ($note -join '; ')
+}
+
 function Test-ConditionalAccessState {
-    <# V3.3 - both policies present and report-only. A visible-but-wrong state fails
-       immediately: that is not a propagation artifact (L03.md V3.3). #>
-    param([Parameter(Mandatory)]$Manifest)
-    $expectedState = 'enabledForReportingButNotEnforced'
-    $expectedName = @($Manifest.conditionalAccessPolicies | ForEach-Object { $_.displayName })
+    <# V3.3 - every manifest CA policy is live in the state the MANIFEST declares, and the
+       one policy declared `enabled` really does enforce what it claims to.
+
+       Two assertions, two different reasons, one Graph read:
+
+       * the two broad policies (All users / All applications) must stay report-only.
+         Enforcing an All/All grant in an adopter's tenant is a lockout, not a demo, so a
+         live `enabled` there is a SAFETY FLAG rather than a finding to analyse later.
+       * mls-ca-require-mfa-dashboards must be ENFORCED, grant `mfa`, cover exactly the
+         dashboard applications the manifest names (never 'All'), and exclude a break-glass
+         group that actually holds an emergency-access account.
+
+       A visible-but-wrong state fails immediately: that is not a propagation artifact
+       (L03.md V3.3). A policy or object not visible YET is retried. #>
+    param(
+        [Parameter(Mandatory)]$Manifest,
+        [Parameter(Mandatory)][string]$Domain
+    )
+    $declared = @($Manifest.conditionalAccessPolicies)
+    $expectedName = @($declared | ForEach-Object { $_.displayName })
     $policies = Get-MlsCollection -Response (Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies')
     $relevant = @($policies | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'displayName') -in $expectedName })
     $observed = @($relevant | ForEach-Object {
@@ -166,18 +315,36 @@ function Test-ConditionalAccessState {
     if ($relevant.Count -ne @($expectedName).Count) {
         return New-MlsCheckResult -Passed $false `
             -Observed "$($relevant.Count) of $(@($expectedName).Count) manifest CA policies visible: $($observed -join ', ')" `
-            -Detail 'CA propagation can take up to 45 min worst case; the audit retries inside the standard 30-minute window.'
+            -Detail 'CA propagation can take up to 45 min worst case; the audit retries inside the standard 30-minute window. An enforced policy the apply script REFUSED to create (no break-glass account) also lands here - see docs/runbooks/g0-bootstrap.md item 13.'
     }
-    $wrong = @($relevant | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'state') -ne $expectedState })
-    if ($wrong.Count -gt 0) {
-        $enforced = @($wrong | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'state') -eq 'enabled' })
-        $detail = 'Wrong state is not a propagation artifact - failing immediately (L03.md V3.3).'
-        if ($enforced.Count -gt 0) {
-            $detail = 'SAFETY FLAG: a CA policy is ENFORCED (state=enabled) in the demo tenant. L03 rollback exception: the lead may converge it back to report-only immediately, before any other analysis - tenant lockout is the blast radius.'
+
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $safetyFlag = $false
+    $detail = [System.Collections.Generic.List[string]]::new()
+    foreach ($policy in $declared) {
+        $live = @($relevant | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'displayName') -eq $policy.displayName })[0]
+        $liveState = "$(Get-MlsProperty -InputObject $live -Name 'state')"
+        if ($liveState -ne $policy.state) {
+            $problem.Add("$($policy.displayName) is '$liveState', manifest declares '$($policy.state)'")
+            if ($liveState -eq 'enabled') { $safetyFlag = $true }
+            continue
         }
-        return New-MlsCheckResult -Passed $false -Observed ($observed -join ', ') -Detail $detail -Final
+        if ($policy.state -ne 'enabled') { continue }
+        $note = Test-EnforcedCaPolicy -Manifest $Manifest -Declared $policy -Live $live -Problem $problem -Domain $Domain
+        if ($note) { $detail.Add("$($policy.displayName) ($note)") }
     }
-    return New-MlsCheckResult -Passed $true -Observed ($observed -join ', ')
+
+    if ($problem.Count -eq 0) {
+        $summary = $observed -join ', '
+        if ($detail.Count -gt 0) { $summary += ' | ' + ($detail -join '; ') }
+        return New-MlsCheckResult -Passed $true -Observed $summary
+    }
+
+    $why = 'Wrong state or scope is not a propagation artifact - failing immediately (L03.md V3.3).'
+    if ($safetyFlag) {
+        $why = 'SAFETY FLAG: a CA policy the manifest declares REPORT-ONLY is ENFORCED (state=enabled) in this tenant. L03 rollback exception: the lead may converge it back to report-only immediately, before any other analysis - tenant lockout is the blast radius. (mls-ca-require-mfa-dashboards is deliberately enforced and is not this case.)'
+    }
+    return New-MlsCheckResult -Passed $false -Observed (($observed -join ', ') + ' | ' + ($problem -join ' | ')) -Detail $why -Final
 }
 
 function Test-LicenseAssignment {
@@ -270,21 +437,44 @@ function Invoke-Main {
         -Expected "each group's member set equals the manifest's member list exactly (set equality)" `
         -Test { Test-GroupMembership -Manifest $manifest -Domain $tenantDomain } | Out-Null
 
-    # -Control @() deliberately, and this is the important case in this file.
-    # This criterion PASSES only when both CA policies are
-    # enabledForReportingButNotEnforced, and Test-ConditionalAccessState raises a
-    # SAFETY FLAG and FAILS if either is actually enabled. So a green V3.3 is
-    # positive evidence that MFA is NOT enforced and legacy auth is NOT blocked -
-    # the inverse of what 3.5.3 (multifactor authentication) and 3.5.4
-    # (replay-resistant mechanisms) require. Mapping it to those would publish a
-    # machine-verified claim that contradicts the assertion that produced it.
-    # Same shape as V9.5, which is empty-mapped for the same reason: a criterion
-    # whose pass condition is "the protection is off" evidences no protection.
+    $enforcedPolicy = @($manifest.conditionalAccessPolicies | Where-Object { $_.state -eq 'enabled' })
+    $reportOnlyPolicy = @($manifest.conditionalAccessPolicies | Where-Object { $_.state -ne 'enabled' })
+    # Built with Get-MlsProperty, not dotted access: this line runs OUTSIDE any criterion's
+    # try/catch, so under Set-StrictMode -Version Latest a manifest missing the key would
+    # abort the whole audit instead of failing V3.3 with a legible message.
+    $enforcedScope = @($enforcedPolicy | ForEach-Object {
+            $applications = Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $_ -Name 'conditions') -Name 'applications'
+            @(Get-MlsProperty -InputObject $applications -Name 'includeApplicationsByDisplayName').Count
+        })
+    # -Control @() STILL, and the reason changed completely on 2026-08-28 - read this
+    # before mapping it.
+    #
+    # It used to be unmapped because a green V3.3 was positive evidence that MFA was NOT
+    # enforced: the criterion asserted every CA policy was report-only. That is no longer
+    # true. V3.3 now PASSES only when mls-ca-require-mfa-dashboards is live, ENFORCED,
+    # granting mfa on exactly the three dashboard applications with a populated break-glass
+    # exclusion - real, machine-verified evidence of multifactor authentication for network
+    # access to those three applications.
+    #
+    # It is still not evidence of 3.5.3, and mapping it would be a laundered claim.
+    # 3.5.3 requires MFA "for local and network access to PRIVILEGED accounts AND for
+    # network access to non-privileged accounts". This criterion asserts, in the same
+    # breath and as a pass condition, that mls-ca-require-mfa-admins - the policy scoped by
+    # includeRoles to the admin directory roles - is REPORT-ONLY. A green V3.3 therefore
+    # proves the non-privileged half for three applications and simultaneously proves the
+    # privileged half is not enforced. Mapping it to 3.5.3 would let a passing criterion
+    # render that requirement COMPLIANT (the criteria branch is the only path to COMPLIANT,
+    # compliance/lib/MlsCompliance.psm1) while half of it is deliberately off.
+    #
+    # 3.5.4 (replay-resistant mechanisms) is not mapped either: what makes an Entra sign-in
+    # replay-resistant is the OIDC code flow the platform implements, which this criterion
+    # neither configures nor reads. compliance/assessment/3.5.3.json carries the authored
+    # record and says exactly this, in both directions.
     Invoke-MlsCriterion -Context $context -Id 'V3.3' -Control @() `
-        -Description 'CA policy state == enabledForReportingButNotEnforced' `
-        -Command 'GET /v1.0/identity/conditionalAccess/policies  # Policy.Read.All, read-only' `
-        -Expected 'both manifest CA policies present with State == enabledForReportingButNotEnforced' `
-        -Test { Test-ConditionalAccessState -Manifest $manifest } | Out-Null
+        -Description 'CA policy state matches the manifest, and the enforced policy really enforces MFA' `
+        -Command "GET /v1.0/identity/conditionalAccess/policies  # Policy.Read.All, read-only`nGET /v1.0/applications?`$filter=displayName eq '<dashboard app>'  # -> appId`nGET /v1.0/groups/<break-glass>/members?`$select=id,userPrincipalName,onPremisesSyncEnabled" `
+        -Expected "$(@($reportOnlyPolicy).Count) broad polic(y/ies) [$(@($reportOnlyPolicy | ForEach-Object { $_.displayName }) -join ', ')] State == enabledForReportingButNotEnforced; $(@($enforcedPolicy).Count) polic(y/ies) [$(@($enforcedPolicy | ForEach-Object { $_.displayName }) -join ', ')] State == enabled, granting mfa, scoped to exactly $($enforcedScope -join '/') named application(s) and not 'All', excluding a break-glass group that holds a cloud-only emergency-access account" `
+        -Test { Test-ConditionalAccessState -Manifest $manifest -Domain $tenantDomain } | Out-Null
 
     $licensedUser = Get-ManifestUserPrincipalName -Manifest $manifest -Domain $tenantDomain -LicensedOnly
     # -Control @(): license assignment is an entitlement/billing precondition for identity
