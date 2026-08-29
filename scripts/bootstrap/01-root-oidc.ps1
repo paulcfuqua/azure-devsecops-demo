@@ -16,7 +16,7 @@
         `environment: demo`. Also: its service principal, Owner on the target
         subscription, and Microsoft Graph *application* permissions (User.ReadWrite.All,
         Group.ReadWrite.All, Application.ReadWrite.OwnedBy, Policy.ReadWrite.ConditionalAccess,
-        Directory.Read.All).
+        Directory.Read.All, Policy.Read.All).
       * App registration `mls-verifier` with its OWN federated identity credential on a
         subject DISTINCT from the deployer's - `environment:verify`, never `environment:
         demo` (2026-08-26 findings F6/F7: reusing the deployer's subject would let anything
@@ -99,12 +99,22 @@ $script:OidcAudience = 'api://AzureADTokenExchange'
 # a real, accepted risk recorded in the findings record's "Deferred" section
 # (compliance/findings/2026-08-26-prepublication-review.md, bottom) rather than left
 # unremarked in a code comment only.
+#
+# Policy.Read.All is there because ReadWrite.ConditionalAccess DOES NOT IMPLY READ for an
+# application permission, whatever the ReadWrite name suggests. With the other five
+# consented against a live tenant, apply-entra.ps1 still took
+#   403 AccessDenied "required scopes are missing in the token"
+# on GET /v1.0/identity/conditionalAccess/policies - the idempotency read every plan makes
+# before it writes anything. So L3 could author a CA policy it was not allowed to look at,
+# and the plan died before reaching the write it DID have rights for. Read-only, and
+# deliberately NOT Policy.ReadWrite.All: closing this must not widen write scope (F50).
 $script:DeployerGraphRoles = [ordered]@{
     'User.ReadWrite.All'                  = '741f803b-c850-494e-b5df-cde7c675a1ca'
     'Group.ReadWrite.All'                 = '62a82d76-70ea-41e2-9197-370581804d09'
     'Application.ReadWrite.OwnedBy'       = '18a4783c-866b-4cc7-a460-3d5e5662c884'
     'Policy.ReadWrite.ConditionalAccess'  = '01c0a623-fc9b-48e9-b794-0756f8e8f067'
     'Directory.Read.All'                  = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
+    'Policy.Read.All'                     = '246dd0d5-5bd0-4def-940b-0421030a5b68' # read the CA policies L3 writes (F50)
 }
 $script:VerifierGraphRoles = [ordered]@{
     'Directory.Read.All' = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'

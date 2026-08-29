@@ -7,13 +7,9 @@ BeforeAll {
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '01-root-oidc.ps1') -SubscriptionId $script:Sub
     Set-StrictMode -Off
 
-    $script:GraphRoleIds = @(
-        '741f803b-c850-494e-b5df-cde7c675a1ca', # User.ReadWrite.All
-        '62a82d76-70ea-41e2-9197-370581804d09', # Group.ReadWrite.All
-        '18a4783c-866b-4cc7-a460-3d5e5662c884', # Application.ReadWrite.OwnedBy
-        '01c0a623-fc9b-48e9-b794-0756f8e8f067', # Policy.ReadWrite.ConditionalAccess
-        '7ab1d382-f21e-4acd-a863-ba3e13f7da61'  # Directory.Read.All
-    )
+    # Derived, not a second copy - see the note in verify-g0.Tests.ps1 (F50). The
+    # individual roles are asserted by name below, where getting them wrong is the point.
+    $script:GraphRoleIds = @($script:DeployerGraphRoles.Values)
 
     function Get-AzArgValue {
         param([string[]]$Arguments, [string]$Name)
@@ -173,6 +169,21 @@ Describe '01-root-oidc' {
             $verifierGranted | Should -Contain '7ab1d382-f21e-4acd-a863-ba3e13f7da61' # Directory.Read.All
             $verifierGranted | Should -Contain '246dd0d5-5bd0-4def-940b-0421030a5b68' # Policy.Read.All
             $verifierGranted.Count | Should -Be 2
+        }
+
+        It 'requests Policy.Read.All so L3 can READ the CA policies it writes (F50)' {
+            # Policy.ReadWrite.ConditionalAccess does not imply read for an APPLICATION
+            # permission. With the other five consented, apply-entra.ps1 still took a
+            # 403 AccessDenied on GET /v1.0/identity/conditionalAccess/policies - the
+            # idempotency read every plan does before it writes.
+            $script:DeployerGraphRoles.Keys | Should -Contain 'Policy.Read.All'
+            $script:DeployerGraphRoles['Policy.Read.All'] | Should -Be '246dd0d5-5bd0-4def-940b-0421030a5b68'
+        }
+
+        It 'grants the deployer read over policy, never write beyond Conditional Access' {
+            # Policy.Read.All is read-only and Policy.ReadWrite.All is not requested:
+            # the increment closing F50 must not widen write scope.
+            $script:DeployerGraphRoles.Keys | Should -Not -Contain 'Policy.ReadWrite.All'
         }
 
         It 'does not request tenant-wide application write (2026-08-26 finding F8)' {

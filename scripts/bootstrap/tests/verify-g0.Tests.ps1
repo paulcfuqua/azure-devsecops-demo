@@ -6,13 +6,12 @@ BeforeAll {
     . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'verify-g0.ps1') -SubscriptionId $script:Sub
     Set-StrictMode -Off
 
-    $script:RoleIds = @(
-        '741f803b-c850-494e-b5df-cde7c675a1ca',
-        '62a82d76-70ea-41e2-9197-370581804d09',
-        '18a4783c-866b-4cc7-a460-3d5e5662c884', # Application.ReadWrite.OwnedBy
-        '01c0a623-fc9b-48e9-b794-0756f8e8f067',
-        '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
-    )
+    # Derived from the script's own map, not a second hardcoded copy of it: a fixture
+    # that lists the ids separately drifts the moment the map gains one, which is exactly
+    # how six of these tests broke when Policy.Read.All was added (F50). WHICH roles are
+    # correct is pinned by the explicit assertions in 01-root-oidc.Tests.ps1; this fixture
+    # only says "the tenant consented whatever the script asks for".
+    $script:RoleIds = @($script:GraphConsentedRoles.Values)
 
     function Get-AzArgValue {
         param([string[]]$Arguments, [string]$Name)

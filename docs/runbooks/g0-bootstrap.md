@@ -363,7 +363,8 @@ it is still about sign-in risk and auto-labeling, nothing else.
    credential — 2026-08-26 finding F7); grants Owner on the subscription; prints the
    admin-consent URL for Graph application permissions (`User.ReadWrite.All`,
    `Group.ReadWrite.All`, `Application.ReadWrite.OwnedBy` — narrowed from `.All`,
-   2026-08-26 finding F8 —, `Policy.ReadWrite.ConditionalAccess`, `Directory.Read.All`)
+   2026-08-26 finding F8 —, `Policy.ReadWrite.ConditionalAccess`, `Directory.Read.All`,
+   **`Policy.Read.All`**)
    — you click consent; and creates the read-only `mls-verifier` app (Reader + `Directory.Read.All` +
    **`Policy.Read.All`**) with its **own** federated credential on a distinct `verify`
    environment, never `demo` (2026-08-26 findings F6/F7 — see item C9 below).
@@ -379,6 +380,13 @@ it is still about sign-in risk and auto-labeling, nothing else.
    > (`sub_claim_prefix`) and registers both. Do not trust the API's
    > `use_immutable_subject` flag: this repo returned `false` while GitHub was
    > sending the immutable subject.
+
+   > **`Policy.ReadWrite.ConditionalAccess` does not let the deployer READ Conditional
+   > Access policies (finding F50).** Whatever the ReadWrite name suggests, an application
+   > permission needs **`Policy.Read.All`** as well. With the other five consented, L3's
+   > plan still took `403 AccessDenied - required scopes are missing in the token` on
+   > `GET /v1.0/identity/conditionalAccess/policies`, the idempotency read it makes before
+   > writing anything. Six permissions, not five.
 
 4. ⚠ **Fabric service-principal settings.** This step used to read *"enable «Service
    principals can use Fabric APIs»"*. **No setting has that name.** It is five settings
@@ -841,7 +849,7 @@ prose that stood here claimed two verifications the script does not perform (fin
 | 2 | `DeployerApp` | `mls-github-deployer` registration exists |
 | 3 | `Federation` | its federated credential carries the `environment:demo` subject. **Does not yet assert the immutable-identifier subject GitHub actually presents** - see F48 |
 | 4 | `OwnerRole` | its service principal holds Owner at subscription scope |
-| 5 | `GraphConsent` | all five application permissions are consented |
+| 5 | `GraphConsent` | all **six** application permissions are consented. The count is read from the script's own map, not written in prose, so it cannot drift again (F50) |
 | 6 | `VerifierApp` | `mls-verifier` exists with a federated subject **distinct** from the deployer's (F6/F7) |
 | 7 | `FabricCapacity` | an **F-series** capacity is visible through the Fabric API. The SKU is checked, not just the state (F46) |
 | 8 | `FabricSpAccess` | **C4** — service principals may create workspaces and call Fabric public APIs; the three admin-API settings are off (F46) |

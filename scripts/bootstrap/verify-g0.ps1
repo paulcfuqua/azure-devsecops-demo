@@ -79,6 +79,7 @@ $script:GraphConsentedRoles = [ordered]@{
     'Application.ReadWrite.OwnedBy'      = '18a4783c-866b-4cc7-a460-3d5e5662c884'
     'Policy.ReadWrite.ConditionalAccess' = '01c0a623-fc9b-48e9-b794-0756f8e8f067'
     'Directory.Read.All'                 = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
+    'Policy.Read.All'                    = '246dd0d5-5bd0-4def-940b-0421030a5b68'
 }
 # CAPABILITIES, NOT PURCHASES (finding F46).
 #
@@ -287,7 +288,9 @@ function Test-GraphConsent {
     }
     $missing = @($script:GraphConsentedRoles.Keys | Where-Object { $grantedIds -notcontains $script:GraphConsentedRoles[$_] })
     if ($missing.Count -eq 0) {
-        return New-CheckResult -Check 'GraphConsent' -Passed $true -Detail 'all 5 application permissions consented'
+        # Counted, never hardcoded: this read 'all 5' while the map held five, and would
+        # have kept saying 5 as the map grew to six (F50).
+        return New-CheckResult -Check 'GraphConsent' -Passed $true -Detail "all $($script:GraphConsentedRoles.Count) application permissions consented"
     }
     return New-CheckResult -Check 'GraphConsent' -Passed $false -Detail "not consented: $($missing -join ', ') (open the admin-consent URL printed by 01-root-oidc.ps1)"
 }
