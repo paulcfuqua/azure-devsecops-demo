@@ -131,7 +131,7 @@ jobs:
             echo "Counts only — there is deliberately no blended percentage."
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: compliance-state
           # Only what this run produced. Uploading compliance/state/ wholesale would

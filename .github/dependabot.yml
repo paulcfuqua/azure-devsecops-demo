@@ -44,6 +44,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - npm
@@ -60,6 +74,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - npm
@@ -72,6 +100,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - npm
@@ -88,6 +130,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - npm
@@ -100,6 +156,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - npm
@@ -112,6 +182,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - npm
@@ -124,6 +208,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - npm
@@ -136,6 +234,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - npm
@@ -193,6 +305,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 3
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - python
@@ -208,6 +334,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 5
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - github-actions
@@ -237,6 +377,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 3
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - docker
@@ -248,6 +402,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 3
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - docker
@@ -259,6 +427,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 3
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - docker
@@ -270,6 +452,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 3
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - docker
@@ -281,6 +477,20 @@ updates:
       day: monday
       time: '06:00'
     open-pull-requests-limit: 3
+    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
+    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
+    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
+    # build) in the same batch that five action majors were fine to take. A group
+    # containing one unmergeable major blocks every safe bump beside it.
+    #
+    # This governs VERSION updates only. Dependabot SECURITY updates are not
+    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
+    # and self-heal.yml's dependabot lane still has one PR each to adopt.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
       - docker

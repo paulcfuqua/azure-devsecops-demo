@@ -267,7 +267,7 @@ jobs:
 
       - name: Upload the GHAS evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-09-ghas-state
           path: |
@@ -363,7 +363,7 @@ jobs:
 
       - name: Upload the negative-test evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-09-trivy-negative-fail
           path: trivy-negative-fail.json
@@ -721,7 +721,7 @@ jobs:
 
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-09-audit-report
           path: verification/reports/

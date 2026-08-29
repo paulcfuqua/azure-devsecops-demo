@@ -288,7 +288,7 @@ jobs:
 
       - name: Upload L8 agent artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-08-copilot-studio
           path: |
@@ -386,7 +386,7 @@ jobs:
 
       - name: Upload L8 data agent artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-08-fabric-data-agent
           path: |
@@ -494,7 +494,7 @@ jobs:
 
       - name: Upload the agent eval artifact
         if: ${{ always() && steps.eval.outputs.ran == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-08-agent-eval
           path: apps/mcp-tools/evals/agent-eval-results.json
@@ -610,7 +610,7 @@ jobs:
 
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-08-audit-report
           path: verification/reports/

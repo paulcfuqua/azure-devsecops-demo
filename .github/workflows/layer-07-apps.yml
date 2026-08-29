@@ -529,7 +529,7 @@ jobs:
 
       - name: Upload the V7.1 deploy manifest
         if: ${{ always() && !inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-07-deploy-manifest
           path: l7-verifier-manifest.json
@@ -1014,7 +1014,7 @@ jobs:
 
       - name: Upload L7 artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-07-apps
           # l7-manifest.json is deliberately NOT here (F4, Task 8): it carries
@@ -1136,7 +1136,7 @@ jobs:
 
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: layer-07-audit-report
           path: verification/reports/
