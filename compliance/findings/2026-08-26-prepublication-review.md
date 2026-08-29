@@ -23,12 +23,14 @@ document now. Each closed finding's `Fix:` section is left as originally written
 describes what closing the finding required, which is historical context, not a live
 claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
-(rationale, evidence, and the closing commit SHA) for that control. **No finding in this document is open.** The last two were **F13** and **F19**, and they were
-one problem wearing two labels: F13's seventh workload RBAC grant had no principal to be
-written against because F19 meant `apps/cost-ingest` had no Function App and no identity.
-Both closed on 2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own
-Fix text below says not to build the Function App without that authorisation, and it was
-given rather than assumed.
+(rationale, evidence, and the closing commit SHA) for that control. **No finding in this
+document is open.** The last two to close were [F37](#f37) and [F38](#f38), both raised
+and both fixed on 2026-08-28. Before them, **F13** and **F19** were one problem wearing
+two labels: F13's seventh workload RBAC grant had no principal to be written against
+because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
+2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own Fix text below
+says not to build the Function App without that authorisation, and it was given rather
+than assumed.
 
 **F25–F36 addendum (2026-08-28, the final pre-publication audit).** Twelve more findings,
 raised by a last pass done specifically in the position of *a stranger cloning this repo
@@ -45,6 +47,22 @@ claim was corrected rather than quietly deleted — [F28](#f28), [F29](#f29) and
 (F14, F15, F19, F20, F21, F22, F29, F36) map to no NIST SP 800-171 control at all, so this
 document and the findings-index table's `Closed by` column are their *only* durable record
 — there is no `compliance/assessment/` file to additionally point at for those.
+
+**F37–F38 addendum (2026-08-28, after publication).** Two findings that no audit pass
+produced, because no reading of this repository could have produced them. Both were
+raised by CI checks that had existed but had never executed: [F22](#f22)'s container
+smoke test, written the same day, and [F33](#f33)'s Trivy gate, which had been pinned to
+an action ref that did not resolve and so had been passing without scanning anything.
+[F37](#f37) is a `data-api` image that builds, pushes, scans clean and then cannot start;
+[F38](#f38) is three images pinned to an `nginx` tag that stopped receiving base rebuilds
+sixteen months ago while keeping its name. Neither was visible in the source tree — one
+lived in a container image, the other in a registry's rebuild history. They are the
+strongest argument this document makes for its own method: **a gate should be assumed
+inert until its first failure proves otherwise**, and running the estate's own checks for
+real is not a formality after the audit, it is a distinct audit lens. Both are closed, and
+both map to 3.14.1; [F38](#f38) also maps to 3.4.1, which has no
+`compliance/assessment/` record of its own — as is already the case for [F30](#f30) and
+[F33](#f33).
 
 ## Index
 
@@ -86,6 +104,8 @@ document and the findings-index table's `Closed by` column are their *only* dura
 | [F34](#f34) | `.superpowers/` (3.3 MB of transcripts) excluded only by a nested ignore file | medium | CONFIRMED | 3.1.3 | final pre-publication audit |
 | [F35](#f35) | Subscription-wide DENY policy nowhere stated as requiring a dedicated, empty subscription | medium | CONFIRMED | CM-6 | final pre-publication audit |
 | [F36](#f36) | F25's fix made the estate undeployable: L7 refused to run without three hand-set client IDs, and the redirect URIs could not exist until it had | high | CONFIRMED | — (availability/adoptability) | final pre-publication audit |
+| [F37](#f37) | The `data-api` image cannot start: the runtime stage copies only the hoisted `node_modules`, and five of its non-dev packages are not hoisted | high | CONFIRMED (reproduced in CI) | 3.14.1 | F22's smoke test, first run |
+| [F38](#f38) | Three shipped images sat sixteen months behind Alpine's security updates on an end-of-line `nginx` tag, and no ecosystem was watching `FROM` lines | medium | CONFIRMED | 3.4.1, 3.14.1 | F33's Trivy repin, first real scan |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -1940,3 +1960,128 @@ missing, a duplicate registration, a failing CLI call, a fresh registration, a
 registration with an unrelated URI already listed, a registration already carrying this
 URI, and an app with no client ID — and the workflow shape is asserted by
 `verification/tests/frontend-auth.Tests.ps1` (25 new assertions, mutation-tested).
+
+
+## F37
+
+**The `data-api` image could not start: five non-dev packages resolve into the workspace's own `node_modules`, and the runtime stage copied only the hoisted tree**
+
+- **Severity:** high (the serving layer both frontends fetch from never answers a request)
+- **Confidence:** CONFIRMED (reproduced in CI — the image was built, booted, and died)
+- **Controls:** 3.14.1 (a flaw identified and corrected); the defect itself is availability, not confidentiality
+- **Closed by:** [F22](#f22)'s smoke test, on its first run
+- **Status:** CLOSED
+
+**Found while:** watching the checks that [F22](#f22) and [F33](#f33) had just made
+executable for the first time. Neither this finding nor [F38](#f38) was raised by a
+person reading code.
+
+**Where:** `apps/data-api/Dockerfile`, runtime stage. It copied one dependency tree:
+
+```dockerfile
+# Workspace dependencies hoist to the repo root, so both trees come across and
+# WORKDIR stays inside the workspace for Node's upward module resolution.
+COPY --from=prod-deps /repo/node_modules /repo/node_modules
+```
+
+The comment is the defect. Workspace dependencies hoist to the repo root *except when
+they cannot*: `apps/data-api` pins `@azure/monitor-opentelemetry-exporter` at exactly
+`1.0.0-beta.32`, the root tree hoists `1.0.0-beta.44`, and npm resolves the conflict by
+nesting — so that package plus `@opentelemetry/api-logs`, `@opentelemetry/core`,
+`@opentelemetry/sdk-logs` and a nested `@opentelemetry/resources` live in
+`apps/data-api/node_modules`. Five non-dev packages, none of them copied.
+
+**Impact.** The image built cleanly, pushed to GHCR, and passed its Trivy scan with zero
+findings — a scan of an image that cannot execute. On boot:
+
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@azure/monitor-opentelemetry-exporter'
+imported from /repo/apps/data-api/dist/telemetry/otel.js
+```
+
+`dist/index.js` reaches the telemetry module before it binds a port, so the container
+exits immediately and Container Apps would have crash-looped the revision. Every
+control-tower and launch-ops panel reads from this API. Had the estate been deployed
+before F22's test existed, this is what the first deploy would have produced.
+
+**Fix.** Copy both trees, and stop depending on hoisting being total:
+
+```dockerfile
+COPY --from=prod-deps /repo/node_modules /repo/node_modules
+COPY --from=prod-deps /repo/apps/data-api/node_modules ./node_modules
+```
+
+Node resolves upward from `WORKDIR`, so it reads the nested tree first and falls through
+to the hoisted one — which is the resolution order npm built the two trees for. The
+`prod-deps` stage now also `mkdir -p`s the nested path, because whether npm creates it at
+all is a property of the lockfile, and a Docker `COPY` whose source is missing fails the
+build.
+
+**Why nothing caught it.** There is nothing wrong with the source, the lockfile, the
+`package.json`, or the build. `npm ci`, `tsc`, `vitest` and the typecheck all pass
+against a tree that has both directories present. The defect existed only in the image,
+and until [F22](#f22) nothing in this repository ever ran an image. `apps/mcp-tools` was
+checked for the same shape and does not have it: it carries a standalone lockfile,
+installs into `apps/mcp-tools/node_modules`, and copies that directory wholesale.
+
+## F38
+
+**Three shipped images sat sixteen months behind Alpine's security updates, on an `nginx` tag that had stopped being rebuilt without ever changing its name**
+
+- **Severity:** medium (the CVE reached is not exploitable on the platform these images run; the sixteen-month gap is the finding)
+- **Confidence:** CONFIRMED
+- **Controls:** 3.4.1 (baseline configuration), 3.14.1 (flaw remediation)
+- **Closed by:** [F33](#f33)'s Trivy repin, on its first real scan
+- **Status:** CLOSED
+
+**Found while:** the same watch as [F37](#f37). [F33](#f33) recorded that
+`aquasecurity/trivy-action@0.28.0` resolved to no ref at all, which meant every "Trivy
+gate — fail the build on CRITICAL" step in this repository had been passing without
+scanning anything. Repinning it to a commit SHA made the gate real, and its first
+execution failed:
+
+```
+libcrypto3  CVE-2026-31789  CRITICAL  fixed  3.3.3-r0 -> 3.3.7-r0  openssl: heap buffer
+libssl3                                                            overflow on 32-bit
+```
+
+**Where:** `apps/compliance/Dockerfile`, `apps/control-tower/Dockerfile` and
+`apps/launch-ops/Dockerfile`, each `FROM nginx:1.27-alpine`.
+
+**What is NOT the finding.** CVE-2026-31789 is a heap overflow parsing oversized X.509
+certificates *on 32-bit systems*. These images are `linux/amd64`. Reported as an
+exploitable exposure it would be an overstatement, and this register does not make
+overstatements.
+
+**What is.** Why a package that far out of date was in a shipped image at all. Docker
+Hub last rebuilt `nginx:1.27-alpine` on **2025-04-16**. 1.27 is an end-of-line release:
+the tag keeps its name indefinitely while quietly ceasing to receive base rebuilds, so
+`FROM nginx:1.27-alpine` in August 2026 pulls a bit-for-bit copy of an April 2025
+filesystem. Sixteen months of Alpine security updates — all of them, not only this
+openssl fix — were absent from three images this repository publishes, and the pin gave
+every appearance of being a responsible one. A version pin naming a dead line is
+indistinguishable from a maintained one by inspection.
+
+**Fix**, in two parts:
+
+1. **`nginx:1.31-alpine`** — current mainline, rebuilt 2026-08-20 — in all three
+   Dockerfiles. The three non-root fixes below each `FROM` (deleting `user  nginx;`,
+   redirecting the pid file to `/tmp`, creating and chowning `/var/cache/nginx`) are
+   unchanged, and are no longer merely asserted to work: [F22](#f22)'s smoke test boots
+   each image and fails the build if the app is not served, which is what a silently
+   skipped `envsubst` pass or an unwritable pid path produces.
+2. **A `docker` ecosystem in `.github/dependabot.yml`**, which is the part that matters.
+   The file had `npm` (nine directories), `pip` and `github-actions` — and nothing
+   reading a `FROM` line, in a repository whose own Dependabot header warns that a wrong
+   directory glob means no PRs ever fire. Five entries now cover the five app
+   Dockerfiles, one per directory rather than a `directories:` glob, so each path is
+   checkable by eye. That converts "the base image went stale" from something a scanner
+   discovers after publication into a bump PR that arrives on a Monday.
+
+**The pattern F37 and F38 share, and it is the one worth keeping.** Both were found by
+checks that had existed for some time and had never executed — F22's smoke test because
+it was only written on 2026-08-28, F33's Trivy gate because it was pinned to a
+nonexistent ref. Neither defect was reachable by reading the repository: one lived in a
+container image, the other in a registry's rebuild history. Every gate here should be
+assumed inert until its first failure proves otherwise, and these two findings are that
+proof arriving.
