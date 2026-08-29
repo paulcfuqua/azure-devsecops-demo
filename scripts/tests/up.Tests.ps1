@@ -26,7 +26,11 @@ BeforeAll {
             [string]$Repository = $script:Repo,
             [string]$Mode = 'full',
             [string]$Layers = 'all',
-            [string]$Location = 'eastus',
+            # '' is what the script itself now defaults to (F53). The helper used to
+            # default to 'eastus', so every test supplied a region the script no longer
+            # supplies - and the empty path, which is the ONLY path a normal `up.ps1`
+            # invocation takes, was never executed once in 74 tests.
+            [string]$Location = '',
             [string]$ImageTag = '',
             [string]$ReportRoot = $script:ReportRoot
         )
@@ -185,6 +189,28 @@ Describe 'up.ps1' {
         It 'fails actionably when the repository cannot be resolved' {
             Mock Invoke-Gh { New-GhResult -ExitCode 1 } -ParameterFilter { ($Arguments -join ' ') -like 'repo view*' }
             { Invoke-UpForTest -Repository '' } | Should -Throw '*-Repository owner/name*'
+        }
+    }
+
+    Context 'region comes from the demo environment, not from this script' {
+        It 'dispatches with an empty location so the workflow resolves vars.AZURE_LOCATION' {
+            # Regression: Invoke-Main declared [Parameter(Mandatory)][string]$Location, which
+            # REJECTS an empty string - so the moment up.ps1 stopped hardcoding 'eastus' the
+            # script could not run at all: "Cannot bind argument to parameter 'Location'
+            # because it is an empty string." Nothing caught it because the test helper
+            # supplied its own default (F53).
+            Invoke-UpForTest -Mode 'full' -Layers 'all' | Out-Null
+            # location= present but with NOTHING after it: the workflow input is supplied and
+            # empty, which is what makes `inputs.location || vars.AZURE_LOCATION` fall through
+            # to the demo environment.
+            Should -Invoke Invoke-Gh -Times 1 -ParameterFilter {
+                (Test-DispatchedWorkflow -Arguments $Arguments) -and
+                ($Arguments -contains 'location=')
+            }
+            Should -Invoke Invoke-Gh -Times 0 -ParameterFilter {
+                (Test-DispatchedWorkflow -Arguments $Arguments) -and
+                @($Arguments | Where-Object { $_ -like 'location=?*' }).Count -gt 0
+            }
         }
     }
 

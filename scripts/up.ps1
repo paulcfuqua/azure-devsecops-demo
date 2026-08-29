@@ -639,7 +639,11 @@ function Invoke-Main {
         [string]$Repository,
         [Parameter(Mandatory)][string]$Mode,
         [Parameter(Mandatory)][string]$Layers,
-        [Parameter(Mandatory)][string]$Location,
+        # AllowEmptyString, like -ImageTag below: empty is the NORMAL case now - it means
+        # "let the workflow resolve vars.AZURE_LOCATION" (F53). Mandatory rejects an empty
+        # string outright, so the moment the region stopped being hardcoded here the
+        # script could not run at all.
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Location,
         [AllowEmptyString()][string]$ImageTag = '',
         [switch]$DryRun,
         [switch]$NoWatch,
