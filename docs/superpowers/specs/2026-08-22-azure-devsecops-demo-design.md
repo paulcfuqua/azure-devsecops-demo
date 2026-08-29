@@ -101,7 +101,10 @@ tenant-object teardown remains available behind G3 with an honest 2–3 hr rebui
 To keep principle 1 (repo as source of truth), agents author `scripts/bootstrap/*` for
 every G0 step that can be scripted (root app registration + federation + role grant +
 admin consent URL, Fabric capacity create, budget alert). The human runs them under their
-own login. Agents never execute G0 steps; the runbook says exactly what to run.
+own login — or by an agent under that login, per the 2026-08-29 sponsor amendment that
+makes agent-created and agent-managed infrastructure the demo itself. This line
+previously read "Agents never execute G0 steps." The runbook says exactly what to run
+either way, and G2 (spend) and G3 (tenant deletion) still wait for a human.
 
 ### F8 — Verifier independence needs its own credential (LOW)
 

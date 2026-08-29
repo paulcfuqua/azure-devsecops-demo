@@ -12,7 +12,7 @@ BeforeAll {
         # on any warning. It is still forwarded to Invoke-Main as -WhatIf.
         param([switch]$AsWhatIf)
         Invoke-Main -Mode 'F2' -SubscriptionId $script:Sub -ResourceGroup 'mls-rg-platform' `
-            -CapacityName 'mlsfabricdemo' -Location 'eastus2' -AdminUpn @('admin@contoso.example') `
+            -CapacityName 'mlsfabricdemo' -Location 'eastus' -AdminUpn @('admin@contoso.example') `
             -DeployerAppName 'mls-github-deployer' -WhatIf:$AsWhatIf
     }
 }
@@ -41,7 +41,7 @@ Describe '02-fabric-capacity' {
     Context 'Trial mode (default)' {
         It 'prints manual steps and never calls az at all' {
             $result = Invoke-Main -Mode 'Trial' -SubscriptionId '' -ResourceGroup 'mls-rg-platform' `
-                -CapacityName 'mlsfabricdemo' -Location 'eastus2' -AdminUpn @() -DeployerAppName 'mls-github-deployer'
+                -CapacityName 'mlsfabricdemo' -Location 'eastus' -AdminUpn @() -DeployerAppName 'mls-github-deployer'
             $result.Mode | Should -Be 'Trial'
             $result.Capacity | Should -BeNullOrEmpty
             Should -Invoke Invoke-AzCli -Exactly -Times 0
@@ -50,7 +50,7 @@ Describe '02-fabric-capacity' {
         It 'mentions the deployer app, the SP-API toggle, the capacity ID variable, and the no-pause trial note' {
             Mock Write-Status {} -ParameterFilter { $true }
             Invoke-Main -Mode 'Trial' -SubscriptionId '' -ResourceGroup 'mls-rg-platform' `
-                -CapacityName 'mlsfabricdemo' -Location 'eastus2' -AdminUpn @() -DeployerAppName 'mls-github-deployer' | Out-Null
+                -CapacityName 'mlsfabricdemo' -Location 'eastus' -AdminUpn @() -DeployerAppName 'mls-github-deployer' | Out-Null
             Should -Invoke Write-Status -ParameterFilter { $Message -like '*mls-github-deployer*' }
             Should -Invoke Write-Status -ParameterFilter { $Message -like '*Service principals can use Fabric APIs*' }
             Should -Invoke Write-Status -ParameterFilter { $Message -like '*FABRIC_CAPACITY_ID*' }

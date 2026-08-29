@@ -25,7 +25,7 @@ BeforeAll {
             [string]$Repository = $script:Repo,
             [string]$Mode = 'full',
             [string]$Layers = 'all',
-            [string]$Location = 'eastus2',
+            [string]$Location = 'eastus',
             [string]$ImageTag = '',
             [string]$ReportRoot = $script:ReportRoot
         )

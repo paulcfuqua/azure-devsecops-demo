@@ -4,7 +4,7 @@
 // Entra admin params must be non-empty at real deploy time (Entra-only auth).
 using './main.bicep'
 
-param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus2')
+param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus')
 
 // Owner tag. Neutral fallback so a downstream deployment never inherits the
 // original author's GitHub handle on every resource group (policy-enforced tag).

@@ -20,12 +20,18 @@
          (2026-08-26 findings F6/F7 - an app registration existing is not proof the
          identity can authenticate, and a subject shared with the deployer would let a
          verify job mint the Owner-capable deployer's token instead of this one's).
-      7. Fabric capacity reachable via the Fabric REST API (trial or F2). The
-         "service principals can use Fabric APIs" toggle itself is portal-verified
-         (spec F2) - this check runs under the human's token.
-      8. Licenses: an M365 E5 sku (SPE_E5 or ENTERPRISEPREMIUM) and EMS E5
-         (EMSPREMIUM) present with at least one unit consumed.
-      9. $75/month budget exists.
+      7. A FABRIC capacity (F-series sku) reachable via the Fabric REST API. The sku
+         matters, not just the state: a Power BI licence alone provisions a PP3
+         "Premium Per User - Reserved" capacity that is Active and cannot host a
+         lakehouse (finding F46).
+      8. Fabric service-principal access (G0 item C4), read from the Fabric admin
+         tenant-settings API. This line used to say the toggle was "portal-verified"
+         and unverifiable here; that was wrong, and C4 is now checked (F46).
+      9. Licenses: the SERVICE PLANS the layers consume - AAD_PREMIUM_P2,
+         RMS_S_PREMIUM, MFA_PREMIUM - from whatever sku provides them, with at least
+         one unit consumed. Not sku part numbers: Microsoft 365 E5 contains the EMS
+         capabilities and no separate EMSPREMIUM sku exists in such a tenant (F46).
+     10. $75/month budget exists.
 
     Additionally, one INFORMATIONAL (non-gate-failing) check:
       - G0 item 12: the tenant-scoped Entra diagnostic setting routing SignInLogs and
@@ -74,8 +80,66 @@ $script:GraphConsentedRoles = [ordered]@{
     'Policy.ReadWrite.ConditionalAccess' = '01c0a623-fc9b-48e9-b794-0756f8e8f067'
     'Directory.Read.All'                 = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
 }
-$script:M365E5Skus = @('SPE_E5', 'ENTERPRISEPREMIUM') # Microsoft 365 E5 / Office 365 E5 trial
-$script:EmsE5Sku = 'EMSPREMIUM'
+# CAPABILITIES, NOT PURCHASES (finding F46).
+#
+# This used to demand two SKU part numbers -- one of SPE_E5/ENTERPRISEPREMIUM plus
+# a separate EMSPREMIUM -- and it was wrong in a way that only a real tenant could
+# reveal. Microsoft 365 E5 (SPE_E5) *contains* the Enterprise Mobility + Security
+# capabilities as SERVICE PLANS; there is no separate EMSPREMIUM SKU in such a
+# tenant and there never will be. The check therefore failed on a tenant holding
+# every capability this estate needs, and told the operator to go buy an $18/user
+# licence that would have added nothing.
+#
+# It is also no longer purchasable as a trial: as of 2026-08-29 the Microsoft 365
+# admin center offers EMS E3 and E5 for purchase only, while Microsoft 365 E5 has
+# a 25-seat trial. An adopter following the old runbook could not have satisfied
+# the old check without spending money.
+#
+# So assert what the layers actually consume, from whatever SKU provides it:
+#
+#   AAD_PREMIUM_P2  Entra ID P2 -- sign-in risk and Identity Protection feed the
+#                   control-tower Sec tab; risk-based Conditional Access (L3)
+#   RMS_S_PREMIUM   AIP P1      -- create/manage sensitivity labels (L4)
+#   MFA_PREMIUM     the enforced dashboard MFA policy V3.3 audits
+#
+# AAD_PREMIUM (P1) is implied by P2 and not listed separately. RMS_S_PREMIUM2
+# (AIP P2, auto-labeling) is deliberately NOT required: the runbook documents
+# auto-labeling as optional.
+# C4 IS VERIFIABLE AFTER ALL (finding F46, correcting F43).
+#
+# Yesterday's F43 wrote that C4 -- the Fabric service-principal toggle -- has "no
+# read path this script can use under your login" and must be confirmed by eye.
+# That was wrong, and a real tenant disproved it within a day: the Fabric admin
+# API returns every tenant setting to a Fabric/Global administrator at
+#   GET https://api.fabric.microsoft.com/v1/admin/tenantsettings
+#
+# The runbook also described C4 as ONE toggle, "Service principals can use Fabric
+# APIs". No setting has that name any more. It is five, and the distinction
+# matters: infra/fabric/provision-workspace.ps1 calls New-FabricWorkspace, and
+# CREATING a workspace is governed by ServicePrincipalAccessGlobalAPIs, not by
+# the similarly-named ServicePrincipalAccessPermissionAPIs. On the tenant this
+# was written against, the second was on and the first was off -- so L5 would
+# have failed on a tenant whose gate said C4 was satisfied.
+#
+# The three admin-API settings stay OFF and are asserted off, not merely ignored:
+# nothing in this repository calls a Fabric admin API (no `v1/admin` or
+# `myorg/admin` under infra/fabric or verification), so an enabled one is scope
+# this estate did not ask for.
+$script:RequiredFabricSpSettings = [ordered]@{
+    'ServicePrincipalAccessGlobalAPIs'     = 'create workspaces/connections (L5 New-FabricWorkspace)'
+    'ServicePrincipalAccessPermissionAPIs' = 'call Fabric public APIs (L5, L8, V5.x)'
+}
+$script:ForbiddenFabricSpSettings = [ordered]@{
+    'AllowServicePrincipalsUseReadAdminAPIs'    = 'read-only admin APIs'
+    'AllowServicePrincipalsUseWriteAdminAPIs'   = 'admin APIs used for updates'
+    'AllowServicePrincipalsCreateAndUseProfiles' = 'service principal profiles'
+}
+
+$script:RequiredServicePlans = [ordered]@{
+    'AAD_PREMIUM_P2' = 'Entra ID P2 (sign-in risk, Identity Protection, risk-based CA)'
+    'RMS_S_PREMIUM'  = 'AIP P1 (sensitivity label management, L4)'
+    'MFA_PREMIUM'    = 'MFA enforcement (V3.3 dashboard policy)'
+}
 
 # --- plumbing (read-only: no Invoke-AzMutation on purpose) -----------------------------
 
@@ -274,15 +338,112 @@ function Test-FabricCapacity {
     }
     $capacities = @()
     if ($response.PSObject.Properties.Name -contains 'value') { $capacities = @($response.value) }
+    # SKU, NOT JUST STATE (finding F46). This used to accept any capacity in state
+    # Active, which is a FALSE PASS: a tenant with a Power BI licence and no Fabric
+    # capacity at all still reports one. Signing into Fabric for the first time
+    # provisions "Premium Per User - Reserved", sku PP3 -- an artifact of the Power
+    # BI Pro licence inside Microsoft 365 E5, not a Fabric capacity. It cannot host
+    # a lakehouse, so L5 fails on a tenant this check called ready.
+    #
+    # Fabric-capable SKUs are the F series: F2, F4, F8 ... F2048, plus the trial.
+    #
+    # THE TRIAL SKU STRING IS `FTL4`, AND THREE SOURCES GOT IT WRONG BEFORE A REAL
+    # TENANT SETTLED IT (finding F46):
+    #   - a first guess of `FT1`, asserted from memory;
+    #   - Microsoft's own trial documentation, which describes the trial in prose as
+    #     "an F4 capacity (4 capacity units) or an F64 capacity"
+    #     (learn.microsoft.com/fabric/fundamentals/fabric-trial, read 2026-08-29);
+    #   - a corrected `^F(T)?\d+$` written from that doc, which still rejects FTL4.
+    # The Power BI admin API returned `sku: FTL4` on a trial started 2026-08-29. The
+    # documented capacity SIZE (4 CU) and the SKU STRING are simply different things.
+    #
+    # So match the F prefix and the digits, and let the middle letters be whatever
+    # Microsoft ships: F4, FT1 and FTL4 all pass. This is safe against false
+    # positives because no Power BI SKU begins with F -- they are P1-P5, PP3
+    # (Premium Per User), EM1-EM3 and A1-A6, and none runs Fabric workloads.
+    #
+    # Power BI-only SKUs are P1-P5, PP3 (Premium Per User), EM1-EM3 and A1-A6, and
+    # none of them runs Fabric workloads.
+    $fabricCapable = @($capacities | Where-Object { $_ -and $_.sku -match '^F[A-Z]*\d+$' })
+    if ($fabricCapable.Count -eq 0) {
+        $others = @($capacities | Where-Object { $_ -and $_.sku }) |
+            ForEach-Object { "$($_.displayName) [$($_.sku)]" }
+        if ($others.Count -gt 0) {
+            return New-CheckResult -Check 'FabricCapacity' -Passed $false -Detail (
+                "no FABRIC capacity: found $($others -join ', '), which is Power BI only. " +
+                'Start the Fabric trial (provisions an F4 or F64) or run 02-fabric-capacity.ps1 -Mode F2 (G2 gate).')
+        }
+        return New-CheckResult -Check 'FabricCapacity' -Passed $false `
+            -Detail 'no Fabric capacity visible (start the trial or run 02-fabric-capacity.ps1 -Mode F2)'
+    }
+    $capacities = $fabricCapable
     $active = @($capacities | Where-Object { $_ -and $_.state -eq 'Active' })
     if ($active.Count -ge 1) {
-        $names = ($active | ForEach-Object { $_.displayName }) -join ', '
-        return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "active capacity: $names (SP API toggle is portal-verified)"
+        # displayName AND sku: the sku is the half that distinguishes a real Fabric
+        # capacity from the PP3 that a Power BI licence provisions (finding F46).
+        $named = @($active | ForEach-Object { "$($_.displayName) [$($_.sku)]" }) -join ', '
+        return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "active Fabric capacity: $named (SP API access checked separately by FabricSpAccess)"
     }
     if ($capacities.Count -ge 1) {
         return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "capacity present but not Active (state: $(($capacities | ForEach-Object { $_.state }) -join ', ')) - paused F2 is expected between deploys"
     }
     return New-CheckResult -Check 'FabricCapacity' -Passed $false -Detail 'no Fabric capacity visible (start the trial or run 02-fabric-capacity.ps1 -Mode F2)'
+}
+
+function Test-FabricServicePrincipal {
+    <#
+        C4, checked rather than trusted. Informational is deliberately NOT set: unlike
+        EntraDiagnostics (F9), this one has a layer gate waiting on it -- L5 cannot
+        create its workspace without it -- so it belongs in the exit code.
+    #>
+    $response = Invoke-AzCli -Arguments @(
+        'rest', '--method', 'get',
+        '--url', 'https://api.fabric.microsoft.com/v1/admin/tenantsettings',
+        '--resource', 'https://api.fabric.microsoft.com'
+    ) -AllowFailure
+
+    $settings = @()
+    foreach ($name in 'tenantSettings', 'value') {
+        if ($response -and $response.PSObject.Properties.Name -contains $name) {
+            $settings = @($response.$name)
+            break
+        }
+    }
+    if ($settings.Count -eq 0) {
+        return New-CheckResult -Check 'FabricSpAccess' -Passed $false `
+            -Detail 'could not read Fabric tenant settings (needs a Fabric or Global administrator login)'
+    }
+
+    $state = @{}
+    foreach ($setting in $settings) {
+        if ($setting.settingName) { $state[[string]$setting.settingName] = [bool]$setting.enabled }
+    }
+
+    $missing = @()
+    foreach ($name in $script:RequiredFabricSpSettings.Keys) {
+        if (-not $state.ContainsKey($name)) {
+            $missing += "$name (not present in this tenant's settings)"
+        } elseif (-not $state[$name]) {
+            $missing += "$name - $($script:RequiredFabricSpSettings[$name])"
+        }
+    }
+    if ($missing.Count -gt 0) {
+        return New-CheckResult -Check 'FabricSpAccess' -Passed $false `
+            -Detail "C4 incomplete, disabled: $($missing -join '; ')"
+    }
+
+    # Enabled admin-API access is not a failure of C4 -- the estate still works --
+    # but it is privilege nobody asked for, so say so rather than pass silently.
+    $extra = @()
+    foreach ($name in $script:ForbiddenFabricSpSettings.Keys) {
+        if ($state[$name]) { $extra += $script:ForbiddenFabricSpSettings[$name] }
+    }
+    if ($extra.Count -gt 0) {
+        return New-CheckResult -Check 'FabricSpAccess' -Passed $true `
+            -Detail "C4 satisfied, but service principals also hold unused admin access: $($extra -join '; ')"
+    }
+    return New-CheckResult -Check 'FabricSpAccess' -Passed $true `
+        -Detail 'C4 satisfied: workspace-creation and public-API access on, admin APIs off'
 }
 
 function Test-License {
@@ -293,17 +454,45 @@ function Test-License {
     $skus = @()
     if ($response -and $response.PSObject.Properties.Name -contains 'value') { $skus = @($response.value) }
     if ($skus.Count -eq 0) {
-        return New-CheckResult -Check 'Licenses' -Passed $false -Detail 'no subscribed SKUs visible (activate the M365 E5 + EMS E5 trials)'
+        return New-CheckResult -Check 'Licenses' -Passed $false -Detail 'no subscribed SKUs visible (activate the Microsoft 365 E5 trial and assign it to your admin user)'
     }
-    $m365 = @($skus | Where-Object { $script:M365E5Skus -contains $_.skuPartNumber -and [int]$_.consumedUnits -ge 1 })
-    $ems = @($skus | Where-Object { $_.skuPartNumber -eq $script:EmsE5Sku -and [int]$_.consumedUnits -ge 1 })
+    # Only SKUs with a seat actually assigned count. A provisioned-but-unassigned
+    # trial grants nothing to anyone, which is why consumedUnits is the filter and
+    # not merely prepaidUnits.enabled.
+    $assigned = @($skus | Where-Object { [int]$_.consumedUnits -ge 1 })
+    if ($assigned.Count -eq 0) {
+        return New-CheckResult -Check 'Licenses' -Passed $false `
+            -Detail 'SKUs exist but none has an assigned seat (assign the licence to your admin user)'
+    }
+
+    # Flatten every service plan across every assigned SKU. Which SKU carries a
+    # capability is Microsoft''s business and it changes; that the tenant HAS the
+    # capability is ours.
+    $available = @{}
+    foreach ($sku in $assigned) {
+        foreach ($plan in @($sku.servicePlans)) {
+            if ($plan.provisioningStatus -in @('Success', 'PendingProvisioning')) {
+                $available[$plan.servicePlanName] = $sku.skuPartNumber
+            }
+        }
+    }
+
     $missing = @()
-    if ($m365.Count -eq 0) { $missing += "M365 E5 ($($script:M365E5Skus -join ' or '))" }
-    if ($ems.Count -eq 0) { $missing += "EMS E5 ($($script:EmsE5Sku))" }
-    if ($missing.Count -eq 0) {
-        return New-CheckResult -Check 'Licenses' -Passed $true -Detail 'M365 E5 + EMS E5 present with assigned seats'
+    $satisfiedBy = @()
+    foreach ($plan in $script:RequiredServicePlans.Keys) {
+        if ($available.ContainsKey($plan)) {
+            $satisfiedBy += "$plan (via $($available[$plan]))"
+        } else {
+            $missing += "$plan - $($script:RequiredServicePlans[$plan])"
+        }
     }
-    return New-CheckResult -Check 'Licenses' -Passed $false -Detail "missing/unassigned: $($missing -join '; ')"
+
+    if ($missing.Count -eq 0) {
+        return New-CheckResult -Check 'Licenses' -Passed $true `
+            -Detail "all required service plans present: $($satisfiedBy -join '; ')"
+    }
+    return New-CheckResult -Check 'Licenses' -Passed $false `
+        -Detail "missing service plan(s): $($missing -join '; ')"
 }
 
 function Test-EntraDiagnostic {
@@ -382,6 +571,7 @@ function Invoke-Main {
         @{ Name = 'GraphConsent'; Run = { Test-GraphConsent -DeployerAppName $DeployerAppName } }
         @{ Name = 'VerifierApp'; Run = { Test-VerifierApp -VerifierAppName $VerifierAppName -DeployerAppName $DeployerAppName -Repository $Repository -VerifierEnvironmentName $VerifierEnvironmentName } }
         @{ Name = 'FabricCapacity'; Run = { Test-FabricCapacity } }
+        @{ Name = 'FabricSpAccess'; Run = { Test-FabricServicePrincipal } }
         @{ Name = 'Licenses'; Run = { Test-License } }
         @{ Name = 'Budget'; Run = { Test-Budget -SubscriptionId $SubscriptionId -BudgetName $BudgetName -BudgetAmount $BudgetAmount } }
         @{ Name = 'EntraDiagnostics'; Informational = $true; Run = { Test-EntraDiagnostic } }

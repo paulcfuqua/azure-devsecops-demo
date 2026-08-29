@@ -74,7 +74,7 @@ on:
       location:
         description: Azure region for every layer deployment
         type: string
-        default: eastus2
+        default: eastus
       dry_run:
         description: 'Plan only — what-if / -WhatIf everywhere, no writes'
         type: boolean

@@ -133,7 +133,7 @@ the cost of not having it is that principle #1 becomes unfalsifiable.
 > If the sponsor prefers a single environment, the degrade path is: point both scripts at
 > it, accept that the round-trip is a tautology, and say so in the demo narration.
 
-**Region:** create both in the geography matching `AZURE_LOCATION` (`eastus2` → United
+**Region:** create both in the geography matching `AZURE_LOCATION` (`eastus` → United
 States). The Fabric data agent cannot query across capacity regions, so keeping Power
 Platform, Fabric and Azure in one geography avoids a class of failure that is tedious to
 diagnose.

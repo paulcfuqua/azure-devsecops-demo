@@ -392,7 +392,7 @@ reversible by changing one parameter or one line of `naming.bicep`.
   references via `readEnvironmentVariable(...)` with safe defaults, satisfying CLAUDE.md
   hard rule 5 and spec F5 while keeping local builds green with nothing set.
 - **[derived] Single-region guardrail:** `allowedLocations` defaults to just
-  `AZURE_LOCATION` (fallback `eastus2`).
+  `AZURE_LOCATION` (fallback `eastus`).
 - **[derived] Empty `demoSubscriptionId` compiles but skips** subscription placement and
   the NIST assignment, so the landing zone builds locally with no tenant.
 

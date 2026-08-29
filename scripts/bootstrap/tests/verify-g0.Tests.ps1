@@ -64,18 +64,46 @@ Describe 'verify-g0' {
         $script:AppRoleAssignments = [pscustomobject]@{
             value = @($script:RoleIds | ForEach-Object { [pscustomobject]@{ appRoleId = $_ } })
         }
+        # sku matters, not just state (finding F46). FTL4 is what the Power BI
+        # admin API actually returned for a trial capacity started 2026-08-29 --
+        # not FT1 (guessed) and not F4 (what Microsoft's doc says in prose).
         $script:FabricCapacities = [pscustomobject]@{
-            value = @([pscustomobject]@{ id = 'cap1'; displayName = 'mlstrial'; state = 'Active' })
+            value = @([pscustomobject]@{ id = 'cap1'; displayName = 'mlstrial'; sku = 'FTL4'; state = 'Active' })
         }
+        # Shaped like a REAL Microsoft 365 E5 tenant (finding F46): one SKU whose
+        # service plans carry the Entra ID P2 / AIP / MFA capabilities. There is no
+        # separate EMSPREMIUM row, because a tenant on M365 E5 does not have one --
+        # which is exactly what the old two-SKU assertion got wrong.
         $script:Skus = [pscustomobject]@{
             value = @(
-                [pscustomobject]@{ skuPartNumber = 'SPE_E5'; consumedUnits = 6 }
-                [pscustomobject]@{ skuPartNumber = 'EMSPREMIUM'; consumedUnits = 6 }
+                [pscustomobject]@{
+                    skuPartNumber = 'SPE_E5'
+                    consumedUnits = 6
+                    servicePlans  = @(
+                        [pscustomobject]@{ servicePlanName = 'AAD_PREMIUM_P2'; provisioningStatus = 'Success' }
+                        [pscustomobject]@{ servicePlanName = 'AAD_PREMIUM'; provisioningStatus = 'Success' }
+                        [pscustomobject]@{ servicePlanName = 'RMS_S_PREMIUM'; provisioningStatus = 'Success' }
+                        [pscustomobject]@{ servicePlanName = 'RMS_S_PREMIUM2'; provisioningStatus = 'Success' }
+                        [pscustomobject]@{ servicePlanName = 'MFA_PREMIUM'; provisioningStatus = 'Success' }
+                        [pscustomobject]@{ servicePlanName = 'INTUNE_O365'; provisioningStatus = 'PendingActivation' }
+                    )
+                }
             )
         }
         $script:Budget = [pscustomobject]@{
             name       = 'mls-monthly-budget'
             properties = [pscustomobject]@{ amount = 75 }
+        }
+        # C4, the Fabric service-principal settings (finding F46). Shaped like the
+        # real tenant: the two the estate uses are on, the three admin-API ones off.
+        $script:FabricTenantSettings = [pscustomobject]@{
+            tenantSettings = @(
+                [pscustomobject]@{ settingName = 'ServicePrincipalAccessGlobalAPIs'; enabled = $true }
+                [pscustomobject]@{ settingName = 'ServicePrincipalAccessPermissionAPIs'; enabled = $true }
+                [pscustomobject]@{ settingName = 'AllowServicePrincipalsUseReadAdminAPIs'; enabled = $false }
+                [pscustomobject]@{ settingName = 'AllowServicePrincipalsUseWriteAdminAPIs'; enabled = $false }
+                [pscustomobject]@{ settingName = 'AllowServicePrincipalsCreateAndUseProfiles'; enabled = $false }
+            )
         }
         $script:EntraDiagnosticSettings = [pscustomobject]@{
             value = @(
@@ -107,15 +135,16 @@ Describe 'verify-g0' {
             if ($joined -like '*api.fabric.microsoft.com/v1/capacities*') { return $script:FabricCapacities }
             if ($joined -like '*subscribedSkus*') { return $script:Skus }
             if ($joined -like '*Microsoft.Consumption/budgets*') { return $script:Budget }
+            if ($joined -like '*tenantsettings*') { return $script:FabricTenantSettings }
             if ($joined -like '*microsoft.aadiam*') { return $script:EntraDiagnosticSettings }
             return $null
         }
     }
 
     Context 'aggregation - all green' {
-        It 'returns 10 rows, 9 PASS + 1 informational, and a fail count of 0' {
+        It 'returns 11 rows, 10 PASS + 1 informational, and a fail count of 0' {
             $results = Invoke-VerifyForTest
-            @($results).Count | Should -Be 10
+            @($results).Count | Should -Be 11
             @($results | Where-Object { $_.Check -ne 'EntraDiagnostics' -and $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             (Get-Row $results 'EntraDiagnostics').Status | Should -Be 'INFO'
             Get-FailCount -Results $results | Should -Be 0
@@ -186,14 +215,149 @@ Describe 'verify-g0' {
             $row.Detail | Should -BeLike '*distinct*'
         }
 
-        It 'flags missing licenses by trial name' {
+        It 'flags a MISSING CAPABILITY, not a missing SKU name (F46)' {
+            # A tenant on a lesser SKU: Entra ID P1 but no P2, so risk-based CA and
+            # the Identity Protection feed are unavailable. The old check asked
+            # "is EMSPREMIUM present"; this one asks "can the estate do the thing".
             $script:Skus = [pscustomobject]@{
-                value = @([pscustomobject]@{ skuPartNumber = 'SPE_E5'; consumedUnits = 6 })
+                value = @(
+                    [pscustomobject]@{
+                        skuPartNumber = 'SPE_E3'
+                        consumedUnits = 6
+                        servicePlans  = @(
+                            [pscustomobject]@{ servicePlanName = 'AAD_PREMIUM'; provisioningStatus = 'Success' }
+                            [pscustomobject]@{ servicePlanName = 'RMS_S_PREMIUM'; provisioningStatus = 'Success' }
+                            [pscustomobject]@{ servicePlanName = 'MFA_PREMIUM'; provisioningStatus = 'Success' }
+                        )
+                    }
+                )
             }
             $results = Invoke-VerifyForTest
             $row = Get-Row $results 'Licenses'
             $row.Status | Should -Be 'FAIL'
-            $row.Detail | Should -BeLike '*EMS E5*'
+            $row.Detail | Should -BeLike '*AAD_PREMIUM_P2*'
+        }
+
+        It 'passes on Microsoft 365 E5 alone, with no EMSPREMIUM SKU present (F46)' {
+            # The regression that mattered: this tenant shape FAILED the old check
+            # while holding every capability the estate uses, and the failure told
+            # the operator to buy an $18/user licence that would have added nothing.
+            $results = Invoke-VerifyForTest
+            $row = Get-Row $results 'Licenses'
+            $row.Status | Should -Be 'PASS'
+            $row.Detail | Should -BeLike '*SPE_E5*'
+        }
+
+        It 'refuses a SKU that is provisioned but assigned to nobody' {
+            # consumedUnits, not prepaidUnits: an unassigned trial grants nothing.
+            $script:Skus = [pscustomobject]@{
+                value = @(
+                    [pscustomobject]@{
+                        skuPartNumber = 'SPE_E5'
+                        consumedUnits = 0
+                        servicePlans  = @(
+                            [pscustomobject]@{ servicePlanName = 'AAD_PREMIUM_P2'; provisioningStatus = 'Success' }
+                            [pscustomobject]@{ servicePlanName = 'RMS_S_PREMIUM'; provisioningStatus = 'Success' }
+                            [pscustomobject]@{ servicePlanName = 'MFA_PREMIUM'; provisioningStatus = 'Success' }
+                        )
+                    }
+                )
+            }
+            $results = Invoke-VerifyForTest
+            $row = Get-Row $results 'Licenses'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*assigned seat*'
+        }
+
+        It 'REFUSES a Power BI capacity masquerading as Fabric (F46)' {
+            # The false pass this check shipped with. Signing into Fabric for the
+            # first time on a Microsoft 365 E5 tenant provisions "Premium Per User -
+            # Reserved" (sku PP3) from the bundled Power BI Pro licence. It is
+            # Active, it is a capacity, and it cannot host a lakehouse -- so the old
+            # state-only assertion reported the tenant ready and L5 was where you
+            # found out.
+            $script:FabricCapacities = [pscustomobject]@{
+                value = @([pscustomobject]@{ id = 'ppu'; displayName = 'Premium Per User - Reserved'; sku = 'PP3'; state = 'Active' })
+            }
+            $results = Invoke-VerifyForTest
+            $row = Get-Row $results 'FabricCapacity'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*PP3*'
+            $row.Detail | Should -BeLike '*Power BI only*'
+        }
+
+        It 'accepts every F-series SKU shape, including the real trial string FTL4' {
+            # Regression pin. A tighter '^F(T)?\d+$' passed every mock in this file
+            # and rejected the live trial capacity, because FTL4 has a letter
+            # between the T and the digits. Only a real tenant surfaced it.
+            foreach ($sku in @('FTL4', 'FT1', 'F2', 'F4', 'F64', 'F2048')) {
+                $script:FabricCapacities = [pscustomobject]@{
+                    value = @([pscustomobject]@{ id = 'c'; displayName = "cap-$sku"; sku = $sku; state = 'Active' })
+                }
+                $row = Get-Row (Invoke-VerifyForTest) 'FabricCapacity'
+                $row.Status | Should -Be 'PASS' -Because "$sku is a Fabric capacity"
+            }
+        }
+
+        It 'still rejects every Power BI SKU shape' {
+            foreach ($sku in @('PP3', 'P1', 'P5', 'EM2', 'A4')) {
+                $script:FabricCapacities = [pscustomobject]@{
+                    value = @([pscustomobject]@{ id = 'c'; displayName = "cap-$sku"; sku = $sku; state = 'Active' })
+                }
+                $row = Get-Row (Invoke-VerifyForTest) 'FabricCapacity'
+                $row.Status | Should -Be 'FAIL' -Because "$sku cannot run Fabric workloads"
+            }
+        }
+
+        It 'accepts a paused F2, which is the expected state between deploys' {
+            $script:FabricCapacities = [pscustomobject]@{
+                value = @([pscustomobject]@{ id = 'f2'; displayName = 'mls-f2'; sku = 'F2'; state = 'Paused' })
+            }
+            $results = Invoke-VerifyForTest
+            (Get-Row $results 'FabricCapacity').Status | Should -Be 'PASS'
+        }
+
+        It 'ignores a Power BI capacity sitting alongside a real Fabric one' {
+            $script:FabricCapacities = [pscustomobject]@{
+                value = @(
+                    [pscustomobject]@{ id = 'ppu'; displayName = 'Premium Per User - Reserved'; sku = 'PP3'; state = 'Active' }
+                    [pscustomobject]@{ id = 'cap1'; displayName = 'mlstrial'; sku = 'FT1'; state = 'Active' }
+                )
+            }
+            $results = Invoke-VerifyForTest
+            $row = Get-Row $results 'FabricCapacity'
+            $row.Status | Should -Be 'PASS'
+            $row.Detail | Should -BeLike '*FT1*'
+            $row.Detail | Should -Not -BeLike '*PP3*'
+        }
+
+        It 'FAILS C4 when service principals cannot create workspaces (F46)' {
+            # The live-tenant defect: ServicePrincipalAccessPermissionAPIs was on and
+            # ServicePrincipalAccessGlobalAPIs was off. L5 calls New-FabricWorkspace,
+            # which the OFF one governs -- the estate would have failed at L5 on a
+            # tenant the old runbook called ready.
+            $script:FabricTenantSettings = [pscustomobject]@{
+                tenantSettings = @(
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessGlobalAPIs'; enabled = $false }
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessPermissionAPIs'; enabled = $true }
+                )
+            }
+            $row = Get-Row (Invoke-VerifyForTest) 'FabricSpAccess'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*ServicePrincipalAccessGlobalAPIs*'
+        }
+
+        It 'passes C4 but names admin access nobody asked for' {
+            $script:FabricTenantSettings = [pscustomobject]@{
+                tenantSettings = @(
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessGlobalAPIs'; enabled = $true }
+                    [pscustomobject]@{ settingName = 'ServicePrincipalAccessPermissionAPIs'; enabled = $true }
+                    [pscustomobject]@{ settingName = 'AllowServicePrincipalsUseWriteAdminAPIs'; enabled = $true }
+                )
+            }
+            $row = Get-Row (Invoke-VerifyForTest) 'FabricSpAccess'
+            $row.Status | Should -Be 'PASS'
+            $row.Detail | Should -BeLike '*admin access*'
         }
 
         It 'flags a wrong active subscription' {
@@ -219,10 +383,13 @@ Describe 'verify-g0' {
         It 'survives az being completely broken (the informational check errors to INFO, not FAIL)' {
             Mock Invoke-AzCli { throw 'az exploded' }
             $results = Invoke-VerifyForTest
-            @($results).Count | Should -Be 10
-            @($results | Where-Object { $_.Status -eq 'FAIL' }).Count | Should -Be 9
+            @($results).Count | Should -Be 11
+            # Ten gate-affecting checks fail; EntraDiagnostics degrades to INFO and is
+            # excluded from the count by design (F9). Was 9 before FabricSpAccess (C4)
+            # became a real check rather than a portal step nobody verified (F46).
+            @($results | Where-Object { $_.Status -eq 'FAIL' }).Count | Should -Be 10
             (Get-Row $results 'EntraDiagnostics').Status | Should -Be 'INFO'
-            Get-FailCount -Results $results | Should -Be 9
+            Get-FailCount -Results $results | Should -Be 10
         }
     }
 

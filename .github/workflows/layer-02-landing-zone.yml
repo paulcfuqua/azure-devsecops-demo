@@ -34,7 +34,7 @@ on:
         description: Azure region for the deployment and the allowed-locations guardrail.
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run `az deployment mg what-if` only; make no writes.
         type: boolean
@@ -46,7 +46,7 @@ on:
         description: Azure region for the deployment and the allowed-locations guardrail.
         type: string
         required: false
-        default: eastus2
+        default: eastus
       dry_run:
         description: Run `az deployment mg what-if` only; make no writes.
         type: boolean
