@@ -64,6 +64,14 @@ both map to 3.14.1; [F38](#f38) also maps to 3.4.1, which has no
 `compliance/assessment/` record of its own — as is already the case for [F30](#f30) and
 [F33](#f33).
 
+**F39 (2026-08-28, immediately after).** Turning the F37/F38 lens on the fixes themselves
+produced a third finding, and the worst of the three: the two checks that caught them
+**could not have blocked either one from merging**. See [F39](#f39). This is the same
+shape as [F25](#f25) (a closed finding's own fix text became the bypass) and [F26](#f26)
+(a guard asserted and never fired), and it is the third time in this register that the
+question worth asking was not "does the control exist" but "what happens when it says
+no".
+
 ## Index
 
 | # | Finding | Severity | Confidence | Controls | Closed by |
@@ -106,6 +114,7 @@ both map to 3.14.1; [F38](#f38) also maps to 3.4.1, which has no
 | [F36](#f36) | F25's fix made the estate undeployable: L7 refused to run without three hand-set client IDs, and the redirect URIs could not exist until it had | high | CONFIRMED | — (availability/adoptability) | final pre-publication audit |
 | [F37](#f37) | The `data-api` image cannot start: the runtime stage copies only the hoisted `node_modules`, and five of its non-dev packages are not hoisted — the same pin also held a `runtime`-scope CVE in the tree | high | CONFIRMED (reproduced in CI) | 3.14.1 | F22's smoke test, first run |
 | [F38](#f38) | Three shipped images sat sixteen months behind Alpine's security updates on an end-of-line `nginx` tag, and no ecosystem was watching `FROM` lines | medium | CONFIRMED | 3.4.1, 3.14.1 | F33's Trivy repin, first real scan |
+| [F39](#f39) | The Trivy CRITICAL gate and the F22 smoke test were **advisory**: not one of the five image jobs was a required status check | high | CONFIRMED | 3.4.3, 3.14.1 | raised and closed with F37/F38 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2108,3 +2117,79 @@ nonexistent ref. Neither defect was reachable by reading the repository: one liv
 container image, the other in a registry's rebuild history. Every gate here should be
 assumed inert until its first failure proves otherwise, and these two findings are that
 proof arriving.
+
+
+## F39
+
+**The Trivy CRITICAL gate and the F22 smoke test were advisory: not one of the five image jobs was a required status check, so a pull request could merge with either of them red**
+
+- **Severity:** high (every container-image security and correctness gate in the repository was non-binding)
+- **Confidence:** CONFIRMED (read directly off the live ruleset)
+- **Controls:** 3.4.3 (track, review, approve or disapprove, and log changes), 3.14.1 (flaw remediation — a flaw-finding gate that cannot block is not remediation)
+- **Closed by:** raised and closed alongside [F37](#f37) and [F38](#f38)
+- **Status:** CLOSED
+
+**Found while:** preparing to merge the F37/F38 fixes, by asking what the branch ruleset
+would actually have done if those checks had stayed red.
+
+**Where:** the `main protection` ruleset. Its `required_status_checks` were exactly seven:
+
+```
+PSScriptAnalyzer + Pester        analyze (javascript-typescript)
+vitest (npm workspace)           analyze (python)
+actionlint (workflows)           scan history for secrets
+pytest (data generators)
+```
+
+Every one of those is a lint, test or static-analysis check. **No image job.** The Trivy
+CRITICAL gate and F22's boot smoke test live only in the five `app-*-ci.yml` workflows,
+they ran, they reported — and nothing consumed the result. A red image check on a pull
+request was a red mark next to a green merge button.
+
+**Impact, concretely.** The pull request that fixed [F37](#f37) and [F38](#f38) could have
+been merged with both defects still in it. So could the commits that introduced them.
+`app-compliance-ci` had been failing on `main` for a full day, and `main` is the branch
+this repository publishes: the ruleset had nothing to say about it. The gates were doing
+their job perfectly and the repository was not listening.
+
+**Why it was not simply "add five checks to the ruleset".** The five workflows carried
+`paths:` filters on both their `push` and `pull_request` triggers. A required check whose
+workflow does not run never reports a conclusion, and GitHub holds the pull request
+pending rather than passing it — so requiring a path-filtered check deadlocks every pull
+request the filter misses. The tempting fix for *that* is to drop the requirement again,
+which is how a gate quietly stops binding a second time.
+
+**Fix**, in three parts:
+
+1. **The `paths:` filter comes off the `pull_request` trigger** in all five workflows and
+   stays on `push`. Nothing is gated on a push run, so skipping work there is free; on a
+   pull request the check must be able to report. The cost is one container build per
+   pull request and it is not a push — the build step is `push: false` on pull requests
+   and both the GHCR login and push steps are `if: github.event_name != 'pull_request'`,
+   verified step by step across all five workflows rather than assumed. A pull-request run
+   writes nothing to the registry and spends only Actions time, which is free on a public
+   repository.
+2. **Each image job is named after its app** — `container build, scan and push
+   (compliance)` and so on. A required status check is matched by the check run's *name*,
+   and five check runs sharing one name cannot be required individually.
+3. **All five names are added to the ruleset's required checks**, taking it from seven
+   required checks to twelve.
+
+**Asserted by test, and mutation-tested.** `verification/tests/app-ci-smoke-test.Tests.ps1`
+gains 26 assertions (F39 block) covering all five properties this rests on: the
+`pull_request` trigger has no `paths:`/`paths-ignore:` key, the `push` trigger still has
+one, the image job's name matches its app, all five names are distinct, and the image job
+carries no job-level `if:` (a job that evaluates false reports *skipped*, and a skipped
+required check deadlocks the pull request instead of failing it honestly). Five surgical
+mutations were run against those assertions — re-adding a `pull_request` `paths:` filter,
+collapsing a job back to the shared name, colliding two names, adding an `if:` to an image
+job, and stripping the `push` filter — and each was caught by the assertion meant to catch
+it. The suite went from 81 to 107 tests on that file, 762 to 788 across
+`verification/tests` and `compliance/tests`.
+
+**What this does not fix, stated plainly.** A self-heal pull request touching
+`apps/vuln-lab/**` still builds and scans images it does not change, which is wasted work
+rather than a hazard; `self-heal.yml`'s header already states honestly that no image of
+its own is ever scanned on such a pull request ([F29](#f29)), and that remains true. And
+open Dependabot pull requests raised before this change will show the old check names
+until Dependabot rebases them onto the new `main`.
