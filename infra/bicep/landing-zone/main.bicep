@@ -1,24 +1,33 @@
 // =============================================================================
 // landing-zone/main.bicep — L2: management group, governance policies, NIST.
 //
-// Deployed AT THE TENANT ROOT management group by the L2 workflow
-// (layer-02-landing-zone.yml):
+// Deployed AT THE LANDING-ZONE management group '<prefix>' (mls) by the L2
+// workflow (layer-02-landing-zone.yml):
 //
 //   az deployment mg create \
-//     --management-group-id <tenantRootMgId> \
+//     --management-group-id <prefix> \
 //     --location $AZURE_LOCATION \
 //     --template-file infra/bicep/landing-zone/main.bicep \
 //     --parameters infra/bicep/landing-zone/demo.bicepparam
 //
 // Creates (all tenant-level — teardown is G3-gated, standard cycle leaves them):
-//   * management group '<prefix>' (mls) under the tenant root
-//   * demo subscription placed under it
 //   * policy assignments at MG scope:
 //       - deny RGs missing each required tag (5 x require-tag + managedBy=iac)
 //       - modify: inherit each required tag from the RG onto resources (6x)
 //       - allowed locations (resources + resource groups)
 //   * NIST SP 800-53 Rev. 5 built-in initiative at SUBSCRIPTION scope,
 //     enforcementMode DoNotEnforce (audit mode) per the master plan.
+//
+// NOT deployed at the tenant root, and deliberately so. Creating the MG and
+// placing the subscription are the only two root-scope operations L2 needs, and
+// the workflow already performs both imperatively (`az account management-group
+// create` / `subscription add`) before this template runs. Azure lets any
+// directory principal create a management group beneath the root and makes the
+// creator its Owner, so the deployer arrives here already owning its own scope:
+// no tenant-root RBAC, and no Global Administrator "elevate access" step, for
+// anyone cloning this repo. Targeting the root instead would have meant granting
+// mls-github-deployer Owner at '/', which is the kind of standing privilege this
+// repo exists to catch (F47).
 //
 // All built-in policy definition IDs are stable GUIDs, commented with their
 // display names. Authoring/compile only in Phase P — no deployment happens
@@ -33,10 +42,7 @@ import * as naming from '../naming.bicep'
 @description('Company prefix; the management group name. Single source: naming.bicep.')
 param companyPrefix string = naming.defaultCompanyPrefix
 
-@description('Friendly display name for the management group.')
-param managementGroupDisplayName string = 'Meridian Launch Systems'
-
-@description('Demo subscription ID, supplied from the AZURE_SUBSCRIPTION_ID environment variable at deploy time (never committed). Empty skips subscription placement and the NIST assignment.')
+@description('Demo subscription ID, supplied from the AZURE_SUBSCRIPTION_ID environment variable at deploy time (never committed). Empty skips the NIST assignment; subscription placement is done by the workflow.')
 param demoSubscriptionId string = ''
 
 @description('Region for policy-assignment managed identities. From AZURE_LOCATION at deploy time.')
@@ -81,30 +87,12 @@ var requiredTagSpecs = [
 var inheritTagSpecs = concat(requiredTagSpecs, [{ tagName: 'managedBy', short: 'managedby' }])
 
 // ------------------------------------------------------------------ management group
-
-// AVM: management group under the current deployment scope (the tenant root MG).
-module managementGroupMls 'br/public:avm/res/management/management-group:0.2.0' = {
-  name: 'l2-mg-${mgName}'
-  params: {
-    name: mgName
-    displayName: managementGroupDisplayName
-  }
-}
-
-// Subscription placement under the new MG. RAW RESOURCE: AVM has no module for
-// Microsoft.Management/managementGroups/subscriptions (the management-group AVM
-// module does not place subscriptions), so the documented tenant-scope child
-// resource is used directly.
-resource managementGroupExisting 'Microsoft.Management/managementGroups@2023-04-01' existing = {
-  scope: tenant()
-  name: mgName
-}
-
-resource subscriptionPlacement 'Microsoft.Management/managementGroups/subscriptions@2023-04-01' = if (!empty(demoSubscriptionId)) {
-  parent: managementGroupExisting
-  name: demoSubscriptionId
-  dependsOn: [managementGroupMls]
-}
+//
+// The MG and the subscription placement are NOT declared here: both are tenant-
+// root writes, and this template deploys AT the MG, which cannot create itself.
+// layer-02-landing-zone.yml owns them, idempotently, before this runs. Everything
+// below assumes MG '<prefix>' exists with the demo subscription already beneath
+// it -- the state that workflow step guarantees.
 
 // ------------------------------------------------------------------ tag governance (MG scope)
 
@@ -126,7 +114,6 @@ module requireTagOnRg 'br/public:avm/ptn/authorization/policy-assignment:0.5.3' 
         { message: 'Resource groups must carry the required tag \'${spec.tagName}\' (see CLAUDE.md tagging rules).' }
       ]
     }
-    dependsOn: [managementGroupMls]
   }
 ]
 
@@ -148,7 +135,6 @@ module requireManagedByIac 'br/public:avm/ptn/authorization/policy-assignment:0.
       { message: 'Resource groups must be created by IaC and tagged managedBy=${naming.managedByValue}.' }
     ]
   }
-  dependsOn: [managementGroupMls]
 }
 
 // Modify: resources inherit each required tag from their resource group.
@@ -168,7 +154,6 @@ module inheritTags 'br/public:avm/ptn/authorization/policy-assignment:0.5.3' = [
       roleDefinitionIds: [tagContributorRoleId]
       location: location
     }
-    dependsOn: [managementGroupMls]
   }
 ]
 
@@ -187,7 +172,6 @@ module allowedLocationsResources 'br/public:avm/ptn/authorization/policy-assignm
     }
     identity: 'None'
   }
-  dependsOn: [managementGroupMls]
 }
 
 module allowedLocationsRgs 'br/public:avm/ptn/authorization/policy-assignment:0.5.3' = {
@@ -203,7 +187,6 @@ module allowedLocationsRgs 'br/public:avm/ptn/authorization/policy-assignment:0.
     }
     identity: 'None'
   }
-  dependsOn: [managementGroupMls]
 }
 
 // ------------------------------------------------------------------ NIST 800-53 R5 (subscription scope, audit mode)
@@ -224,19 +207,15 @@ module nist80053r5 'br/public:avm/ptn/authorization/policy-assignment:0.5.3' = i
     roleDefinitionIds: [] // No role grants in DoNotEnforce; enabling enforcement later means granting the specific roles the DINE members declare, never Contributor.
     location: location
   }
-  dependsOn: [
-    managementGroupMls
-    subscriptionPlacement
-  ]
 }
 
 // ------------------------------------------------------------------ outputs
 
 @description('Resource ID of the mls management group.')
-output managementGroupResourceId string = managementGroupMls.outputs.resourceId
+output managementGroupResourceId string = managementGroup().id
 
 @description('Name of the mls management group.')
-output managementGroupName string = managementGroupMls.outputs.name
+output managementGroupName string = mgName
 
 @description('Name of the NIST 800-53 R5 subscription-scope assignment (empty when no subscription ID was supplied).')
 output nistAssignmentName string = !empty(demoSubscriptionId) ? nist80053r5!.outputs.name : ''

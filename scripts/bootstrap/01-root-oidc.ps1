@@ -355,6 +355,46 @@ function Grant-GraphApplicationPermission {
     return $true
 }
 
+function Get-GitHubSubClaimPrefix {
+    <#
+        WHAT SUBJECT WILL GITHUB ACTUALLY PRESENT? Ask it, do not construct it.
+
+        This script used to register exactly one subject per app, built by hand as
+        "repo:<owner>/<repo>:environment:<env>". On 2026-08-29 the first real OIDC
+        login failed against a live tenant with:
+
+          AADSTS700213: No matching federated identity record found for presented
+          assertion subject
+          'repo:paulcfuqua@51541817/azure-devsecops-demo@1347346268:environment:demo'
+
+        GitHub now embeds IMMUTABLE ACTOR IDENTIFIERS -- the numeric owner id and
+        repository id -- in the subject claim, so that renaming an org or repo cannot
+        silently redirect a federated trust to someone else. The hand-built string is
+        the old shape and no longer matches.
+
+        GitHub reports the prefix it will use at
+        GET /repos/{owner}/{repo}/actions/oidc/customization/sub, in `sub_claim_prefix`.
+        Note that the tenant this was found on returned `use_immutable_subject: false`
+        while still presenting the immutable form -- so DO NOT branch on that flag.
+        Read the prefix and trust it.
+
+        Returns $null when the field is absent or gh is unavailable; the caller then
+        registers only the classic subject, which is the pre-2026-08-29 behaviour.
+    #>
+    param([Parameter(Mandatory)][string]$Repository)
+
+    $raw = & gh api "repos/$Repository/actions/oidc/customization/sub" 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
+        Write-Status "  (could not read GitHub's sub_claim_prefix for $Repository; registering the classic subject only)" -Color Yellow
+        return $null
+    }
+    try { $parsed = $raw | ConvertFrom-Json } catch { return $null }
+    $prefix = $parsed.sub_claim_prefix
+    if ([string]::IsNullOrWhiteSpace($prefix)) { return $null }
+    if ($prefix -eq "repo:$Repository") { return $null }   # same as the classic form
+    return [string]$prefix
+}
+
 function Get-AdminConsentUrl {
     param(
         [Parameter(Mandatory)][string]$TenantId,
@@ -381,6 +421,10 @@ function Invoke-Main {
     $consentUrls = [ordered]@{}
 
     Write-Status "Tenant $tenantId / subscription $SubscriptionId" -Color Cyan
+    $script:ImmutableSubjectPrefix = Get-GitHubSubClaimPrefix -Repository $Repository
+    if ($script:ImmutableSubjectPrefix) {
+        Write-Status "GitHub presents immutable subjects: $($script:ImmutableSubjectPrefix) - registering both forms." -Color Gray
+    }
 
     # ---- deployer -----------------------------------------------------------------
     Write-Status "`n== $DeployerAppName ==" -Color Cyan
@@ -391,6 +435,17 @@ function Invoke-Main {
         # Owner-capable subject while bypassing the demo environment's protection rules.
         Initialize-FederatedCredential -AppObjectId $deployer.id -Name "github-env-$EnvironmentName" `
             -Subject "repo:${Repository}:environment:$EnvironmentName" | Out-Null
+        # ... and the immutable-identifier form, when GitHub says it will present one.
+        # Both are registered rather than one replacing the other: GitHub is evidently
+        # mid-transition (it reported use_immutable_subject=false while presenting the
+        # immutable subject), and an app that accepts only the form GitHub happens to
+        # send today breaks silently when that changes. Neither subject widens the
+        # trust -- both name the same repository and the same `demo` environment, which
+        # is the property F7 cares about.
+        if ($script:ImmutableSubjectPrefix) {
+            Initialize-FederatedCredential -AppObjectId $deployer.id -Name "github-env-$EnvironmentName-immutable" `
+                -Subject "$($script:ImmutableSubjectPrefix):environment:$EnvironmentName" | Out-Null
+        }
         $deployerSp = Initialize-ServicePrincipal -AppId $deployer.appId
         if ($deployerSp) {
             Initialize-RoleAssignment -PrincipalObjectId $deployerSp.id -Role 'Owner' -Scope $scope | Out-Null
@@ -415,6 +470,10 @@ function Invoke-Main {
         # instead of this Reader-scoped identity.
         Initialize-FederatedCredential -AppObjectId $verifier.id -Name "github-env-$VerifierEnvironmentName" `
             -Subject "repo:${Repository}:environment:$VerifierEnvironmentName" | Out-Null
+        if ($script:ImmutableSubjectPrefix) {
+            Initialize-FederatedCredential -AppObjectId $verifier.id -Name "github-env-$VerifierEnvironmentName-immutable" `
+                -Subject "$($script:ImmutableSubjectPrefix):environment:$VerifierEnvironmentName" | Out-Null
+        }
         $verifierSp = Initialize-ServicePrincipal -AppId $verifier.appId
         if ($verifierSp) {
             Initialize-RoleAssignment -PrincipalObjectId $verifierSp.id -Role 'Reader' -Scope $scope | Out-Null
