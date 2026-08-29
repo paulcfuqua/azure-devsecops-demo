@@ -51,11 +51,13 @@ RUN npm run build --workspace apps/data-api
 # both simpler and provably the same resolution.
 FROM deps AS prod-deps
 WORKDIR /repo
-# The mkdir is not redundant. It guarantees apps/data-api/node_modules exists
-# so the runtime stage's COPY of that path is always valid -- a Docker COPY
-# whose source is missing fails the build, and whether npm creates a nested
-# tree at all is a function of the lockfile, not of this Dockerfile.
-RUN npm ci --workspace apps/data-api --include-workspace-root --omit=dev --ignore-scripts     && mkdir -p /repo/apps/data-api/node_modules
+# The mkdir is not redundant, and since the F37 dedupe it is load-bearing: with
+# nothing nested, npm creates no apps/data-api/node_modules at all, and a Docker
+# COPY whose source is missing fails the build. This makes the runtime stage's
+# COPY of that path valid in both states -- empty today, populated the next time
+# a version conflict forces npm to nest something.
+RUN npm ci --workspace apps/data-api --include-workspace-root --omit=dev --ignore-scripts \
+    && mkdir -p /repo/apps/data-api/node_modules
 
 # ---------- runtime ----------
 FROM node:24-bookworm-slim AS runtime
@@ -64,24 +66,35 @@ ENV NODE_ENV=production \
 WORKDIR /repo/apps/data-api
 
 # TWO dependency trees have to come across, not one. npm hoists what it can to
-# /repo/node_modules, but a workspace pinning a version that conflicts with the
-# hoisted one gets a NESTED copy under apps/data-api/node_modules -- and this
-# app does: its exact pin of @azure/monitor-opentelemetry-exporter@1.0.0-beta.32
-# drags four @opentelemetry packages down with it, five non-dev packages in all.
+# /repo/node_modules, but a workspace whose pin conflicts with the hoisted
+# version gets a NESTED copy under apps/data-api/node_modules instead, and
+# copying only the root tree silently drops it.
 #
-# An earlier revision copied only the root tree, on the assumption that
-# "workspace dependencies hoist to the repo root". They do, except when they
-# cannot. The image built, pushed and passed its Trivy scan, then died on the
-# first line of real work:
+# TODAY THIS DIRECTORY IS EMPTY, and the COPY below is still correct and still
+# required. Whether npm nests anything is a property of the lockfile on any
+# given day, not of this Dockerfile; the state that shipped as finding F37 is
+# one `npm install` away from returning. What F37 actually was: an exact pin of
+# @azure/monitor-opentelemetry-exporter@1.0.0-beta.32 conflicted with the
+# beta.44 the root tree hoists, so the exporter and four @opentelemetry packages
+# resolved under apps/data-api/node_modules -- five non-dev packages the runtime
+# stage left behind, on the assumption, written here as a comment, that
+# "workspace dependencies hoist to the repo root". The image built, pushed and
+# passed its Trivy scan, then died on the first line of real work:
 #
 #   Error [ERR_MODULE_NOT_FOUND]: Cannot find package
 #   '@azure/monitor-opentelemetry-exporter' imported from
 #   /repo/apps/data-api/dist/telemetry/otel.js
 #
-# No test in the repository could have caught it, because nothing ran the
+# The pin has since moved to beta.44, which dedupes the subtree to nothing --
+# and closed CVE-2026-54285 in the bargain, because the nested tree was also the
+# only place @opentelemetry/core@2.0.0 survived. Both fixes are kept: one makes
+# the tree clean now, the other makes the image correct whatever the tree does
+# next. Node resolves upward from WORKDIR, so the nested tree wins and the
+# hoisted one is the fallthrough -- the order npm builds the two trees for.
+#
+# No test in the repository could have caught F37, because nothing ran the
 # image -- which is precisely why F22's smoke test now boots it in CI and calls
-# its own /healthz before the merge. Copy both trees and let Node resolve
-# upward from WORKDIR: the nested tree first, the hoisted one as fallthrough.
+# its own /healthz before the merge.
 COPY --from=prod-deps /repo/node_modules /repo/node_modules
 COPY --from=prod-deps /repo/apps/data-api/node_modules ./node_modules
 COPY --from=build /repo/apps/data-api/dist ./dist

@@ -104,7 +104,7 @@ both map to 3.14.1; [F38](#f38) also maps to 3.4.1, which has no
 | [F34](#f34) | `.superpowers/` (3.3 MB of transcripts) excluded only by a nested ignore file | medium | CONFIRMED | 3.1.3 | final pre-publication audit |
 | [F35](#f35) | Subscription-wide DENY policy nowhere stated as requiring a dedicated, empty subscription | medium | CONFIRMED | CM-6 | final pre-publication audit |
 | [F36](#f36) | F25's fix made the estate undeployable: L7 refused to run without three hand-set client IDs, and the redirect URIs could not exist until it had | high | CONFIRMED | — (availability/adoptability) | final pre-publication audit |
-| [F37](#f37) | The `data-api` image cannot start: the runtime stage copies only the hoisted `node_modules`, and five of its non-dev packages are not hoisted | high | CONFIRMED (reproduced in CI) | 3.14.1 | F22's smoke test, first run |
+| [F37](#f37) | The `data-api` image cannot start: the runtime stage copies only the hoisted `node_modules`, and five of its non-dev packages are not hoisted — the same pin also held a `runtime`-scope CVE in the tree | high | CONFIRMED (reproduced in CI) | 3.14.1 | F22's smoke test, first run |
 | [F38](#f38) | Three shipped images sat sixteen months behind Alpine's security updates on an end-of-line `nginx` tag, and no ecosystem was watching `FROM` lines | medium | CONFIRMED | 3.4.1, 3.14.1 | F33's Trivy repin, first real scan |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
@@ -2017,10 +2017,33 @@ to the hoisted one — which is the resolution order npm built the two trees for
 all is a property of the lockfile, and a Docker `COPY` whose source is missing fails the
 build.
 
-**Why nothing caught it.** There is nothing wrong with the source, the lockfile, the
-`package.json`, or the build. `npm ci`, `tsc`, `vitest` and the typecheck all pass
-against a tree that has both directories present. The defect existed only in the image,
-and until [F22](#f22) nothing in this repository ever ran an image. `apps/mcp-tools` was
+**Found alongside it, from the same root cause.** The exact pin is not just what made the
+image nest — it is what kept a vulnerable package in the tree. Of the twenty-one
+`@opentelemetry/core` copies the lockfile resolved, twenty were 2.9.0 or 2.10.0 and one
+was **2.0.0**: the nested copy, dragged in by the beta.32 exporter. GitHub had an open
+Dependabot alert on it, CVE-2026-54285 (unbounded memory allocation in W3C Baggage
+propagation, `< 2.8.0`), scope `runtime`, and the fix above would have shipped that exact
+copy into the image. Moving the pin to `1.0.0-beta.44` — the version already resolved at
+the root, required by `@azure/monitor-opentelemetry` — dedupes the whole subtree: one
+exporter copy, no nested tree under `apps/data-api` at all, and no `@opentelemetry/core`
+below 2.8.0 anywhere in the lockfile. `AzureMonitorTraceExporter` is the only symbol
+`src/telemetry/otel.ts` imports from it; typecheck, build and all 295 data-api tests
+(27 of them telemetry) pass unchanged on beta.44.
+
+The Dockerfile fix stays even though nothing nests any more, and that is deliberate: it
+is not a workaround for this pin, it is the correct way to copy a workspace's production
+tree. Whether npm nests is a property of the lockfile on any given day, and the next
+version conflict must not be able to reproduce this. The `mkdir -p` in `prod-deps` is
+what makes the `COPY` valid in the state the tree is now actually in — an empty nested
+directory.
+
+**Why nothing caught it.** Not one build-time or test-time check could see it. `npm ci`,
+`tsc`, `vitest` and the typecheck all pass against a working tree that has both
+directories present, which is every developer machine and every CI runner — the
+`package.json` pin that caused the nesting is a defect only in combination with a
+Dockerfile that copies one of the two trees, and neither half is wrong on its own. The
+failure existed only in the image, and until [F22](#f22) nothing in this repository ever
+ran an image. `apps/mcp-tools` was
 checked for the same shape and does not have it: it carries a standalone lockfile,
 installs into `apps/mcp-tools/node_modules`, and copies that directory wholesale.
 
