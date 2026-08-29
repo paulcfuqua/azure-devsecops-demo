@@ -1,4 +1,4 @@
-# Pester tests for infra/fabric/provision-workspace.ps1 - module functions mocked; zero cloud calls.
+﻿# Pester tests for infra/fabric/provision-workspace.ps1 - module functions mocked; zero cloud calls.
 
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
@@ -146,6 +146,97 @@ Describe 'provision-workspace' {
                 $PrincipalId -eq 'verifier-obj-1' -and $Role -eq 'Viewer'
             }
             Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 2
+        }
+    }
+
+    Context 'cost-ingest workspace Contributor grant (F19)' {
+        # The ONLY grant this script makes that is not Viewer, and the only one that
+        # can write to OneLake. Every assertion below is on the ROLE STRING actually
+        # passed to Add-FabricWorkspaceRoleAssignment, never on the comment that
+        # explains it (F27): the argument for Contributor lives in
+        # provision-workspace.ps1's grant table, but a test that matched that prose
+        # would stay green if the call were changed to Admin.
+        BeforeEach {
+            Mock Get-FabricWorkspace { [pscustomobject]@{ id = 'w1'; displayName = 'mls-operations' } }
+            Mock Get-FabricLakehouse { [pscustomobject]@{ id = 'l1'; displayName = 'mls_operations' } }
+            Mock Get-FabricTable { @() }
+        }
+
+        It 'grants cost-ingest Contributor - the least Fabric role that can write to Files/' {
+            Mock Get-FabricWorkspaceRoleAssignment { $null }
+            Mock Add-FabricWorkspaceRoleAssignment { [pscustomobject]@{} }
+            Invoke-Main -Token 'tok-1' -CapacityId 'cap-1' -WorkspaceName 'mls-operations' `
+                -LakehouseName 'mls_operations' -CostIngestPrincipalId 'cost-ingest-obj-1' | Out-Null
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 1 -ParameterFilter {
+                $WorkspaceId -eq 'w1' -and $PrincipalId -eq 'cost-ingest-obj-1' -and
+                $PrincipalType -eq 'ServicePrincipal' -and $Role -eq 'Contributor'
+            }
+        }
+
+        It 'never grants cost-ingest a role broader than Contributor' {
+            # Admin and Member are the two roles above Contributor. Neither is needed
+            # to write workspace data, and both can re-grant access to other
+            # principals - which is what makes widening this grant a finding rather
+            # than a tuning change.
+            Mock Get-FabricWorkspaceRoleAssignment { $null }
+            Mock Add-FabricWorkspaceRoleAssignment { [pscustomobject]@{} }
+            Invoke-Main -Token 'tok-1' -CapacityId 'cap-1' -WorkspaceName 'mls-operations' `
+                -LakehouseName 'mls_operations' -CostIngestPrincipalId 'cost-ingest-obj-1' | Out-Null
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 0 -ParameterFilter {
+                $Role -in @('Admin', 'Member')
+            }
+        }
+
+        It 'does not re-grant when cost-ingest already holds Contributor (idempotent replay)' {
+            Mock Get-FabricWorkspaceRoleAssignment {
+                [pscustomobject]@{ principal = [pscustomobject]@{ id = 'cost-ingest-obj-1' }; role = 'Contributor' }
+            }
+            Mock Add-FabricWorkspaceRoleAssignment { throw 'must not be called' }
+            Invoke-Main -Token 'tok-1' -CapacityId 'cap-1' -WorkspaceName 'mls-operations' `
+                -LakehouseName 'mls_operations' -CostIngestPrincipalId 'cost-ingest-obj-1' | Out-Null
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 0
+        }
+
+        It 'RE-grants when cost-ingest holds only Viewer, rather than treating it as satisfied' {
+            # The idempotency check compares against the role this entry asks for, not
+            # against 'Viewer'. A principal left on Viewer by an earlier revision of
+            # this script would otherwise be skipped forever and 403 on every write.
+            Mock Get-FabricWorkspaceRoleAssignment {
+                [pscustomobject]@{ principal = [pscustomobject]@{ id = 'cost-ingest-obj-1' }; role = 'Viewer' }
+            }
+            Mock Add-FabricWorkspaceRoleAssignment { [pscustomobject]@{} }
+            Invoke-Main -Token 'tok-1' -CapacityId 'cap-1' -WorkspaceName 'mls-operations' `
+                -LakehouseName 'mls_operations' -CostIngestPrincipalId 'cost-ingest-obj-1' | Out-Null
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 1 -ParameterFilter {
+                $Role -eq 'Contributor'
+            }
+        }
+
+        It 'is a no-op when CostIngestPrincipalId is not supplied' {
+            Mock Get-FabricWorkspaceRoleAssignment { throw 'must not be called' }
+            Mock Add-FabricWorkspaceRoleAssignment { throw 'must not be called' }
+            Invoke-ProvisionForTest | Out-Null
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 0
+        }
+
+        It 'gives the READ principals Viewer in the same run it gives cost-ingest Contributor' {
+            # The per-entry role table must not leak the write role sideways: this is
+            # the assertion that would go red if Role became a single constant again.
+            Mock Get-FabricWorkspaceRoleAssignment { $null }
+            Mock Add-FabricWorkspaceRoleAssignment { [pscustomobject]@{} }
+            Invoke-Main -Token 'tok-1' -CapacityId 'cap-1' -WorkspaceName 'mls-operations' `
+                -LakehouseName 'mls_operations' -DataApiPrincipalId 'data-api-obj-1' `
+                -VerifierPrincipalId 'verifier-obj-1' -CostIngestPrincipalId 'cost-ingest-obj-1' | Out-Null
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 1 -ParameterFilter {
+                $PrincipalId -eq 'data-api-obj-1' -and $Role -eq 'Viewer'
+            }
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 1 -ParameterFilter {
+                $PrincipalId -eq 'verifier-obj-1' -and $Role -eq 'Viewer'
+            }
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 1 -ParameterFilter {
+                $PrincipalId -eq 'cost-ingest-obj-1' -and $Role -eq 'Contributor'
+            }
+            Should -Invoke Add-FabricWorkspaceRoleAssignment -Exactly -Times 3
         }
     }
 

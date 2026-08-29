@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // naming.bicep — the single source of naming and tagging for the entire estate.
 //
 // CLAUDE.md: "Company name and prefix are set once in infra/bicep/naming.bicep —
@@ -51,7 +51,7 @@ var requiredTagNames = [
 ]
 
 @export()
-@description('[derived] Short app keys used in resource names. mcp-tools shortens to "mcp", giving mls-mcp-demo-ca — the Copilot Studio amendment (2026-08-24) replaced the copilot-svc LLM service (mls-copilot-demo-ca, the CLAUDE.md worked example) with an MCP tool server. dataApi keeps its full slug so the container app is mls-data-api-demo-ca, which is the name .github/workflows/app-data-api-ci.yml already derives as <prefix>-<APP_SLUG>-<env>-ca. vulnLab names the L10 deployment witness (mls-vuln-lab-demo-ca) — the name verification/layer-10-audit.ps1 reads revisions from; it is NOT a fifth serving app, and apps/vuln-lab is never containerised (see infra/bicep/apps/main.bicep). compliance names the Task 13 board (mls-compliance-demo-ca) — external ingress like launchOps/controlTower, but gated by Container Apps Easy Auth rather than left open; see that app\'s block in infra/bicep/apps/main.bicep for why it is deliberately excluded from that template\'s containerAppNames output.')
+@description('[derived] Short app keys used in resource names. mcp-tools shortens to "mcp", giving mls-mcp-demo-ca — the Copilot Studio amendment (2026-08-24) replaced the copilot-svc LLM service (mls-copilot-demo-ca, the CLAUDE.md worked example) with an MCP tool server. dataApi keeps its full slug so the container app is mls-data-api-demo-ca, which is the name .github/workflows/app-data-api-ci.yml already derives as <prefix>-<APP_SLUG>-<env>-ca. vulnLab names the L10 deployment witness (mls-vuln-lab-demo-ca) — the name verification/layer-10-audit.ps1 reads revisions from; it is NOT a fifth serving app, and apps/vuln-lab is never containerised (see infra/bicep/apps/main.bicep). compliance names the Task 13 board (mls-compliance-demo-ca) — external ingress like launchOps/controlTower, but gated by Container Apps Easy Auth rather than left open; see that app\'s block in infra/bicep/apps/main.bicep for why it is deliberately excluded from that template\'s containerAppNames output. costIngest (F19) is the odd one out: it names no container app at all - apps/cost-ingest is an Azure Function, not a container - and is used for the L6 Function App (mls-cost-ingest-demo-func), its Flex Consumption plan and its user-assigned identity.')
 var appKeys = {
   launchOps: 'launch-ops'
   controlTower: 'control-tower'
@@ -59,6 +59,7 @@ var appKeys = {
   dataApi: 'data-api'
   vulnLab: 'vuln-lab'
   compliance: 'compliance'
+  costIngest: 'cost-ingest'
 }
 
 @export()
@@ -143,3 +144,19 @@ func keyVaultName(prefix string, envName string) string => '${prefix}-sec-${envN
 @description('[derived] Storage account: hyphens stripped to satisfy storage naming (3-24 lowercase alphanumerics), e.g. mlscostdemost.')
 func storageAccountName(prefix string, role string, envName string) string =>
   toLower(replace('${prefix}${role}${envName}st', '-', ''))
+
+@export()
+@description('[derived] Function app (Microsoft.Web/sites, kind functionapp): <prefix>-<appKey>-<env>-func. `func` rather than `fa` because it is the segment an operator reading a resource list recognises without a lookup table, and the 60-character site-name limit leaves no reason to abbreviate.')
+func functionAppName(prefix string, appKey string, envName string) string => '${prefix}-${appKey}-${envName}-func'
+
+@export()
+@description('[derived] App Service plan (Microsoft.Web/serverfarms): <prefix>-<appKey>-<env>-plan. The estate has exactly one, the Flex Consumption plan the cost-ingest Function runs on; it is named per-app rather than shared because a second Function would want its own scale envelope, not this one\'s.')
+func appServicePlanName(prefix string, appKey string, envName string) string => '${prefix}-${appKey}-${envName}-plan'
+
+@export()
+@description('[derived] Fabric workspace name: <prefix>-operations. Fabric artefacts are not ARM resources and take no env segment or type suffix - the workspace is a tenant-level object created by infra/fabric/provision-workspace.ps1, whose -WorkspaceName default is this same string. Defined here so a Bicep template that has to name the workspace (the cost-ingest Function\'s FABRIC_WORKSPACE app setting) does not hardcode the company prefix (CLAUDE.md).')
+func fabricWorkspaceName(prefix string) string => '${prefix}-operations'
+
+@export()
+@description('[derived] Fabric lakehouse name: <prefix>_operations. UNDERSCORE, not hyphen: lakehouse names allow letters, digits and underscores only (see provision-workspace.ps1\'s ValidatePattern on -LakehouseName). Same rationale as fabricWorkspaceName above.')
+func fabricLakehouseName(prefix string) string => '${prefix}_operations'

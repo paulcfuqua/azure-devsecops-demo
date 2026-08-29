@@ -29,10 +29,23 @@ name: infra-up
 # a selective replay of `l8` alone still runs.
 #
 # WHERE THE FINOPS LEG LIVES. `apps/cost-ingest` (Cost Management daily export →
-# storage → consumption Function → lakehouse `cost_daily`) is an L6 resource and
-# deploys inside layer-06-platform.yml alongside the export wiring it consumes.
-# It gets no job of its own here: it has no independent dependency and giving it
-# one would put a Function deploy on the critical path for no benefit.
+# storage → Function → lakehouse `cost_daily`) is an L6 resource and deploys inside
+# layer-06-platform.yml alongside the export wiring it consumes. It gets no job of
+# its own here: it has no independent dependency and giving it one would put a
+# Function deploy on the critical path for no benefit.
+#
+# THAT SENTENCE WAS FALSE UNTIL 2026-08-28, and its falseness was finding F19
+# (compliance/findings/2026-08-26-prepublication-review.md#f19): apps/cost-ingest
+# appeared in no Bicep anywhere, so there was no Function App, no identity, and
+# no way to make the one workload RBAC grant F13 still had open. It is true now,
+# and specifically: infra/bicep/platform/main.bicep provisions the Function App on
+# a Flex Consumption plan with a user-assigned identity, its runtime storage, the
+# container-scoped Storage Blob Data Reader grant and the Event Grid system topic;
+# layer-06-platform.yml publishes the code and creates the blob-created event
+# subscription; and layer-07-apps.yml grants the identity its Fabric workspace
+# role, from L7 because L5 and L6 run in parallel here and only L7 can assume both
+# the workspace and the identity exist. Idle cost is unchanged (~$0): Flex
+# Consumption bills execution time and the plan carries no always-ready instances.
 #
 # ---------------------------------------------------------------------------
 # PRE-G0 GUARD

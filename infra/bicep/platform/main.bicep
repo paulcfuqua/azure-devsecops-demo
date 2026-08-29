@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // platform/main.bicep — L6: shared runtime platform (Bicep/AVM).
 //
 // Deployed at SUBSCRIPTION scope by the L6 workflow (layer-06-platform.yml):
@@ -104,6 +104,33 @@ param lawDailyQuotaGb string = '1'
 @description('[derived] Email receiver for the security/operational action group (F17, Task 19) — reuses the sponsor address scripts/bootstrap/03-budget.ps1 already notifies, so cost and security alerting share one page-out path. Empty disables the email receiver; the action group still deploys (a clean local build stays green, and the resource exists for 03-budget.ps1 to reference by ID once L6 has deployed).')
 param alertNotificationEmail string = ''
 
+@description('[derived] Blob container the Cost Management daily export writes into, and the only container the cost-ingest Function is granted any access to (F19 / F13\'s seventh grant). Pinned by the L6 audit\'s V6.3 (verification/layer-06-audit.ps1\'s -CostExportContainerName default) and by layer-06-platform.yml\'s export-definition body; a parameter here so all three read one value rather than three literals that can drift apart.')
+param costExportContainerName string = 'cost-exports'
+
+@description('[derived] Blob container in the FUNCTION RUNTIME storage account that Flex Consumption stores the deployment package in. Its own container in its own account, never shared with the export data — see the cost-ingest block below for why the two accounts are separate.')
+param functionDeploymentContainerName string = 'deployment-package'
+
+@description('[derived] Node runtime major version for the cost-ingest Function (Flex Consumption `functionAppConfig.runtime`). 22 matches apps/cost-ingest/package.json\'s `engines.node: >=22`. Not a free choice: Flex Consumption accepts only the runtime versions it publishes, and one it does not offer fails the deployment rather than degrading.')
+param costIngestNodeVersion string = '22'
+
+@description('[derived] Per-instance memory for the cost-ingest Function, in MB. Flex Consumption bills GB-seconds, so the smallest supported size is also the cheapest, and the workload is one CSV parse a day.')
+@allowed([512, 2048, 4096])
+param costIngestInstanceMemoryMb int = 512
+
+@description('[derived] Maximum Flex Consumption instances for the cost-ingest Function. 40 is the platform floor for this setting, and a scale-out ceiling here is a spend guard rather than a throughput target: the trigger fires roughly once a day. Raising it is a spend-profile change (G2).')
+@minValue(40)
+@maxValue(1000)
+param costIngestMaximumInstanceCount int = 40
+
+@description('[derived] Fabric workspace the cost-ingest Function writes `cost_daily` into (its FABRIC_WORKSPACE app setting — apps/cost-ingest/src/config.ts). EMPTY means "derive it from naming.bicep", which is the normal case and the only way the name follows a changed companyPrefix; a Bicep parameter default cannot reference another parameter, so the derivation is a var below rather than a default here. Set it only to point at a workspace named something other than infra/fabric/provision-workspace.ps1\'s -WorkspaceName default.')
+param fabricWorkspace string = ''
+
+@description('[derived] Fabric lakehouse inside that workspace (FABRIC_LAKEHOUSE). Same empty-means-derive contract as fabricWorkspace above. Underscored when derived, matching provision-workspace.ps1\'s -LakehouseName default and its ValidatePattern (letters, digits and underscores only).')
+param fabricLakehouse string = ''
+
+@description('[derived] Folder under the lakehouse\'s Files/ that the `cost_daily` Delta table is defined over (LAKEHOUSE_COST_PATH). Set explicitly rather than left to the app\'s own fallback so the table location is declared in one place a reviewer can find.')
+param lakehouseCostPath string = 'cost_daily'
+
 // ------------------------------------------------------------------ names + tags
 
 var rgPlatformName = naming.resourceGroupName(companyPrefix, naming.rgPurposes.platform)
@@ -122,6 +149,20 @@ var alertActionGroupName = naming.resourceName(companyPrefix, 'obs', env, 'ag')
 var kvDeniedAccessAlertName = naming.resourceName(companyPrefix, 'kv-denied', env, 'alert')
 var sqlFailedLoginAlertName = naming.resourceName(companyPrefix, 'sql-auth', env, 'alert')
 
+// F19 — the cost-ingest FinOps leg. `cost-ingest` is an appKey in naming.bicep,
+// not a role segment invented here, even though it names no container app.
+var costIngestIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.costIngest, env)
+var costIngestFunctionAppName = naming.functionAppName(companyPrefix, naming.appKeys.costIngest, env)
+var costIngestPlanName = naming.appServicePlanName(companyPrefix, naming.appKeys.costIngest, env)
+var functionRuntimeStorageName = naming.storageAccountName(companyPrefix, 'func', env)
+var costExportSystemTopicName = naming.resourceName(companyPrefix, 'cost', env, 'evgt')
+
+// Empty parameter means "derive from naming.bicep so the name follows
+// companyPrefix" — a parameter default cannot reference another parameter, which
+// is why the derivation lives here.
+var fabricWorkspaceResolved = empty(fabricWorkspace) ? naming.fabricWorkspaceName(companyPrefix) : fabricWorkspace
+var fabricLakehouseResolved = empty(fabricLakehouse) ? naming.fabricLakehouseName(companyPrefix) : fabricLakehouse
+
 // app tag values follow the role segment of each resource name (README: derived).
 var tagsPlatform = naming.requiredTags(env, 'platform', costCenter, owner, dataClassification)
 var tagsApps = naming.requiredTags(env, 'apps', costCenter, owner, dataClassification)
@@ -130,6 +171,7 @@ var tagsOps = naming.requiredTags(env, 'ops', costCenter, owner, dataClassificat
 var tagsSqlServer = naming.requiredTags(env, 'ops', costCenter, owner, dataClassification)
 var tagsSqlDb = naming.requiredTags(env, naming.appKeys.launchOps, costCenter, owner, dataClassification)
 var tagsCostStorage = naming.requiredTags(env, 'cost', costCenter, owner, dataClassification)
+var tagsCostIngest = naming.requiredTags(env, naming.appKeys.costIngest, costCenter, owner, dataClassification)
 
 // ------------------------------------------------------------------ resource groups (all four — single owner of RG creation)
 
@@ -429,6 +471,370 @@ module costExportStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
   dependsOn: [rgOps]
 }
 
+// ------------------------------------------------------------------ cost-ingest FinOps leg (mls-rg-ops)
+//
+// F19 (compliance/findings/2026-08-26-prepublication-review.md#f19), and with it
+// the SEVENTH and last of F13's documented workload RBAC grants.
+//
+// WHAT WAS WRONG. `apps/cost-ingest` is a complete, tested Azure Functions app —
+// host.json, a blob-triggered handler, 84 unit tests — that appeared in no Bicep
+// anywhere. .github/workflows/infra-up.yml:31 said it "deploys inside
+// layer-06-platform.yml alongside the export wiring it consumes"; it did not, and
+// so it had no Function App, no identity, and no way to be granted the Storage
+// Blob Data Reader role F13 lists against it. Three controls (3.1.1, 3.1.2,
+// 3.1.5) named that missing grant as their last open contributor. This block is
+// the thing that was missing; the workflow steps that publish its code and
+// subscribe it to the container are in layer-06-platform.yml, and the Fabric
+// grant it needs is in layer-07-apps.yml (see each for why it lives there).
+//
+// ---------------------------------------------------------------------------
+// PLAN CHOICE: FLEX CONSUMPTION (FC1). NOT a taste call — two hard constraints
+// intersect on exactly one plan.
+//
+//  1. NO STORED CREDENTIAL (CLAUDE.md hard rule 5, restated by the app itself in
+//     apps/cost-ingest/src/config.ts: "NONE of them is a credential… If a setting
+//     ever appears here that looks like a secret, that is the bug"). A Functions
+//     host needs an `AzureWebJobsStorage` connection. Microsoft's support matrix
+//     (learn.microsoft.com/azure/azure-functions/manage-connections, "Managed
+//     identity support for AzureWebJobsStorage varies by hosting plan") gives
+//     Flex Consumption "Full support / None (no Azure Files)"; the legacy
+//     Consumption and Elastic Premium plans support managed identity for blobs,
+//     queues and tables but still require `WEBSITE_AZUREFILESCONNECTIONSTRING` —
+//     a shared-key connection string — which their own guidance says to hide in
+//     Key Vault. Hiding a credential is not the same as not having one. Flex
+//     Consumption uses no Azure Files at all, so there is no such setting.
+//  2. ~$0 IDLE against the $200 / 30-day credit. Flex Consumption bills
+//     per-execution GB-seconds plus a per-million-execution charge, and bills
+//     nothing for an idle app unless `alwaysReady` instances are configured —
+//     which is why `scaleAndConcurrency` below carries no `alwaysReady` block at
+//     all. One Cost Management export a day is ~30 invocations a month of a few
+//     seconds each: comfortably inside the monthly free grant, and $0 on the days
+//     nothing lands. The Dedicated (App Service) plan is the only other plan with
+//     full managed-identity host storage, and its cheapest usable tier (B1) bills
+//     ~$13/month whether or not anything runs — 6.5% of the entire credit,
+//     permanently, for 30 executions. Elastic Premium (EP1, ~$150/month) is not
+//     in the conversation.
+//
+// THE COST OF THAT CHOICE, stated rather than buried: the Flex Consumption plan
+// supports ONLY the Event Grid-based blob trigger, never the polling one
+// (learn.microsoft.com/azure/azure-functions/functions-bindings-storage-blob-trigger:
+// "the Flex Consumption plan supports only the event-based Blob storage
+// trigger"). apps/cost-ingest/src/functions/cost-ingest.ts therefore declares
+// `source: 'EventGrid'`, this template creates the Event Grid system topic on the
+// cost-export account below, and layer-06-platform.yml creates the event
+// subscription after the app exists. That last step cannot be Bicep: the
+// subscription's webhook URL embeds the app's `blobs_extension` system key, which
+// only exists once the site does, and resolving it here with `listKeys` would
+// (a) fail `az deployment sub what-if` outright on a fresh estate, since the site
+// does not exist yet at what-if time, and (b) render a live system key into the
+// what-if output of a PUBLIC repository's workflow log — F4's exact failure mode.
+// Same shape, same reasoning as the Cost Management export wiring in that
+// workflow (F15): configuration whose only input is born at deploy time.
+// ---------------------------------------------------------------------------
+//
+// WHY A SECOND, SEPARATE STORAGE ACCOUNT for the Functions runtime rather than
+// reusing costExportStorage above. The Functions host needs ACCOUNT-WIDE blob,
+// queue and table access to its AzureWebJobsStorage account (it owns
+// `azure-webjobs-hosts`, lease blobs, the poison queue and the diagnostic-events
+// table). Consolidating would mean granting the cost-ingest identity Storage Blob
+// Data Owner on the account that holds the Cost Management exports — at which
+// point the container-scoped Storage Blob Data Reader grant that F13 asks for,
+// and that this block makes, would be decorative: the identity would already hold
+// Owner-class blob access to the same container by another route. A second empty
+// Standard_LRS account is cents a month (a few MB of host bookkeeping plus the
+// deployment package; no export data ever lands in it) and is what keeps the
+// narrow grant real. It dies with mls-rg-ops like everything else here.
+
+module costIngestIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0' = {
+  name: 'l6-cost-ingest-uami'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    name: costIngestIdentityName
+    location: location
+    tags: tagsCostIngest
+  }
+  dependsOn: [rgOps]
+}
+
+// Runtime/deployment storage for the Functions host — see the block header for
+// why this is not costExportStorage. Same hardened posture as that account:
+// RBAC-only data plane (allowSharedKeyAccess:false, which Flex Consumption
+// supports precisely because it authenticates with the managed identity), no
+// public blob access, TLS 1.2 floor, diagnostics to the same workspace.
+module functionRuntimeStorage 'br/public:avm/res/storage/storage-account:0.33.0' = {
+  name: 'l6-func-st'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    name: functionRuntimeStorageName
+    location: location
+    tags: tagsCostIngest
+    skuName: 'Standard_LRS' // cheapest redundancy; holds no data, only host bookkeeping
+    kind: 'StorageV2'
+    accessTier: 'Hot'
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false // no connection string exists for anything to leak
+    minimumTlsVersion: 'TLS1_2'
+    diagnosticSettings: [
+      {
+        workspaceResourceId: logAnalytics.outputs.resourceId
+      }
+    ]
+    blobServices: {
+      diagnosticSettings: [
+        {
+          workspaceResourceId: logAnalytics.outputs.resourceId
+        }
+      ]
+      containers: [
+        {
+          // Flex Consumption's deployment package lands here, written by the
+          // app's own user-assigned identity (functionAppConfig.deployment
+          // below). Created by this template rather than by the platform so the
+          // container exists before the first publish and so its access level is
+          // declared, not defaulted.
+          name: functionDeploymentContainerName
+          publicAccess: 'None'
+        }
+      ]
+    }
+  }
+  dependsOn: [rgOps]
+}
+
+module costIngestPlan 'br/public:avm/res/web/serverfarm:0.7.0' = {
+  name: 'l6-cost-ingest-plan'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    name: costIngestPlanName
+    location: location
+    tags: tagsCostIngest
+    // FC1 is the Flex Consumption SKU; the AVM module maps it to
+    // sku: { name: 'FC1', tier: 'FlexConsumption' } and omits `capacity`, which
+    // that tier rejects (verified against the cached
+    // avm/res/web/serverfarm@0.7.0 module).
+    skuName: 'FC1'
+    kind: 'functionapp'
+    reserved: true // Flex Consumption is Linux-only; the module's default derives from kind == 'linux', which is not this kind
+    zoneRedundant: false // no zone pinning anywhere in this single-region demo
+  }
+  dependsOn: [rgOps]
+}
+
+module costIngestFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
+  name: 'l6-cost-ingest-func'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    name: costIngestFunctionAppName
+    location: location
+    tags: tagsCostIngest
+    kind: 'functionapp,linux'
+    serverFarmResourceId: costIngestPlan.outputs.resourceId
+    httpsOnly: true
+    clientAffinityEnabled: false // ARR affinity is meaningless for an event-driven app and is not a Flex Consumption concept
+    // USER-ASSIGNED, for the same reason data-api's and mcp-tools' identities are
+    // (infra/bicep/apps/main.bicep): the grants this principal needs are issued
+    // from three different places — the container grant below, the
+    // runtime-account grants below, and a Fabric workspace role assigned over
+    // REST from layer-07-apps.yml — so the principal must be nameable and
+    // grantable independently of the app's own lifecycle. It is also mandatory
+    // here for a second reason a system-assigned identity could not satisfy:
+    // Flex Consumption's deployment-storage authentication needs an identity
+    // RESOURCE ID at site-creation time, which a system-assigned identity does
+    // not have until after the site exists.
+    managedIdentities: {
+      userAssignedResourceIds: [costIngestIdentity.outputs.resourceId]
+    }
+    // The module's siteConfig default is { alwaysOn: true, minTlsVersion: '1.2',
+    // ftpsState: 'FtpsOnly' }. alwaysOn is invalid on a dynamic plan and is the
+    // literal opposite of this estate's scale-to-zero posture, so it is replaced
+    // rather than extended. FTP/FTPS publishing is disabled outright: the only
+    // deployment path is the identity-authenticated zip push in
+    // layer-06-platform.yml, and an enabled FTPS endpoint is a
+    // credential-bearing second way in that nothing uses.
+    siteConfig: {
+      minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
+    }
+    // Public network access stays enabled because the Event Grid subscription
+    // delivers over the public webhook endpoint (/runtime/webhooks/blobs). There
+    // is no HTTP-triggered function in this app, so nothing else is reachable.
+    publicNetworkAccess: 'Enabled'
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: '${functionRuntimeStorage.outputs.primaryBlobEndpoint}${functionDeploymentContainerName}'
+          authentication: {
+            // NOT a shared key and NOT a SAS: the platform reads the deployment
+            // package as this app's own user-assigned identity, which is why
+            // functionRuntimeStorage can keep allowSharedKeyAccess:false.
+            type: 'UserAssignedIdentity'
+            userAssignedIdentityResourceId: costIngestIdentity.outputs.resourceId
+          }
+        }
+      }
+      scaleAndConcurrency: {
+        // NO `alwaysReady` BLOCK. Always-ready instances are the only thing on
+        // Flex Consumption that bills while idle; omitting the block is what
+        // makes the idle cost $0, and adding one would be an un-gated spend
+        // increase (G2), not a tuning change.
+        instanceMemoryMB: costIngestInstanceMemoryMb
+        maximumInstanceCount: costIngestMaximumInstanceCount
+      }
+      runtime: {
+        name: 'node'
+        version: costIngestNodeVersion
+      }
+    }
+    configs: [
+      {
+        name: 'appsettings'
+        // Emits AzureWebJobsStorage__accountName / __blobServiceUri /
+        // __queueServiceUri / __tableServiceUri instead of a connection string.
+        // The __credential and __clientId halves that bind those to THIS
+        // user-assigned identity are set explicitly below — the module does not
+        // emit them, and without them the host would look for a system-assigned
+        // identity that does not exist.
+        storageAccountResourceId: functionRuntimeStorage.outputs.resourceId
+        storageAccountUseIdentityAuthentication: true
+        // The template is the whole truth about this app's settings. The
+        // module's default is to `list()` the site's current settings and merge
+        // them in, which (a) would carry hand-edits forward across deployments —
+        // the opposite of what IaC is for — and (b) is a `list()` against a site
+        // that does not exist yet on a first deploy.
+        retainCurrentAppSettings: false
+        properties: {
+          // -- host storage: managed identity, no key, no connection string ----
+          AzureWebJobsStorage__credential: 'managedidentity'
+          AzureWebJobsStorage__clientId: costIngestIdentity.outputs.clientId
+          // -- the blob trigger's own identity-based connection ---------------
+          // `connection: 'CostExports'` in src/functions/cost-ingest.ts resolves
+          // this prefix. It points at the COST-EXPORT account — a different
+          // account from AzureWebJobsStorage above — which is the whole reason
+          // the trigger names a connection at all instead of defaulting to host
+          // storage.
+          CostExports__blobServiceUri: costExportStorage.outputs.primaryBlobEndpoint
+          CostExports__credential: 'managedidentity'
+          CostExports__clientId: costIngestIdentity.outputs.clientId
+          // -- application settings (apps/cost-ingest/src/config.ts) ----------
+          // None of these is a credential; the app's own header says so, and this
+          // template is where that claim has to stay true.
+          COST_EXPORT_CONTAINER: costExportContainerName
+          FABRIC_WORKSPACE: fabricWorkspaceResolved
+          FABRIC_LAKEHOUSE: fabricLakehouseResolved
+          LAKEHOUSE_COST_PATH: lakehouseCostPath
+          // Binds DefaultAzureCredential — which src/lakehouse.ts uses to mint
+          // the OneLake token — to this identity rather than to an ambient one.
+          // Same setting, same purpose as apps/main.bicep's AZURE_CLIENT_ID on
+          // data-api and mcp-tools.
+          AZURE_CLIENT_ID: costIngestIdentity.outputs.clientId
+        }
+      }
+    ]
+    // F9's discipline applied to the newest resource in the estate: the
+    // Function's own logs go to the same workspace everything else does.
+    // Application Insights is deliberately NOT wired: F4 disabled local
+    // ingestion auth on that component, so an App Insights connection here would
+    // additionally need a Monitoring Metrics Publisher grant on it and an
+    // APPLICATIONINSIGHTS_AUTHENTICATION_STRING — a fourth role assignment for an
+    // app whose whole output is 30 invocations a month that this diagnostic
+    // setting already records.
+    diagnosticSettings: [
+      {
+        workspaceResourceId: logAnalytics.outputs.resourceId
+      }
+    ]
+  }
+  dependsOn: [rgOps]
+}
+
+// ---- the seventh F13 grant --------------------------------------------------
+// CONTAINER SCOPE, NOT ACCOUNT SCOPE. The Function reads the export and writes
+// nowhere in this account, so Storage Blob Data Reader on the `cost-exports`
+// container is the narrowest grant that works. See
+// modules/blob-container-role.bicep for why that needs a raw role assignment.
+module costIngestExportReaderGrant 'modules/blob-container-role.bicep' = {
+  name: 'l6-cost-ingest-export-reader-grant'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    storageAccountName: costExportStorage.outputs.name
+    containerName: costExportContainerName
+    principalId: costIngestIdentity.outputs.principalId
+    // 'Storage Blob Data Reader' — read and list blobs and containers; no write, no delete, no ACL change (built-in role, stable GUID; verified against learn.microsoft.com/azure/role-based-access-control/built-in-roles/storage).
+    roleDefinitionId: '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
+  }
+}
+
+// ---- Functions host requirements, on the RUNTIME account only ---------------
+// Microsoft's documented minimum for an identity-based AzureWebJobsStorage
+// connection is Storage Blob Data Owner on the account, plus Storage Queue Data
+// Contributor for the blob extension's poison queue and Storage Table Data
+// Contributor for the host's diagnostic events
+// (learn.microsoft.com/azure/azure-functions/manage-connections → "Grant
+// permissions to an identity"). Every one of these binds to
+// functionRuntimeStorage — the empty account created above — and NONE of them
+// touches the cost-export account. Storage Account Contributor, which that same
+// table lists under host-required storage for the blob extension, is deliberately
+// NOT granted: it is a control-plane role whose purpose is letting the POLLING
+// trigger create containers and queues it does not have, and this app does not
+// poll — its trigger is Event Grid-sourced and the one container it deploys into
+// is declared in this template.
+var costIngestRuntimeStorageGrants = [
+  {
+    label: 'blob-data-owner'
+    // 'Storage Blob Data Owner' — full blob data access including POSIX ACLs; Microsoft's documented minimum for AzureWebJobsStorage with an identity (built-in role, stable GUID).
+    roleDefinitionId: 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
+  }
+  {
+    label: 'queue-data-contributor'
+    // 'Storage Queue Data Contributor' — read, write and delete queue messages; the blob extension writes poison-blob receipts to a queue in the host account (built-in role, stable GUID).
+    roleDefinitionId: '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
+  }
+  {
+    label: 'table-data-contributor'
+    // 'Storage Table Data Contributor' — read, write and delete table entities; where the host persists diagnostic events when the app cannot start (built-in role, stable GUID).
+    roleDefinitionId: '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
+  }
+]
+
+module costIngestRuntimeStorageGrant 'modules/storage-account-role.bicep' = [
+  for grant in costIngestRuntimeStorageGrants: {
+    name: 'l6-cost-ingest-rt-${grant.label}'
+    scope: resourceGroup(rgOpsName)
+    params: {
+      storageAccountName: functionRuntimeStorage.outputs.name
+      principalId: costIngestIdentity.outputs.principalId
+      roleDefinitionId: grant.roleDefinitionId
+    }
+  }
+]
+
+// ---- Event Grid system topic on the cost-export account ---------------------
+// The declarative half of the Event Grid-based blob trigger. The SUBSCRIPTION
+// that points at the Function's webhook is created by layer-06-platform.yml,
+// because its endpoint URL embeds a system key that does not exist until the
+// site does — see this block's header for why resolving that key here would both
+// break `what-if` and print a live key into a public workflow log. Free at this
+// volume: Event Grid's first 100,000 operations a month cost nothing, and one
+// daily export is ~30.
+module costExportSystemTopic 'br/public:avm/res/event-grid/system-topic:0.7.0' = {
+  name: 'l6-cost-evgt'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    name: costExportSystemTopicName
+    location: location
+    tags: tagsCostIngest
+    source: costExportStorage.outputs.resourceId
+    topicType: 'Microsoft.Storage.StorageAccounts'
+    diagnosticSettings: [
+      {
+        workspaceResourceId: logAnalytics.outputs.resourceId
+      }
+    ]
+  }
+  dependsOn: [rgOps]
+}
+
 // ------------------------------------------------------------------ alerting (mls-rg-platform)
 //
 // F17 (compliance/findings/2026-08-26-prepublication-review.md#f17, Task 19): this is
@@ -642,6 +1048,26 @@ output lawCustomerId string = logAnalytics.outputs.logAnalyticsWorkspaceId
 
 @description('NAME (not resource id) of the cost-export storage account, under the name V6.3 resolves. `az storage blob list --account-name` takes a name; costExportStorageResourceId is the id the export-definition step needs, and the two are not interchangeable.')
 output costExportAccountName string = costExportStorage.outputs.name
+
+// --- the cost-ingest FinOps leg (F19), read back by layer-06-platform.yml ---
+//
+// The workflow resolves every one of these from the deployment manifest rather
+// than recomposing them from a prefix, for the same reason the four names above
+// exist: "expected values resolve from the Bicep-declared manifest, never from a
+// teammate's message" (docs/runbooks/layers/L06.md). None of them is sensitive —
+// three resource NAMES and a resource-group name, no ids, no endpoints, no keys.
+
+@description('Name of the cost-ingest Function App. layer-06-platform.yml publishes the zip package to it and builds the Event Grid webhook endpoint from it.')
+output costIngestFunctionAppName string = costIngestFunctionApp.outputs.name
+
+@description('Resource group the cost-ingest Function App and its runtime storage live in (mls-rg-ops, alongside the cost-export storage it reads).')
+output costIngestResourceGroupName string = rgOpsName
+
+@description('Name of the Event Grid system topic on the cost-export storage account. layer-06-platform.yml adds the blob-created event subscription to it once the Function App exists.')
+output costExportSystemTopicName string = costExportSystemTopic.outputs.name
+
+@description('Blob container the Cost Management export writes to and the cost-ingest Function is granted Storage Blob Data Reader on — the subject filter for the event subscription, and the scope of F13\'s seventh grant.')
+output costExportContainerName string = costExportContainerName
 
 @description('Names of the four demo resource groups, as created.')
 output resourceGroupNames object = {

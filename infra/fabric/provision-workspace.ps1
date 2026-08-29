@@ -35,6 +35,13 @@
     always Viewer — read-only, matching mls-verifier's Reader-everywhere posture; a
     wider role would itself be a finding.
 
+    Write access (F19, 2026-08-28): -CostIngestPrincipalId is the one grant this
+    script makes that is NOT Viewer. The cost-ingest Function writes cost_daily
+    into OneLake, and Viewer cannot write; Contributor is the lowest of Fabric's
+    four workspace roles that can. The full argument - what Member and Admin would
+    add, and why no narrower Fabric scope exists to use instead - is at the grant
+    table in Invoke-Main.
+
 .EXAMPLE
     $token = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
     ./provision-workspace.ps1 -Token $token -CapacityId $env:FABRIC_CAPACITY_ID -WhatIf
@@ -70,7 +77,17 @@ param(
     # need the SP's object ID). Empty by default, same no-op-until-wired shape as
     # -DataApiPrincipalId above, so calling this script with no verifier configured
     # (G0 incomplete, or a fork that never set AZURE_VERIFIER_CLIENT_ID) is unchanged.
-    [string]$VerifierPrincipalId = ''
+    [string]$VerifierPrincipalId = '',
+
+    # F19: object ID of the cost-ingest Function's user-assigned identity
+    # (infra/bicep/platform/main.bicep's costIngestIdentity, created at L6). Empty
+    # by default, same no-op-until-passed shape as the two above. Wired by
+    # layer-07-apps.yml's post-deploy step - see that workflow for why an
+    # L6-created identity gets its Fabric grant from the L7 workflow.
+    #
+    # THIS IS THE ONE PRINCIPAL HERE THAT DOES NOT GET Viewer. The reason is in
+    # Invoke-Main's grant table below; read it before changing this.
+    [string]$CostIngestPrincipalId = ''
 )
 
 Set-StrictMode -Version Latest
@@ -94,7 +111,8 @@ function Invoke-Main {
         [Parameter(Mandatory)][string]$WorkspaceName,
         [Parameter(Mandatory)][string]$LakehouseName,
         [string]$DataApiPrincipalId = '',
-        [string]$VerifierPrincipalId = ''
+        [string]$VerifierPrincipalId = '',
+        [string]$CostIngestPrincipalId = ''
     )
     # ---- workspace -----------------------------------------------------------------
     $workspace = Get-FabricWorkspace -Token $Token -Name $WorkspaceName
@@ -139,32 +157,58 @@ function Invoke-Main {
         Write-Status 'Lakehouse has no tables yet - run the generator seed step next (L5).' -Color Yellow
     }
 
-    # ---- workspace Viewer grants (F13 data-api, Task 12; F21 mls-verifier) ---------
-    # Each entry is empty by default (see the -DataApiPrincipalId / -VerifierPrincipalId
-    # parameter headers) so this is a no-op until a caller passes a principal. Both
-    # are wired now, from the layer each principal actually exists at:
-    #   * VerifierPrincipalId - layer-05-fabric.yml's deploy job (F21), because the
+    # ---- workspace role grants (F13 data-api; F21 mls-verifier; F19 cost-ingest) ---
+    # Each entry is empty by default (see the -DataApiPrincipalId /
+    # -VerifierPrincipalId / -CostIngestPrincipalId parameter headers) so this is a
+    # no-op until a caller passes a principal. All three are wired now, from the
+    # layer at which each principal actually exists:
+    #   * VerifierPrincipalId   - layer-05-fabric.yml's deploy job (F21), because the
     #     L5 Verifier audit depends on it.
-    #   * DataApiPrincipalId  - layer-07-apps.yml's post-deploy step (F24). It cannot
+    #   * DataApiPrincipalId    - layer-07-apps.yml's post-deploy step (F24). It cannot
     #     be passed at L5: L5 runs before L7 creates the data-api identity, which is
     #     why this parameter sat with no caller at all until F24 - the same ordering
     #     problem F20 describes for the SQL grant.
-    # A caller that passes neither still gets the workspace and lakehouse, unchanged.
-    # Role is always Viewer for every entry - read-only, never broader.
+    #   * CostIngestPrincipalId - layer-07-apps.yml as well (F19), even though that
+    #     identity is created at L6. L5 and L6 run in PARALLEL in infra-up.yml, so L6
+    #     cannot assume the workspace exists, and calling this create-if-absent script
+    #     from there would race L5 to create it. L7 is the first point in the graph at
+    #     which the identity and the workspace both exist.
+    # A caller that passes none still gets the workspace and lakehouse, unchanged.
+    #
+    # ROLE IS PER-ENTRY, NOT A CONSTANT - and exactly one entry is not Viewer.
+    #
+    #   data-api and mls-verifier READ. Viewer is the least role that permits a read,
+    #   and is what they get; anything wider would itself be a finding.
+    #
+    #   cost-ingest WRITES. It creates and replaces Files/cost_daily/month=YYYY-MM/
+    #   in OneLake every time an export lands (apps/cost-ingest/src/lakehouse.ts), so
+    #   Viewer is not merely tight for it, it is non-functional: Viewer is read-only
+    #   and the PUT would 403. Fabric offers exactly four workspace roles - Admin,
+    #   Member, Contributor, Viewer - and CONTRIBUTOR is the lowest of them that can
+    #   write workspace data. The two above it add permissions this Function has no
+    #   use for: Member can share the workspace and re-grant access to other
+    #   principals, and Admin can additionally delete the workspace and manage every
+    #   role assignment in it, including its own. Fabric exposes no data-plane role
+    #   narrower than the workspace - there is no per-lakehouse or per-folder OneLake
+    #   role a service principal can hold - so Contributor is the floor here, not a
+    #   compromise. It is the broadest grant any workload identity holds in this
+    #   estate; the argument is written where the grant is made so a reviewer meets
+    #   it rather than having to reconstruct it.
     foreach ($grant in @(
-            [pscustomobject]@{ Label = 'data-api identity'; PrincipalId = $DataApiPrincipalId }
-            [pscustomobject]@{ Label = 'mls-verifier'; PrincipalId = $VerifierPrincipalId }
+            [pscustomobject]@{ Label = 'data-api identity'; PrincipalId = $DataApiPrincipalId; Role = 'Viewer' }
+            [pscustomobject]@{ Label = 'mls-verifier'; PrincipalId = $VerifierPrincipalId; Role = 'Viewer' }
+            [pscustomobject]@{ Label = 'cost-ingest identity'; PrincipalId = $CostIngestPrincipalId; Role = 'Contributor' }
         )) {
         if ([string]::IsNullOrWhiteSpace($grant.PrincipalId)) { continue }
         $existing = Get-FabricWorkspaceRoleAssignment -Token $Token -WorkspaceId $workspace.id -PrincipalId $grant.PrincipalId
-        if ($existing -and $existing.role -eq 'Viewer') {
-            Write-Status "$($grant.Label) already holds workspace role 'Viewer' - reusing." -Color Green
+        if ($existing -and $existing.role -eq $grant.Role) {
+            Write-Status "$($grant.Label) already holds workspace role '$($grant.Role)' - reusing." -Color Green
             continue
         }
-        if ($PSCmdlet.ShouldProcess($grant.PrincipalId, "Grant Fabric workspace role 'Viewer' in workspace '$WorkspaceName'")) {
+        if ($PSCmdlet.ShouldProcess($grant.PrincipalId, "Grant Fabric workspace role '$($grant.Role)' in workspace '$WorkspaceName'")) {
             Add-FabricWorkspaceRoleAssignment -Token $Token -WorkspaceId $workspace.id `
-                -PrincipalId $grant.PrincipalId -PrincipalType ServicePrincipal -Role Viewer -Confirm:$false | Out-Null
-            Write-Status "Granted $($grant.Label) workspace role 'Viewer' on '$WorkspaceName'." -Color Green
+                -PrincipalId $grant.PrincipalId -PrincipalType ServicePrincipal -Role $grant.Role -Confirm:$false | Out-Null
+            Write-Status "Granted $($grant.Label) workspace role '$($grant.Role)' on '$WorkspaceName'." -Color Green
         }
     }
 
@@ -174,5 +218,6 @@ function Invoke-Main {
 if (-not $env:MLS_SKIP_MAIN) {
     Import-Module (Join-Path $PSScriptRoot 'fabric-api.psm1') -Force
     Invoke-Main -Token $Token -CapacityId $CapacityId -WorkspaceName $WorkspaceName -LakehouseName $LakehouseName `
-        -DataApiPrincipalId $DataApiPrincipalId -VerifierPrincipalId $VerifierPrincipalId
+        -DataApiPrincipalId $DataApiPrincipalId -VerifierPrincipalId $VerifierPrincipalId `
+        -CostIngestPrincipalId $CostIngestPrincipalId
 }

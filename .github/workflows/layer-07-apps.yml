@@ -783,6 +783,109 @@ jobs:
 
 
       # ---------------------------------------------------------------------
+      # F19 (compliance/findings/2026-08-26-prepublication-review.md#f19): the
+      # cost-ingest Function's Fabric workspace grant — the write half of the
+      # FinOps leg, and the last of F13's seven workload grants to land.
+      #
+      # WHY AN L6-CREATED IDENTITY IS GRANTED FROM THE L7 WORKFLOW. The identity
+      # is provisioned by infra/bicep/platform/main.bicep at L6, so the obvious
+      # home for this is layer-06-platform.yml. It cannot be: infra-up.yml runs L5
+      # and L6 IN PARALLEL, so at L6 time the Fabric workspace may not exist yet,
+      # and provision-workspace.ps1 is create-if-absent — calling it from L6 would
+      # race L5 to create the same workspace. L7 needs L6 and, on the normal path,
+      # follows L5, which makes it the first point in the graph where both the
+      # identity and the workspace exist. That is the same ordering argument the
+      # F20 and F24 steps above make for their own grants, one layer over.
+      #
+      # NOT VIEWER. This is the only workspace grant in the estate that is not
+      # read-only: the Function writes cost_daily into OneLake, and Contributor is
+      # the lowest of Fabric's four workspace roles that can write. The full
+      # argument lives at the grant itself, in infra/fabric/provision-workspace.ps1's
+      # grant table, and is asserted by role string (not by comment) in
+      # infra/fabric/tests/provision-workspace.Tests.ps1.
+      #
+      # Placement and failure posture are identical to the F20/F24 steps: after
+      # the V7.1 manifest is written AND uploaded, and continue-on-error, because
+      # `verify` needs `deploy` to succeed and an idempotent remediation step must
+      # not cost the layer its sign-off.
+      # ---------------------------------------------------------------------
+      - name: Grant cost-ingest the Fabric workspace Contributor role now that the identity exists (F19)
+        id: f19_grant
+        if: ${{ !inputs.dry_run && vars.FABRIC_CAPACITY_ID != '' }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          RG_OPS: ${{ steps.names.outputs.rg-ops }}
+          FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Assert-AzSucceeded {
+            param([Parameter(Mandatory)][string]$What)
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error title=Azure CLI call failed::$What returned exit code $LASTEXITCODE. This is NOT the same as 'the identity does not exist yet' - it is a CLI, auth or throttling failure, and the F19 Fabric grant did not run."
+              exit 1
+            }
+          }
+
+          # mls-rg-ops, not mls-rg-apps: the cost-ingest identity is an L6 resource
+          # that lives next to the cost-export storage it reads. Resolved by shape
+          # rather than by a hardcoded name, so naming.bicep keeps owning the
+          # prefix and env (CLAUDE.md).
+          $ids = @(
+            az identity list --resource-group $env:RG_OPS --query "[?contains(name, 'cost-ingest')].{name:name, principalId:principalId}" -o json |
+              ConvertFrom-Json
+          )
+          Assert-AzSucceeded -What 'az identity list'
+
+          if ($ids.Count -eq 0) {
+            Write-Host "::warning title=cost-ingest identity not found::No user-assigned identity matching 'cost-ingest' in $env:RG_OPS. Skipping the F19 Fabric workspace grant - L6 has probably not deployed yet on a standalone L7 run."
+            exit 0
+          }
+          if ($ids.Count -gt 1) {
+            Write-Host "::error title=Ambiguous cost-ingest identity::Found $($ids.Count) identities matching 'cost-ingest' in $env:RG_OPS ($(($ids | ForEach-Object { $_.name }) -join ', ')). Refusing to grant a WRITE role on the Fabric workspace to an arbitrary one."
+            exit 1
+          }
+
+          # The Fabric roleAssignments API wants the identity's PRINCIPAL (object)
+          # id, which is what `az identity list` returns as principalId - not the
+          # clientId the Function App consumes as AZURE_CLIENT_ID.
+          $principalId = $ids[0].principalId
+          Write-Host "Resolved cost-ingest identity '$($ids[0].name)' -> principal $principalId."
+
+          $token = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+          Assert-AzSucceeded -What 'az account get-access-token (Fabric)'
+          if ([string]::IsNullOrWhiteSpace($token)) {
+            Write-Host '::error title=Fabric token acquisition failed::Could not mint a Fabric API token for the F19 grant.'
+            exit 1
+          }
+
+          # Same script, same create-if-absent semantics and the same known side
+          # effect the F24 step documents: on a standalone L7 dispatch where L5 has
+          # never run, this will create the workspace and lakehouse from here.
+          ./infra/fabric/provision-workspace.ps1 `
+            -Token $token `
+            -CapacityId $env:FABRIC_CAPACITY_ID `
+            -CostIngestPrincipalId $principalId `
+            -Confirm:$false
+
+          Write-Host "F19: cost-ingest holds the Fabric workspace Contributor role."
+
+      - name: Report a failed F19 grant pass
+        if: ${{ !inputs.dry_run && steps.f19_grant.outcome == 'failure' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### F19 Fabric grant did not complete"
+            echo
+            echo "The post-L7 Fabric workspace Contributor grant for \`cost-ingest\` did not apply. The deployment itself succeeded and this does not block the Verifier, but the cost-ingest Function will 403 on every OneLake write until the grant lands, and \`cost_daily\` will hold only the L5 synthetic history."
+            echo
+            # shellcheck disable=SC2016  # backticks are markdown code-span syntax; no expansion wanted
+            echo 'Apply it by hand: `infra/fabric/provision-workspace.ps1 -Token <fabric-token> -CapacityId <id> -CostIngestPrincipalId <principalId>`'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # ---------------------------------------------------------------------
       # F36, second half — the redirect-URI chicken-and-egg, closed here.
       #
       # Easy Auth's reply URL is https://<that app's own ingress FQDN>/.auth/login/aad/callback,

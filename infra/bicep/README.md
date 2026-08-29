@@ -16,7 +16,10 @@ infra/bicep/
 │   └── demo.bicepparam
 ├── platform/                        # L6 — subscription scope
 │   ├── main.bicep
-│   └── demo.bicepparam
+│   ├── demo.bicepparam
+│   └── modules/
+│       ├── blob-container-role.bicep      # grant scoped to ONE blob container (F19)
+│       └── storage-account-role.bicep     # grant scoped to a whole storage account
 └── apps/                            # L7 — resource group scope (mls-rg-apps)
     ├── main.bicep
     ├── demo.bicepparam
@@ -82,10 +85,19 @@ creation), then:
 | Key Vault (RBAC mode, soft-delete on) — **currently empty** | `mls-rg-platform` | ~$0 |
 | SQL server + serverless DB | `mls-rg-data` | auto-pause 60 min, 0.5–2 vCore; storage only when paused |
 | Cost-export storage account | `mls-rg-ops` | Standard_LRS, pennies |
+| cost-ingest Function App + Flex Consumption plan | `mls-rg-ops` | **$0 idle** — no always-ready instances; ~30 executions/month |
+| cost-ingest user-assigned identity | `mls-rg-ops` | free |
+| Function runtime storage account | `mls-rg-ops` | Standard_LRS, cents; host bookkeeping + deployment package only |
+| Event Grid system topic on the cost-export account | `mls-rg-ops` | first 100k ops/month free; ~30 used |
 | *(empty, for L7)* | `mls-rg-apps` | — |
 
 Nothing here bills while idle beyond SQL storage + LAW retention, which is exactly the
-master plan's built-but-parked envelope (< $15/month).
+master plan's built-but-parked envelope (< $15/month). The cost-ingest leg added at F19
+does not change that: Flex Consumption has no per-plan charge and bills only execution
+GB-seconds, the plan declares no `alwaysReady` instances (the one setting on that plan
+that *would* bill while idle), and its two supporting resources — an empty Standard_LRS
+storage account and an Event Grid system topic — cost cents and nothing respectively at
+one export a day.
 
 **Key Vault after the amendment.** The vault is still created, and at the amendment itself
 it dropped to **zero secret consumers**: `anthropic-api-key` was its only intended tenant,
@@ -180,10 +192,13 @@ Every resource that has an AVM module uses one, pinned to an explicit version.
 | User-assigned identity | `avm/res/managed-identity/user-assigned-identity` | 0.6.0 |
 | Action group (security alerts) | `avm/res/insights/action-group` | 0.3.0 |
 | Scheduled query rules (2) | `avm/res/insights/scheduled-query-rule` | 0.3.0 |
+| Function App (cost-ingest, F19) | `avm/res/web/site` | 0.24.0 |
+| Flex Consumption plan (cost-ingest, F19) | `avm/res/web/serverfarm` | 0.7.0 |
+| Event Grid system topic (F19) | `avm/res/event-grid/system-topic` | 0.7.0 |
 
 ## Raw resources — and why each one is raw
 
-Six, each because **no AVM module covers the case**. This section is the estate's
+Eight, each because **no AVM module covers the case**. This section is the estate's
 inventory of every privileged grant expressed outside AVM, so it is deliberately
 exhaustive -- an omission here is a grant nobody is reviewing:
 
@@ -227,6 +242,24 @@ exhaustive -- an omission here is a grant nobody is reviewing:
 6. **`Microsoft.Authorization/roleAssignments` for Monitoring Metrics Publisher**
    (`apps/modules/monitoring-metrics-publisher-role.bicep`) — lets the apps emit custom
    metrics to their own App Insights component, which lives in another resource group.
+7. **`Microsoft.Authorization/roleAssignments` scoped to a single BLOB CONTAINER**
+   (`platform/modules/blob-container-role.bicep`) — added by F19. **Storage Blob Data
+   Reader** for the cost-ingest Function's identity on the `cost-exports` container, and
+   the last of F13's seven documented workload grants. AVM's storage-account module
+   scopes its own `roleAssignments` parameter to the *account*; there is no per-container
+   grant in it, and the container is not separately addressable through its outputs, so
+   the narrower scope can only be expressed as a raw assignment against an `existing`
+   container.
+8. **`Microsoft.Authorization/roleAssignments` scoped to a whole storage account**
+   (`platform/modules/storage-account-role.bicep`) — also F19, and deliberately a
+   *different file* from the one above so the scope of a grant is legible from which
+   module a call site invokes. Three roles, all on the Function's own runtime storage
+   account and never on the cost-export account: **Storage Blob Data Owner** (Microsoft's
+   documented minimum for an identity-based `AzureWebJobsStorage`), **Storage Queue Data
+   Contributor** (the blob extension's poison queue) and **Storage Table Data
+   Contributor** (host diagnostic events). Those roles are account-wide by necessity,
+   which is exactly why the Function does not share the cost-export account: doing so
+   would make the container-scoped Reader grant above decorative.
 
 Four `existing` lookups (`apps/main.bicep`) read L6 resources this deployment does not
 own — the App Insights component above, the Log Analytics workspace, the Key Vault, and
@@ -261,7 +294,21 @@ reversible by changing one parameter or one line of `naming.bicep`.
   example should be updated to match; that file is outside this change's write scope, so
   it is listed as a reconciliation item.**
 - **[derived] Storage account names strip hyphens** (`mlscostdemost`) — storage requires
-  3–24 lowercase alphanumerics, so the hyphenated convention cannot apply.
+  3–24 lowercase alphanumerics, so the hyphenated convention cannot apply. A second one,
+  `mlsfuncdemost` (role segment `func`), holds the cost-ingest Function's runtime state
+  and deployment package; see raw resource 8 above for why it is not the cost-export
+  account.
+- **[derived] `func` and `plan` type segments** for the F19 Function App
+  (`mls-cost-ingest-demo-func`) and its Flex Consumption plan
+  (`mls-cost-ingest-demo-plan`). `cost-ingest` is an `appKeys` entry in `naming.bicep`
+  even though it names no container app — it is the app key for the estate's only
+  Function.
+- **[derived] `fabricWorkspaceName` / `fabricLakehouseName` in `naming.bicep`.** The
+  Fabric workspace and lakehouse are not ARM resources and carry no env or type segment,
+  but the cost-ingest Function needs both as app settings — so they are derived from the
+  company prefix here rather than spelled out in a template, which CLAUDE.md forbids.
+  `infra/bicep/apps/main.bicep`'s `fabricDatabase` parameter still carries the literal
+  default it always had; unifying that is a follow-up, not part of F19.
 - **[derived] `mls-rg-apps` is created by the L6 template**, not the L7 one, so a single
   template owns all four RGs and L7 stays a pure RG-scoped app deployment.
 

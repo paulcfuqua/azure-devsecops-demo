@@ -2,7 +2,8 @@ name: layer-06-platform
 
 # =============================================================================
 # L6 — Core platform: ACA environment, Log Analytics + App Insights, Key Vault,
-#      serverless SQL, cost-export storage.
+#      serverless SQL, cost-export storage, and the cost-ingest Function
+#      (Flex Consumption) that reads the export into the lakehouse.
 # Playbook: docs/runbooks/layers/L06.md   Template: infra/bicep/platform/main.bicep
 #
 # Subscription-scope deployment. The template creates all four demo resource
@@ -465,6 +466,167 @@ jobs:
         run: |
           set -euo pipefail
           echo "sql-last-touched=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
+      # ---------------------------------------------------------------------
+      # F19 — the cost-ingest FinOps leg, second half.
+      #
+      # infra/bicep/platform/main.bicep provisions the Function App, its Flex
+      # Consumption plan, its user-assigned identity, the container-scoped
+      # Storage Blob Data Reader grant (F13's seventh) and the Event Grid system
+      # topic. Two things cannot be Bicep and are done here instead:
+      #
+      #   1. the CODE. `apps/cost-ingest` is a Node project; Bicep provisions the
+      #      site, it does not publish a package into it.
+      #   2. the EVENT SUBSCRIPTION. Its webhook URL embeds the Function App's
+      #      `blobs_extension` system key, which does not exist until the site
+      #      does. Resolving that with `listKeys` inside the template would both
+      #      fail `az deployment sub what-if` on a fresh estate (the site is not
+      #      there yet at what-if time) and render a live system key into the
+      #      what-if output of a PUBLIC repository's workflow log — F4's exact
+      #      failure mode. Same shape as the Cost Management export wiring above,
+      #      whose identity principalId is likewise born at deploy time (F15).
+      #
+      # PLACEMENT AND FAILURE POSTURE are the F20/F24 shape: both steps sit after
+      # the manifest has been produced and recorded, and both carry
+      # continue-on-error, because `verify` needs `deploy` to SUCCEED. The
+      # Function is not on the demo's critical path — it feeds a table the L5 seed
+      # already populates with synthetic history — so a publish that fails must
+      # not cost L6 its Verifier sign-off. Failures are annotated and summarised,
+      # never swallowed.
+      # ---------------------------------------------------------------------
+      - uses: actions/setup-node@v4
+        if: ${{ !inputs.dry_run }}
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Publish the cost-ingest Function package (F19)
+        id: cost_ingest_publish
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          func_app="$(jq -r '.costIngestFunctionAppName.value // empty' l6-manifest.json)"
+          func_rg="$(jq -r '.costIngestResourceGroupName.value // empty' l6-manifest.json)"
+          if [ -z "${func_app}" ] || [ -z "${func_rg}" ]; then
+            echo "::error title=cost-ingest not in the manifest::costIngestFunctionAppName / costIngestResourceGroupName were not in the L6 deployment outputs, so there is no Function App to publish to."
+            exit 1
+          fi
+
+          # Build with the workspace's dev dependencies (typescript is hoisted to
+          # the repo root), then assemble a package that carries ONLY production
+          # dependencies. `npm ci` cannot run inside a workspace member directory,
+          # so the staging directory gets its own plain `npm install` against the
+          # app's own two-dependency package.json.
+          npm ci
+          npm run build --workspace @mls/cost-ingest
+
+          rm -rf cost-ingest-pkg
+          mkdir -p cost-ingest-pkg
+          cp -R apps/cost-ingest/dist cost-ingest-pkg/dist
+          cp apps/cost-ingest/host.json apps/cost-ingest/package.json cost-ingest-pkg/
+          ( cd cost-ingest-pkg && npm install --omit=dev --no-audit --no-fund --ignore-scripts )
+          ( cd cost-ingest-pkg && zip -qr ../cost-ingest.zip . )
+
+          # Flex Consumption's deployment container is written by the app's own
+          # user-assigned identity (functionAppConfig.deployment in the template),
+          # so this push needs no storage key and the runtime storage account keeps
+          # allowSharedKeyAccess:false.
+          az functionapp deployment source config-zip \
+            --resource-group "${func_rg}" \
+            --name "${func_app}" \
+            --src cost-ingest.zip \
+            --output none
+          echo "Published apps/cost-ingest to ${func_app}."
+
+      - name: Subscribe the cost-ingest Function to blob-created events (F19)
+        id: cost_ingest_events
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          func_app="$(jq -r '.costIngestFunctionAppName.value // empty' l6-manifest.json)"
+          func_rg="$(jq -r '.costIngestResourceGroupName.value // empty' l6-manifest.json)"
+          topic="$(jq -r '.costExportSystemTopicName.value // empty' l6-manifest.json)"
+          container="$(jq -r '.costExportContainerName.value // empty' l6-manifest.json)"
+          if [ -z "${func_app}" ] || [ -z "${func_rg}" ] || [ -z "${topic}" ] || [ -z "${container}" ]; then
+            echo "::error title=cost-ingest event wiring incomplete::The L6 deployment outputs did not carry costIngestFunctionAppName, costIngestResourceGroupName, costExportSystemTopicName and costExportContainerName, so the blob-created subscription cannot be created."
+            exit 1
+          fi
+
+          subscription_name="${func_app}-blob-created"
+
+          # Create-if-absent (CLAUDE.md). An Event Grid subscription's endpoint URL
+          # is immutable after creation, so a replay must not try to rewrite it;
+          # and the whole system topic dies with mls-rg-ops on teardown, so a
+          # kill/rebuild gets a fresh one with a fresh key either way.
+          if az eventgrid system-topic event-subscription show \
+              --name "${subscription_name}" \
+              --resource-group "${func_rg}" \
+              --system-topic-name "${topic}" \
+              --output none 2>/dev/null; then
+            echo "Event subscription ${subscription_name} already exists - no change."
+            exit 0
+          fi
+
+          # The blobs extension's system key is minted by the Functions host the
+          # first time it starts with the blob extension loaded, which is moments
+          # after the publish above - not instantly. Poll rather than assume.
+          host_name=""
+          blob_key=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            host_name="$(az functionapp show --resource-group "${func_rg}" --name "${func_app}" --query defaultHostName --output tsv 2>/dev/null || true)"
+            blob_key="$(az functionapp keys list --resource-group "${func_rg}" --name "${func_app}" --query 'systemKeys.blobs_extension' --output tsv 2>/dev/null || true)"
+            if [ -n "${host_name}" ] && [ -n "${blob_key}" ] && [ "${blob_key}" != "null" ]; then
+              break
+            fi
+            echo "Waiting for the Function host to mint its blobs_extension key (attempt ${attempt}/10)..."
+            sleep 15
+          done
+
+          if [ -z "${blob_key}" ] || [ "${blob_key}" = "null" ] || [ -z "${host_name}" ]; then
+            echo "::error title=No blobs_extension key::${func_app} has not published a blobs_extension system key. The Event Grid subscription cannot be created without it, so the cost-ingest trigger will never fire. Re-run this workflow once the app has started."
+            exit 1
+          fi
+
+          # Masked BEFORE it is used anywhere. It is never written to a file, an
+          # output, a job summary or an artifact; it exists only as a shell
+          # variable for the length of this step (CLAUDE.md hard rule 5 - and the
+          # reason this subscription is not created in Bicep at all).
+          echo "::add-mask::${blob_key}"
+          endpoint="https://${host_name}/runtime/webhooks/blobs?functionName=Host.Functions.cost-ingest&code=${blob_key}"
+
+          # Filtered twice over, so the Function is woken only by the blobs it can
+          # actually read: to BlobCreated events, and by subject prefix to the
+          # cost-exports container - the same container its Storage Blob Data
+          # Reader grant is scoped to.
+          az eventgrid system-topic event-subscription create \
+            --name "${subscription_name}" \
+            --resource-group "${func_rg}" \
+            --system-topic-name "${topic}" \
+            --endpoint-type webhook \
+            --endpoint "${endpoint}" \
+            --included-event-types Microsoft.Storage.BlobCreated \
+            --subject-begins-with "/blobServices/default/containers/${container}/" \
+            --output none
+          echo "Event subscription ${subscription_name} created against ${topic}, filtered to the ${container} container."
+
+      - name: Report a failed cost-ingest pass (F19)
+        if: ${{ !inputs.dry_run && (steps.cost_ingest_publish.outcome == 'failure' || steps.cost_ingest_events.outcome == 'failure') }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### F19 cost-ingest leg did not complete"
+            echo
+            echo "| step | outcome |"
+            echo "|---|---|"
+            echo "| publish the Function package | ${{ steps.cost_ingest_publish.outcome }} |"
+            echo "| subscribe to blob-created events | ${{ steps.cost_ingest_events.outcome }} |"
+            echo
+            echo "The Function App, its identity and its role assignments deployed with the rest of L6 — this is the code and event wiring only. Until it lands, Cost Management exports accumulate in the \`cost-exports\` container with nothing reading them into the lakehouse; the control tower's cost chart falls back on the L5 synthetic history. Re-run \`layer-06-platform.yml\` to retry; both steps are create-if-absent."
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload L6 artifacts
         if: ${{ always() }}

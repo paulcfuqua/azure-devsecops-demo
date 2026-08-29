@@ -11,10 +11,11 @@ synthetic cost history — the chart works, but nothing behind it is real.
 | | |
 |---|---|
 | **Layer** | L6 (`docs/runbooks/layers/L06.md`, deploy step 3) |
-| **Host** | Azure Functions, consumption plan, Node v4 programming model |
-| **Trigger** | Blob created in the cost-export container |
+| **Host** | Azure Functions, **Flex Consumption (FC1)**, Node v4 programming model |
+| **Trigger** | Blob created in the cost-export container, **Event Grid-sourced** |
 | **Auth** | Managed identity only — see [Authentication](#authentication) |
-| **Teardown** | Dies with `mls-rg-platform`; gate-free |
+| **Deploys from** | `infra/bicep/platform/main.bicep` (the app, its plan, its identity, its grants) + `.github/workflows/layer-06-platform.yml` (the code and the event subscription) |
+| **Teardown** | Dies with `mls-rg-ops`; gate-free |
 
 ## The pipeline in one paragraph
 
@@ -27,9 +28,9 @@ in OneLake. The `cost_daily` Delta table is defined over that folder by the L5
 loader, so this Function owns the data and the lakehouse owns the table.
 
 ```
-costexports/<rg>/<period>/part_0.csv        (Cost Management writes)
+cost-exports/<rg>/<period>/part_0.csv       (Cost Management writes)
         │
-        ▼  blob trigger, identity-based connection
+        ▼  Event Grid blob-created event -> identity-based read
    parseCsv ──► normaliseExport ──► groupByMonth ──► replacePartition
         │              │                                    │
    RFC 4180      column aliases,                   OneLake ADLS Gen2 DFS
@@ -40,6 +41,38 @@ costexports/<rg>/<period>/part_0.csv        (Cost Management writes)
                                                             ▼
         <workspace>/<lakehouse>.Lakehouse/Files/cost_daily/month=YYYY-MM/cost_daily.csv
 ```
+
+## Hosting
+
+**Flex Consumption (FC1), one plan, ~$0 idle.** The choice is forced rather than
+preferred, by two constraints that intersect on exactly one plan:
+
+1. **No stored credential** (CLAUDE.md hard rule 5, and this app's own
+   `src/config.ts`). Every Functions host needs an `AzureWebJobsStorage`
+   connection. Flex Consumption is the only *dynamic* plan with full managed
+   identity support for it and no Azure Files at all; the legacy Consumption and
+   Elastic Premium plans still require `WEBSITE_AZUREFILESCONNECTIONSTRING`, a
+   shared-key connection string their own guidance says to hide in Key Vault.
+   Hiding a credential is not the same as not having one.
+2. **~$0 while idle**, against the estate's $200 / 30-day credit. Flex
+   Consumption bills execution GB-seconds and nothing at rest unless
+   `alwaysReady` instances are configured — L6's Bicep configures none, on
+   purpose. The only other plan with full managed-identity host storage is
+   Dedicated, whose cheapest usable tier bills ~$13/month around the clock for
+   what is ~30 invocations a month.
+
+**The consequence, stated up front:** Flex Consumption supports *only* the
+Event Grid-based blob trigger, never the polling one. So the trigger declares
+`source: "EventGrid"`, L6's Bicep creates the Event Grid system topic on the
+cost-export storage account, and `layer-06-platform.yml` creates the blob-created
+subscription pointing at this app's `/runtime/webhooks/blobs` endpoint once the
+app exists. That subscription cannot be Bicep: its URL embeds the app's
+`blobs_extension` system key, which does not exist until the site does.
+
+It is a net security win as well as the only option: the polling trigger keeps
+blob receipts and a poison queue *in the account it watches*, which would have
+forced a write grant on the cost-export container. The Event Grid source keeps
+neither, so the grant there stays a pure read.
 
 ## The `cost_daily` shape
 
@@ -129,19 +162,38 @@ None of the following is hypothetical; each has a test.
 leak** (CLAUDE.md hard rule 5).
 
 * The **trigger** uses an identity-based connection: `connection: "CostExports"`
-  resolves `CostExports__blobServiceUri` and
-  `CostExports__credential=managedidentity`. No `AzureWebJobsStorage` connection
-  string points at this container and no SAS exists.
+  resolves `CostExports__blobServiceUri`,
+  `CostExports__credential=managedidentity` and `CostExports__clientId` (the
+  identity is user-assigned). No `AzureWebJobsStorage` connection string points at
+  this container and no SAS exists.
+* The **host's own** storage connection is identity-based too —
+  `AzureWebJobsStorage__accountName` / `__credential` / `__clientId`, never a
+  connection string. That is the single hardest constraint on the hosting plan;
+  see [Hosting](#hosting) below.
 * The **write** uses `DefaultAzureCredential` → the same managed identity, with a
   token scoped to `https://storage.azure.com/.default`, the audience OneLake's
   ADLS Gen2 surface accepts.
 
-RBAC the identity needs (granted by L6's Bicep):
+The identity is **user-assigned** (`<prefix>-cost-ingest-<env>-id`), created by
+`infra/bicep/platform/main.bicep` alongside the Function App. Until F19 closed,
+neither existed — which is why the grant below was the one of F13's seven that
+could not be written: there was no principal to write it against.
 
 | Scope | Role | Why |
 |---|---|---|
-| cost-export storage account | Storage Blob Data Reader | read the export |
-| Fabric workspace `mls-operations` | Contributor | write into OneLake |
+| the `cost-exports` **container** (not the account) | Storage Blob Data Reader | read the export |
+| the Function's **own runtime** storage account | Storage Blob Data Owner + Queue Data Contributor + Table Data Contributor | Microsoft's documented minimum for an identity-based `AzureWebJobsStorage`; a second, empty account exists precisely so these account-wide roles never touch the export data |
+| the Fabric workspace | Contributor | write into OneLake — see below |
+
+**Why Contributor on Fabric and not Viewer.** Fabric workspace roles are Admin,
+Member, Contributor and Viewer, and only the first three carry write access to
+OneLake; Viewer is read-only, so it cannot create `Files/cost_daily/month=…`.
+Contributor is therefore the *least* role that permits the write, and Member and
+Admin both add permissions this app has no use for (Member can share the
+workspace and re-grant access to others; Admin can additionally delete the
+workspace and manage every role assignment in it). The reasoning is restated at
+the grant itself, in `infra/fabric/provision-workspace.ps1` — it is the broadest
+grant any workload identity holds in this estate and is meant to be argued with.
 
 `tests/lakehouse.test.ts` asserts that every outbound request carries a bearer
 token and that no request URL ever contains a SAS signature or account key.
@@ -156,7 +208,7 @@ All placed by L6's platform deployment. None is a secret.
 | `FABRIC_LAKEHOUSE` | yes | — | lakehouse name, no `.Lakehouse` suffix |
 | `CostExports__blobServiceUri` | yes | — | trigger's identity-based connection |
 | `CostExports__credential` | yes | — | `managedidentity` |
-| `COST_EXPORT_CONTAINER` | no | `costexports` | container the trigger watches |
+| `COST_EXPORT_CONTAINER` | no | `cost-exports` | container the trigger watches; L6 sets it explicitly |
 | `LAKEHOUSE_COST_PATH` | no | `cost_daily` | folder under `Files/` |
 | `ONELAKE_ENDPOINT` | no | `https://onelake.dfs.fabric.microsoft.com` | sovereign-cloud override |
 | `COST_CENTER_BUDGETS` | no | `{}` | JSON: `{"Propulsion": 8610, …}` → `budget_usd` |
@@ -231,10 +283,8 @@ Coverage, by the brief's four headings:
 
 ## Known gaps
 
-* **Not a repo-root workspace member.** Like `apps/directline-token`, this app
-  deploys as its own Functions app with its own dependency closure. It still
-  needs adding to the root `package.json` `workspaces` list so `npm test` at the
-  root reaches it — that file is owned elsewhere this round.
+* ~~**Not a repo-root workspace member.**~~ Stale: `apps/cost-ingest` is in the
+  root `package.json` `workspaces` list, so root `npm test` reaches this suite.
 * **Non-USD amounts.** If the export has no USD column and bills in another
   currency, the value lands in `amount_usd` with `currency` set to the real code.
   The column name then overstates what it holds. For this demo's single-currency

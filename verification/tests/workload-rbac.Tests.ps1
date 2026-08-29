@@ -29,9 +29,18 @@
 #   available to infra/bicep/apps/main.bicep to grant, in Bicep or in a
 #   static test, because nothing here is a Bicep resource.
 #
-#   cost-ingest -> Storage Blob Data Reader: blocked on F19 — cost-ingest has
-#   no Function App, and therefore no identity, anywhere in this repo's IaC,
-#   despite .github/workflows/infra-up.yml:31 claiming otherwise.
+#   cost-ingest -> Storage Blob Data Reader: LANDED (F19, 2026-08-28), but at
+#   L6, not here. infra/bicep/platform/main.bicep now provisions the Function
+#   App and its user-assigned identity and grants that identity Storage Blob
+#   Data Reader scoped to the cost-exports CONTAINER. It is asserted - by role
+#   definition GUID and by scope, the same way this file asserts its own -
+#   in verification/tests/cost-ingest.Tests.ps1, which is where the rest of
+#   that leg (the Flex Consumption plan, the Event Grid trigger wiring, the
+#   Fabric write grant) is guarded too. It is not asserted here because
+#   infra/bicep/apps/main.bicep, which this file reads, does not express it and
+#   should not: the principal is an L6 resource.
+#
+#   With it, all seven of F13's documented grants are expressed in code.
 #
 # Two more findings came out of building this layer. Neither is shaped like a
 # missing RBAC grant, so neither belongs to this file's main body — but F20's
@@ -168,9 +177,18 @@ Describe 'workload identities have their grants expressed in code' {
     }
 
     It 'wires the data-api Fabric workspace Viewer grant into provision-workspace.ps1' {
-        $script = Get-Content -LiteralPath $script:ProvisionWorkspacePath -Raw
-        $script | Should -Match 'DataApiPrincipalId'
-        $script | Should -Match "Role\s+Viewer"
+        # The role used to be a hardcoded `-Role Viewer` on a single call, and this
+        # test matched that literal. It is now per-principal, because F19's
+        # cost-ingest identity needs Contributor to write to OneLake while these two
+        # stay read-only - so the assertion moved to the grant TABLE entry, which is
+        # the value actually passed to Add-FabricWorkspaceRoleAssignment. Matching
+        # `-Role Viewer` anywhere in the file would now be satisfied by the wrong
+        # principal's entry, which is exactly the class of weakness F27 recorded.
+        $provision = Get-Content -LiteralPath $script:ProvisionWorkspacePath -Raw
+        $provision | Should -Match 'DataApiPrincipalId'
+        $provision | Should -Match "Label = 'data-api identity';\s*PrincipalId = \`$DataApiPrincipalId;\s*Role = 'Viewer'"
+        # And the role that reaches the API is the table's, not a constant.
+        $provision | Should -Match '-Role \$grant\.Role'
     }
 }
 
