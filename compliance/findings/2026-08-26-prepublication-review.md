@@ -25,7 +25,8 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F51](#f51), all raised and all fixed on 2026-08-29 during the first live tenant bring-up. Before them, **F13** and **F19** were one problem wearing
+[F52](#f52), all raised and all fixed on 2026-08-29 during the first live tenant bring-up
+and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
 2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own Fix text below
@@ -127,6 +128,7 @@ no".
 | [F49](#f49) | The Verifier crashed before evaluating a single criterion, and its own 535-test suite could not see it: **12 audit scripts run `Set-StrictMode -Version Latest`; 13 test harnesses ran `Set-StrictMode -Off`** | high | CONFIRMED (observed in CI, reproduced, mutation-tested) | 3.12.1, 3.12.3 | verify-l1 failures on main, 2026-08-29 |
 | [F50](#f50) | `Policy.ReadWrite.ConditionalAccess` does not imply READ for an application permission, so L3 could author Conditional Access policies it was forbidden to look at - and died on the idempotency read before reaching the write it did have rights for | high | CONFIRMED (403 against the live tenant) | 3.1.2, 3.5.2 | first L3 plan, 2026-08-29 |
 | [F51](#f51) | `up.ps1 -DryRun` could never exit 0: L7 what-ifs against a resource group that only a real L6 creates, so the plan always failed and its exit code carried no information | medium | CONFIRMED (every plan run to date) | - (operability; the plan is the pre-deploy gate) | plan runs, 2026-08-29 |
+| [F52](#f52) | Five defects the first real deployment exposed, including a **fabricated policy GUID three `what-if` runs passed** and a fail-fast gate where a skipped layer launders into a success, so L2 failed and L6 built 13 resources anyway | high | CONFIRMED (observed, run 33272832687) | 3.12.1, 3.12.3 | first real deploy, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -3089,3 +3091,110 @@ direction: [F49](#f49)'s Verifier could not start, [F50](#f50)'s G0 counted in p
 this one could not succeed. None of the three was wrong about the estate - they were wrong
 about *themselves*, and each was invisible for the same reason: **nobody reads a signal that
 never changes.** A red L7 in every plan run is indistinguishable from wallpaper.
+
+
+---
+
+## F52
+
+**Five defects the first real deployment exposed, and a plan that could not have caught any of them**
+
+- **Severity:** high (the landing zone did not apply, and the platform layer built on it anyway)
+- **Confidence:** CONFIRMED - all five observed in run 33272832687 against the live subscription
+- **Controls:** 3.12.1 (assess controls), 3.12.3 (monitor controls on an ongoing basis)
+- **Closed by:** four code fixes and one region decision
+- **Status:** CLOSED
+
+**Found while:** the first real `up.ps1`, immediately after three green `-DryRun` runs. This is
+[F46](#f46) one level out: F46 was the first real *tenant* finding what mocks could not, and
+this is the first real *deployment* finding what a plan could not.
+
+### 1. A policy definition GUID that does not exist (high)
+
+L2 failed two minutes in, inside four levels of nested ARM error, on:
+
+```
+PolicyDefinitionNotFound: The policy definition
+'/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-5fbf209ee700'
+could not be found.
+```
+
+Checking all seven built-in ids the template pins, six resolve and one does not. The real
+`Allowed locations` definition is `e56962a6-4747-49cd-b67b-`**`bf8b01975c4c`**. The pinned
+value shares the first four segments and invents the last - the signature of a plausible
+fabrication rather than a typo or upstream drift, which is what `docs/runbooks/layers/L02.md`
+failure mode 3 had anticipated.
+
+**`az deployment mg what-if` passed it three times.** What-if validates template shape and
+computes a resource delta; it does not resolve policy definition ids. So the estate had a
+green plan for a template that could never deploy. A preflight step now resolves all seven
+before the deployment runs - seconds instead of two minutes, and it names the offender
+instead of burying it in nested ARM JSON.
+
+### 2. A skipped layer launders into a success (high)
+
+Every downstream gate read:
+
+```
+!contains(fromJSON('["failure","cancelled"]'), needs.layer-0N.result)
+```
+
+`skipped` is in neither list. So L2 failed, L3 correctly skipped, **L4 saw `skipped` and
+proceeded**, L4's job reported `success` because its own work had been skipped, and L5 and L6
+took that as a green light. L6 created **thirteen real resources on a landing zone whose
+governance policies had never applied** - no tag deny, no allowed-locations guardrail. The
+demo's entire policy story was absent while the resources it governs were being built.
+
+`skipped` cannot simply be added to the blocklist: it is also how selective replay works
+(`layers: l6` legitimately skips L2-L5). The two cases are distinguished by whether the layer
+was *selected*: `needs.plan.outputs.lN == 'true' && result == 'skipped'` means an upstream
+died. Seven gates corrected.
+
+The sponsor spotted this from the job list before the run finished, which is the part worth
+recording: the failure was legible in the shape of the output and nobody had been reading it.
+
+### 3. Azure SQL cannot provision in East US on this subscription (environmental)
+
+```
+ProvisioningDisabled: Provisioning is restricted in this region.
+```
+
+Not a defect in this repository - a trial-subscription capacity restriction. Querying
+`Microsoft.Sql/locations/{region}/capabilities` per region turns it into a decision rather
+than a guess: **eastus, eastus2, westus2, southcentralus, northeurope, westeurope and uksouth
+are all `Visible`** (restricted); **centralus, westus3, westus and canadacentral are
+`Available`**.
+
+The estate moved to **Central US**: it satisfies Azure SQL, Flex Consumption Functions and
+Container Apps, and it is the closest available region to the **East US** Fabric trial
+capacity, which cannot move - Microsoft provisions it, and `docs/runbooks/g0-bootstrap.md`
+already warned that its region is often not the tenant's.
+
+### 4. An alert that cannot be created before the data it alerts on (medium)
+
+The SQL failed-login rule queried `AzureDiagnostics | ... and succeeded_s == "false"`.
+`AzureDiagnostics` has a dynamic schema: `succeeded_s` does not exist until SQL audit data has
+been ingested, so ARM rejects the rule at create time with *"Failed to resolve column or
+scalar expression named 'succeeded_s'"*. On a freshly rebuilt estate that is always. Now
+`columnifexists("succeeded_s", "")`, which is the schema-tolerant form.
+
+### 5. The Verifier was never handed an input that existed (medium)
+
+L5's audit died at argument binding - *"Missing an argument for parameter
+'FabricCapacityId'"* - on an estate where `FABRIC_CAPACITY_ID` had been set in the `demo`
+environment since 16:05. The verify job's `env:` block simply never passed it. The step's own
+notice text claims the audit is skipped when the variable is absent, which made the omission
+read as configuration rather than a defect.
+
+### What this says about the method
+
+The plan was green. It had been green three times, and each green run increased confidence in
+a template that could not deploy. **A plan is a model of a deployment, and this one did not
+model the two things that actually failed** - whether a referenced definition exists, and what
+happens to layer N+1 when layer N does not run.
+
+The register's arc is now four steps of the same lesson at widening scope: mocks are not the
+cloud ([F46](#f46)), a test is not production configuration ([F49](#f49)), a gate that never
+fails is untested ([F51](#f51)), and now **a plan is not a deployment**. Each was found the
+same way - by running the real thing once - and each had survived every check that came before
+it.

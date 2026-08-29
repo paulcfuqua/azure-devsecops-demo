@@ -216,7 +216,7 @@ jobs:
   layer-03:
     name: L3 Entra
     needs: [preflight, plan, layer-02]
-    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l3 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-02.result) }}
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l3 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-02.result) && !(needs.plan.outputs.l2 == 'true' && needs.layer-02.result == 'skipped') }}
     permissions:
       id-token: write
       contents: read
@@ -229,7 +229,7 @@ jobs:
   layer-04:
     name: L4 Purview labels
     needs: [preflight, plan, layer-03]
-    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l4 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-03.result) }}
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l4 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-03.result) && !(needs.plan.outputs.l3 == 'true' && needs.layer-03.result == 'skipped') }}
     permissions:
       id-token: write
       contents: read
@@ -243,7 +243,7 @@ jobs:
     # Parallel with layer-06 — see the replay graph above.
     name: L5 Fabric + seed
     needs: [preflight, plan, layer-04]
-    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l5 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-04.result) }}
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l5 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-04.result) && !(needs.plan.outputs.l4 == 'true' && needs.layer-04.result == 'skipped') }}
     permissions:
       id-token: write
       contents: read
@@ -257,7 +257,7 @@ jobs:
     # Parallel with layer-05 — see the replay graph above.
     name: L6 platform
     needs: [preflight, plan, layer-04]
-    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l6 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-04.result) }}
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l6 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-04.result) && !(needs.plan.outputs.l4 == 'true' && needs.layer-04.result == 'skipped') }}
     permissions:
       id-token: write
       contents: read
@@ -270,7 +270,7 @@ jobs:
   layer-07:
     name: L7 apps
     needs: [preflight, plan, layer-06]
-    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l7 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-06.result) }}
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l7 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-06.result) && !(needs.plan.outputs.l6 == 'true' && needs.layer-06.result == 'skipped') }}
     permissions:
       id-token: write
       contents: read
@@ -293,7 +293,7 @@ jobs:
     # only the apps), and it must not be blocked by L5/L7 having been deselected.
     name: L8 Copilot Studio
     needs: [preflight, plan, layer-05, layer-07]
-    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l8 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-05.result) && !contains(fromJSON('["failure","cancelled"]'), needs.layer-07.result) }}
+    if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.plan.outputs.l8 == 'true' && !contains(fromJSON('["failure","cancelled"]'), needs.layer-05.result) && !(needs.plan.outputs.l5 == 'true' && needs.layer-05.result == 'skipped') && !contains(fromJSON('["failure","cancelled"]'), needs.layer-07.result) && !(needs.plan.outputs.l7 == 'true' && needs.layer-07.result == 'skipped') }}
     permissions:
       id-token: write
       contents: read

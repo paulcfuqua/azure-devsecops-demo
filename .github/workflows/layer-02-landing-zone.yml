@@ -123,6 +123,34 @@ jobs:
             --subscription "${AZURE_SUBSCRIPTION_ID}" 2>/dev/null \
             || echo "Subscription already placed under ${MG_NAME}."
 
+      - name: Resolve every built-in policy definition the template pins
+        run: |
+          set -euo pipefail
+          # WHAT-IF DOES NOT RESOLVE POLICY DEFINITION IDS. main.bicep pins seven built-in
+          # GUIDs; one of them was fabricated - the right shape, the right first four
+          # segments, a made-up last one - and three green `az deployment mg what-if` runs
+          # passed it before the first real deploy failed two minutes in, inside four
+          # levels of nested ARM error. This resolves each one first, in seconds, and names
+          # the offender (F52).
+          fail=0
+          check() {
+            if ! az policy definition show --name "$1" --query id -o tsv >/dev/null 2>&1; then
+              echo "::error title=Policy definition not found::$1 ($2) does not resolve. main.bicep pins it; Azure does not have it."
+              fail=1
+            fi
+          }
+          check 96670d01-0a4d-4649-9c89-2d3abc0a5025 'Require a tag on resource groups'
+          check 8ce3da23-7156-49e4-b145-24f95f9dcb46 'Require a tag and its value on resource groups'
+          check ea3f2387-9b95-492a-a190-fcdc54f7b070 'Inherit a tag from the resource group if missing'
+          check e56962a6-4747-49cd-b67b-bf8b01975c4c 'Allowed locations'
+          check e765b5de-1225-4ba3-bd56-1ac6695af988 'Allowed locations for resource groups'
+          if ! az policy set-definition show --name 179d1daa-458f-4e47-8086-2a68d0d6c38f --query id -o tsv >/dev/null 2>&1; then
+            echo "::error title=Initiative not found::179d1daa-458f-4e47-8086-2a68d0d6c38f (NIST SP 800-53 Rev. 5) does not resolve."
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "All seven built-in definitions resolve."
+          exit "$fail"
+
       - name: What-if the landing zone
         env:
           MG_NAME: ${{ steps.names.outputs.management-group }}
