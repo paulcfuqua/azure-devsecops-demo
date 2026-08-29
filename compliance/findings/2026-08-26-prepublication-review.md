@@ -121,6 +121,7 @@ no".
 | [F43](#f43) | The G0 gate's own definition asserts two verifications `verify-g0.ps1` does not perform, and `PURVIEW_APP_ID` was documented nowhere | high | CONFIRMED | — (adoptability; blocks nothing until the clock is running, then costs days) | G0 rehearsal, 2026-08-29 |
 | [F44](#f44) | The published leadership brief still carried F28's exact false claim — "continuous integration holds no secret at all" | high | CONFIRMED | 3.1.3 | doc refresh, 2026-08-29 |
 | [F45](#f45) | All fourteen labels `dependabot.yml` declares were never created, so every Dependabot PR carried an error comment — 42 of them | low | CONFIRMED (counted) | — (operability) | raised and closed 2026-08-29 |
+| [F46](#f46) | Nine defects the first real tenant exposed in an hour, including **three wrong results in the G0 gate itself** — two false fails and a false pass | high | CONFIRMED (observed against a live tenant) | 3.12.3, 3.14.1 | tenant bring-up, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2425,6 +2426,21 @@ whether service principals can call Fabric at all — which is exactly what C4's
 switches on. The check's own output has always been honest about this; it prints
 `(SP API toggle is portal-verified)`. The runbook was not.
 
+> **SUPERSEDED THE NEXT DAY by [F46](#f46), and the correction matters more than the
+> finding.** This section went on to say C4 was portal work "with no read path this script
+> can use under your login" and had to be confirmed by eye. That was **wrong**. The Fabric
+> admin API returns every tenant setting to a Fabric or Global administrator at
+> `GET https://api.fabric.microsoft.com/v1/admin/tenantsettings`, and `verify-g0.ps1` now
+> checks C4 there (`FabricSpAccess`). Writing that check immediately found a live defect
+> the prose had concealed: **C4 is not one toggle but five**, and the one L5 actually
+> depends on — `ServicePrincipalAccessGlobalAPIs`, workspace creation — was **off** while
+> the similarly-named `ServicePrincipalAccessPermissionAPIs` was on.
+>
+> The lesson is not that this finding was careless. It is that **"unverifiable" was
+> asserted without trying**, in a document whose whole subject is claims made without
+> checking. The same sentence still stands over C5 (the Power Platform billing plan), and
+> it should now be read as a to-do rather than a fact.
+
 **3. `PURVIEW_APP_ID` was documented in no runbook in this repository (medium).**
 `layer-04-purview.yml` gates its apply job on all three of `PURVIEW_APP_ID`,
 `PURVIEW_ORGANIZATION` and `PURVIEW_CERT_BASE64`; C9b's table named only the certificate
@@ -2568,3 +2584,122 @@ mocked, and asserting a repository's label set requires the live GitHub API. A t
 needs network access to pass is a test that fails for the wrong reason; the prerequisite is
 documented at the point of use instead. The honest position is that this one is guarded by
 a comment, not a gate.
+
+
+## F46
+
+**Nine defects surfaced by the first real tenant, three of them wrong results inside the gate that is supposed to catch wrong results**
+
+- **Severity:** high (one false PASS in the G0 gate; two false FAILs, one of which pointed at an $18/user purchase that was neither needed nor available)
+- **Confidence:** CONFIRMED — every item observed against a live Azure/Entra/Fabric tenant on 2026-08-29, not inferred
+- **Controls:** 3.12.3 (monitor security controls on an ongoing basis), 3.14.1 (flaw remediation)
+- **Closed by:** the tenant bring-up itself
+- **Status:** CLOSED
+
+**Found while:** running G0 for real for the first time. Every one of these had survived
+1,352 Pester assertions, 63 of them written specifically against the bootstrap scripts,
+because all 63 mock the cloud. This is [F22](#f22)'s lesson at the next level up: it is
+not enough to run your code, you have to run it *against the thing it talks to*.
+
+### The three that were wrong inside the gate
+
+**1. `Licenses` — a false FAIL that told you to spend money (high).** The check demanded
+two SKU part numbers: one of `SPE_E5`/`ENTERPRISEPREMIUM`, **plus** a separate
+`EMSPREMIUM`. Microsoft 365 E5 *contains* the Enterprise Mobility + Security capabilities
+as service plans; a tenant on it has no `EMSPREMIUM` SKU and never will. So the gate
+failed a tenant holding every capability the estate uses, and its remediation text pointed
+at a licence costing **$18/user/month**. It is also **no longer purchasable as a trial** —
+the Microsoft 365 admin center now lists EMS E3 and E5 for purchase only — so an adopter
+following the runbook could not have satisfied the old check without paying. Now asserts
+`AAD_PREMIUM_P2`, `RMS_S_PREMIUM` and `MFA_PREMIUM` from whatever SKU provides them.
+
+**2. `FabricCapacity` — a false PASS, which is worse (high).** It accepted any capacity in
+state `Active`. Signing into Fabric for the first time on an M365 E5 tenant provisions
+**"Premium Per User - Reserved", SKU `PP3`**, from the bundled Power BI Pro licence. It is
+Active. It is a capacity. It **cannot host a lakehouse**. The gate reported the tenant
+ready and L5 would have been where you found out. Now requires an F-series SKU and names
+what it found.
+
+The SKU string took **three attempts and a live tenant to establish**, which is the part
+worth keeping: a first guess of `FT1`, asserted from memory; then Microsoft's own trial
+documentation, which says in prose *"an F4 capacity (4 capacity units) or an F64
+capacity"*; then a regex written from that documentation, `^F(T)?\d+$`, which **still
+rejects the real value**. The Power BI admin API returns **`FTL4`**. The documented
+capacity *size* and the API's SKU *string* are different things, and no amount of reading
+would have settled it.
+
+**3. `FabricSpAccess` — a check that did not exist because [F43](#f43) asserted it could
+not (high).** F43, written the previous day, said C4 was portal work "with no read path
+this script can use under your login." Untrue: the Fabric admin API returns every tenant
+setting at `GET /v1/admin/tenantsettings`. Writing the check took twenty minutes and
+immediately caught a live misconfiguration — **C4 is five settings, not one**, the runbook
+named a sixth that no longer exists ("Service principals can use Fabric APIs"), and the
+one L5 depends on (`ServicePrincipalAccessGlobalAPIs`, workspace creation) was **off**
+while the confusingly-similar `ServicePrincipalAccessPermissionAPIs` was on. G0 would have
+gone green; `New-FabricWorkspace` would have failed at L5.
+
+### The six in the path around it
+
+**4. Resource providers unregistered.** A fresh subscription has `Microsoft.App`, `Sql`,
+`KeyVault`, `Storage`, `OperationalInsights`, `Insights`, `Web` and `Fabric` all
+`NotRegistered`, and **nothing in this repository registers them** — no script, no
+workflow, no runbook line. ARM fails partway through a layer with
+`MissingSubscriptionRegistration`.
+
+**5. A personal Microsoft account cannot administer the tenant it creates.** The default
+path from Azure's own signup page gives a "Default Directory" in which you are an external
+identity (`you_hotmail.com#EXT#@tenant.onmicrosoft.com`). That account is **refused by
+`admin.microsoft.com` outright**, so it cannot buy the licences C2 requires. A cloud-only
+admin must be created first.
+
+**6. Global Administrator carries no Azure RBAC.** The new cloud admin could not read a
+resource group, and — the part that costs a round trip — **cannot grant itself Owner**,
+because that needs `Microsoft.Authorization/roleAssignments/write` it does not have. The
+grant has to come from the original personal account. C1 said "confirm Global
+Administrator" as though that settled access; directory roles and Azure RBAC are separate
+axes and the runbook never said so.
+
+**7. Git Bash silently corrupts `--scope`.** MSYS rewrites a leading-slash argument into a
+Windows path, so `--scope /subscriptions/...` arrives as
+`C:/Program Files/Git/subscriptions/...` and the CLI answers **`MissingSubscription`** — an
+error naming your subscription when the fault is your shell. It cost a diagnosis cycle
+even knowing the machine was Windows. The repo's own scripts are PowerShell and immune;
+this bites the copy-paste commands *in the runbook*.
+
+**8. `usageLocation` blocks every licence assignment.** Assigning E5 to the new admin fails
+with *"License assignment cannot be done for user with invalid usage location"*. The repo
+already knew this for the demo personas — `apply-entra.ps1` sets `usageLocation` and the
+runbook calls it "a prerequisite for licensing" — but nobody anticipated that the *admin*
+account needs it too, because the runbook assumed an account that already had one.
+
+**9. The admin-consent URL the bootstrap script prints cannot work.** `01-root-oidc.ps1`
+ended by printing a `/adminconsent` link per app. That endpoint redirects to a reply
+address after approval, and both apps are daemon identities with **no redirect URI** — nor
+should they have one. The result is `AADSTS500113: No reply address is registered for the
+application`, on the very last step of the very first script.
+`az ad app permission admin-consent --id <appId>` grants the same consent through Graph
+with no redirect at all; the script now prints that first and keeps the URL below it with
+the error attached.
+
+### The Fabric trial trap, recorded because it is close to irreversible
+
+Not a repository defect, but it cost an account. The Fabric Account manager offers **"Power
+BI only"** and **"Fabric and Power BI"**. Taking the first gives an individual PPU trial
+and no capacity; **cancelling it burns that user's trial eligibility permanently** — the
+Account manager then shows only "Buy now", and Microsoft's documented workaround (trigger
+a trial by creating a Fabric item) shows "Buy now" too. The recovery is a **second user**,
+because eligibility is per-user while the tenant setting stays enabled. The alternative was
+a paid F2 at ~$0.36/hr under gate G2.
+
+### What this says about the method
+
+Every finding in this register before F46 was found by reading, by CI, or by a gate. These
+were found by **doing the thing once**. The three gate defects are the ones that matter:
+`verify-g0.ps1` is the artifact whose entire job is to refuse a tenant that is not ready,
+and on first contact with a real tenant it got three answers wrong — including one that
+would have waved through a subscription that could not deploy L5.
+
+The register's standing lesson has been *"a gate should be assumed inert until its first
+failure proves otherwise"* ([F39](#f39)). F46 sharpens it: **a gate should be assumed wrong
+until it has run against production reality, however green its mocks are.** Sixty-three
+passing tests against a mocked `az` proved only that the script's control flow works.

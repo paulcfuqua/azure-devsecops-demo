@@ -1,10 +1,23 @@
-# G0 Bootstrap Runbook (human-only)
+# G0 Bootstrap Runbook
 
 Status as verified on 2026-08-22 from this machine; **section A re-verified and completed
 2026-08-26** — the local toolchain is now fully installed and every offline gate replays
-green. Section C is untouched and still entirely ahead of you. Agents never execute these
-steps; where a step is scriptable, agents author the script and you run it. Items marked ⚠
-are **missing/unverified** and block the layer noted.
+green. Items marked ⚠ are **missing/unverified** and block the layer noted.
+
+> **2026-08-29 sponsor amendment — this runbook is no longer human-only.** It used to say
+> "Agents never execute these steps; where a step is scriptable, agents author the script
+> and you run it," and the title said *(human-only)*. **Agent-created and agent-managed
+> infrastructure is now the demo itself**, so agents may run the scripts here under an
+> interactive `az login` session. Two gates are deliberately unchanged, because an agent
+> that can spend your money or delete what it cannot recreate is not a thing anyone wants
+> to buy: **G2** on every spend increase (including `02-fabric-capacity.ps1 -Mode F2` and
+> each resume of a paid capacity) and **G3** on tenant-level deletion. See CLAUDE.md
+> rule 1.
+>
+> **The portal steps are still yours.** C1, C2, C4, C5, C7 and the licence assignments
+> happen in Microsoft's web UIs, which no script here drives. What changed is who runs
+> `01-root-oidc.ps1`, `02-fabric-capacity.ps1` and `03-budget.ps1` — not the existence of
+> the portal work.
 
 > **2026-08-22 amendment (sponsor decision):** tenant activation is deliberately
 > deferred. Phase P (pre-tenant scaffold, see
@@ -76,8 +89,16 @@ Yes — the whole demo window can run on free trials:
 | Need | Free path | Duration | Covers |
 |---|---|---|---|
 | Azure subscription | **Azure free account** ($200 credit). Partner/VS-subscriber credits are **not** available on a personal account (2026-08-26) | **30 days, then the credit is forfeited** — unspent balance does not roll over | All ARM resources. At <$5/mo idle and ~$1/hr active, $200 is comfortable *for 30 days* — it is not a standing budget. This is the master clock |
-| Identity licensing | **EMS E5 trial** | 90 days, 25 seats | Entra P1+P2 (CA, sign-in risk), AIP P2 |
-| Purview/compliance portal | **Microsoft 365 E5 trial** | 30 days, 25 seats | Exchange-backed tenant → Security & Compliance PowerShell + label management work reliably; also includes Entra P2 + AIP P2 |
+| Identity licensing **and** Purview/compliance | **Microsoft 365 E5 trial** — one trial, not two | 30 days, 25 seats | Everything the estate uses: `AAD_PREMIUM_P2` (Entra P2 — CA, sign-in risk), `RMS_S_PREMIUM`/`RMS_S_PREMIUM2` (AIP P1/P2, label management), `MFA_PREMIUM`, plus the Exchange-backed tenant that makes Security & Compliance PowerShell work |
+
+> **There is no EMS E5 trial any more (verified 2026-08-29, finding F46).** These were two
+> rows until a real tenant proved otherwise: the Microsoft 365 admin center now offers
+> Enterprise Mobility + Security **E3 and E5 for purchase only**, at $12 and $18 per user
+> per month. Do not buy either. **Microsoft 365 E5 is a strict superset** for this
+> estate — it carries the EMS capabilities as service plans inside `SPE_E5`, so a tenant
+> on it has no separate `EMSPREMIUM` SKU and needs none. `verify-g0.ps1` used to demand
+> that SKU and would have failed a perfectly good tenant while pointing at a $18/user
+> purchase; it now asserts the service plans instead.
 | Fabric capacity | **Fabric 60-day free trial capacity** (enable "Users can try Microsoft Fabric" tenant setting, start trial as your admin user) | 60 days | F4 or F64 CU, 1 TB OneLake. Replaces paying for F2 during bring-up. Capacity ID is a config variable — moving to paid F2 later is one variable + G2. **Does not cover the L8 Fabric data agent** — see the caveat below |
 | Copilot Studio (showpiece #1) | **Pay-as-you-go meter** on this Azure subscription + the *Copilot Studio authors* role for the maker — no licence purchase | indefinite | Authoring and running the agent. $0.01/credit, nothing when idle. See "Copilot Studio licensing" below |
 | Everything GitHub | Public repo | indefinite | Actions minutes, CodeQL, Dependabot, secret scanning, **and Copilot Autofix (showpiece #3)** all free — [Autofix is GA and free on all public repositories](https://github.blog/changelog/2024-09-17-now-available-for-free-on-all-public-repositories-copilot-autofix-for-codeql-code-scanning-alerts/) and needs no Copilot subscription |
@@ -250,13 +271,92 @@ it is still about sign-in risk and auto-labeling, nothing else.
    Confirm Global Administrator on the tenant. After toolchain install, run `az login`
    when prompted by the bootstrap script.
 
+   **⚠ If you sign up with a personal Microsoft account — the default path from that
+   page — you have three more steps before anything else works (finding F46).** Signing
+   up with an `@outlook.com`/`@hotmail.com`/`@gmail.com` account gives you a "Default
+   Directory" tenant in which *you are an external identity*: your UPN is
+   `you_hotmail.com#EXT#@<tenant>.onmicrosoft.com`. That account **cannot sign in to
+   `admin.microsoft.com` at all** — it is refused with "You can't sign in here with a
+   personal account" — so you cannot buy the licences item 2 needs.
+
+   1. **Create a cloud-only admin** in the Entra portal:
+      `admin@<tenant>.onmicrosoft.com`. Use the portal, not `az ad user create`, so the
+      password does not land in your shell history. Assign it **Global Administrator**.
+   2. **Grant it Owner on the subscription — from the original account.** Global
+      Administrator is a *directory* role and carries **no Azure RBAC**; the new admin
+      cannot grant itself anything. Sign in as the personal account (which owns the
+      subscription) and run:
+
+      ```
+      az role assignment create --assignee-object-id <new-admin-object-id> \
+        --assignee-principal-type User --role Owner \
+        --scope /subscriptions/<sub-id>
+      ```
+   3. **Set its `usageLocation` before assigning any licence**, or the assignment fails
+      with *"License assignment cannot be done for user with invalid usage location"*:
+
+      ```
+      az rest --method PATCH --url "https://graph.microsoft.com/v1.0/users/<upn>" \
+        --headers "Content-Type=application/json" --body '{"usageLocation":"US"}'
+      ```
+
+   Then `az logout && az login` as the new admin and use it for everything: the CLI, the
+   M365 admin center, Fabric and Power Platform. Splitting identities across those breaks
+   `verify-g0.ps1` check 7, which calls the Fabric API as whoever `az` is logged in as.
+
+   **⚠ Register the resource providers.** A fresh subscription has them unregistered and
+   nothing in this repo does it for you; ARM deployments then fail with
+   `MissingSubscriptionRegistration` partway through a layer:
+
+   ```
+   for p in Microsoft.App Microsoft.Web Microsoft.Sql Microsoft.KeyVault \
+            Microsoft.Storage Microsoft.OperationalInsights Microsoft.Insights \
+            Microsoft.Fabric; do az provider register -n $p; done
+   ```
+
+   It returns immediately and registers in the background; do the portal steps while it
+   runs.
+
+   **⚠ Do not run scoped `az` commands from Git Bash on Windows.** MSYS rewrites a
+   leading-slash argument into a Windows path, so `--scope /subscriptions/...` arrives as
+   `C:/Program Files/Git/subscriptions/...` and the CLI answers `MissingSubscription` — an
+   error that points at your subscription rather than your shell. Use `pwsh`, or prefix
+   with `MSYS_NO_PATHCONV=1`, or double the leading slash. The repo's own scripts are
+   PowerShell and immune; this bites the copy-paste commands in this runbook.
+
    **Clicking Start begins the 30-day clock.** Do not click it until you are ready to
    work — the credit expires on the calendar, not on usage, so a week of hesitation is a
    week of budget gone. Record the signup date; every date in § B's schedule counts from it.
-2. ⚠ **Activate all trials on day 0**, per section B: M365 E5 + EMS E5 (M365 admin center
-   → Billing → Purchase services → free trials), assign to your admin user; Fabric trial
-   from fabric.microsoft.com. Same day as item 1 — under the 30-day master clock every
-   trial either matches the window or outlives it, so staggering buys nothing.
+2. ⚠ **Activate both trials on day 0.** Same day as item 1 — under the 30-day master
+   clock every trial either matches the window or outlives it, so staggering buys nothing.
+
+   1. **Microsoft 365 E5** (30 days, 25 seats) from the M365 admin center →
+      **Marketplace/Billing → Purchase services**. Search `Microsoft 365 E5` and take the
+      **trial**, not the Buy listing. Beware two look-alikes: **Office 365 E5** is a
+      different, purchase-only product, and **"Office 365 E5 without Audio Conferencing"**
+      is a trial whose SKU (`ENTERPRISEPREMIUM_NOPSTNCONF`) is *not* what you want.
+      **Assign it to your admin user** — check 9 asserts ≥1 consumed unit, so an
+      unassigned trial reads as no trial. **Do not buy EMS E5**; see § B.
+   2. **Fabric** (60 days) from `fabric.microsoft.com` → account manager → **Start
+      trial** → **"Fabric and Power BI"**, *not* "Power BI only".
+
+   **⚠ The Power BI trial is not the Fabric trial, and picking wrong is close to
+   irreversible (finding F46).** "Power BI only" gives an individual PPU trial and **no
+   Fabric capacity**; what appears is `Premium Per User - Reserved`, SKU `PP3`, which is
+   Active, looks like a capacity, and cannot host a lakehouse. Worse, **cancelling that
+   trial burns the account's trial eligibility** — the Account manager then offers only
+   "Buy now" and Microsoft's documented workaround (start a trial by trying to create a
+   Fabric item) offers "Buy now" too. The recovery is a **second user**: eligibility is
+   per-user, so create `fabric@<tenant>.onmicrosoft.com`, set `usageLocation`, assign it
+   one of your 24 spare E5 seats, and start the trial as that account. It becomes the
+   trial's Capacity administrator, which is fine — capacity administrators are added
+   afterwards.
+
+   **The trial capacity's SKU string is `FTL4`**, not `F4` and not `FT1`, whatever the
+   Microsoft documentation's prose says about "an F4 capacity". Its **region is often not
+   your home region** — Microsoft's doc warns it may land in East US when your tenant is
+   Central US, and moving Fabric items between regions later means deleting them first.
+   Decide the estate's `AZURE_LOCATION` to match the capacity **before L1**.
 3. ⚠ **Run `scripts/bootstrap/01-root-oidc.ps1`** (agent-authored in Phase P). Under
    your login it: creates app registration `mls-github-deployer` with a federated
    credential for this repo's `demo` environment only (deliberately no branch-ref
@@ -270,9 +370,32 @@ it is still about sign-in risk and auto-labeling, nothing else.
    `Policy.Read.All` is what lets the Verifier read Conditional Access policy state
    read-only; V3.3's enforced-MFA audit cannot see the policy without it. This line used
    to name only `Directory.Read.All` — the script has always granted both (finding F43).
-4. ⚠ **Fabric SP API toggle:** in the Fabric admin portal enable **"Service principals
-   can use Fabric APIs"** and add `mls-github-deployer` as admin on the trial capacity
-   (~2 min, portal-only).
+4. ⚠ **Fabric service-principal settings.** This step used to read *"enable «Service
+   principals can use Fabric APIs»"*. **No setting has that name.** It is five settings
+   under **Admin portal → Tenant settings → Developer settings**, and getting the wrong
+   one leaves G0 green and L5 broken (finding F46). Sign in as the account holding
+   **Fabric administrator** or Global Administrator — a Capacity administrator sees a
+   truncated Admin portal with no Tenant settings at all.
+
+   | Setting | Set to | Why |
+   |---|---|---|
+   | **Service principals can create workspaces, connections, and deployment pipelines** | **ON** | `infra/fabric/provision-workspace.ps1` calls `New-FabricWorkspace`. **This is the one L5 needs, and it is off by default.** |
+   | **Service principals can call Fabric public APIs** | **ON** | every other Fabric REST call in L5/L8 and the V5.x audits |
+   | Service principals can access read-only admin APIs | leave OFF | nothing here calls a Fabric admin API — verified: no `v1/admin` or `myorg/admin` under `infra/fabric` or `verification` |
+   | Service principals can access admin APIs used for updates | leave OFF | as above |
+   | Allow service principals to create and use profiles | leave OFF | unused |
+
+   The confusing pair is the first two: "call Fabric public APIs" is the one whose name
+   most resembles the old label, and it is **not** the one that permits workspace
+   creation. On the tenant this was written against the second was already on and the
+   first was off.
+
+   `verify-g0.ps1` check 8 (`FabricSpAccess`) now asserts all five, so you do not have to
+   trust your own clicking — but the clicking is still yours, and § D no longer claims
+   this step is unverifiable.
+
+   **Adding `mls-github-deployer` as capacity administrator happens after C3**, not here:
+   the app registration does not exist until `01-root-oidc.ps1` has run.
 5. ⚠ **Power Platform environment + Copilot Studio pay-as-you-go meter** (blocks L8).
    Three sub-steps, all portal, ~15 minutes total:
    1. In the [Power Platform admin center](https://admin.powerplatform.microsoft.com/),
@@ -699,7 +822,7 @@ gh secret set MLS_VERIFIER_CERT_BASE64 --env verify < <(base64 -w0 mls-verifier.
 ## D. What "G0 complete" means
 
 The Orchestrator re-runs `scripts/bootstrap/verify-g0.ps1` (read-only). It runs
-**exactly ten checks**, and this list is now enumerated rather than described, because the
+**exactly eleven checks**, and this list is now enumerated rather than described, because the
 prose that stood here claimed two verifications the script does not perform (finding F43):
 
 | # | Check | Asserts |
@@ -710,35 +833,37 @@ prose that stood here claimed two verifications the script does not perform (fin
 | 4 | `OwnerRole` | its service principal holds Owner at subscription scope |
 | 5 | `GraphConsent` | all five application permissions are consented |
 | 6 | `VerifierApp` | `mls-verifier` exists with a federated subject **distinct** from the deployer's (F6/F7) |
-| 7 | `FabricCapacity` | a capacity is visible to **you** through the Fabric API |
-| 8 | `Licenses` | M365 E5 and EMS E5 present tenant-wide with ≥1 unit consumed |
-| 9 | `Budget` | the budget exists at the expected amount with the expected thresholds |
-| 10 | `EntraDiagnostics` | *informational only* — tenant diagnostics route SignInLogs + AuditLogs to Log Analytics (F9). Never affects the exit code |
+| 7 | `FabricCapacity` | an **F-series** capacity is visible through the Fabric API. The SKU is checked, not just the state (F46) |
+| 8 | `FabricSpAccess` | **C4** — service principals may create workspaces and call Fabric public APIs; the three admin-API settings are off (F46) |
+| 9 | `Licenses` | the **service plans** the layers consume — `AAD_PREMIUM_P2`, `RMS_S_PREMIUM`, `MFA_PREMIUM` — from whatever SKU provides them, with ≥1 unit consumed (F46) |
+| 10 | `Budget` | the budget exists at the expected amount with the expected thresholds |
+| 11 | `EntraDiagnostics` | *informational only* — tenant diagnostics route SignInLogs + AuditLogs to Log Analytics (F9). Never affects the exit code |
 
-**TWO STEPS ARE NOT VERIFIED BY ANYTHING, and a green run does not cover them.** Both are
-portal work with no read path this script can use under your login, so you must confirm
-them by eye:
+**C4 IS NOW CHECKED. C5 STILL IS NOT.** Yesterday this section said both were
+unverifiable — *"portal work with no read path this script can use under your login"* —
+and a real tenant disproved half of that within a day (finding F46).
 
-* **C4, the Fabric "Service principals can use Fabric APIs" toggle.** Check 7 calls the
-  Fabric API as *you*, the logged-in human — not as `mls-github-deployer`. It proves a
-  capacity exists and that **your** account can see it. It says nothing about whether the
-  deployer SP can call Fabric at all, which is precisely what C4 switches on. The check's
-  own output admits this — it prints `(SP API toggle is portal-verified)`. Skip C4 and
-  this check still passes; **L5 is where you find out.**
-* **C5, the Power Platform environment and Copilot Studio pay-as-you-go billing plan.**
-  There is no check for it. The text here used to assert one, which was false: `grep -i
-  powerplatform scripts/bootstrap/verify-g0.ps1` returns nothing. Skip C5 and G0 reports
-  green; **L8 is where you find out.**
+* **C4 is check 8.** The Fabric admin API returns every tenant setting to a Fabric or
+  Global administrator at `GET https://api.fabric.microsoft.com/v1/admin/tenantsettings`.
+  Writing that check found a live defect the prose had hidden: **C4 is not one toggle.**
+  The runbook called it *"Service principals can use Fabric APIs"*, a setting that no
+  longer exists by that name. It is five, and the two that matter are easy to confuse —
+  on the tenant this was written against, `ServicePrincipalAccessPermissionAPIs` ("call
+  Fabric public APIs") was **on** while `ServicePrincipalAccessGlobalAPIs` ("create
+  workspaces, connections, and deployment pipelines") was **off**. L5 calls
+  `New-FabricWorkspace`, which the *off* one governs. G0 would have gone green and L5
+  would have failed.
+* **C5, the Power Platform environment and Copilot Studio pay-as-you-go billing plan, is
+  still unchecked.** `grep -i powerplatform scripts/bootstrap/verify-g0.ps1` returns
+  nothing. Skip C5 and G0 reports green; **L8 is where you find out.**
 
-An eleventh check against the Power Platform admin API
-(`api.bap.microsoft.com/.../scopes/admin/environments`) would close the second gap and is
-deliberately **not** shipped, because it cannot be exercised before a tenant exists and
-this repository has now been bitten four times by code that looked correct because nothing
-ever ran it (findings F22, F33, F39 and F43's own TypeScript-7 note). An untested check
-that always fails is worse than an honest gap.
+A twelfth check against the Power Platform admin API
+(`api.bap.microsoft.com/.../scopes/admin/environments`) would close that last gap. It is
+not shipped yet for one reason only: nobody has exercised it against a tenant. That was
+also the stated reason C4 could not be checked, and C4 turned out to be checkable the
+moment someone tried — so treat this as a to-do, not a law.
 
-Only when the ten checks are green **and** C4 and C5 are confirmed by eye does Layer 1
-deploy.
+Only when the eleven checks are green **and** C5 is confirmed by eye does Layer 1 deploy.
 
 Items C6, C7, C10 and 13 are **not** G0-complete blockers for Layer 1 — C7 cannot even be
 done
