@@ -6,7 +6,8 @@
 
 BeforeAll {
     Import-Module (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'MlsAudit.psm1') -Force
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the audit scripts set -Version Latest and CI runs them
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-control-mapping-tests-$([guid]::NewGuid().ToString('n'))"
     $script:RepoRoot = Split-Path -Path $PSScriptRoot -Parent | Split-Path -Parent

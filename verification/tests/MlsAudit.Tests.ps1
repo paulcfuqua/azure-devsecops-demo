@@ -3,7 +3,8 @@
 
 BeforeAll {
     Import-Module (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'MlsAudit.psm1') -Force
-    Set-StrictMode -Off
+    # No Set-StrictMode -Off: the audit scripts set -Version Latest and CI runs them
+    # that way, so the harness must not relax the language mode it is testing (F49).
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-audit-tests-$([guid]::NewGuid().ToString('n'))"
 
@@ -637,5 +638,50 @@ Describe 'Get-MlsCollection distinguishes an empty collection from a one-item on
         $empty = @(Get-MlsCollection -Response ([pscustomobject]@{ value = @() }))
         $single = @(Get-MlsCollection -Response ([pscustomobject]@{ value = @([pscustomobject]@{ id = 'x' }) }))
         $empty.Count | Should -Not -Be $single.Count
+    }
+}
+
+Describe 'collection helpers are re-wrapped at every call site' {
+    BeforeAll {
+        $script:AuditSource = @(
+            Get-ChildItem -Path (Join-Path $PSScriptRoot '..') -Filter '*.ps1' -File
+            Get-ChildItem -Path (Join-Path $PSScriptRoot '..') -Filter '*.psm1' -File
+        )
+    }
+
+    # These helpers return a PIPELINE. `return @()` emits nothing, so an unwrapped
+    # caller is handed nothing at all; `return @($one)` unrolls to the bare scalar.
+    # Both throw on .Count and on [0] under Set-StrictMode -Version Latest, which
+    # all twelve audit scripts set. Only two-or-more elements ever worked.
+    #
+    # The wrap cannot be pushed down into the helper: returning the array via the
+    # comma operator makes @(helper) a nested one-element array instead, breaking
+    # every caller that DOES wrap. @() at the call site is the only form that is
+    # correct for zero, one and many, and it is idempotent. So this is a call-site
+    # invariant, and this test is what keeps it one.
+    #
+    # layer-01-audit died in CI this way, before evaluating a single criterion,
+    # while its own tests stayed green because the harness set Set-StrictMode -Off
+    # and every assertion re-wrapped the call itself (F49).
+
+    It 'no audit assigns <Helper> without @()' -ForEach @(
+        @{ Helper = 'Get-MlsCollection' }
+        @{ Helper = 'Get-AllowedGuid' }
+        @{ Helper = 'Get-ManifestUserPrincipalName' }
+        @{ Helper = 'Get-MlsLabel' }
+    ) {
+        #  matters: without it 'Get-MlsLabel' also matches Get-MlsLabelPolicy, which
+        # returns a single object and is null-checked by its caller - wrapping that in
+        # @() would break the check this guard is supposed to protect.
+        $pattern = '\$\w+\s*=\s*' + [regex]::Escape($Helper) + '\b'
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in $script:AuditSource) {
+            $number = 0
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                $number++
+                if ($line -match $pattern) { $offender.Add("$($file.Name):$number") }
+            }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty -Because 'the helper unrolls to nothing when empty and to a bare scalar when it holds one item; the call site must wrap it in @()'
     }
 }

@@ -86,7 +86,7 @@ function Test-OidcRoundTrip {
     $run = $runs[0]
     $runId = Get-MlsProperty -InputObject $run -Name 'databaseId'
     $conclusion = Get-MlsProperty -InputObject $run -Name 'conclusion'
-    $jobs = Get-MlsCollection -Response (Invoke-MlsGh -Argument @('api', "repos/$Repository/actions/runs/$runId/jobs"))
+    $jobs = @(Get-MlsCollection -Response (Invoke-MlsGh -Argument @('api', "repos/$Repository/actions/runs/$runId/jobs")))
     $oidcJob = @($jobs | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'name') -eq $OidcJobName })
     $jobConclusion = if ($oidcJob.Count -ge 1) { Get-MlsProperty -InputObject $oidcJob[0] -Name 'conclusion' } else { '(job absent)' }
     $observed = "run $runId conclusion=$conclusion; job $OidcJobName conclusion=$jobConclusion"
@@ -160,13 +160,13 @@ function Test-FederatedCredential {
         [Parameter(Mandatory)][string]$Repository,
         [Parameter(Mandatory)][string]$EnvironmentName
     )
-    $applications = Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$DeployerAppName'")
-    if (@($applications).Count -eq 0) {
+    $applications = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$DeployerAppName'"))
+    if ($applications.Count -eq 0) {
         return New-MlsCheckResult -Passed $false -Observed "application '$DeployerAppName' not found in the directory" `
             -Detail 'The federated credential lives on the deployer app registration created by scripts/bootstrap/01-root-oidc.ps1 (G0).'
     }
     $applicationId = Get-MlsProperty -InputObject $applications[0] -Name 'id'
-    $credentials = Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/applications/$applicationId/federatedIdentityCredentials")
+    $credentials = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/applications/$applicationId/federatedIdentityCredentials"))
     $expectedSubject = "repo:${Repository}:environment:$EnvironmentName"
     $expectedIssuer = 'https://token.actions.githubusercontent.com'
     $observedPairs = @($credentials | ForEach-Object {
@@ -215,7 +215,7 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Identifiers for the V1.3 specific sweep' `
         -Value "$($secretValue.Count) of 3 available (values never logged)" `
         -Status $(if ($secretValue.Count -eq 3) { 'OK' } else { 'PARTIAL' })
-    $allowedGuid = Get-AllowedGuid -RepoRoot $root -AllowlistPath $GuidAllowlistPath
+    $allowedGuid = @(Get-AllowedGuid -RepoRoot $root -AllowlistPath $GuidAllowlistPath)
     Add-MlsPreflight -Context $context -Name 'GUID allowlist entries' -Value "$($allowedGuid.Count)"
 
     Invoke-MlsCriterion -Context $context -Id 'V1.1' -Control @('3.5.2') `

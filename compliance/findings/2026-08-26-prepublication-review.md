@@ -24,8 +24,8 @@ describes what closing the finding required, which is historical context, not a 
 claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
-document is open.** The most recent to close were [F46](#f46), [F47](#f47) and
-[F48](#f48), all raised and all fixed on 2026-08-29 during the first live tenant bring-up. Before them, **F13** and **F19** were one problem wearing
+document is open.** The most recent to close were [F46](#f46) through
+[F49](#f49), all raised and all fixed on 2026-08-29 during the first live tenant bring-up. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
 2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own Fix text below
@@ -124,6 +124,7 @@ no".
 | [F46](#f46) | Nine defects the first real tenant exposed in an hour, including **three wrong results in the G0 gate itself** — two false fails and a false pass | high | CONFIRMED (observed against a live tenant) | 3.12.3, 3.14.1 | tenant bring-up, 2026-08-29 |
 | [F47](#f47) | L2 deployed at the **tenant root** management group, so the first live plan run failed and the documented remedy was Global Administrator elevation plus a standing root-scope Owner service principal - neither of which L2 ever needed | high | CONFIRMED (observed, run 33264310126) | 3.1.2, 3.1.5 | first live plan run, 2026-08-29 |
 | [F48](#f48) | `01-root-oidc.ps1` built the OIDC subject claim by hand, but GitHub now presents an **immutable-identifier** subject - so the first real federated login failed and every workflow was locked out of Azure | high | CONFIRMED (AADSTS700213, then green) | 3.5.1, 3.5.2 | first live OIDC login, 2026-08-29 |
+| [F49](#f49) | The Verifier crashed before evaluating a single criterion, and its own 535-test suite could not see it: **12 audit scripts run `Set-StrictMode -Version Latest`; 13 test harnesses ran `Set-StrictMode -Off`** | high | CONFIRMED (observed in CI, reproduced, mutation-tested) | 3.12.1, 3.12.3 | verify-l1 failures on main, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -2852,3 +2853,101 @@ otherwise. The authoritative value is the one the API returns. Ask, do not deriv
 The failure mode is also worth noting for anyone debugging this: `AADSTS700213` names the
 subject that was **presented** but not the ones that are **registered**, so the error tells
 you half of a comparison. The fix is only obvious once you print the other half.
+
+
+---
+
+## F49
+
+**The Verifier's test suite ran in a different language mode than the Verifier**
+
+- **Severity:** high (the estate's sign-off gate died before evaluating a single criterion, and 535 passing tests reported nothing wrong)
+- **Confidence:** CONFIRMED - observed twice in CI on `main`, reproduced locally, and the new guard mutation-tested
+- **Controls:** 3.12.1 (periodically assess security controls), 3.12.3 (monitor security controls on an ongoing basis)
+- **Closed by:** call-site wraps, the removal of every `Set-StrictMode -Off`, and a static call-site guard
+- **Status:** CLOSED
+
+**Found while:** looking at repository state after [F47](#f47) merged. Two `verify-l1` runs had
+failed on `main` and nobody had opened them. The uploaded report was one line:
+
+```
+layer-01-audit could not start: The property 'Count' cannot be found on this object.
+```
+
+### The defect
+
+`Get-AllowedGuid` ends `return @($allowed | Sort-Object -Unique)`. PowerShell unrolls an
+array on return, and it does so in **two** ways that matter:
+
+- zero elements emit **no output at all**, so the caller is assigned `$null`;
+- one element unrolls to the **bare scalar**, so the caller is assigned a `String`.
+
+Only two-or-more ever produced a countable collection. The preflight then read
+`$allowedGuid.Count` under the `Set-StrictMode -Version Latest` the script sets at line 42,
+where both shapes are a *terminating* error. Neither allowlist source exists on a fresh
+estate - `guid-allowlist.txt` is not committed, and `reports/label-guids.json` is written by
+L4 - so the audit crashed on the zero case, every time, on any estate that had not yet run
+L4.
+
+The same return shape sits in `Get-MlsCollection`, the helper **every** layer uses, and in
+`Get-ManifestUserPrincipalName`. Thirteen call sites assigned one of them without
+re-wrapping.
+
+### Why 535 passing tests said nothing
+
+Two independent reasons, and the second is the one worth keeping.
+
+**1. The harnesses disabled the language mode being tested.** All twelve audit scripts set
+`Set-StrictMode -Version Latest`. Thirteen test files set `Set-StrictMode -Off` - fourteen
+occurrences - immediately after dot-sourcing the script that had just turned it on. Present
+since the toolkit's first commit (`d65f4f9`), so it was never a fix for anything; it was
+just how the file was written, thirteen times. The existing L1 tests were **already
+executing the crashing line**. Deleting the `-Off` made ten of eleven fail instantly, at
+`layer-01-audit.ps1:219`, with the CI error verbatim.
+
+Someone had already half-noticed. A comment in `layer-03-audit.Tests.ps1` reads *"This whole
+file runs Set-StrictMode -Off, so it would not otherwise notice that the audit itself runs
+under -Version Latest... These two put strict mode back on for the call."* The mismatch was
+understood well enough to be worked around for two tests, and never fixed for the suite.
+
+**2. `Get-MlsCollection`'s tests supplied their own answer.** Every assertion re-wrapped the
+call: `@(Get-MlsCollection -Response $Response).Count | Should -Be 0`. Re-wrapping `$null`
+in `@()` produces exactly the empty array the assertion wanted, so the tests passed on the
+broken function - while the nine production call sites, which do not re-wrap, got `$null`.
+The wrapper *was* the test's answer. Same shape as [F42](#f42)'s hollow ReDoS test, where
+`header.trim()` stripped the hostile input before the regex ever saw it.
+
+### The fix that did not work, and why it is worth recording
+
+The obvious repair is to push the wrap down into the helper: `return ,@(...)`, so the array
+survives the return. It fixes every unwrapped caller and **breaks every wrapped one** -
+`@(helper)` then yields a nested one-element array. Nine existing tests failed the moment it
+was applied. There is no return shape that is correct for both caller styles, because `@()`
+is idempotent for a real array but not for a returned one. `@()` **at the call site** is the
+only form correct for zero, one and many. So this is a call-site invariant, not a helper
+contract, and it needs a guard rather than a fix.
+
+**Fix:** thirteen call sites wrapped (`layer-01-audit.ps1`, `layer-03-audit.ps1`); all
+fourteen `Set-StrictMode -Off` removed, so the suite now runs in the mode CI runs in; a new
+static guard in `MlsAudit.Tests.ps1` scans every audit source for an unwrapped assignment of
+the three helpers and names the offending `file:line`. The guard was mutation-tested by
+unwrapping `layer-03-audit.ps1:319` - it failed, naming that exact line, and passed again on
+restore. Turning strict mode on also exposed two harness defects of its own: `$_.breakGlass`
+read directly off manifest groups when only one of five carries the key (the production
+audit uses `Get-MlsProperty`, and the test's own comment claimed it found the group "the
+same way"), and `$script:DomainVariable` read in an `AfterAll` that had silently restored
+nothing for months. 535 verification tests now pass under production strict mode.
+
+### What this says about the method
+
+[F46](#f46) established that a gate should be assumed wrong until it has run against
+production reality. F49 adds the cheaper half of that: **a test that does not run in
+production's configuration is not testing production**, and the difference can be one line
+per file that nobody reads twice. The suite was not weak - 535 assertions, mutation-tested
+guards elsewhere, hostile-input cases. It was thorough inside a language mode the Verifier
+never runs in.
+
+The compounding is the real lesson. The mode mismatch hid the class of bug; the re-wrapping
+habit hid the specific one; and the audit that would have reported both is the audit that
+crashed. A verifier that cannot start is indistinguishable, in a CI summary, from a verifier
+that has nothing to say - and this one had failed twice on `main` before anyone opened it.
