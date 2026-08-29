@@ -74,8 +74,36 @@ $script:GraphConsentedRoles = [ordered]@{
     'Policy.ReadWrite.ConditionalAccess' = '01c0a623-fc9b-48e9-b794-0756f8e8f067'
     'Directory.Read.All'                 = '7ab1d382-f21e-4acd-a863-ba3e13f7da61'
 }
-$script:M365E5Skus = @('SPE_E5', 'ENTERPRISEPREMIUM') # Microsoft 365 E5 / Office 365 E5 trial
-$script:EmsE5Sku = 'EMSPREMIUM'
+# CAPABILITIES, NOT PURCHASES (finding F46).
+#
+# This used to demand two SKU part numbers -- one of SPE_E5/ENTERPRISEPREMIUM plus
+# a separate EMSPREMIUM -- and it was wrong in a way that only a real tenant could
+# reveal. Microsoft 365 E5 (SPE_E5) *contains* the Enterprise Mobility + Security
+# capabilities as SERVICE PLANS; there is no separate EMSPREMIUM SKU in such a
+# tenant and there never will be. The check therefore failed on a tenant holding
+# every capability this estate needs, and told the operator to go buy an $18/user
+# licence that would have added nothing.
+#
+# It is also no longer purchasable as a trial: as of 2026-08-29 the Microsoft 365
+# admin center offers EMS E3 and E5 for purchase only, while Microsoft 365 E5 has
+# a 25-seat trial. An adopter following the old runbook could not have satisfied
+# the old check without spending money.
+#
+# So assert what the layers actually consume, from whatever SKU provides it:
+#
+#   AAD_PREMIUM_P2  Entra ID P2 -- sign-in risk and Identity Protection feed the
+#                   control-tower Sec tab; risk-based Conditional Access (L3)
+#   RMS_S_PREMIUM   AIP P1      -- create/manage sensitivity labels (L4)
+#   MFA_PREMIUM     the enforced dashboard MFA policy V3.3 audits
+#
+# AAD_PREMIUM (P1) is implied by P2 and not listed separately. RMS_S_PREMIUM2
+# (AIP P2, auto-labeling) is deliberately NOT required: the runbook documents
+# auto-labeling as optional.
+$script:RequiredServicePlans = [ordered]@{
+    'AAD_PREMIUM_P2' = 'Entra ID P2 (sign-in risk, Identity Protection, risk-based CA)'
+    'RMS_S_PREMIUM'  = 'AIP P1 (sensitivity label management, L4)'
+    'MFA_PREMIUM'    = 'MFA enforcement (V3.3 dashboard policy)'
+}
 
 # --- plumbing (read-only: no Invoke-AzMutation on purpose) -----------------------------
 
@@ -274,10 +302,50 @@ function Test-FabricCapacity {
     }
     $capacities = @()
     if ($response.PSObject.Properties.Name -contains 'value') { $capacities = @($response.value) }
+    # SKU, NOT JUST STATE (finding F46). This used to accept any capacity in state
+    # Active, which is a FALSE PASS: a tenant with a Power BI licence and no Fabric
+    # capacity at all still reports one. Signing into Fabric for the first time
+    # provisions "Premium Per User - Reserved", sku PP3 -- an artifact of the Power
+    # BI Pro licence inside Microsoft 365 E5, not a Fabric capacity. It cannot host
+    # a lakehouse, so L5 fails on a tenant this check called ready.
+    #
+    # Fabric-capable SKUs are the F series: F2, F4, F8 ... F2048, plus the trial.
+    #
+    # THE TRIAL SKU STRING IS `FTL4`, AND THREE SOURCES GOT IT WRONG BEFORE A REAL
+    # TENANT SETTLED IT (finding F46):
+    #   - a first guess of `FT1`, asserted from memory;
+    #   - Microsoft's own trial documentation, which describes the trial in prose as
+    #     "an F4 capacity (4 capacity units) or an F64 capacity"
+    #     (learn.microsoft.com/fabric/fundamentals/fabric-trial, read 2026-08-29);
+    #   - a corrected `^F(T)?\d+$` written from that doc, which still rejects FTL4.
+    # The Power BI admin API returned `sku: FTL4` on a trial started 2026-08-29. The
+    # documented capacity SIZE (4 CU) and the SKU STRING are simply different things.
+    #
+    # So match the F prefix and the digits, and let the middle letters be whatever
+    # Microsoft ships: F4, FT1 and FTL4 all pass. This is safe against false
+    # positives because no Power BI SKU begins with F -- they are P1-P5, PP3
+    # (Premium Per User), EM1-EM3 and A1-A6, and none runs Fabric workloads.
+    #
+    # Power BI-only SKUs are P1-P5, PP3 (Premium Per User), EM1-EM3 and A1-A6, and
+    # none of them runs Fabric workloads.
+    $fabricCapable = @($capacities | Where-Object { $_ -and $_.sku -match '^F[A-Z]*\d+$' })
+    if ($fabricCapable.Count -eq 0) {
+        $others = @($capacities | Where-Object { $_ -and $_.sku }) |
+            ForEach-Object { "$($_.displayName) [$($_.sku)]" }
+        if ($others.Count -gt 0) {
+            return New-CheckResult -Check 'FabricCapacity' -Passed $false -Detail (
+                "no FABRIC capacity: found $($others -join ', '), which is Power BI only. " +
+                'Start the Fabric trial (provisions an F4 or F64) or run 02-fabric-capacity.ps1 -Mode F2 (G2 gate).')
+        }
+        return New-CheckResult -Check 'FabricCapacity' -Passed $false `
+            -Detail 'no Fabric capacity visible (start the trial or run 02-fabric-capacity.ps1 -Mode F2)'
+    }
+    $capacities = $fabricCapable
     $active = @($capacities | Where-Object { $_ -and $_.state -eq 'Active' })
     if ($active.Count -ge 1) {
         $names = ($active | ForEach-Object { $_.displayName }) -join ', '
-        return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "active capacity: $names (SP API toggle is portal-verified)"
+        $named = @($active | ForEach-Object { "$($_.displayName) [$($_.sku)]" }) -join ', '
+        return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "active Fabric capacity: $named (SP API toggle is portal-verified)"
     }
     if ($capacities.Count -ge 1) {
         return New-CheckResult -Check 'FabricCapacity' -Passed $true -Detail "capacity present but not Active (state: $(($capacities | ForEach-Object { $_.state }) -join ', ')) - paused F2 is expected between deploys"
@@ -293,17 +361,45 @@ function Test-License {
     $skus = @()
     if ($response -and $response.PSObject.Properties.Name -contains 'value') { $skus = @($response.value) }
     if ($skus.Count -eq 0) {
-        return New-CheckResult -Check 'Licenses' -Passed $false -Detail 'no subscribed SKUs visible (activate the M365 E5 + EMS E5 trials)'
+        return New-CheckResult -Check 'Licenses' -Passed $false -Detail 'no subscribed SKUs visible (activate the Microsoft 365 E5 trial and assign it to your admin user)'
     }
-    $m365 = @($skus | Where-Object { $script:M365E5Skus -contains $_.skuPartNumber -and [int]$_.consumedUnits -ge 1 })
-    $ems = @($skus | Where-Object { $_.skuPartNumber -eq $script:EmsE5Sku -and [int]$_.consumedUnits -ge 1 })
+    # Only SKUs with a seat actually assigned count. A provisioned-but-unassigned
+    # trial grants nothing to anyone, which is why consumedUnits is the filter and
+    # not merely prepaidUnits.enabled.
+    $assigned = @($skus | Where-Object { [int]$_.consumedUnits -ge 1 })
+    if ($assigned.Count -eq 0) {
+        return New-CheckResult -Check 'Licenses' -Passed $false `
+            -Detail 'SKUs exist but none has an assigned seat (assign the licence to your admin user)'
+    }
+
+    # Flatten every service plan across every assigned SKU. Which SKU carries a
+    # capability is Microsoft''s business and it changes; that the tenant HAS the
+    # capability is ours.
+    $available = @{}
+    foreach ($sku in $assigned) {
+        foreach ($plan in @($sku.servicePlans)) {
+            if ($plan.provisioningStatus -in @('Success', 'PendingProvisioning')) {
+                $available[$plan.servicePlanName] = $sku.skuPartNumber
+            }
+        }
+    }
+
     $missing = @()
-    if ($m365.Count -eq 0) { $missing += "M365 E5 ($($script:M365E5Skus -join ' or '))" }
-    if ($ems.Count -eq 0) { $missing += "EMS E5 ($($script:EmsE5Sku))" }
-    if ($missing.Count -eq 0) {
-        return New-CheckResult -Check 'Licenses' -Passed $true -Detail 'M365 E5 + EMS E5 present with assigned seats'
+    $satisfiedBy = @()
+    foreach ($plan in $script:RequiredServicePlans.Keys) {
+        if ($available.ContainsKey($plan)) {
+            $satisfiedBy += "$plan (via $($available[$plan]))"
+        } else {
+            $missing += "$plan - $($script:RequiredServicePlans[$plan])"
+        }
     }
-    return New-CheckResult -Check 'Licenses' -Passed $false -Detail "missing/unassigned: $($missing -join '; ')"
+
+    if ($missing.Count -eq 0) {
+        return New-CheckResult -Check 'Licenses' -Passed $true `
+            -Detail "all required service plans present: $($satisfiedBy -join '; ')"
+    }
+    return New-CheckResult -Check 'Licenses' -Passed $false `
+        -Detail "missing service plan(s): $($missing -join '; ')"
 }
 
 function Test-EntraDiagnostic {
