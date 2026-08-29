@@ -17,6 +17,7 @@ import type { McpToolsConfig } from "../src/config.js";
 import { loadConfig } from "../src/config.js";
 import {
   loadInboundAuth,
+  presentedCredential,
   secretsMatch,
   describeInboundAuth,
   type InboundAuth,
@@ -124,6 +125,71 @@ describe("the gate lets the right caller through", () => {
     // Posture is reported; the token is not.
     expect(body.auth).toEqual({ enforced: true, deliberatelyOpen: false });
     expect(JSON.stringify(body)).not.toContain(TOKEN);
+  });
+});
+
+/**
+ * `presentedCredential` reads one header, so a fake carrying just `get` is the
+ * whole surface it touches. Casting through `unknown` keeps that explicit
+ * rather than pretending to build an Express Request.
+ */
+const reqWith = (headers: Record<string, string>) =>
+  ({ get: (name: string) => headers[name.toLowerCase()] }) as unknown as Parameters<
+    typeof presentedCredential
+  >[0];
+
+describe("the Authorization parse is linear (js/polynomial-redos, CodeQL alert #1)", () => {
+  it("still reads an ordinary bearer token", () => {
+    expect(presentedCredential(reqWith({ authorization: `Bearer ${TOKEN}` }))).toBe(TOKEN);
+  });
+
+  it("still tolerates extra spaces and tabs before the token", () => {
+    expect(presentedCredential(reqWith({ authorization: `Bearer \t  ${TOKEN}` }))).toBe(TOKEN);
+  });
+
+  it("is still case-insensitive about the keyword", () => {
+    expect(presentedCredential(reqWith({ authorization: `bEaReR ${TOKEN}` }))).toBe(TOKEN);
+  });
+
+  it("falls through to x-api-key when the bearer value is only whitespace", () => {
+    // The old regex returned "" here, because `.+` could match the whitespace
+    // that `[ \t]+` had not taken. An empty string is not a credential.
+    const req = reqWith({ authorization: "Bearer \t   ", "x-api-key": TOKEN });
+    expect(presentedCredential(req)).toBe(TOKEN);
+  });
+
+  it("returns undefined for a header that is a keyword and nothing else", () => {
+    expect(presentedCredential(reqWith({ authorization: "Bearer" }))).toBeUndefined();
+  });
+
+  it("refuses a hostile 60k whitespace header in bounded time", () => {
+    // THIS IS THE REGRESSION GUARD, and it took two attempts to make it real.
+    //
+    // The defect the old pattern had was not a wrong answer, it was the time
+    // taken to reach the right one, so only elapsed time can catch a
+    // reintroduction. The first version of this test used
+    // "Bearer" + "\t".repeat(n) and asserted a time bound -- and passed with
+    // the VULNERABLE pattern restored, because `header.trim()` runs first and
+    // strips every trailing tab, leaving the regex to match "Bearer" and fail
+    // instantly. A guard that cannot fail is worse than no guard; mutation
+    // testing is the only reason that was noticed rather than shipped.
+    //
+    // What actually backtracks is a whitespace run that survives trim AND a
+    // tail the pattern cannot match to the anchor. `.` does not match a
+    // newline and there is no `m` flag, so "a\nb" makes `$` unreachable: the
+    // engine must try every way of splitting the tab run between `[ \t]+` and
+    // `.+` before it can fail. Measured on the old pattern: 7ms at 2k tabs,
+    // 59ms at 6k, 201ms at 12k -- quadratic, so ~5s at 60k. The fixed pattern
+    // is flat at ~0.03ms because `[^ \t]` makes the split unique.
+    //
+    // The bound sits in the two-orders-of-magnitude gap between those: far
+    // above any CI hiccup, far below what the vulnerable pattern can do.
+    const hostile = "Bearer" + "\t".repeat(60_000) + "a\nb";
+    const started = performance.now();
+    const result = presentedCredential(reqWith({ authorization: hostile }));
+    const elapsed = performance.now() - started;
+    expect(result).toBeUndefined();
+    expect(elapsed).toBeLessThan(1000);
   });
 });
 
