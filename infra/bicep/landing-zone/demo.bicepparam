@@ -9,6 +9,11 @@ param demoSubscriptionId = readEnvironmentVariable('AZURE_SUBSCRIPTION_ID', '')
 
 param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus')
 
+// Empty is the normal case: policy-assignment identities are created in the estate's region
+// and STAY there, because an assignment's location cannot be updated. Set only on an estate
+// whose region changed after L2 first ran.
+param policyAssignmentLocation = readEnvironmentVariable('MLS_POLICY_ASSIGNMENT_LOCATION', '')
+
 // [derived] Single-region guardrail: the demo lives entirely in AZURE_LOCATION.
 param allowedLocations = [
   readEnvironmentVariable('AZURE_LOCATION', 'eastus')

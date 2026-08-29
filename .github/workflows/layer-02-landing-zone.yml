@@ -101,6 +101,13 @@ jobs:
       # variable at all - which is why every layer used to carry `default: eastus`
       # instead. An explicit `location` input still overrides, for a one-off (F53).
       AZURE_LOCATION: ${{ inputs.location || vars.AZURE_LOCATION }}
+      # Where the policy assignments' managed identities live. Normally EMPTY, meaning
+      # "same as AZURE_LOCATION" - correct for a fresh estate. It is set only on an estate
+      # whose region changed after L2 first ran, because an assignment's location cannot be
+      # updated and the identities are already registered in Entra with the old one. Not a
+      # second source of truth for the estate's region: a different value, about a different
+      # thing (F55).
+      MLS_POLICY_ASSIGNMENT_LOCATION: ${{ vars.POLICY_ASSIGNMENT_LOCATION }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
     steps:

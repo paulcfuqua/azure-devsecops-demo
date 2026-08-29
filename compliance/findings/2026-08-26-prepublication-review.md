@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F54](#f54), all raised and all fixed on 2026-08-29 during the first live tenant bring-up
+[F55](#f55), all raised and all fixed on 2026-08-29 during the first live tenant bring-up
 and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -164,6 +164,7 @@ made the practice look safe.
 | [F52](#f52) | Five defects the first real deployment exposed, including a **fabricated policy GUID three `what-if` runs passed** and a fail-fast gate where a skipped layer launders into a success, so L2 failed and L6 built 13 resources anyway | high | CONFIRMED (observed, run 33272832687) | 3.12.1, 3.12.3 | first real deploy, 2026-08-29 |
 | [F53](#f53) | The estate region was hardcoded in **16 places** and the workflow input silently outvoted `vars.AZURE_LOCATION`, so setting the environment variable did nothing and the next deploy went back to the region that cannot host it | high | CONFIRMED (observed, run 33275398487 cancelled) | 3.4.1, 3.4.2 | sponsor question, 2026-08-29 |
 | [F54](#f54) | A management-group deployment location is immutable, so changing `AZURE_LOCATION` wedges L2 permanently - ten simultaneous Conflicts on names the template must keep stable | medium | CONFIRMED (observed, run 33277220471) | 3.4.2 | region change, 2026-08-29 |
+| [F55](#f55) | A policy assignment location is immutable too, so the region change needed **sixteen assignments deleted** - a G3 action on a management group whose only Owner is the deployer, leaving the human sponsor unable to perform it | high | CONFIRMED (observed, run 33277577651) | 3.4.2, 3.1.5 | region change, 2026-08-29 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -3380,3 +3381,64 @@ The one genuinely good outcome sits alongside them: **the fail-fast gates from
 [F52](#f52) worked.** L2 failed and L3 through L8 all skipped, where the equivalent failure
 four hours earlier had let L6 build thirteen resources on a landing zone that never applied.
 The run cost 2m43s and produced nothing to clean up.
+
+
+---
+
+## F55
+
+**The guardrails pinned themselves to a region, and only the robot could unpin them**
+
+- **Severity:** high (the estate could not change region without a G3 deletion its human owner had no permission to perform)
+- **Confidence:** CONFIRMED - sixteen simultaneous failures in run 33277577651
+- **Controls:** 3.4.2 (enforce configuration settings), 3.1.5 (least privilege)
+- **Closed by:** decoupling the assignment identity's location from the estate's region
+- **Status:** CLOSED
+
+**Found while:** the deploy immediately after [F54](#f54) cleared the stale deployment
+records. The records were the *first* immutability. The assignments themselves are a second:
+
+```
+InvalidLocationUpdate: The policy assignment 'require-env' request is invalid.
+  The existing assignment's location cannot be changed from 'eastus' to 'centralus'.
+```
+
+and, for the six that carry a managed identity, a harder one - the identity is registered in
+Entra with a region of its own:
+
+```
+AlreadyExistServicePrincipalInDifferentRegion: Location mismatch in AAD and in Model.
+  LocationInAAD: 'eastus', LocationInModel: 'centralus'
+```
+
+Sixteen assignments, all refusing, and no update path: an assignment's location can only be
+changed by deleting and recreating it.
+
+**Which nobody present could do.** Deleting management-group policy assignments is
+`infra/policy/teardown.ps1`, a G3 action. The sponsor authorised it - and it still could not
+run, because the `mls` management group's only Owner is `mls-github-deployer`. The deployer
+became Owner automatically by creating the group ([F47](#f47)); nothing ever granted the
+human anything. `admin@` cannot delete a policy assignment there, or read one, or list them.
+**The estate had reached a state where its owner needed a robot's permission to change his
+own governance layer**, and the only route back was a tenant-root elevation toggle.
+
+**The fix is that none of it was necessary.** A policy assignment's `location` says where its
+system-assigned identity lives. It has no bearing on what the assignment enforces -
+`listOfAllowedLocations` is the parameter that does that, and it updates freely. Coupling the
+identity's home to the estate's region is what turned a parameter change into a sixteen-object
+deletion. `policyAssignmentLocation` is now separate: empty means "same as the estate", which
+is right on a fresh deploy, and it is set explicitly only on an estate whose region has moved
+since L2 first ran. The identities stay where they were created, which nothing observes.
+
+### What this says about the method
+
+This is the fourth finding from one region change, and the first that is a **design** error
+rather than an operational surprise. [F53](#f53) and [F54](#f54) were things Azure does that
+the estate did not know about. This one is a decision the estate made: it bound a value that
+does not matter (where an identity lives) to a value that does (where the estate runs), and
+the binding was invisible until the two had to differ.
+
+The access gap underneath it is worth carrying separately. An estate whose management group
+only its deployer can administer is one where every governance question - *what is actually
+assigned? why did that deny fire?* - is unanswerable by the person accountable for it. That
+is not a region problem and it did not go away with this fix.

@@ -51,6 +51,30 @@ param location string = deployment().location
 @description('Allowed Azure regions enforced by the allowed-locations guardrails. Defaults to the deployment region.')
 param allowedLocations array = [location]
 
+@description('Where policy-assignment MANAGED IDENTITIES live. Empty means "same as location", which is right for a fresh estate. Set it only when the estate has changed region since L2 first ran.')
+param policyAssignmentLocation string = ''
+
+// A POLICY ASSIGNMENT'S LOCATION IS IMMUTABLE, AND IS NOT WHERE THE POLICY APPLIES.
+//
+// `location` on a policyAssignment says where its system-assigned managed identity lives. It
+// has NO bearing on what the assignment enforces - `listOfAllowedLocations` below is the
+// parameter that does that, and it updates freely.
+//
+// Azure refuses to move an existing assignment:
+//     InvalidLocationUpdate: the existing assignment's location cannot be changed
+//       from 'eastus' to 'centralus'
+// and refuses harder for the six that carry an identity, because the identity is registered
+// in Entra with a region of its own:
+//     AlreadyExistServicePrincipalInDifferentRegion: LocationInAAD 'eastus',
+//       LocationInModel 'centralus'
+//
+// So tying this to the estate's region meant a region change required DELETING all sixteen
+// assignments - a G3 action needing a human, on a management group whose only Owner is the
+// deployer, so the human could not perform it either. Decoupled here: identities stay where
+// they were created, which nothing observes, and the guardrails repoint by parameter as they
+// should (F55).
+var effectivePolicyAssignmentLocation = empty(policyAssignmentLocation) ? location : policyAssignmentLocation
+
 // ------------------------------------------------------------------ variables
 
 var mgName = naming.managementGroupName(companyPrefix)
@@ -157,7 +181,7 @@ module inheritTags 'br/public:avm/ptn/authorization/policy-assignment:0.5.3' = [
       }
       identity: 'SystemAssigned' // modify effect remediates via managed identity
       roleDefinitionIds: [tagContributorRoleId]
-      location: location
+      location: effectivePolicyAssignmentLocation
     }
   }
 ]
@@ -210,7 +234,7 @@ module nist80053r5 'br/public:avm/ptn/authorization/policy-assignment:0.5.3' = i
     subscriptionId: demoSubscriptionId
     identity: 'SystemAssigned' // required: the initiative contains DINE/modify members
     roleDefinitionIds: [] // No role grants in DoNotEnforce; enabling enforcement later means granting the specific roles the DINE members declare, never Contributor.
-    location: location
+    location: effectivePolicyAssignmentLocation
   }
 }
 
