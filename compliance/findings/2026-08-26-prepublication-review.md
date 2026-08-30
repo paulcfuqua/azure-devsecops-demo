@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F70](#f70), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F72](#f72), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -100,6 +100,8 @@ claim by one step:
 | [F68](#f68) | **A repository-wide sweep has no exemption for test data.** The fix for F62's test collision wrote three realistic-looking GUID literals into a fixture; V1.3 flagged them on the next live run, correctly. Generated now, not committed. | low | CONFIRMED (observed, verify-l1 16:14) | 3.1.1, 3.4.1 | verify-l1, 2026-08-30 |
 | [F69](#f69) | **A mutation test proves a guard is load bearing; it cannot prove the guard is wired to reality.** F67's retry matched the Graph error code against `Exception.Message`, which never carries it - so a fully tested, triple-mutation-killed fix merged and did nothing, and L3 failed identically. | high | CONFIRMED (observed, run 33323094630 on the commit containing the fix) | 3.1.1, 3.12.1 | second L3 apply, 2026-08-30 |
 | [F70](#f70) | **A fix at the call site protects one call; a fix at the choke point protects the class.** F69's retry finally fired - and the run died on the GET one line above it, unprotected. Every call against a just-created directory object can 404. | high | CONFIRMED (observed, run 33324015966) | 3.1.1, 3.12.1 | third L3 apply, 2026-08-30 |
+| [F71](#f71) | **Two error predicates were correct only by luck** - matching Graph codes against `Exception.Message`, which happens to contain the numeric token. Found by a sweep in a second, not by a deploy. | medium | CONFIRMED (found by failure-classes.Tests.ps1) | 3.12.1, 3.12.3 | preventive sweep, 2026-08-30 |
+| [F72](#f72) | **A layer that stops at its first error makes the discovery rate equal to the deploy rate.** Three ~40-minute runs each returned one finding. L3 now reports every failed item in one run - and still fails. | high | CONFIRMED (runs 33321360624, 33323094630, 33324015966) | 3.12.1 | throughput review, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4168,3 +4170,89 @@ The three tests that covered F67 also had to be rewritten here, because they moc
 `Invoke-GraphApi` - which is now the unit under test. A mock placed at the layer you later
 move the logic into stops testing anything, silently. That is the fourth mock this session
 caught certifying its own assumptions ([F59](#f59), [F62](#f62), [F69](#f69), and now this).
+
+---
+
+## F71
+
+**Two predicates were correct only by luck, and a sweep found them in a second**
+
+- **Severity:** medium (both worked, both would have stopped working on a message-format change; neither had been exercised in the failing direction)
+- **Confidence:** CONFIRMED - found by `verification/tests/failure-classes.Tests.ps1` on its first run, at `verification/MlsAudit.psm1:1185` and `infra/entra/teardown.ps1:131`
+- **Controls:** 3.12.1, 3.12.3
+- **Closed by:** both predicates now read the whole error record
+- **Status:** CLOSED
+
+[F69](#f69) cost a deploy to learn that a Graph error's CODE lives in `$_.ErrorDetails.Message`
+while `$_.Exception.Message` carries only the terse status. Encoding that as a repository-wide
+check took ten minutes and immediately found two more instances:
+
+- **`MlsAudit.psm1`** - [F57](#f57)'s "a permission failure is Final" predicate, matching
+  `AuthorizationFailed|403|...` against `Exception.Message`. It works, because the terse text
+  happens to contain `403`. It would have missed `Authorization_RequestDenied` outright.
+- **`entra/teardown.ps1`** - the `-AllowNotFound` predicate that lets a delete treat an
+  already-absent object as success. Same luck, same fragility: one message-format change from
+  turning "already deleted" back into a hard failure during teardown.
+
+Both now read `Exception.Message` and `ErrorDetails.Message` together.
+
+### What this says about the method
+
+**Neither was found by failing.** They were found by turning a class already paid for into a
+check, and pointing it at the whole repository. That is the difference between a finding
+register and a test suite: the register records what went wrong once, and the suite prevents
+the same shape everywhere else.
+
+The sweep also caught its own first version being wrong: the check "this transport retries"
+passed for `fabric-api.psm1` on the strength of a COMMENT mentioning `Retry-After`. A check
+satisfied by prose *about* the thing it checks for is the same defect it exists to catch, one
+level up - so it now strips comments before matching.
+
+And it corrected a claim made from a partial reading: `Invoke-FabricApi` was reported here as
+having no retry at all, on the strength of inspecting the first fifty lines of one function.
+It has a long-running-operation poller with a deadline and `Retry-After` handling fifty lines
+further down. **The transport still does not retry a transient 429**, which may or may not
+matter, and the honest entry in the inventory says exactly that rather than guessing - because
+guessing about an unexercised layer is how three consecutive wrong theories about L3 shipped.
+
+---
+
+## F72
+
+**A layer that stops at its first error makes the discovery rate equal to the deploy rate**
+
+- **Severity:** high (process, not code: three consecutive ~40-minute runs each returned exactly one finding)
+- **Confidence:** CONFIRMED - runs 33321360624, 33323094630 and 33324015966 each failed at L3's first failing item and revealed nothing about the items behind it
+- **Controls:** 3.12.1 (assess controls periodically)
+- **Closed by:** collecting failures across manifest items and reporting them together, while still failing the layer
+- **Status:** CLOSED
+
+L3 halts on the first failing item. Each attempt therefore bought exactly one fact, at roughly
+forty minutes per fact once deploy, analysis, review and merge are counted - and the estate has
+eleven layers. The sponsor's observation that two days had produced two layers was not a
+complaint about defect count; it was an accurate reading of a throughput problem.
+
+**The defects were never the bottleneck. The serialisation was.**
+
+`apply-entra.ps1` now runs each manifest item through `Invoke-ManifestItem`, which records a
+failure and continues. Items are independent by construction - one user, one group, one app
+registration - so continuing past one cannot corrupt the next. The single real dependency,
+groups referencing user ids, degrades exactly as the `-WhatIf` path already did: a user that
+failed has no id, and that member is reported unresolvable.
+
+**The gate is unchanged, and that is the property the tests hold.** Collected failures are
+still failures: they are listed together and the run still throws, so the layer is still red
+and L4-L8 still skip. What changes is only how much a single attempt teaches. Mutation tested
+in both directions - swallowing the failures, and aborting on the first.
+
+### What this says about the method
+
+Fail-fast is the right default for a deploy that must not proceed in a broken state, and this
+layer still does not proceed. But fail-fast on DIAGNOSIS is a different property that came
+along for free with it, and nobody chose it. **A run is an expensive, rate-limited
+observation; it should return everything it saw.**
+
+The general form, worth applying to L4-L8 before they run rather than after: any step that
+iterates over independent items should report on all of them. The cost of getting this wrong
+is invisible in a green run and compounds in a red one - which is why it survived to be found
+by a human noticing that two days had produced two layers, rather than by any check here.

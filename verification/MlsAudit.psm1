@@ -1182,7 +1182,16 @@ function Invoke-MlsCriterion {
             # not slow: mls-verifier had no role assignment at the mls management group, so
             # every criterion reading MG state threw AuthorizationFailed and each one waited
             # out the whole propagation window in turn (F57).
-            $final = $_.Exception.Message -match 'AuthorizationFailed|Authorization_RequestDenied|InsufficientPrivileges|\bForbidden\b|\b403\b'
+            # Read the WHOLE error record, not just Exception.Message. A Graph SDK failure
+            # puts the terse status text there and the error CODE in ErrorDetails.Message,
+            # so a predicate reading only the former matched `403` by luck and would have
+            # missed `Authorization_RequestDenied` entirely if the numeric token ever moved
+            # (F69's class, found by the preventive sweep rather than by a deploy - F71).
+            # ErrorDetails is $null for a plain exception and StrictMode makes that access
+            # terminating, hence the guard.
+            $errorDetails = if ($null -ne $_.ErrorDetails) { "$($_.ErrorDetails.Message)" } else { '' }
+            $errorText = "$($_.Exception.Message)`n$errorDetails"
+            $final = $errorText -match 'AuthorizationFailed|Authorization_RequestDenied|InsufficientPrivileges|\bForbidden\b|\b403\b'
             $result = New-MlsCheckResult -Passed $false -Final:$final -Observed "check threw: $($_.Exception.Message)" `
                 -Detail "$($_.Exception.GetType().Name) at $($_.InvocationInfo.ScriptLineNumber)$(if ($final) { ' - permission failure, not retried: the identity cannot see this, and waiting will not change that' })"
         }

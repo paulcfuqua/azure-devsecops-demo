@@ -77,6 +77,16 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   (`AZURE_LOCATION` and friends); a default elsewhere silently outranks them, because a
   workflow input beats an environment variable. When a value looks wrong, ask where it comes
   from before asking whether it is correct.
+- **A run is an expensive, rate-limited observation: it returns everything it saw.** A step
+  iterating over independent items reports on all of them and fails at the end, rather than
+  stopping at the first. Fail-fast is right for a deploy that must not proceed broken - and
+  the layer still does not proceed - but applying it to DIAGNOSIS makes the discovery rate
+  equal to the deploy rate, which is how three consecutive forty-minute runs each returned
+  exactly one fact.
+- **A class paid for once becomes a check, not just a finding.** When a defect is understood,
+  ask where else its shape occurs and encode that as a test over the whole repository. The
+  first sweep written this way found two more instances in a second, having cost a deploy to
+  learn once. `verification/tests/failure-classes.Tests.ps1` is where they live.
 - **A check declares how long it is willing to wait, and why.** Patience is opted into, never
   inherited: a criterion that says nothing gets a short window, and one that needs longer
   states the number and cites the propagation it is waiting on. Nineteen of forty-seven

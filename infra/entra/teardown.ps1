@@ -128,7 +128,14 @@ function Invoke-GraphApi {
         return Invoke-MgGraphRequest -Method $Method -Uri $uri
     }
     catch {
-        if ($AllowNotFound -and $_.Exception.Message -match '(?i)404|Not ?Found|Request_ResourceNotFound|does not exist') {
+        # Read the whole error record. Invoke-MgGraphRequest puts the terse status in
+        # Exception.Message and the Graph error CODE in ErrorDetails.Message; matching only
+        # the former worked here solely because the terse text happens to contain "404", and
+        # a predicate that is correct by luck is one message-format change from silently
+        # turning "already deleted" back into a hard failure (F71).
+        $errorDetails = if ($null -ne $_.ErrorDetails) { "$($_.ErrorDetails.Message)" } else { '' }
+        $errorText = "$($_.Exception.Message)`n$errorDetails"
+        if ($AllowNotFound -and $errorText -match '(?i)404|Not ?Found|Request_ResourceNotFound|does not exist') {
             return $null
         }
         throw
