@@ -183,6 +183,37 @@ Describe 'group membership survives directory replication' {
         Should -Invoke Invoke-PropagationDelay -Exactly -Times 2
     }
 
+    It 'retries when the Graph code is only in ErrorDetails, not in the exception message' {
+        # The shape Invoke-MgGraphRequest actually throws: terse Message, JSON body in
+        # ErrorDetails. Matching Exception.Message alone meant the retry never fired at all
+        # and L3 failed identically with the fix merged (F69).
+        $script:PostCalls = 0
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'GET') { return @{ value = @() } }
+            $script:PostCalls++
+            if ($script:PostCalls -lt 2) {
+                # Deliberately carries NEITHER '404' NOR 'Not Found'. With that text present
+                # the predicate matches Exception.Message alone and this test passes whether
+                # or not ErrorDetails is read at all - it mutation-SURVIVED in that form, so
+                # it was proving nothing about the field it exists to check.
+                $exception = [System.Net.Http.HttpRequestException]::new(
+                    'The remote server returned an error.')
+                $record = [System.Management.Automation.ErrorRecord]::new(
+                    $exception, 'GraphHttpError', [System.Management.Automation.ErrorCategory]::InvalidResult, $null)
+                $record.ErrorDetails = [System.Management.Automation.ErrorDetails]::new(
+                    '{"error":{"code":"Request_ResourceNotFound","message":"Resource does not exist or one of its queried reference-property objects are not present."}}')
+                throw $record
+            }
+            return @{}
+        }
+
+        $added = Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-security-team' `
+            -MemberIds @('u-1') -TimeoutSeconds 60 -IntervalSeconds 1
+        $added | Should -Be 1
+        $script:PostCalls | Should -Be 2
+        Should -Invoke Invoke-PropagationDelay -Exactly -Times 1
+    }
+
     It 'raises any other failure immediately, without waiting' {
         # A 403 does not become a 200 by waiting. Retrying everything would turn a permission
         # problem into a timeout, which is the confusion F57 was about.

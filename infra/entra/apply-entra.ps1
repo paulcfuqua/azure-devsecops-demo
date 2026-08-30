@@ -524,7 +524,24 @@ function Initialize-GroupMembership {
                 break
             }
             catch {
-                $isPropagation = $_.Exception.Message -match '(?i)Request_ResourceNotFound|does not exist or one of its queried reference-property objects'
+                # MATCH THE WHOLE ERROR RECORD, NOT JUST Exception.Message.
+                #
+                # The first version of this retry matched `Request_ResourceNotFound` against
+                # $_.Exception.Message and never fired, because Invoke-MgGraphRequest puts the
+                # terse text there - "Response status code does not indicate success: 404 (Not
+                # Found)." - and the JSON body carrying the Graph error CODE in
+                # $_.ErrorDetails.Message. The predicate was reading a field that does not hold
+                # the thing it was looking for, so a correct retry sat in the code doing
+                # nothing while L3 failed exactly as before (F69).
+                # ErrorDetails is $null for a plain exception, and StrictMode makes a
+                # property access on $null a terminating error - which would convert every
+                # non-Graph failure into a confusing one.
+                $errorDetails = if ($null -ne $_.ErrorDetails) { "$($_.ErrorDetails.Message)" } else { '' }
+                $detail = "$($_.Exception.Message)`n$errorDetails`n$($_.Exception)"
+                # A 404 on this endpoint is ALWAYS one of the two directory objects not being
+                # resolvable on this replica: the group id came from a create or a lookup in
+                # this same run, and the member id from the users just confirmed visible.
+                $isPropagation = $detail -match '(?i)Request_ResourceNotFound|does not exist or one of its queried reference-property objects|\b404\b|Not Found'
                 if (-not $isPropagation) { throw }
                 if ([datetime]::UtcNow -ge $deadline) {
                     throw "Timed out after ${TimeoutSeconds}s adding member $memberId to group '$GroupName': Graph still reports one of the two directory objects as not present. Both were visible to a GET before this write, so this is directory replication rather than a missing object."

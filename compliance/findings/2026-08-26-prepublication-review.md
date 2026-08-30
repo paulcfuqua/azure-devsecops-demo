@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F68](#f68), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F69](#f69), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -98,6 +98,7 @@ claim by one step:
 | [F66](#f66) | **An auditor that acquires write access to close a finding has closed the wrong thing** - and the least-privilege alternative I reached for, a `GITHUB_TOKEN` scoped `administration: read`, is not a permission that exists. V1.2 now SKIPs, naming the one credential that would resolve it. The control was enabled all along. | medium | CONFIRMED (both settings read `enabled` under an admin token; actionlint rejected the invented scope) | 3.1.5, 3.14.6 | verify-l1, 2026-08-30 |
 | [F67](#f67) | **When a check and the operation it protects are not asking the same question, the check will pass at exactly the moment it matters.** `Wait-EntraPropagation` confirmed the user and group were VISIBLE; the membership write needs them LINKABLE, and 404'd - killing L3 on its first membership on the first run that ever reached it. | high | CONFIRMED (observed, run 33321360624) | 3.1.1, 3.12.1 | first L3 apply, 2026-08-30 |
 | [F68](#f68) | **A repository-wide sweep has no exemption for test data.** The fix for F62's test collision wrote three realistic-looking GUID literals into a fixture; V1.3 flagged them on the next live run, correctly. Generated now, not committed. | low | CONFIRMED (observed, verify-l1 16:14) | 3.1.1, 3.4.1 | verify-l1, 2026-08-30 |
+| [F69](#f69) | **A mutation test proves a guard is load bearing; it cannot prove the guard is wired to reality.** F67's retry matched the Graph error code against `Exception.Message`, which never carries it - so a fully tested, triple-mutation-killed fix merged and did nothing, and L3 failed identically. | high | CONFIRMED (observed, run 33323094630 on the commit containing the fix) | 3.1.1, 3.12.1 | second L3 apply, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4067,3 +4068,53 @@ who wrote the rule.
 The lesson worth keeping is narrower than "be careful": **a repository-wide sweep has no
 exemption for test data**, and the instinct to write a realistic-looking constant into a
 fixture is exactly the instinct such a sweep is built to catch. Generate, do not commit.
+
+---
+
+## F69
+
+**The retry read a field that does not carry the thing it was matching on**
+
+- **Severity:** high ([F67](#f67)'s fix merged, deployed, and did nothing; L3 failed identically on the next run)
+- **Confidence:** CONFIRMED - run 33323094630 on commit `0a9cb02`, which contains the retry, failed with the same 404 and produced no "retrying" line at all
+- **Controls:** 3.1.1, 3.12.1
+- **Closed by:** matching the whole error record, and matching a bare 404 on an endpoint where 404 can only mean replication
+- **Status:** CLOSED
+
+[F67](#f67) added a bounded retry around the group-membership write, tested it, mutation-tested
+it three ways, and merged it. The next run failed **identically**, on the same call, with the
+same status - and the transcript contained no retry message, so the loop never engaged.
+
+The predicate matched `Request_ResourceNotFound` against `$_.Exception.Message`.
+`Invoke-MgGraphRequest` does not put it there. The exception message is the terse form -
+*"Response status code does not indicate success: 404 (Not Found)."* - and the JSON body
+carrying the Graph error code lives in `$_.ErrorDetails.Message`. The retry was correct, the
+budget was correct, the tests passed, and the condition it keyed on was never true.
+
+**Fix:** the predicate reads `Exception.Message`, `ErrorDetails.Message` and the exception's
+full string, and also treats a bare 404 as propagation - defensible here because on
+`groups/{id}/members/$ref` a 404 can only mean one of the two directory objects is not
+resolvable on this replica: the group id came from a create or lookup in the same run, and the
+member id from users confirmed visible moments before. `ErrorDetails` is read null-safely,
+because under StrictMode a property access on `$null` would turn every non-Graph failure into
+a different and more confusing one.
+
+### What this says about the method
+
+**Every test F67 shipped passed against a mock that threw the wrong shape.** The mocks raised
+exceptions whose `.Message` carried the Graph code, because that is where the author believed
+it lived - so the tests confirmed the belief rather than the behaviour. Three mutations were
+killed. The code still did nothing in production. **A mutation test proves a guard is load
+bearing; it cannot prove the guard is wired to reality**, and mocks are exactly where a wrong
+belief about an external system survives contact with a test suite.
+
+The first replacement test had the same defect one layer in: its exception message read
+*"...404 (Not Found)."*, which the widened predicate matches on its own, so the test passed
+whether or not `ErrorDetails` was ever read. It mutation-SURVIVED, and only then became a test
+of the field it exists to check. That is the third mock in this session caught supplying the
+answer it was meant to verify ([F59](#f59), [F62](#f62), and here).
+
+The rule this earns: **when a fix depends on the shape of an external system's error, the
+mock encodes an assumption, and the assumption is the thing most likely to be wrong.** The
+cheap check is to fail once for real and read the actual error record - which is what
+[F58](#f58)'s streamed transcript exists to make possible, and what closed this in one run.
