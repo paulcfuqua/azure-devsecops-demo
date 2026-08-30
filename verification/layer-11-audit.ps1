@@ -295,10 +295,12 @@ function Invoke-Main {
     # baseline" claim as V3.1/V5.2/V6.1, just for resource groups. Both branches record the
     # same criterion identity, so both carry the same mapping.
     if ($Phase -eq 'Down') {
+        # L11: RG deletion is asynchronous, up to 30 min
         Invoke-MlsCriterion -Context $context -Id 'V11.1' -Control @('3.4.1') `
             -Description 'All RGs absent post-down' `
             -Command "az group list --query `"[?starts_with(name,'$ResourceGroupPrefix')].name`"" `
             -Expected 'empty array - none of mls-rg-platform, mls-rg-apps, mls-rg-data, mls-rg-ops (nor any stray mls-rg-*)' `
+            -RetryWindowMinutes 30 `
             -Test { Test-ResourceGroupAbsent -Prefix $ResourceGroupPrefix -SubscriptionId $subscription } | Out-Null
     }
     else {

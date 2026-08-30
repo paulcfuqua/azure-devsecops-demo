@@ -46,19 +46,45 @@ function Test-ManagementGroupPlacement {
         [Parameter(Mandatory)][string]$ManagementGroupName,
         [Parameter(Mandatory)][string]$SubscriptionId
     )
-    $children = @(Invoke-MlsAz -AllowFailure -Argument @(
-            'account', 'management-group', 'show', '--name', $ManagementGroupName, '--expand', '--recurse',
-            '--query', "children[?contains(id, '$SubscriptionId')].displayName", '--output', 'json'
-        ))
-    $found = @($children | Where-Object { -not [string]::IsNullOrWhiteSpace("$_") })
+    # NO -AllowFailure, and NO --query. Both were hiding the answer (F59).
+    #
+    # -AllowFailure turned a denied read into $null, which this function then reported with
+    # the same sentence as a genuinely absent child - "does not report the demo subscription
+    # as a child (or the MG read was denied)". That disjunction is not a finding, it is two
+    # findings the criterion could not tell apart, and it retried the pair for the full
+    # thirty-minute window before saying so. Letting az throw instead gives the criterion
+    # loop the real stderr, and a permission failure is marked Final there (F57) rather than
+    # waited out.
+    #
+    # --query projected the answer away: on a failure the report could say only that the
+    # projection was empty, never what the management group actually contained. The children
+    # are filtered here so the observed value can name what WAS found.
+    $mg = Invoke-MlsAz -Argument @(
+        'account', 'management-group', 'show', '--name', $ManagementGroupName,
+        '--expand', '--recurse', '--output', 'json')
+
+    $children = @()
+    if ($null -ne $mg -and (Test-MlsHasProperty -InputObject $mg -Name 'children')) {
+        $children = @(Get-MlsProperty -InputObject $mg -Name 'children' | Where-Object { $null -ne $_ })
+    }
+    $found = @($children | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'id')" -like "*$SubscriptionId*" })
+
     if ($found.Count -eq 1) {
-        return New-MlsCheckResult -Passed $true -Observed "one child: $($found[0])"
+        return New-MlsCheckResult -Passed $true -Observed "one child: $(Get-MlsProperty -InputObject $found[0] -Name 'displayName')"
     }
     if ($found.Count -gt 1) {
-        return New-MlsCheckResult -Passed $false -Observed "$($found.Count) children matched the subscription id: $($found -join ', ')"
+        return New-MlsCheckResult -Passed $false -Observed "$($found.Count) children matched the subscription id"
     }
-    return New-MlsCheckResult -Passed $false -Observed "management group '$ManagementGroupName' does not report the demo subscription as a child (or the MG read was denied)" `
-        -Detail 'A denied MG read is a finding on mls-verifier scope, not a pass (L02.md V2.1).'
+    $inventory = if ($children.Count -eq 0) {
+        'it lists no children at all'
+    }
+    else {
+        'its children are: ' + (($children | ForEach-Object {
+                    "$(Get-MlsProperty -InputObject $_ -Name 'displayName') [$(Get-MlsProperty -InputObject $_ -Name 'type')]"
+                }) -join ', ')
+    }
+    return New-MlsCheckResult -Passed $false -Observed "management group '$ManagementGroupName' does not list the demo subscription as a child - $inventory" `
+        -Detail 'A denied MG read no longer reaches here - it throws, carrying az stderr, and is marked Final by the criterion loop (L02.md V2.1).'
 }
 
 function Test-CanaryPolicyDenial {
@@ -150,16 +176,20 @@ function Invoke-Main {
     # -Control @(): confirms subscription placement under the management group, a
     # governance-hierarchy precondition for policy scope (V2.3). Placement alone implements
     # no 800-171 requirement by itself.
+    # L02: MG moves propagate in minutes - the long default was never this criterion s need (F59)
     Invoke-MlsCriterion -Context $context -Id 'V2.1' -Control @() `
         -Description 'az account management-group show mls shows the sub' `
-        -Command "az account management-group show --name $ManagementGroupName --expand --recurse --query `"children[?contains(id, '$subscription')].displayName`"" `
+        -Command "az account management-group show --name $ManagementGroupName --expand --recurse --output json  # children filtered in-process, so a FAIL can name what WAS there" `
         -Expected 'exactly one child returned - the demo subscription' `
+        -RetryWindowMinutes 5 `
         -Test { Test-ManagementGroupPlacement -ManagementGroupName $ManagementGroupName -SubscriptionId $subscription } | Out-Null
 
+    # L02: Activity Log ingestion lag, minutes not tens of minutes
     Invoke-MlsCriterion -Context $context -Id 'V2.2' -Control @('3.4.2') `
         -Description 'Creating an untagged canary RG fails with policy denial (then cleaned up)' `
         -Command "az monitor activity-log list --offset $ActivityLogOffset --status Failed --query `"[?contains(resourceGroupName,'$CanaryResourceGroupName')].{op:operationName.value, sub:subStatus.localizedValue, code:properties.statusMessage}`"`naz group exists --name $CanaryResourceGroupName" `
         -Expected 'at least one Microsoft.Resources/subscriptions/resourceGroups/write event with RequestDisallowedByPolicy; az group exists == false' `
+        -RetryWindowMinutes 10 `
         -Test { Test-CanaryPolicyDenial -CanaryResourceGroupName $CanaryResourceGroupName -ActivityLogOffset $ActivityLogOffset } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V2.3' -Control @('3.12.1', '3.12.3') `

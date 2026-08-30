@@ -218,10 +218,12 @@ function Invoke-Main {
     $allowedGuid = @(Get-AllowedGuid -RepoRoot $root -AllowlistPath $GuidAllowlistPath)
     Add-MlsPreflight -Context $context -Name 'GUID allowlist entries' -Value "$($allowedGuid.Count)"
 
+    # L01: Graph reads of the app registration may lag creation by up to 30 min
     Invoke-MlsCriterion -Context $context -Id 'V1.1' -Control @('3.5.2') `
         -Description 'Actions run using OIDC succeeds (az account show inside the runner matches the demo sub)' `
         -Command "gh run list --workflow $WorkflowFile --limit 1 --json databaseId,conclusion`ngh api repos/$repositoryName/actions/runs/<databaseId>/jobs --jq '.jobs[] | select(.name==`"$OidcJobName`") | .conclusion'" `
         -Expected "run conclusion == 'success' and job '$OidcJobName' conclusion == 'success'" `
+        -RetryWindowMinutes 30 `
         -Test { Test-OidcRoundTrip -Repository $repositoryName -WorkflowFile $WorkflowFile -OidcJobName $OidcJobName } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V1.2' -Control @('3.4.2') `
@@ -240,10 +242,12 @@ function Invoke-Main {
         -Expected 'first sweep: zero matches (exit code 1). second sweep: matches only on the reviewed allowlist' -NoRetry `
         -Test { Test-CommittedIdentifier -RepoRoot $root -SecretValue $secretValue -AllowedGuid $allowedGuid } | Out-Null
 
+    # L01: same Graph propagation window
     Invoke-MlsCriterion -Context $context -Id 'V1.4' -Control @('3.5.1', '3.5.2') `
         -Description 'Federated credential subject matches repo:<owner>/<repo>' `
         -Command "GET https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$DeployerAppName'`nGET https://graph.microsoft.com/v1.0/applications/<id>/federatedIdentityCredentials" `
         -Expected "Issuer == https://token.actions.githubusercontent.com; Subject == repo:${repositoryName}:environment:$EnvironmentName" `
+        -RetryWindowMinutes 30 `
         -Test { Test-FederatedCredential -DeployerAppName $DeployerAppName -Repository $repositoryName -EnvironmentName $EnvironmentName } | Out-Null
 
     return $context

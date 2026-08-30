@@ -348,10 +348,12 @@ function Invoke-Main {
     # outright. That demonstrates the Reader identity can reach the workspace, not
     # that audit records were created or retained, which is what 3.3.1 asks for.
     # V7.3 carries 3.3.1 instead, because it proves an actual record was captured.
+    # L06: workspace RBAC propagation
     Invoke-MlsCriterion -Context $context -Id 'V6.2' -Control @() `
         -Description 'KQL query against LAW succeeds as verifier' `
         -Command "az monitor log-analytics query --workspace <lawCustomerId> --analytics-query 'Heartbeat | take 1' --timespan P1D" `
         -Expected 'a well-formed table result under the mls-verifier login (row content may be empty this early)' `
+        -RetryWindowMinutes 15 `
         -Test { Test-LogAnalyticsQuery -WorkspaceId $workspaceId } | Out-Null
 
     $costWindowStart = [datetime]::MinValue

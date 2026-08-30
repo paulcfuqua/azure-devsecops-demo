@@ -295,3 +295,119 @@ Describe 'a transport call cannot outlive its timeout' {
         }
     }
 }
+
+Describe 'a layer cannot declare more patience than its run budget' {
+
+    # The run budget (F58) stops an over-patient audit from being KILLED. It does not stop it
+    # from being over-patient: a layer whose criteria sum past the budget still gets its last
+    # checks truncated, and a truncated window is a half-measured answer.
+    #
+    # This is the arithmetic nobody did. L2 declared three criteria at the inherited
+    # 30-minute default - 90 minutes inside a 60-minute job. L3 declares four, none of them
+    # explicit: two hours. Every one of those windows was inherited rather than chosen, which
+    # is why right-sizing the DEFAULT was the fix and not right-sizing L2 (F59).
+
+    BeforeAll {
+        $script:ModuleText = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'verification' 'MlsAudit.psm1') -Raw
+
+        function Get-MlsDefaultWindow {
+            $m = [regex]::Match($script:ModuleText, '\$script:StandardRetryWindowMinutes\s*=\s*([\d.]+)')
+            if (-not $m.Success) { return -1 }
+            return [double]$m.Groups[1].Value
+        }
+
+        function Get-MlsLayerWindowPlan {
+            <#
+                For each verification/layer-NN-audit.ps1, the in-process wait each criterion
+                can actually block for:
+                  -InProcessWaitMinutes N  -> N   (the 24 h criteria pass 0 and record PENDING)
+                  -NoRetry                 -> 0
+                  -RetryWindowMinutes N    -> N
+                  otherwise                -> the module default
+            #>
+            $default = Get-MlsDefaultWindow
+            $out = [System.Collections.Generic.List[object]]::new()
+            foreach ($file in (Get-ChildItem -Path (Join-Path $script:RepoRoot 'verification') -Filter 'layer-*-audit.ps1' -File)) {
+                $text = Get-Content -LiteralPath $file.FullName -Raw
+                $calls = $text -split 'Invoke-MlsCriterion' | Select-Object -Skip 1
+                $total = 0.0
+                $count = 0
+                $max = 0.0
+                $implicitCount = 0
+                foreach ($call in $calls) {
+                    # A criterion's arguments end at the pipe that consumes its result.
+                    $seg = ($call -split '\|\s*Out-Null')[0]
+                    $count++
+                    # DECLARED and NUMERIC are different questions. V6.4 passes
+                    # `-RetryWindowMinutes $SqlIdleWindowMinutes` - a variable, so its window
+                    # is chosen but not readable here. Treating "not a literal" as "not
+                    # declared" reported a properly-declared criterion as an orphan.
+                    $declared = $seg -match '-InProcessWaitMinutes\b' -or
+                    $seg -match '-RetryWindowMinutes\b' -or
+                    $seg -match '-NoRetry\b'
+                    if (-not $declared) { $implicitCount++ }
+
+                    $window = if ($seg -match '-InProcessWaitMinutes\s+([\d.]+)') { [double]$Matches[1] }
+                    elseif ($seg -match '-NoRetry\b') { 0.0 }
+                    elseif ($seg -match '-RetryWindowMinutes\s+([\d.]+)') { [double]$Matches[1] }
+                    elseif ($declared) { $null }
+                    else { $default }
+
+                    if ($null -ne $window) {
+                        $total += $window
+                        if ($window -gt $max) { $max = $window }
+                    }
+                }
+                $out.Add([pscustomobject]@{
+                        File               = $file.Name
+                        Criteria           = $count
+                        TotalWindowMinutes = $total
+                        MaxWindowMinutes   = $max
+                        Implicit           = $implicitCount
+                    })
+            }
+            return $out
+        }
+    }
+
+    It 'reads a plausible default window' {
+        Get-MlsDefaultWindow | Should -BeGreaterThan 0
+    }
+
+    It 'finds criteria in every layer audit' {
+        $layers = @(Get-MlsLayerWindowPlan)
+        $layers.Count | Should -BeGreaterThan 8
+        @($layers | Where-Object { $_.Criteria -eq 0 }) | Should -BeNullOrEmpty -Because 'a layer audit with no criteria would make this vacuous'
+    }
+
+    It 'no single criterion may declare more patience than the whole run has' {
+        # NOT the sum. Propagation is shared wall clock: once the first criterion has waited
+        # out a 45-minute Entra window, the objects the next three read have had 45 minutes
+        # too, so summing the declared windows overstates the realistic cost. What is never
+        # defensible is ONE criterion that can consume the entire budget and starve the rest.
+        $budget = Get-MlsActionBudgetDefault
+        $offender = @(Get-MlsLayerWindowPlan |
+                Where-Object { $_.MaxWindowMinutes -gt $budget } |
+                ForEach-Object { "$($_.File): a criterion declares $($_.MaxWindowMinutes) min > run budget $budget" })
+        $offender -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a criterion that can eat the whole budget leaves the rest of the layer unmeasured'
+    }
+
+    It 'no criterion inherits its patience silently' {
+        # The original defect in one line: 19 of 47 criteria took a 30-minute window nobody
+        # chose for them, because it was the default. Every criterion now states what it
+        # waits for and why - a value taken from that layer's runbook, not from whatever
+        # default happened to be in the module (F59).
+        $orphan = @(Get-MlsLayerWindowPlan | Where-Object { $_.Implicit -gt 0 } |
+                ForEach-Object { "$($_.File): $($_.Implicit) criteria with no declared window" })
+        $orphan -join '; ' | Should -BeNullOrEmpty `
+            -Because 'inheriting patience is how a synchronous check got a 30-minute window'
+    }
+
+    It 'the default window is short enough that patience must be opted into' {
+        # The specific number is a judgement call; that it is SHORT is the design. A default
+        # long enough to hide an unconsidered criterion is the defect this test exists for.
+        Get-MlsDefaultWindow | Should -BeLessOrEqual 10 `
+            -Because 'a criterion that genuinely needs longer must say so explicitly'
+    }
+}

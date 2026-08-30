@@ -53,10 +53,32 @@ Set-StrictMode -Version Latest
 
 # --- constants -------------------------------------------------------------------------
 
-# Standard bounded-retry window and poll cadence: "bounded retry 30 minutes, poll every
-# 5 minutes" (master plan risk 2; repeated verbatim in L01-L07 playbooks).
-$script:StandardRetryWindowMinutes = 30
-$script:StandardPollIntervalSeconds = 300
+# Standard bounded-retry window and poll cadence.
+#
+# This was "bounded retry 30 minutes, poll every 5 minutes" (master plan risk 2, repeated
+# verbatim in the L01-L07 playbooks), applied as the DEFAULT to every criterion that did not
+# say otherwise - 19 of the 47 criteria in this repo. That is backwards. Thirty minutes is
+# the right window for the handful of checks that wait on a genuinely slow, eventually
+# consistent process; it is absurd for a check whose answer is settled the moment the deploy
+# step returns, and V2.1 is the second kind. It inherited the long window by default and
+# spent all thirty minutes reaching a WRONG verdict (F59).
+#
+# The cost was never one criterion. L3 declares four criteria, none of them explicit: four
+# times thirty is two hours inside a sixty-minute job. The run budget (F58) stops that from
+# killing the job, but a truncated window is a half-measured answer, not a good one.
+#
+# So the default is now short and PATIENCE IS OPT-IN. Ordinary Azure RBAC, policy and Graph
+# propagation lands well inside five minutes; the checks that genuinely need longer already
+# declare it (-RetryWindowMinutes 30 on V2.3's policy scan, 24 h on the cost export and the
+# self-heal criteria). A criterion that turns out to need more now fails fast and says how
+# long it waited, which is the evidence for giving it an explicit window - rather than every
+# criterion silently inheriting the most patient case.
+#
+# Twenty-second polling matters as much as the window: at 300 s a criterion that became true
+# at t=10s still waited five minutes, so every propagation-lagged check cost the full poll
+# interval even when it converged immediately.
+$script:StandardRetryWindowMinutes = 5
+$script:StandardPollIntervalSeconds = 20
 
 # Hard ceiling on how long the WHOLE audit may spend retrying, across every criterion.
 #

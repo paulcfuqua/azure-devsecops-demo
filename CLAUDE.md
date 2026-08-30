@@ -77,6 +77,13 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   (`AZURE_LOCATION` and friends); a default elsewhere silently outranks them, because a
   workflow input beats an environment variable. When a value looks wrong, ask where it comes
   from before asking whether it is correct.
+- **A check declares how long it is willing to wait, and why.** Patience is opted into, never
+  inherited: a criterion that says nothing gets a short window, and one that needs longer
+  states the number and cites the propagation it is waiting on. Nineteen of forty-seven
+  criteria once inherited a 30-minute window nobody chose for them, including a check whose
+  answer was settled the moment the deploy step returned - it spent all thirty minutes
+  reaching a wrong verdict. Match the window to the thing being waited for, and remember
+  propagation is shared wall clock: the second criterion is not starting the clock again.
 - **A test harness runs in the language mode of the script it tests.** No
   `Set-StrictMode -Off` in `*.Tests.ps1`, and no test that supplies the answer it is
   checking - a wrapper, a helper default, or a fixture that re-wraps a return value is not a

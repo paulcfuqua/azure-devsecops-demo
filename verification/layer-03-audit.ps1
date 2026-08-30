@@ -434,16 +434,20 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Manifest shape' `
         -Value "$(@($manifest.users).Count) users / $(@($manifest.groups).Count) groups / $(@($manifest.appRegistrations).Count) app registrations / $(@($manifest.conditionalAccessPolicies).Count) CA policies"
 
+    # L03: Entra object propagation can lag 15-45 min (spec F6)
     Invoke-MlsCriterion -Context $context -Id 'V3.1' -Control @('3.1.1', '3.5.1') `
         -Description 'Graph queries confirm object counts' `
         -Command "GET /v1.0/users/<upn> for each manifest user`nGET /v1.0/groups?`$filter=displayName eq '<name>'`nGET /v1.0/applications?`$filter=displayName eq '<name>'`nGET /v1.0/groups?`$filter=startswith(displayName,'$NamingPrefix')  # drift sweep" `
         -Expected "$(@($manifest.users).Count) users, $(@($manifest.groups).Count) groups, $(@($manifest.appRegistrations).Count) app registrations - each manifest entry resolving to exactly one object, zero $NamingPrefix-prefixed extras" `
+        -RetryWindowMinutes 45 `
         -Test { Test-DirectoryObjectCount -Manifest $manifest -Domain $tenantDomain -NamingPrefix $NamingPrefix } | Out-Null
 
+    # L03: reads the directory V3.1 has already waited out
     Invoke-MlsCriterion -Context $context -Id 'V3.2' -Control @('3.1.1', '3.1.2') `
         -Description 'Graph queries confirm group memberships' `
         -Command "GET /v1.0/groups/<id>/members for each manifest group" `
         -Expected "each group's member set equals the manifest's member list exactly (set equality)" `
+        -RetryWindowMinutes 10 `
         -Test { Test-GroupMembership -Manifest $manifest -Domain $tenantDomain } | Out-Null
 
     $enforcedPolicy = @($manifest.conditionalAccessPolicies | Where-Object { $_.state -eq 'enabled' })
@@ -479,10 +483,12 @@ function Invoke-Main {
     # replay-resistant is the OIDC code flow the platform implements, which this criterion
     # neither configures nor reads. compliance/assessment/3.5.3.json carries the authored
     # record and says exactly this, in both directions.
+    # L03: reads the directory V3.1 has already waited out
     Invoke-MlsCriterion -Context $context -Id 'V3.3' -Control @() `
         -Description 'CA policy state matches the manifest, and the enforced policy really enforces MFA' `
         -Command "GET /v1.0/identity/conditionalAccess/policies  # Policy.Read.All, read-only`nGET /v1.0/applications?`$filter=displayName eq '<dashboard app>'  # -> appId`nGET /v1.0/groups/<break-glass>/members?`$select=id,userPrincipalName,onPremisesSyncEnabled" `
         -Expected "$(@($reportOnlyPolicy).Count) broad polic(y/ies) [$(@($reportOnlyPolicy | ForEach-Object { $_.displayName }) -join ', ')] State == enabledForReportingButNotEnforced; $(@($enforcedPolicy).Count) polic(y/ies) [$(@($enforcedPolicy | ForEach-Object { $_.displayName }) -join ', ')] State == enabled, granting mfa, scoped to exactly $($enforcedScope -join '/') named application(s) and not 'All', excluding a break-glass group that holds a cloud-only emergency-access account" `
+        -RetryWindowMinutes 10 `
         -Test { Test-ConditionalAccessState -Manifest $manifest -Domain $tenantDomain } | Out-Null
 
     $licensedUser = @(Get-ManifestUserPrincipalName -Manifest $manifest -Domain $tenantDomain -LicensedOnly)
@@ -491,10 +497,12 @@ function Invoke-Main {
     # implemented protection. What those features do is evidenced directly by V3.3;
     # licence state alone would over-claim if mapped to the identification/authentication
     # requirements those features realize.
+    # L03: reads the directory V3.1 has already waited out
     Invoke-MlsCriterion -Context $context -Id 'V3.4' -Control @() `
         -Description "License assignment state == success for all $($licensedUser.Count) licensed of $(@($manifest.users).Count)" `
         -Command "GET /v1.0/subscribedSkus`nGET /v1.0/users/<upn>?`$select=licenseAssignmentStates" `
         -Expected "each of the $($licensedUser.Count) manifest user(s) flagged licensed carries the $LicenseSkuPartNumber assignment with State == Active and no error" `
+        -RetryWindowMinutes 10 `
         -Test { Test-LicenseAssignment -Manifest $manifest -Domain $tenantDomain -LicenseSkuPartNumber $LicenseSkuPartNumber } | Out-Null
 
     return $context

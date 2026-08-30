@@ -492,8 +492,11 @@ Describe 'layer-03-audit' {
             $row = Get-Row -Context $context -Id 'V3.1'
             $row.Status | Should -Be 'PASS'
             $row.Attempt | Should -Be 2
-            $row.SleptSeconds | Should -Be 300
-            $row.SleptSeconds | Should -BeLessThan (30 * 60)
+            # One poll interval, not the whole window - asserted against the row's own
+            # cadence rather than a literal, so right-sizing the defaults (F59) cannot
+            # silently turn this into a test of a constant nobody re-checked.
+            $row.SleptSeconds | Should -Be $row.PollIntervalSecond
+            $row.SleptSeconds | Should -BeLessThan ($row.RetryWindowMinutes * 60)
             Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Exactly -Times 1
         }
     }
