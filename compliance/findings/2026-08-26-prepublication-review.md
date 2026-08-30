@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F69](#f69), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F70](#f70), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -99,6 +99,7 @@ claim by one step:
 | [F67](#f67) | **When a check and the operation it protects are not asking the same question, the check will pass at exactly the moment it matters.** `Wait-EntraPropagation` confirmed the user and group were VISIBLE; the membership write needs them LINKABLE, and 404'd - killing L3 on its first membership on the first run that ever reached it. | high | CONFIRMED (observed, run 33321360624) | 3.1.1, 3.12.1 | first L3 apply, 2026-08-30 |
 | [F68](#f68) | **A repository-wide sweep has no exemption for test data.** The fix for F62's test collision wrote three realistic-looking GUID literals into a fixture; V1.3 flagged them on the next live run, correctly. Generated now, not committed. | low | CONFIRMED (observed, verify-l1 16:14) | 3.1.1, 3.4.1 | verify-l1, 2026-08-30 |
 | [F69](#f69) | **A mutation test proves a guard is load bearing; it cannot prove the guard is wired to reality.** F67's retry matched the Graph error code against `Exception.Message`, which never carries it - so a fully tested, triple-mutation-killed fix merged and did nothing, and L3 failed identically. | high | CONFIRMED (observed, run 33323094630 on the commit containing the fix) | 3.1.1, 3.12.1 | second L3 apply, 2026-08-30 |
+| [F70](#f70) | **A fix at the call site protects one call; a fix at the choke point protects the class.** F69's retry finally fired - and the run died on the GET one line above it, unprotected. Every call against a just-created directory object can 404. | high | CONFIRMED (observed, run 33324015966) | 3.1.1, 3.12.1 | third L3 apply, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4118,3 +4119,52 @@ The rule this earns: **when a fix depends on the shape of an external system's e
 mock encodes an assumption, and the assumption is the thing most likely to be wrong.** The
 cheap check is to fail once for real and read the actual error record - which is what
 [F58](#f58)'s streamed transcript exists to make possible, and what closed this in one run.
+
+---
+
+## F70
+
+**I fixed the call that failed and left the call on the line above it**
+
+- **Severity:** high (third consecutive run stopped at L3; the failure moved one line and the fix did not)
+- **Confidence:** CONFIRMED - run 33324015966: the retry engaged exactly once on the POST, then the job died on `GET groups/{id}/members?$select=id`, an unprotected call in the same function
+- **Controls:** 3.1.1, 3.12.1
+- **Closed by:** moving the retry into `Invoke-GraphApi`, the choke point every Graph call already routes through
+- **Status:** CLOSED
+
+[F67](#f67) added a retry to the membership POST. [F69](#f69) made that retry actually fire.
+The next run got one retry message - proof the machinery finally worked - and then failed on
+the **GET immediately above it**, reading the group's existing members before adding any.
+Same function. Adjacent line. Same freshly created group, same 404, no protection.
+
+And it would have been the next call after that. **Every read or write against an object this
+script just created can 404 on a replica that has not caught up**, and there is no principled
+way to enumerate in advance which ones will.
+
+**Fix.** The retry lives in `Invoke-GraphApi`, whose own summary already describes it as the
+*"single choke point for every Microsoft Graph call"* - the retry now makes that true rather
+than aspirational. `-AllowNotFound` short-circuits before it, because a caller asking *does
+this exist?* wants the answer no immediately and must never wait out a propagation budget:
+that is the entire difference between **not there** and **not there yet**. The budget is
+script-scoped rather than threaded through every caller, because a parameter that every call
+site must remember is a parameter some call site will forget - which is the shape of this
+finding.
+
+### What this says about the method
+
+**This is the third time in one session I have fixed what the error named rather than what it
+implied**, after [F49](#f49) (one test directory of three), [F54](#f54) (one scope of two) and
+[F55](#f55) (two policy modules of six) had already established the pattern, and after I wrote
+it into [F58](#f58) as a lesson. Knowing the failure mode by name did not prevent committing
+it three more times.
+
+What actually breaks the cycle is not vigilance, it is **placement**: a fix at the call site
+protects one call, and a fix at the choke point protects the class. The code had already
+identified its own choke point in a comment. The repair belonged there from the start, and
+the reason it went elsewhere is that a specific failing line is concrete and a class of calls
+is abstract - the concrete thing is easier to fix and is almost never the whole fix.
+
+The three tests that covered F67 also had to be rewritten here, because they mocked
+`Invoke-GraphApi` - which is now the unit under test. A mock placed at the layer you later
+move the logic into stops testing anything, silently. That is the fourth mock this session
+caught certifying its own assumptions ([F59](#f59), [F62](#f62), [F69](#f69), and now this).

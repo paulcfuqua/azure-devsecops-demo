@@ -89,6 +89,12 @@ function Test-GraphConnection {
     return $ctx
 }
 
+# Propagation budget for the Graph choke point below. Script-scoped because EVERY call goes
+# through one function, and threading two parameters through every caller would guarantee the
+# next call site forgets them - which is the shape of F70.
+$script:PropagationTimeoutSeconds = 180
+$script:PropagationIntervalSeconds = 5
+
 function Invoke-GraphApi {
     <# Single choke point for every Microsoft Graph call (mocked in tests). #>
     param(
@@ -99,17 +105,48 @@ function Invoke-GraphApi {
         [switch]$AllowNotFound
     )
     $uri = "https://graph.microsoft.com/v1.0/$Path"
-    try {
-        if ($null -ne $Body) {
-            return Invoke-MgGraphRequest -Method $Method -Uri $uri -Body ($Body | ConvertTo-Json -Depth 10) -ContentType 'application/json'
+
+    # DIRECTORY REPLICATION IS HANDLED HERE, AT THE CHOKE POINT, FOR EVERY CALL.
+    #
+    # It was handled one level up instead, on the single POST that had been observed to fail
+    # - and the very next run failed on the GET immediately above it, in the same function,
+    # against the same freshly created group (F70). Then it would have been the next call,
+    # and the next: EVERY read-or-write against an object this script just created can 404
+    # on a replica that has not caught up, and there is no principled way to enumerate which
+    # ones will. This function's own summary already calls it "single choke point for every
+    # Microsoft Graph call"; the retry belongs where that is true.
+    #
+    # -AllowNotFound short-circuits BEFORE the retry: a caller asking "does this exist?" wants
+    # the answer no, immediately, and must never be made to wait out a propagation budget for
+    # it. That is the whole distinction between "not there" and "not there yet".
+    $deadline = [datetime]::UtcNow.AddSeconds($script:PropagationTimeoutSeconds)
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            if ($null -ne $Body) {
+                return Invoke-MgGraphRequest -Method $Method -Uri $uri -Body ($Body | ConvertTo-Json -Depth 10) -ContentType 'application/json'
+            }
+            return Invoke-MgGraphRequest -Method $Method -Uri $uri
         }
-        return Invoke-MgGraphRequest -Method $Method -Uri $uri
-    }
-    catch {
-        if ($AllowNotFound -and $_.Exception.Message -match '(?i)404|Not ?Found|Request_ResourceNotFound|does not exist') {
-            return $null
+        catch {
+            # Match the WHOLE error record. Invoke-MgGraphRequest puts the terse status text in
+            # Exception.Message and the JSON body carrying the Graph error code in
+            # ErrorDetails.Message, so a predicate reading only the former never fires (F69).
+            # ErrorDetails is $null for a plain exception and StrictMode makes that access
+            # terminating, hence the guard.
+            $errorDetails = if ($null -ne $_.ErrorDetails) { "$($_.ErrorDetails.Message)" } else { '' }
+            $text = "$($_.Exception.Message)`n$errorDetails`n$($_.Exception)"
+            $isNotFound = $text -match '(?i)Request_ResourceNotFound|does not exist or one of its queried reference-property objects|\b404\b|Not Found'
+
+            if ($AllowNotFound -and $isNotFound) { return $null }
+            if (-not $isNotFound) { throw }
+            if ([datetime]::UtcNow -ge $deadline) {
+                throw "Timed out after $($script:PropagationTimeoutSeconds)s on $Method $Path after $attempt attempt(s): Graph still reports the object as not present. It was created or resolved earlier in this same run, so this is directory replication rather than a missing object."
+            }
+            Write-Status "$Method $Path not resolvable yet (directory replication); retrying in $($script:PropagationIntervalSeconds)s." -Color DarkYellow
+            Invoke-PropagationDelay -Seconds $script:PropagationIntervalSeconds
         }
-        throw
     }
 }
 
@@ -505,9 +542,7 @@ function Initialize-GroupMembership {
     param(
         [Parameter(Mandatory)][string]$GroupId,
         [Parameter(Mandatory)][string]$GroupName,
-        [AllowEmptyCollection()][string[]]$MemberIds = @(),
-        [int]$TimeoutSeconds = 180,
-        [int]$IntervalSeconds = 5
+        [AllowEmptyCollection()][string[]]$MemberIds = @()
     )
     $response = Invoke-GraphApi -Method GET -Path "groups/$GroupId/members?`$select=id"
     $currentIds = @(Get-ResponseValue -Response $response | ForEach-Object { Get-Field -Object $_ -Name 'id' })
@@ -516,40 +551,10 @@ function Initialize-GroupMembership {
         if ($currentIds -contains $memberId) { continue }
         $body = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$memberId" }
 
-        $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
-        while ($true) {
-            try {
-                Invoke-GraphMutation -Target $GroupName -Action "Add member $memberId" `
-                    -Method POST -Path "groups/$GroupId/members/`$ref" -Body $body | Out-Null
-                break
-            }
-            catch {
-                # MATCH THE WHOLE ERROR RECORD, NOT JUST Exception.Message.
-                #
-                # The first version of this retry matched `Request_ResourceNotFound` against
-                # $_.Exception.Message and never fired, because Invoke-MgGraphRequest puts the
-                # terse text there - "Response status code does not indicate success: 404 (Not
-                # Found)." - and the JSON body carrying the Graph error CODE in
-                # $_.ErrorDetails.Message. The predicate was reading a field that does not hold
-                # the thing it was looking for, so a correct retry sat in the code doing
-                # nothing while L3 failed exactly as before (F69).
-                # ErrorDetails is $null for a plain exception, and StrictMode makes a
-                # property access on $null a terminating error - which would convert every
-                # non-Graph failure into a confusing one.
-                $errorDetails = if ($null -ne $_.ErrorDetails) { "$($_.ErrorDetails.Message)" } else { '' }
-                $detail = "$($_.Exception.Message)`n$errorDetails`n$($_.Exception)"
-                # A 404 on this endpoint is ALWAYS one of the two directory objects not being
-                # resolvable on this replica: the group id came from a create or a lookup in
-                # this same run, and the member id from the users just confirmed visible.
-                $isPropagation = $detail -match '(?i)Request_ResourceNotFound|does not exist or one of its queried reference-property objects|\b404\b|Not Found'
-                if (-not $isPropagation) { throw }
-                if ([datetime]::UtcNow -ge $deadline) {
-                    throw "Timed out after ${TimeoutSeconds}s adding member $memberId to group '$GroupName': Graph still reports one of the two directory objects as not present. Both were visible to a GET before this write, so this is directory replication rather than a missing object."
-                }
-                Write-Status "Member $memberId not yet linkable to '$GroupName' (directory replication); retrying in ${IntervalSeconds}s." -Color DarkYellow
-                Invoke-PropagationDelay -Seconds $IntervalSeconds
-            }
-        }
+        # No bespoke retry here any more: Invoke-GraphApi retries replication for EVERY call,
+        # which is what the GET above this loop needed too and did not have (F70).
+        Invoke-GraphMutation -Target $GroupName -Action "Add member $memberId" `
+            -Method POST -Path "groups/$GroupId/members/`$ref" -Body $body | Out-Null
         $added++
     }
     return $added
@@ -757,6 +762,12 @@ function Invoke-Main {
         [int]$PropagationTimeoutSeconds = 180,
         [int]$PropagationIntervalSeconds = 5
     )
+    # Publish the propagation budget to the Graph choke point, which every call routes
+    # through. Without this the parameters above would configure the two Wait-EntraPropagation
+    # call sites and silently NOT configure the retry that now does most of the waiting.
+    $script:PropagationTimeoutSeconds = $PropagationTimeoutSeconds
+    $script:PropagationIntervalSeconds = $PropagationIntervalSeconds
+
     $manifest = Get-Manifest -Path $ManifestPath
     Assert-ManifestSchema -Manifest $manifest | Out-Null
     Test-GraphConnection | Out-Null
@@ -820,8 +831,7 @@ function Invoke-Main {
                 Write-Status "(-WhatIf) Member '$member' has no resolvable id yet (user not created) - skipping." -Color Yellow
             }
         }
-        $summary.MembershipsAdded += Initialize-GroupMembership -GroupId $result.Id -GroupName $groupName -MemberIds $memberIds `
-            -TimeoutSeconds $PropagationTimeoutSeconds -IntervalSeconds $PropagationIntervalSeconds
+        $summary.MembershipsAdded += Initialize-GroupMembership -GroupId $result.Id -GroupName $groupName -MemberIds $memberIds
     }
 
     # ---- app registrations ---------------------------------------------------------
