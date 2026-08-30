@@ -966,8 +966,17 @@ function Invoke-MlsCriterion {
             $result = ConvertTo-MlsCheckResult -InputObject $raw
         }
         catch {
-            $result = New-MlsCheckResult -Passed $false -Observed "check threw: $($_.Exception.Message)" `
-                -Detail "$($_.Exception.GetType().Name) at $($_.InvocationInfo.ScriptLineNumber)"
+            # A PERMISSION FAILURE IS NEVER A PROPAGATION FAILURE, so it is -Final and the
+            # loop below stops on it. Waiting cannot turn "forbidden" into "permitted"; it
+            # only converts an actionable FAIL into a job timeout with no report at all.
+            #
+            # L2's audit ran for exactly sixty minutes and was killed by the runner. It was
+            # not slow: mls-verifier had no role assignment at the mls management group, so
+            # every criterion reading MG state threw AuthorizationFailed and each one waited
+            # out the whole propagation window in turn (F57).
+            $final = $_.Exception.Message -match 'AuthorizationFailed|Authorization_RequestDenied|InsufficientPrivileges|\bForbidden\b|\b403\b'
+            $result = New-MlsCheckResult -Passed $false -Final:$final -Observed "check threw: $($_.Exception.Message)" `
+                -Detail "$($_.Exception.GetType().Name) at $($_.InvocationInfo.ScriptLineNumber)$(if ($final) { ' - permission failure, not retried: the identity cannot see this, and waiting will not change that' })"
         }
         if ($result.Status -eq 'SKIP' -or $result.Passed -or $result.Final) { break }
         # Budget consumed is the greater of wall-clock elapsed and the sleep we asked for.
