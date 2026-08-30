@@ -911,7 +911,7 @@ Only when the eleven checks are green **and** C5 is confirmed by eye does Layer 
 Items C6, C7, C10 and 13 are **not** G0-complete blockers for Layer 1 — C7 cannot even be
 done
 until L8 has published an agent, C6 is deferred by design while the Fabric capacity
-is on the trial SKU, C10 cannot run until L3 has created the users it licenses, and item
+is on the trial SKU, C10 is now performed BY L3 itself (F79) and needs no operator action, and item
 13 cannot run until L3 has created the group. C6/C7
 block L8 only, C10 blocks L3's V3.4 only, and item 13 blocks L3's V3.3 only;
 `verify-g0.ps1` reports them as

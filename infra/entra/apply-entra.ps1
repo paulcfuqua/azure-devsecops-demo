@@ -645,6 +645,74 @@ function Resolve-CaPolicyCondition {
 # deliberately NOT used here).
 $script:GlobalAdministratorRoleTemplateId = '62e90394-69f5-4237-9190-012177145e10'
 
+function Get-CapableLicenseSku {
+    <#
+        The subscribed SKU that provisions the service plans this estate's features need.
+
+        MATCHED ON CAPABILITY, NOT BUNDLE NAME. Microsoft sells Entra ID Premium and MFA
+        under many SKUs and adds more; enumerating bundle names is a list that goes stale on
+        someone else's schedule, and the audit already learned this the expensive way -
+        V3.4 reported "SKU 'EMSPREMIUM' is not present" about a tenant holding 25 seats of
+        Microsoft 365 E5, which provides every one of them (F73).
+
+        Returns the first SKU with a free seat, or $null.
+    #>
+    param([string[]]$RequiredServicePlan = @('AAD_PREMIUM', 'MFA_PREMIUM'))
+
+    $response = Invoke-GraphApi -Method GET -Path 'subscribedSkus' -AllowNotFound
+    foreach ($sku in @(Get-ResponseValue -Response $response)) {
+        $plans = @(Get-Field -Object $sku -Name 'servicePlans')
+        $names = @($plans |
+                Where-Object { "$(Get-Field -Object $_ -Name 'provisioningStatus')" -eq 'Success' } |
+                ForEach-Object { "$(Get-Field -Object $_ -Name 'servicePlanName')" })
+        if (@($RequiredServicePlan | Where-Object { $_ -notin $names }).Count -ne 0) { continue }
+
+        $prepaid = Get-Field -Object $sku -Name 'prepaidUnits'
+        $enabled = if ($prepaid) { [int](Get-Field -Object $prepaid -Name 'enabled') } else { 0 }
+        $consumed = [int](Get-Field -Object $sku -Name 'consumedUnits')
+        if ($enabled -le $consumed) { continue }   # no free seat: assigning would fail
+
+        return @{
+            SkuId       = Get-Field -Object $sku -Name 'skuId'
+            PartNumber  = Get-Field -Object $sku -Name 'skuPartNumber'
+            SeatsFree   = $enabled - $consumed
+        }
+    }
+    return $null
+}
+
+function Initialize-UserLicense {
+    <#
+        Assign a licence to a manifest user that declares `licensed: true`, if it has none.
+
+        THIS USED TO BE A HUMAN STEP. `g0-bootstrap.md` item C10 asked the operator to
+        assign licences by hand after L3 created the users, and V3.4 asserted the result -
+        so the audit checked a state that nothing in the deploy path produced. On an estate
+        whose entire claim is agent-created and agent-managed infrastructure, a manifest
+        field nothing acts on is a gap rather than a design (F79).
+
+        No new permission: the deployer already holds Directory.Read.All to read the SKUs and
+        User.ReadWrite.All to assign them, both granted at G0 for other reasons. No spend
+        either - it consumes seats already bought, and refuses rather than buying more when
+        none are free.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$UserId,
+        [Parameter(Mandatory)][string]$Upn,
+        [Parameter(Mandatory)][hashtable]$Sku
+    )
+    $existing = Invoke-GraphApi -Method GET -Path "users/$UserId`?`$select=assignedLicenses" -AllowNotFound
+    $assigned = @(Get-Field -Object $existing -Name 'assignedLicenses' |
+            ForEach-Object { "$(Get-Field -Object $_ -Name 'skuId')" })
+    if ($Sku.SkuId -in $assigned) { return 'Unchanged' }
+
+    $body = @{ addLicenses = @(@{ skuId = $Sku.SkuId; disabledPlans = @() }); removeLicenses = @() }
+    $result = Invoke-GraphMutation -Target $Upn -Action "Assign licence $($Sku.PartNumber)" `
+        -Method POST -Path "users/$UserId/assignLicense" -Body $body
+    if ($null -eq $result) { return 'WhatIf' }
+    return 'Assigned'
+}
+
 function Test-BreakGlassReady {
     <#
         Is there an emergency-access account to fall back on if this policy is wrong?
@@ -881,6 +949,10 @@ function Invoke-Main {
     # Collected, not thrown. See Invoke-ManifestItem for why.
     $failures = [System.Collections.Generic.List[string]]::new()
 
+    # Resolved on first use, once, and only if some user is actually licensed.
+    $licenseSku = $null
+    $licenseSkuResolved = $false
+
     $manifest = Get-Manifest -Path $ManifestPath
     Assert-ManifestSchema -Manifest $manifest | Out-Null
     Test-GraphConnection | Out-Null
@@ -899,6 +971,7 @@ function Invoke-Main {
         GroupsCreated = 0; GroupsUnchanged = 0; MembershipsAdded = 0
         AppsCreated = 0; AppsUpdated = 0; AppsUnchanged = 0
         CaCreated = 0; CaUpdated = 0; CaUnchanged = 0; CaBlocked = 0
+        LicensesAssigned = 0; LicensesUnchanged = 0
         SkippedInWhatIf = 0
     }
 
@@ -918,6 +991,32 @@ function Invoke-Main {
             'WhatIf' { $summary.SkippedInWhatIf++ }
         }
         if ($result.Id) { $userIdByPrefix[$prefix] = $result.Id }
+
+        # Licence, if the manifest says this persona is licensed. Resolved once, lazily:
+        # a manifest with no licensed users must not make the estate read subscribedSkus.
+        if ((Get-Field -Object $user -Name 'licensed') -eq $true -and $result.Id) {
+            if ($null -eq $licenseSku -and -not $licenseSkuResolved) {
+                $licenseSkuResolved = $true
+                $licenseSku = Get-CapableLicenseSku
+                if ($null -eq $licenseSku) {
+                    Write-Status "No subscribed SKU provides Entra ID Premium + MFA with a free seat, so no manifest user will be licensed. V3.4 fails until a suitable licence is available (docs/runbooks/g0-bootstrap.md item C10)." -Color Yellow
+                }
+                else {
+                    Write-Status "Licensing manifest users with $($licenseSku.PartNumber) ($($licenseSku.SeatsFree) seat(s) free)." -Color Cyan
+                }
+            }
+            if ($null -ne $licenseSku) {
+                $upn = "$prefix@$effectiveDomain"
+                $outcome = Invoke-ManifestItem -Description "licence for $upn" -Failures $failures -Action {
+                    Initialize-UserLicense -UserId $result.Id -Upn $upn -Sku $licenseSku
+                }
+                switch ($outcome) {
+                    'Assigned' { $summary.LicensesAssigned++ }
+                    'Unchanged' { $summary.LicensesUnchanged++ }
+                    'WhatIf' { $summary.SkippedInWhatIf++ }
+                }
+            }
+        }
     }
 
     # ---- groups + memberships ------------------------------------------------------

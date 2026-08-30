@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F78](#f78), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F79](#f79), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -108,6 +108,7 @@ claim by one step:
 | [F76](#f76) | **Fail-slow was wired into three of four item types.** F72 covered users, groups and memberships - the three failing at the time - and left the CA loop aborting on first error. | medium | CONFIRMED (the F75 run stopped dead) | 3.12.1 | same run, 2026-08-30 |
 | [F77](#f77) | **When a check gates a dangerous action it must assert the capability, not the artefact.** Break-glass readiness verified group membership; the account it approved held zero roles and could recover nothing. | high | CONFIRMED (account passed while holding no role) | 3.1.1, 3.5.3 | sponsor question, 2026-08-30 |
 | [F78](#f78) | **A test that can only be satisfied by weakening the system is reasoning backwards.** V3.3 asserted an enabled CA policy where 3.5.3 asks whether MFA is enforced - failing on a tenant secured by Security Defaults, and offering a green result in exchange for baseline MFA. | high | CONFIRMED (tenant enforces MFA; V3.3 failed) | 3.5.3 | first L3 audit, 2026-08-30 |
+| [F79](#f79) | **A documented manual step reads as a design.** The manifest declared five users licensed, V3.4 asserted it, and nothing assigned a licence - C10 asked a human to. L3 does it now, with permissions the deployer already had and seats already bought. | medium | CONFIRMED (observed, run 33335057817) | 3.1.1, 3.5.3 | second L3 audit, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4500,3 +4501,54 @@ not a persona, credential out of band, monitored, two accounts in production - a
 said the account needs a role**. The prose described the artefact as faithfully as the check
 did. Writing the guidance did not surface the gap, because the guidance and the check were
 written from the same picture.
+
+---
+
+## F79
+
+**V3.4 audited a state that no layer produced**
+
+- **Severity:** medium (L3 could not sign off without a manual step, on an estate whose claim is that it manages itself)
+- **Confidence:** CONFIRMED - run 33335057817: V3.4 reported all five personas unlicensed; `apply-entra.ps1` contains no licence assignment of any kind
+- **Controls:** 3.1.1, 3.5.3
+- **Closed by:** L3 assigning licences from the manifest, using permissions the deployer already held
+- **Status:** CLOSED
+
+`infra/entra/manifest.json` declares `"licensed": true` on all five demo personas. V3.4 asserts
+that each of them holds a licence. **Nothing between those two statements assigns one.**
+
+It was documented rather than forgotten: `g0-bootstrap.md` item C10 asks the operator to
+assign licences by hand once L3 has created the users, and notes that C10 blocks V3.4 alone.
+So the design was coherent - and it left a manifest field that nothing acts on, an audit
+criterion measuring a human's diligence, and a layer that cannot sign off unattended.
+
+**On an estate whose entire argument is agent-created and agent-managed infrastructure, that
+is a gap wearing a runbook entry.**
+
+**Fix.** L3 resolves a SKU by CAPABILITY - the `AAD_PREMIUM` and `MFA_PREMIUM` service plans,
+the same rule [F73](#f73) established for the audit rather than a bundle name - and assigns it
+to every manifest user declaring `licensed: true`. Idempotent, fail-slow, and it refuses when
+no subscribed SKU has a free seat rather than half-licensing the estate.
+
+Three properties worth naming, because each was a decision:
+
+- **No new permission.** `Directory.Read.All` reads the SKUs and `User.ReadWrite.All` assigns
+  them; the deployer holds both, granted at G0 for other reasons. No seventh credential, so
+  CLAUDE.md hard rule 5 is untouched.
+- **No spend.** It consumes seats already bought and stops when none are free. Buying a seat
+  is a G2 decision and this code cannot make one.
+- **Lazily resolved.** A manifest with no licensed users never reads `subscribedSkus` at all.
+
+### What this says about the method
+
+The audit was right and the estate was incomplete - the reverse of most of this register,
+where the estate was fine and the check was asking the wrong question. Worth recording for
+that reason alone.
+
+But the interesting part is why it survived: **the gap was documented, and documentation made
+it look decided.** C10 explains clearly why licence assignment cannot run before L3, and
+that explanation is correct. It just never asks the next question, which is why a step that
+can only run after L3 is not simply part of L3. A runbook entry describing a manual step reads
+as a design, and it takes a live run - and a criterion failing against a tenant with 23 idle
+seats - to notice that the manual step had no reason to be manual.
+
