@@ -32,6 +32,20 @@ Describe 'the estate region is never hardcoded in the deploy path' {
         $offender -join ', ' | Should -BeNullOrEmpty -Because 'vars.AZURE_LOCATION is the single source of truth; a default silently outvotes it'
     }
 
+    It 'every policy assignment pins its identity location explicitly' {
+        # AVM's policy-assignment module defaults `location` to the DEPLOYMENT's location.
+        # Four of the six assignments never passed one, so they silently tracked the estate
+        # region and failed with InvalidLocationUpdate on a region change - even the ones
+        # with identity 'None', which have no identity to place. A seventh module added
+        # without a location would reintroduce exactly that (F55).
+        $template = Join-Path $script:RepoRoot 'infra' 'bicep' 'landing-zone' 'main.bicep'
+        $content = Get-Content -LiteralPath $template -Raw
+        $modules = ([regex]::Matches($content, "avm/ptn/authorization/policy-assignment")).Count
+        $pinned = ([regex]::Matches($content, 'location:\s*effectivePolicyAssignmentLocation')).Count
+        $modules | Should -BeGreaterThan 0 -Because 'the template must still declare policy assignments'
+        $pinned | Should -Be $modules -Because 'every policy-assignment module must pin its location, or AVM defaults it to the estate region'
+    }
+
     It 'scripts/up.ps1 does not default -Location to a region' {
         $line = Select-String -Path (Join-Path $script:RepoRoot 'scripts' 'up.ps1') `
             -Pattern '^\s*\[string\]\$Location\s*=' | Select-Object -First 1

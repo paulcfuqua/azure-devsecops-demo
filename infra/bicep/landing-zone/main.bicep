@@ -139,6 +139,9 @@ module requireTagOnRg 'br/public:avm/ptn/authorization/policy-assignment:0.5.3' 
         tagName: { value: spec.tagName }
       }
       identity: 'None' // deny effect needs no managed identity
+      // AVM defaults this to the deployment location. Unset, these four tracked the estate
+      // region and broke on a region change even without an identity (F55).
+      location: effectivePolicyAssignmentLocation
       nonComplianceMessages: [
         { message: 'Resource groups must carry the required tag \'${spec.tagName}\' (see CLAUDE.md tagging rules).' }
       ]
@@ -160,6 +163,7 @@ module requireManagedByIac 'br/public:avm/ptn/authorization/policy-assignment:0.
       tagValue: { value: naming.managedByValue }
     }
     identity: 'None'
+    location: effectivePolicyAssignmentLocation
     nonComplianceMessages: [
       { message: 'Resource groups must be created by IaC and tagged managedBy=${naming.managedByValue}.' }
     ]
@@ -200,6 +204,7 @@ module allowedLocationsResources 'br/public:avm/ptn/authorization/policy-assignm
       listOfAllowedLocations: { value: allowedLocations }
     }
     identity: 'None'
+    location: effectivePolicyAssignmentLocation
   }
 }
 
@@ -215,6 +220,7 @@ module allowedLocationsRgs 'br/public:avm/ptn/authorization/policy-assignment:0.
       listOfAllowedLocations: { value: allowedLocations }
     }
     identity: 'None'
+    location: effectivePolicyAssignmentLocation
   }
 }
 
