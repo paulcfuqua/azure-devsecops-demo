@@ -411,3 +411,29 @@ Describe 'a layer cannot declare more patience than its run budget' {
             -Because 'a criterion that genuinely needs longer must say so explicitly'
     }
 }
+
+Describe 'no test fixture commits a GUID the allowlist does not cover' {
+    # V1.3 sweeps the repository and fails on any GUID not on the reviewed allowlist. A test
+    # fixture is a committed file, so a GUID-shaped literal in one is a hit like any other -
+    # which is how three "realistic-looking" ids added to make an L1 test honest promptly
+    # made V1.3 red (F68). Generate them instead of committing them.
+
+    It 'every committed GUID is on the reviewed allowlist' {
+        $pattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+        $allowlist = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'verification' 'guid-allowlist.txt') -Raw
+        $allowed = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($m in [regex]::Matches($allowlist, $pattern)) { $null = $allowed.Add($m.Value.ToLowerInvariant()) }
+
+        Push-Location $script:RepoRoot
+        try {
+            $hits = @(git grep -hoIE $pattern -- '.' ':!docs' ':!*.lock' 2>$null)
+        }
+        finally { Pop-Location }
+
+        $hits.Count | Should -BeGreaterThan 0 -Because 'a sweep that finds nothing would make this vacuous'
+        $orphan = @($hits | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique |
+                Where-Object { -not $allowed.Contains($_) })
+        $orphan -join ', ' | Should -BeNullOrEmpty `
+            -Because 'V1.3 fails the live audit on exactly this; catching it here costs a second instead of a deploy'
+    }
+}

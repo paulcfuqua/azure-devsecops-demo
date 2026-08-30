@@ -41,13 +41,17 @@ AfterAll {
 Describe 'layer-01-audit' {
     BeforeEach {
         $env:GH_TOKEN = 'ghp-verifier-read-only'
-        # Deliberately NOT repeating-digit ids. Those appear throughout the repo's fixtures
-        # and are therefore on the reviewed GUID allowlist, so using them here made every
-        # test look like the estate had laundered its live identifiers into that list - the
-        # exact condition V1.3 now refuses (F62). A real tenant id looks like this.
-        $env:AZURE_TENANT_ID = 'c0ffee11-dead-4bee-9abc-0123456789ab'
-        $env:AZURE_SUBSCRIPTION_ID = 'facade22-cafe-4dad-8def-9876543210fe'
-        $env:FABRIC_CAPACITY_ID = 'badc0de3-feed-4fab-b012-13579bdf2468'
+        # GENERATED, never committed. These must not be repeating-digit ids - those appear
+        # throughout the repo's fixtures and are therefore allowlisted, which made every test
+        # look like the estate had laundered its live identifiers into that list (F62). The
+        # first fix wrote three realistic-looking LITERALS instead, and V1.3 immediately and
+        # correctly flagged them: a committed GUID that is not on the allowlist is exactly
+        # what that sweep exists to find, and a test fixture is still a committed file (F68).
+        #
+        # A fresh guid each run is both: never committed, and never allowlisted.
+        $env:AZURE_TENANT_ID = [guid]::NewGuid().ToString()
+        $env:AZURE_SUBSCRIPTION_ID = [guid]::NewGuid().ToString()
+        $env:FABRIC_CAPACITY_ID = [guid]::NewGuid().ToString()
 
         Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
         Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
