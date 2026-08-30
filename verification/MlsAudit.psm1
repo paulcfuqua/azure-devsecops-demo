@@ -559,12 +559,34 @@ function Invoke-MlsGh {
         [Parameter(Mandatory)][string[]]$Argument,
         [switch]$AllowFailure,
         [switch]$Raw,
-        [int]$TimeoutSeconds = 0
+        [int]$TimeoutSeconds = 0,
+        [AllowEmptyString()][string]$Token = ''
     )
     Assert-MlsReadOnlyGhArgument -Argument $Argument
     Assert-MlsCommand -Name 'gh' -Hint 'Install the GitHub CLI and export the Verifier read token as GH_TOKEN.'
     if ($TimeoutSeconds -le 0) { $TimeoutSeconds = $script:DefaultCommandTimeoutSeconds }
-    $run = Invoke-MlsBoundedNativeCommand -FilePath 'gh' -Argument $Argument -TimeoutSeconds $TimeoutSeconds
+
+    # -Token runs ONE call under a different credential. It exists for V1.2, which reads a
+    # repository setting GitHub returns only to a token holding repository administration -
+    # a permission the Verifier's own long-lived token must never hold, because admin
+    # includes write and the Verifier's whole contract is that it cannot write (F66).
+    #
+    # The caller supplies the job's ephemeral GITHUB_TOKEN instead, scoped `administration:
+    # read` for that job alone. Read-only, this repository only, expires with the job. The
+    # read-only ARGUMENT guard above still applies: a different token does not widen what
+    # may be asked, only who is asking.
+    $previousToken = $env:GH_TOKEN
+    $tokenOverridden = -not [string]::IsNullOrWhiteSpace($Token)
+    if ($tokenOverridden) { $env:GH_TOKEN = $Token }
+    try {
+        $run = Invoke-MlsBoundedNativeCommand -FilePath 'gh' -Argument $Argument -TimeoutSeconds $TimeoutSeconds
+    }
+    finally {
+        if ($tokenOverridden) {
+            if ($null -eq $previousToken) { Remove-Item Env:\GH_TOKEN -ErrorAction SilentlyContinue }
+            else { $env:GH_TOKEN = $previousToken }
+        }
+    }
     if ($run.TimedOut) {
         throw "gh $($Argument -join ' ') did not return within $TimeoutSeconds s and was terminated."
     }

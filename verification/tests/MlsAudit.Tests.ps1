@@ -437,6 +437,52 @@ Describe 'transport wrappers' {
     }
     function global:Get-MgContext { }
 
+    It 'Invoke-MlsGh -Token runs one call under a different credential and restores the old one' {
+        # V1.2 reads a setting GitHub shows only to a caller with repository administration.
+        # The Verifier's long-lived token must never hold that, so the workflow hands over its
+        # ephemeral `administration: read` token for that ONE call (F66). If the override
+        # leaked past the call, every later gh read would run as the wrong identity.
+        $env:GH_TOKEN = 'verifier-token'
+        try {
+            Mock Invoke-MlsBoundedNativeCommand {
+                [pscustomobject]@{ TimedOut = $false; ExitCode = 0; StdOut = "{`"seen`":`"$($env:GH_TOKEN)`"}"; StdErr = '' }
+            } -ModuleName 'MlsAudit'
+
+            $response = Invoke-MlsGh -Token 'ephemeral-admin-read' -Argument @('api', 'repos/o/r')
+            $response.seen | Should -Be 'ephemeral-admin-read' -Because 'the call itself must run as the supplied identity'
+            $env:GH_TOKEN | Should -Be 'verifier-token' -Because 'the override must not outlive the call'
+        }
+        finally {
+            Remove-Item Env:\GH_TOKEN -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Invoke-MlsGh -Token leaves GH_TOKEN unset when it was unset' {
+        Remove-Item Env:\GH_TOKEN -ErrorAction SilentlyContinue
+        Mock Invoke-MlsBoundedNativeCommand {
+            [pscustomobject]@{ TimedOut = $false; ExitCode = 0; StdOut = '{"ok":true}'; StdErr = '' }
+        } -ModuleName 'MlsAudit'
+
+        $null = Invoke-MlsGh -Token 'ephemeral-admin-read' -Argument @('api', 'repos/o/r')
+        # Restoring a $null to the environment would write the literal string "".
+        [string]::IsNullOrEmpty($env:GH_TOKEN) | Should -BeTrue
+    }
+
+    It 'Invoke-MlsGh without -Token does not touch GH_TOKEN at all' {
+        $env:GH_TOKEN = 'verifier-token'
+        try {
+            Mock Invoke-MlsBoundedNativeCommand {
+                [pscustomobject]@{ TimedOut = $false; ExitCode = 0; StdOut = "{`"seen`":`"$($env:GH_TOKEN)`"}"; StdErr = '' }
+            } -ModuleName 'MlsAudit'
+            $response = Invoke-MlsGh -Argument @('api', 'repos/o/r')
+            $response.seen | Should -Be 'verifier-token'
+            $env:GH_TOKEN | Should -Be 'verifier-token'
+        }
+        finally {
+            Remove-Item Env:\GH_TOKEN -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'Invoke-MlsGraph uses the Graph SDK when it is present AND signed in' {
         try {
             Mock Get-MgContext { [pscustomobject]@{ ClientId = 'verifier-app-id' } } -ModuleName 'MlsAudit'

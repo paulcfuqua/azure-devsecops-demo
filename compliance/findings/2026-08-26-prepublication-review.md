@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F65](#f65), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F66](#f66), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -95,6 +95,7 @@ claim by one step:
 | [F62](#f62) | **An allowlist that can hide a real identifier is worse than none.** The GUID allowlist file never existed, so V1.3 flagged all 57 ids in the repo and was permanently red; creating it made "add a line" the cheapest way to green, so live ids are now checked against the list first. | medium | CONFIRMED (file absent) | 3.1.1, 3.4.1 | verify-l1, 2026-08-30 |
 | [F63](#f63) | **A criterion that fails for reasons outside what it measures is not measuring it.** V1.1 gated the OIDC token exchange on the whole run's conclusion; V1.2 reported secret scanning as off when its token could not read the setting at all. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3, 3.14.6 | verify-l1, 2026-08-30 |
 | [F64](#f64) | **Presence is not readiness.** The Graph SDK being installed was taken as being signed in, so every Graph criterion threw while an already-authenticated `az rest` fallback sat unreachable beneath it. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3 | verify-l1, 2026-08-30 |
+| [F66](#f66) | **An auditor that acquires write access to close a finding has closed the wrong thing.** V1.2 needed repository administration to read a setting; granting the Verifier's long-lived token admin would have given it write, so the job's ephemeral `administration: read` token does that one call instead. The control was enabled all along. | medium | CONFIRMED (both settings read `enabled` under an admin token) | 3.1.5, 3.14.6 | verify-l1, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -3919,3 +3920,51 @@ The comment above that code correctly predicted branch protection landing and co
 described what would break. It did not predict the collision, because the branch name *looks*
 unique - it contains a commit SHA. The variable that makes it unique is the one thing a
 scheduled workflow does not vary.
+
+---
+
+## F66
+
+**The check could not see the control it verifies, and the obvious fix was the wrong one**
+
+- **Severity:** medium (V1.2 could not evaluate at all; the tempting remedy would have given the Verifier write access to the repository)
+- **Confidence:** CONFIRMED - `gh api repos/paulcfuqua/azure-devsecops-demo` under an admin token returns `secret_scanning: enabled` and `secret_scanning_push_protection: enabled`, so the control was on the whole time and only the Verifier could not see it
+- **Controls:** 3.1.5 (least privilege), 3.14.6
+- **Closed by:** the job's ephemeral token, scoped `administration: read`, used for that one call
+- **Status:** CLOSED
+
+[F63](#f63) established that V1.2's empty result meant *this identity cannot read the
+setting*, not *the setting is off*. That left the actual question: how should a read-only
+Verifier read a setting GitHub shows only to a caller holding repository administration?
+
+**The obvious answer was to grant `MLS_VERIFIER_GH_TOKEN` admin, and it is the wrong one.**
+GitHub's repository administration permission includes WRITE - settings, collaborators,
+deletion. The Verifier's entire contract is that it cannot write anything (CLAUDE.md hard
+rule 1), and [F57](#f57) turned down exactly this trade once already: *"Reader, not
+Contributor - this grant widens what it can look AT, never what it can do."* Widening a
+long-lived credential to fix a read is how a read-only auditor stops being one.
+
+**What it does instead.** GitHub Actions can scope a job's own `GITHUB_TOKEN` to
+`administration: read`. That token is repository-scoped, read-only, and expires when the job
+ends. `verify-l1.yml` declares that permission and passes the token as
+`MLS_REPO_SETTINGS_TOKEN`; `Invoke-MlsGh` gained a `-Token` parameter that runs ONE call
+under it and restores the ambient credential afterwards. The read-only ARGUMENT guard still
+applies - a different token changes who is asking, never what may be asked.
+
+It is also not a seventh long-lived credential, so CLAUDE.md hard rule 5's written-reason
+requirement is not triggered. Nothing was added to the rotation list.
+
+Off a runner there is no ephemeral token, and V1.2 correctly reports what it cannot see
+rather than erroring on a missing input.
+
+### What this says about the method
+
+The control was **enabled the entire time**. Secret scanning and push protection have been on
+throughout, and V1.2 has been reporting a red criterion about them for as long as it has
+existed. So the finding was never about the estate's posture; it was about an auditor that
+could not reach the evidence and said so in a way that read like a verdict.
+
+And the fix that presents itself first - *give the checker more permission* - is the one that
+would have quietly dismantled the property the checker exists to demonstrate. **An auditor
+that acquires write access to close a finding has closed the wrong thing.** The narrow,
+expiring, single-purpose credential does the same job and keeps the claim true.

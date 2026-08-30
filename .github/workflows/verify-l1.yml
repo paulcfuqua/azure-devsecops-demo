@@ -71,6 +71,12 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      # V1.2 reads `security_and_analysis`, which GitHub returns only to a caller holding
+      # repository administration. Granting that to the Verifier's long-lived token would
+      # give it WRITE - the one thing its contract forbids - so the job's own ephemeral
+      # token carries it instead: read-only, this repository only, gone when the job ends
+      # (F66). It does not become a seventh long-lived credential (CLAUDE.md hard rule 5).
+      administration: read
     env:
       # V1.3's first sweep greps the working tree for these three values, so the
       # audit needs them in its environment to know what to look FOR. They are
@@ -80,6 +86,8 @@ jobs:
       FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
       GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+      # Used by V1.2 alone, for the one read the Verifier's token cannot perform.
+      MLS_REPO_SETTINGS_TOKEN: ${{ github.token }}
     steps:
       # Full history: V1.3 runs `git grep` over the checked-out tree, and a
       # shallow clone is still a complete tree at that ref, which is what the
