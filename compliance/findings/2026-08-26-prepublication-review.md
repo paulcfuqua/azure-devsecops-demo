@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F72](#f72), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F74](#f74), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -102,6 +102,8 @@ claim by one step:
 | [F70](#f70) | **A fix at the call site protects one call; a fix at the choke point protects the class.** F69's retry finally fired - and the run died on the GET one line above it, unprotected. Every call against a just-created directory object can 404. | high | CONFIRMED (observed, run 33324015966) | 3.1.1, 3.12.1 | third L3 apply, 2026-08-30 |
 | [F71](#f71) | **Two error predicates were correct only by luck** - matching Graph codes against `Exception.Message`, which happens to contain the numeric token. Found by a sweep in a second, not by a deploy. | medium | CONFIRMED (found by failure-classes.Tests.ps1) | 3.12.1, 3.12.3 | preventive sweep, 2026-08-30 |
 | [F72](#f72) | **A layer that stops at its first error makes the discovery rate equal to the deploy rate.** Three ~40-minute runs each returned one finding. L3 now reports every failed item in one run - and still fails. | high | CONFIRMED (runs 33321360624, 33323094630, 33324015966) | 3.12.1 | throughput review, 2026-08-30 |
+| [F73](#f73) | **The licence check asked for a bundle name when it needed a capability.** V3.4 reported a gap on a tenant holding 25 seats of a superset SKU, and nearly went to the sponsor as a spend request. | medium | CONFIRMED (observed, run 33326778474) | 3.1.1, 3.5.3 | first L3 audit, 2026-08-30 |
+| [F74](#f74) | **A test suite that can reach production is not a test suite.** Three unit tests read live tenant data because -ModuleName scoped their mock to the module, not the dot-sourced script. | high | CONFIRMED (Graph 404 naming a fixture-only user) | 3.12.1, 3.4.2 | writing the F73 tests, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4256,3 +4258,83 @@ The general form, worth applying to L4-L8 before they run rather than after: any
 iterates over independent items should report on all of them. The cost of getting this wrong
 is invisible in a green run and compounds in a red one - which is why it survived to be found
 by a human noticing that two days had produced two layers, rather than by any check here.
+
+---
+
+## F73
+
+**The licence check asked for a bundle name when it needed a capability**
+
+- **Severity:** medium (V3.4 reported a licensing gap on a tenant that holds 25 seats of a superset licence, and would do the same on every adopter not using the one bundle it names)
+- **Confidence:** CONFIRMED - run 33326778474 observed `SKU 'EMSPREMIUM' is not present on the tenant`; the tenant subscribes to `SPE_E5` with `AAD_PREMIUM`, `AAD_PREMIUM_P2` and `MFA_PREMIUM` all provisioned `Success`
+- **Controls:** 3.1.1, 3.5.3
+- **Closed by:** matching the service plans L3's features need, with the named SKU still winning if supplied
+- **Status:** CLOSED
+
+V3.4 asked *is a SKU literally called EMSPREMIUM present*. What L3 needs is *are these users
+licensed for the features it deploys* - Conditional Access and MFA, which key on the
+`AAD_PREMIUM*` and `MFA_PREMIUM` service plans. A tenant on Microsoft 365 E5 has every one of
+them and fails the check, because `SPE_E5` does not contain the substring EMSPREMIUM anywhere.
+
+**A bundle name is a constant naming something in another system**, which CLAUDE.md says is
+resolved against that system rather than written from memory. Microsoft sells these
+capabilities under many names and adds more; enumerating bundles is a list that goes stale on
+someone else's schedule. Service plans are what the features actually check.
+
+An explicit `-LicenseSkuPartNumber` still wins, so a caller who genuinely means one bundle can
+still say so. Otherwise any subscribed SKU provisioning the required plans satisfies it, and a
+failure now names what the tenant DOES have rather than only what it lacks.
+
+### What this says about the method
+
+This nearly went to the sponsor as a **cost** question - buy EMS Premium licences - and the
+licences were already there, paid for, with 23 of 25 seats idle. **Checking the tenant before
+proposing the spend took one command.** The register's rule about resolving constants against
+the system that owns them is usually framed as a correctness rule; here it was a money rule.
+
+---
+
+## F74
+
+**Three unit tests read live tenant data, and the claim that none could was enforced by nothing**
+
+- **Severity:** high (a test suite that can reach production is not a test suite; those calls were reads only because a separate guard made writes impossible)
+- **Confidence:** CONFIRMED - three new V3.4 tests failed with a Graph 404 naming a fixture-only user, proving the call reached the real directory
+- **Controls:** 3.12.1, 3.4.2
+- **Closed by:** refusing az and gh calls while Pester is loaded, with a named escape hatch
+- **Status:** CLOSED
+
+Every test file in this repo opens with a claim like *every transport is mocked; zero cloud
+calls*. Nothing enforced it.
+
+A mock declared with `-ModuleName 'MlsAudit'` intercepts calls made INSIDE the module. The
+layer audits are dot-sourced into the test's own scope, so their calls are NOT inside it, and
+the mock silently does not apply. The test looks correct, the mock looks present, and the
+transport runs for real. Nine existing mocks omit `-ModuleName` and work; three written in one
+sitting included it and did not.
+
+The give-away was a Graph 404 naming a user that exists only in a fixture. Without that
+coincidence these would have passed against live data and been believed.
+
+**The blast radius was bounded by luck holding a door shut.** `Assert-MlsReadOnlyAzArgument`
+means the Verifier's transports can only ever read, so the worst case was slow, flaky tests
+coupled to a tenant. A test suite for a deploy path would have had no such protection.
+
+**Fix:** `Assert-MlsTransportAllowed` refuses az and gh while the Pester module is loaded, and
+says why - naming the mis-scoped mock, because that is the cause every time. Local process
+spawns stay allowed, because the bounded runner spawns pwsh in its own tests and a guard that
+blocked those would be switched off rather than trusted. `MLS_ALLOW_LIVE_TRANSPORT=1` is the
+escape hatch for a deliberately live test.
+
+### What this says about the method
+
+A comment asserting a property is not the property. *Every transport is mocked; zero cloud
+calls* was true when written, stayed at the top of every test file, and was quietly false for
+as long as it took to write three tests. **The check that makes a claim true has to run.**
+
+This is also the fifth mock this session caught certifying its own assumptions ([F59](#f59),
+[F62](#f62), [F69](#f69), [F70](#f70), and now one that was not even in effect). The pattern is
+consistent enough to state plainly: **mocks are where beliefs about other systems go to be
+confirmed rather than tested**, and every reliable correction this session has come from
+running against something real - which is exactly what makes a test that ACCIDENTALLY runs
+against something real so dangerous. It passes for the right reasons and the wrong ones at once.

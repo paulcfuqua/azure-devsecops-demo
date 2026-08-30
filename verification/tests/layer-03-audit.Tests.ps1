@@ -539,3 +539,76 @@ Describe 'layer-03-audit' {
         }
     }
 }
+
+Describe 'V3.4 matches the licence capability, not the bundle name' {
+    # The live tenant runs Microsoft 365 E5 (SPE_E5), which provides every capability EMS
+    # Premium does and contains the substring EMSPREMIUM nowhere. V3.4 pinned the bundle
+    # name and reported "SKU 'EMSPREMIUM' is not present on the tenant" about a tenant
+    # holding 25 seats of a superset licence (F73).
+
+    BeforeAll {
+        Import-Module (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'MlsAudit.psm1') -Force
+        $env:MLS_SKIP_MAIN = '1'
+        . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-03-audit.ps1')
+
+        function Get-SkuWithPlan {
+            param([string]$PartNumber, [string]$Id, [string[]]$Plans)
+            return [pscustomobject]@{
+                skuPartNumber = $PartNumber
+                skuId         = $Id
+                servicePlans  = @($Plans | ForEach-Object {
+                        [pscustomobject]@{ servicePlanName = $_; provisioningStatus = 'Success' }
+                    })
+            }
+        }
+        $script:E5Id = 'e5-sku-id'
+        $script:Manifest3 = [pscustomobject]@{
+            users = @([pscustomobject]@{ userPrincipalNamePrefix = 'dana.reyes'; licensed = $true })
+        }
+    }
+
+    It 'accepts Microsoft 365 E5, which is a superset under a different name' {
+        Mock Invoke-MlsGraph {
+            if ($Uri -like '*subscribedSkus*') {
+                return [pscustomobject]@{ value = @(Get-SkuWithPlan -PartNumber 'SPE_E5' -Id $script:E5Id `
+                            -Plans @('AAD_PREMIUM', 'AAD_PREMIUM_P2', 'MFA_PREMIUM', 'INTUNE_A')) }
+            }
+            return [pscustomobject]@{ licenseAssignmentStates = @([pscustomobject]@{ skuId = $script:E5Id; state = 'Active'; error = 'None' }) }
+        }
+
+        $result = Test-LicenseAssignment -Manifest $script:Manifest3 -Domain 'contoso.example' -LicenseSkuPartNumber 'EMSPREMIUM'
+        $result.Passed | Should -BeTrue -Because 'E5 provides AAD_PREMIUM and MFA_PREMIUM, which is what L3 actually needs'
+    }
+
+    It 'still fails when no SKU provides the capability, and names what the tenant does have' {
+        Mock Invoke-MlsGraph {
+            if ($Uri -like '*subscribedSkus*') {
+                return [pscustomobject]@{ value = @(Get-SkuWithPlan -PartNumber 'O365_BUSINESS' -Id 'b-id' -Plans @('EXCHANGE_S_STANDARD')) }
+            }
+            return [pscustomobject]@{ licenseAssignmentStates = @() }
+        }
+
+        $result = Test-LicenseAssignment -Manifest $script:Manifest3 -Domain 'contoso.example' -LicenseSkuPartNumber 'EMSPREMIUM'
+        $result.Passed | Should -BeFalse
+        $result.Observed | Should -BeLike '*O365_BUSINESS*' -Because 'the operator needs to know what IS there, not only what is missing'
+    }
+
+    It 'ignores a plan that is provisioned but not Success' {
+        # A pending plan is not a usable capability.
+        Mock Invoke-MlsGraph {
+            if ($Uri -like '*subscribedSkus*') {
+                return [pscustomobject]@{ value = @([pscustomobject]@{
+                            skuPartNumber = 'SPE_E5'; skuId = $script:E5Id
+                            servicePlans  = @(
+                                [pscustomobject]@{ servicePlanName = 'AAD_PREMIUM'; provisioningStatus = 'Success' }
+                                [pscustomobject]@{ servicePlanName = 'MFA_PREMIUM'; provisioningStatus = 'PendingActivation' }
+                            )
+                        }) }
+            }
+            return [pscustomobject]@{ licenseAssignmentStates = @() }
+        }
+
+        $result = Test-LicenseAssignment -Manifest $script:Manifest3 -Domain 'contoso.example' -LicenseSkuPartNumber 'EMSPREMIUM'
+        $result.Passed | Should -BeFalse
+    }
+}

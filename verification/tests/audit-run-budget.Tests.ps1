@@ -213,6 +213,52 @@ Describe 'the run budget actually clamps a criterion' {
     }
 }
 
+Describe 'a unit test cannot reach the network by accident' {
+    # Every test file here claims "every transport is mocked; zero cloud calls", and that
+    # claim was enforced by nothing. A mock declared `-ModuleName 'MlsAudit'` intercepts
+    # calls from INSIDE the module and not from a dot-sourced audit script, so the mock looks
+    # present, the test looks meaningful, and the transport quietly runs for real - which is
+    # how three tests read live tenant data before a Graph 404 naming a fixture-only user
+    # gave it away (F74).
+
+    BeforeAll {
+        Import-Module (Join-Path $script:RepoRoot 'verification' 'MlsAudit.psm1') -Force
+    }
+
+    It 'refuses an az call while Pester is loaded' {
+        InModuleScope 'MlsAudit' {
+            { Assert-MlsTransportAllowed -FilePath 'az' -Description 'az account show' } |
+                Should -Throw '*Refusing a live transport call*'
+        }
+    }
+
+    It 'names the usual cause, because the usual cause is a mis-scoped mock' {
+        InModuleScope 'MlsAudit' {
+            $message = try { Assert-MlsTransportAllowed -FilePath 'gh' -Description 'gh api repos/o/r'; '' }
+            catch { $_.Exception.Message }
+            $message | Should -BeLike '*-ModuleName*'
+        }
+    }
+
+    It 'allows a local process, which is not a network call' {
+        # The bounded runner spawns pwsh in its own tests. A guard that blocked those would
+        # get switched off rather than trusted.
+        InModuleScope 'MlsAudit' {
+            { Assert-MlsTransportAllowed -FilePath 'pwsh' -Description 'pwsh -Command x' } | Should -Not -Throw
+        }
+    }
+
+    It 'allows a deliberate live call when the caller says so out loud' {
+        InModuleScope 'MlsAudit' {
+            $env:MLS_ALLOW_LIVE_TRANSPORT = '1'
+            try {
+                { Assert-MlsTransportAllowed -FilePath 'az' -Description 'az account show' } | Should -Not -Throw
+            }
+            finally { Remove-Item Env:\MLS_ALLOW_LIVE_TRANSPORT -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
 Describe 'a transport call cannot outlive its timeout' {
 
     BeforeAll {
