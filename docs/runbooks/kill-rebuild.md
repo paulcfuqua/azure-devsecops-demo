@@ -217,7 +217,21 @@ one-off override for a single run; because it is passed as a workflow *input* it
 environment variable, so an estate "moved" that way silently reverts on the next ordinary
 run. `up.ps1` prints which of the two it is using - read that line.
 
-**Third, expect L2's first deploy in the new region to clear stale records.** A
+**Third, pin where the policy identities already live.** A policy assignment's `location`
+is immutable, and for the six modify policies that location is also registered in Entra with
+the identity itself. Moving them is not possible; deleting and recreating all sixteen is the
+only alternative, and on a management group whose sole Owner is the deployer, a human cannot
+do it. So tell L2 to leave them where they are:
+
+```bash
+gh variable set POLICY_ASSIGNMENT_LOCATION --env demo --body <the region they were created in>
+```
+
+This is not a second source of truth for the estate's region. It is a different value about a
+different thing - where six managed identities live, which nothing observes - and leaving it
+unset is correct on any estate that has not moved.
+
+**Fourth, expect L2's first deploy in the new region to clear stale records.** A
 management-group deployment's location is immutable, so the previous region's `l2-pa-*`
 records refuse the new one - ten `Conflict`s at once. L2 deletes those records itself before
 deploying; the step is called *Clear management-group deployment records pinned to another

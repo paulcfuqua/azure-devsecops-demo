@@ -56,7 +56,7 @@ allowlist exactly in both directions.
 | PowerShell (`.ps1`) | 89 | 29,363 | bootstrap, Entra/Purview/Fabric automation, seeding, the 11 audits, the compliance collectors and state emitter, the fuse |
 | TypeScript | 129 | 24,091 | MCP tool server (6 tools), data API, providers, telemetry, Functions |
 | JSON | 108 | 19,959 | the 110-requirement NIST catalog, manifests, schemas, fixtures, the emitted compliance state |
-| Markdown | 57 | 16,683 | brief, specs, plans, 12 layer playbooks, runbooks, the 54-finding security review |
+| Markdown | 57 | 16,683 | brief, specs, plans, 12 layer playbooks, runbooks, the 56-finding security review |
 | YAML | 37 | 10,127 | 24 workflows + 3 composite actions + Dependabot |
 | TSX | 36 | 4,551 | Fluent UI renderer and three app shells |
 | PowerShell modules | 7 | 4,182 | the audit engine, the compliance derivation, Fabric REST client, seed libraries |
@@ -71,7 +71,7 @@ allowlist exactly in both directions.
 | Area | Files | Lines | |
 |---|---|---|---|
 | `apps/` | 251 | 34,019 | 8 packages: 3 frontends, MCP server, data API, 2 Functions, shared renderer (+ the vulnerable lab) |
-| `compliance/` | 96 | 26,096 | the NIST catalog, the assessment register, the 54-finding review, 5 collectors, the derivation, the emitter, the committed state |
+| `compliance/` | 96 | 26,096 | the NIST catalog, the assessment register, the 56-finding review, 5 collectors, the derivation, the emitter, the committed state |
 | `infra/` | 40 | 12,624 | Bicep, Entra manifest, Purview labels, Fabric REST, Copilot Studio ALM |
 | `docs/` | 32 | 11,010 | decision record, specs, plans, 12 playbooks, runbooks |
 | `verification/` | 38 | 11,997 | the Verifier's audit engine and 11 layer audits |
@@ -91,8 +91,8 @@ numbers say more:
   that has never been deployed, that is the only truthful board there is. The platform is
   built so a human's strongest written claim cannot derive to `COMPLIANT`, and so that no
   blended percentage exists anywhere to paper over the difference.
-- **54 security findings** (36 pre-publication, 18 more raised by the first live
-  tenant bring-up and the first real deployment on 2026-08-29), each with severity, `file:line`, an attack
+- **56 security findings** (36 pre-publication, 20 more raised by the first live
+  tenant bring-up and the first real deployment, 2026-08-29/30), each with severity, `file:line`, an attack
   path and a fix — found by reviewing this repository before publishing it, and closed on
   this branch. **All nineteen control records now assert `CLOSED`**, so there are zero
   `GAP` rows on the board — and `CLOSED` still means only "no known open finding", which
