@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F57](#f57), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F58](#f58), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -89,6 +89,7 @@ claim by one step:
 | [F53](#f53) | **A value with more than one source has no source.** The estate's region was written in sixteen places, and the one an operator would naturally set was outranked by fifteen nobody reads. |
 | [F56](#f56) | **Code that has run once is not code that runs.** L2 generated a new GUID for a role assignment on every run, so it converged exactly once and was refused ever after - on an estate whose entire premise is tearing itself down and rebuilding. |
 | [F57](#f57) | **The Verifier could not see the layer it signs off**, and its retry loop treated "forbidden" as "not yet" - so L2's audit ran the full 60-minute job timeout and produced no report at all | high | CONFIRMED (observed, run 33283413834) | 3.1.5, 3.12.3 | first real L2 audit, 2026-08-30 |
+| [F58](#f58) | **A check that cannot report is not a check.** The audit published its transcript only on exit, declared `ran=true` only on exit, ran `az` with no timeout and gave the whole run no retry budget - so every audit that hit the job timeout destroyed the evidence of why. | high | CONFIRMED (observed, run 33287461494) | 3.3.1, 3.12.3 | second L2 audit, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -3570,3 +3571,80 @@ budget telling you nothing.** The retry window existed for a real reason - Azure
 genuinely does take minutes to propagate, and [F46](#f46) warned against calling propagation a
 defect. The error was applying that patience to a class of failure where patience is
 meaningless, and the cost was the one report anybody actually needed.
+
+---
+
+## F58
+
+**The audit destroyed its own evidence, four different ways, whenever it ran out of time**
+
+- **Severity:** high (every timed-out audit produced nothing at all - no report, no transcript, no reason - so the estate's own verification layer was blind exactly when it mattered)
+- **Confidence:** CONFIRMED - run 33287461494, L2 deployed, its audit ran 02:21:56 to 03:21:55 and was killed at the 60-minute job timeout having printed exactly one line
+- **Controls:** 3.3.1 (create and retain audit records), 3.12.3 (monitor controls on an ongoing basis)
+- **Closed by:** a streamed transcript, outputs declared before the run, bounded transports, and a run-level retry budget
+- **Status:** CLOSED
+
+**Found while:** the first run after [F57](#f57) was fixed. L2 deployed *and replayed* -
+[F56](#f56) confirmed by execution rather than argument - and then the audit was cancelled at
+exactly sixty minutes for the second night running.
+
+[F57](#f57) had removed one reason an audit could burn its whole window. It had not removed
+the reason an audit that burns its window tells you nothing. **Four independent severances,
+one symptom:**
+
+1. **The transcript was published only on exit.** `pwsh ... > "$transcript"` followed by
+   `cat` prints nothing while the audit runs and everything after it finishes - so a
+   cancellation discarded every line it had produced. Sixty minutes of work, one line of log.
+2. **`ran=true` was written only on exit.** The caller uploads on
+   `always() && steps.audit.outputs.ran == 'true'`. An output written after the process does
+   not exist when the process is killed, so `ran` was empty, the `always()` was defeated by
+   its own second clause, and the partial reports already on disk were never uploaded either.
+3. **`az` had no timeout, and its stderr went to `$null`.** One call that never returns holds
+   the audit forever: the retry loop above it never gets another turn. The cancelled job's
+   cleanup line - `Terminate orphan process: pid (3399) (python3)` - is that call, still
+   running. `az` is Python.
+4. **The run had no retry budget.** Each criterion's window was bounded; their sum was not.
+   L2 declares three criteria at the standard 30 minutes, so the worst case was 90 minutes
+   inside a 60-minute job. There was never margin: V2.3 legitimately waits out the NIST
+   assignment's own 30-minute scan, so **one** unexpected failure anywhere else in the layer
+   was enough to reach the runner's limit.
+
+**Fix.** The transcript streams through `tee` and the exit code comes from `PIPESTATUS[0]`,
+so the audit's own verdict still gates the job. `ran` and `report` are declared *before* the
+run, because that the script will run is knowable then. Both transports go through one
+bounded runner with a per-call ceiling that captures stderr and reports *why* - and a timeout
+throws even under `-AllowFailure`, because "allowed to come back empty-handed" and "we never
+found out" are not the same answer. And the context now carries a run deadline: a criterion's
+window is clamped to the time actually left, it still runs once, and when its window was cut
+short the row says `run budget exhausted` rather than reading like a window that completed.
+
+`verification/tests/audit-run-budget.Tests.ps1` holds the budget against the job timeout that
+kills it - the two numbers live in different files, and nothing but a test keeps them
+related.
+
+### What this says about the method
+
+The composite action's own header comment describes fixing this bug in August: `ran=true`
+"was never written on a failure - so the caller's upload was skipped exactly when the report
+mattered most." That fix was real, and it was half. It repaired the case where the audit
+*exits* non-zero and left untouched the case where it never exits at all - which is the same
+defect, one step further out, and the one where the evidence is scarcer and worth more.
+
+**This register keeps finding the same shape: a fix aimed at what the error named rather than
+at what the error implied.** [F49](#f49) turned strict mode on in one test directory of
+three. [F54](#f54) cleared one scope of two. [F55](#f55) pinned two policy-assignment modules
+of six. Here, an upload was repaired for failure and not for cancellation. Every one of them
+looked complete against the incident that produced it, and every one left the general case
+standing.
+
+There is a sharper lesson in how long this took to see. The reason the retry-budget
+arithmetic - three criteria, thirty minutes each, sixty-minute job - was worked out from the
+*source* rather than the log is that **the log did not survive**. Defect 3 was undiagnosable
+because of defect 1: the tool that reports on the estate could not report on itself. An
+observability failure does not merely accompany the other failures in its blast radius, it
+conceals them, and it is the only class of defect that gets *harder* to find as it gets
+worse.
+
+So the ordering rule this establishes: **fix the thing that reports before fixing the thing
+that failed.** A cancelled job that streams its transcript is a bad afternoon. A cancelled
+job that streams nothing is a second night.
