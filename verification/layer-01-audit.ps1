@@ -112,8 +112,14 @@ function Test-OidcRoundTrip {
 
 function Test-SecretScanning {
     <# V1.2 - read-your-writes, single query, no retry (L01.md). #>
-    param([Parameter(Mandatory)][string]$Repository)
-    $repo = Invoke-MlsGh -Argument @('api', "repos/$Repository")
+    param(
+        [Parameter(Mandatory)][string]$Repository,
+        [AllowEmptyString()][string]$SettingsToken = ''
+    )
+    # Read under the job's ephemeral `administration: read` token when the workflow supplies
+    # one. Empty falls back to the Verifier's own token, which is correct off a runner and
+    # simply cannot see the block - reported honestly below rather than guessed at.
+    $repo = Invoke-MlsGh -Token $SettingsToken -Argument @('api', "repos/$Repository")
     $analysis = Get-MlsProperty -InputObject $repo -Name 'security_and_analysis'
 
     # AN ABSENT FIELD IS NOT A DISABLED SETTING. GitHub returns `security_and_analysis` only
@@ -125,9 +131,13 @@ function Test-SecretScanning {
     # Same confusion as F57, in a different API: waiting will not turn unreadable into
     # readable, and neither will re-running. Say which one it is.
     if ($null -eq $analysis) {
-        return New-MlsCheckResult -Passed $false -Final `
+        # SKIP, not FAIL. The Verifier structurally cannot reach this evidence, and that is a
+        # property of the identity rather than of the control - reporting FAIL would be the
+        # same error F63 fixed, one level up: a verdict where there is only an absence. SKIP
+        # never fails the run and is never silent (F66).
+        return New-MlsCheckResult -Status SKIP `
             -Observed "the repository response carries no 'security_and_analysis' block, so this identity cannot read the setting" `
-            -Detail "GitHub returns that block only to a token with admin on the repository. MLS_VERIFIER_GH_TOKEN is read-only by contract (CLAUDE.md), so V1.2 cannot be evaluated as the Verifier: grant the token repository admin, or move this criterion to a check that runs under the deployer's token. This is NOT evidence that secret scanning is disabled."
+            -Detail "GitHub returns that block only to a caller holding repository ADMINISTRATION, and the Verifier's own token must never hold it - administration includes write, and a read-only auditor that acquires write has stopped being one. There is no GITHUB_TOKEN permission scope for this either: `administration` exists only on fine-grained PATs. To get a verdict, set MLS_REPO_SETTINGS_TOKEN to a fine-grained PAT scoped 'Administration: Read-only' - a deliberate seventh long-lived credential, which CLAUDE.md hard rule 5 says needs a written reason. Until then this is SKIP, and it is NOT evidence that secret scanning is disabled."
     }
 
     $secretScanning = Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $analysis -Name 'secret_scanning') -Name 'status'
@@ -258,6 +268,14 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Identifiers for the V1.3 specific sweep' `
         -Value "$($secretValue.Count) of 3 available (values never logged)" `
         -Status $(if ($secretValue.Count -eq 3) { 'OK' } else { 'PARTIAL' })
+    # Optional and deliberately NOT via Resolve-MlsInput's required path: off a runner there
+    # is no ephemeral token, and V1.2 reporting "this identity cannot see the setting" is the
+    # correct answer there rather than a missing-input error (F66).
+    $settingsToken = "$($env:MLS_REPO_SETTINGS_TOKEN)"
+    Add-MlsPreflight -Context $context -Name 'Repository-settings token (administration: read)' `
+        -Value $(if ([string]::IsNullOrWhiteSpace($settingsToken)) { 'not supplied - V1.2 will report what it cannot see' } else { 'supplied by the workflow (ephemeral, read-only)' }) `
+        -Status $(if ([string]::IsNullOrWhiteSpace($settingsToken)) { 'PARTIAL' } else { 'OK' })
+
     $allowedGuid = @(Get-AllowedGuid -RepoRoot $root -AllowlistPath $GuidAllowlistPath)
     Add-MlsPreflight -Context $context -Name 'GUID allowlist entries' -Value "$($allowedGuid.Count)"
 
@@ -273,7 +291,7 @@ function Invoke-Main {
         -Description 'gh api repos/{repo} shows secret scanning + push protection enabled' `
         -Command "gh api repos/$repositoryName --jq '.security_and_analysis | {ss: .secret_scanning.status, pp: .secret_scanning_push_protection.status}'" `
         -Expected '{"ss":"enabled","pp":"enabled"}' -NoRetry `
-        -Test { Test-SecretScanning -Repository $repositoryName } | Out-Null
+        -Test { Test-SecretScanning -Repository $repositoryName -SettingsToken $settingsToken } | Out-Null
 
     # -Control @(): confirms no tenant/subscription/capacity identifier or generic GUID is
     # committed to the repo. That is infrastructure-identifier hygiene, not CUI protection -

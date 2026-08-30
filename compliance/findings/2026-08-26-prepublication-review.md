@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F65](#f65), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F66](#f66), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -95,6 +95,7 @@ claim by one step:
 | [F62](#f62) | **An allowlist that can hide a real identifier is worse than none.** The GUID allowlist file never existed, so V1.3 flagged all 57 ids in the repo and was permanently red; creating it made "add a line" the cheapest way to green, so live ids are now checked against the list first. | medium | CONFIRMED (file absent) | 3.1.1, 3.4.1 | verify-l1, 2026-08-30 |
 | [F63](#f63) | **A criterion that fails for reasons outside what it measures is not measuring it.** V1.1 gated the OIDC token exchange on the whole run's conclusion; V1.2 reported secret scanning as off when its token could not read the setting at all. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3, 3.14.6 | verify-l1, 2026-08-30 |
 | [F64](#f64) | **Presence is not readiness.** The Graph SDK being installed was taken as being signed in, so every Graph criterion threw while an already-authenticated `az rest` fallback sat unreachable beneath it. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3 | verify-l1, 2026-08-30 |
+| [F66](#f66) | **An auditor that acquires write access to close a finding has closed the wrong thing** - and the least-privilege alternative I reached for, a `GITHUB_TOKEN` scoped `administration: read`, is not a permission that exists. V1.2 now SKIPs, naming the one credential that would resolve it. The control was enabled all along. | medium | CONFIRMED (both settings read `enabled` under an admin token; actionlint rejected the invented scope) | 3.1.5, 3.14.6 | verify-l1, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -3919,3 +3920,60 @@ The comment above that code correctly predicted branch protection landing and co
 described what would break. It did not predict the collision, because the branch name *looks*
 unique - it contains a commit SHA. The variable that makes it unique is the one thing a
 scheduled workflow does not vary.
+
+---
+
+## F66
+
+**The check cannot see the control it verifies, and the least-privilege fix I reached for does not exist**
+
+- **Severity:** medium (V1.2 cannot be evaluated by a read-only identity; the control itself has been enabled throughout)
+- **Confidence:** CONFIRMED - under an admin token the repository reports `secret_scanning: enabled` and `secret_scanning_push_protection: enabled`, so the control was on the whole time and only the Verifier could not see it
+- **Controls:** 3.1.5 (least privilege), 3.14.6
+- **Closed by:** reporting the limitation as SKIP, naming the one credential that would resolve it, and NOT widening the Verifier
+- **Status:** CLOSED
+
+[F63](#f63) established that V1.2's empty result meant *this identity cannot read the
+setting*, not *the setting is off*. This is the question that left open: how should a
+read-only Verifier read a setting GitHub returns only to a caller holding repository
+administration?
+
+**The first answer - grant `MLS_VERIFIER_GH_TOKEN` admin - is wrong**, and stays wrong.
+GitHub's administration permission includes WRITE: settings, collaborators, deletion. The
+Verifier's entire contract is that it cannot write (CLAUDE.md hard rule 1), and
+[F57](#f57) turned this exact trade down once already: *"Reader, not Contributor - this grant
+widens what it can look AT, never what it can do."*
+
+**The second answer was to scope the job's own `GITHUB_TOKEN` to `administration: read` -
+ephemeral, repository-scoped, expiring with the job. That permission scope does not exist.**
+`administration` is a fine-grained PAT permission; the workflow token's scopes are `actions`,
+`checks`, `contents`, `id-token`, `security-events` and a dozen others, and `administration`
+is not among them. The repository's own `actionlint` step rejected it before it merged.
+
+**So the honest answer is that a read-only identity cannot verify this control through this
+API at all.** V1.2 now records SKIP - never silent, never failing the run - naming what it
+could not see and the single thing that would change it: a fine-grained PAT scoped
+`Administration: Read-only`, supplied as `MLS_REPO_SETTINGS_TOKEN`. That would be a seventh
+long-lived credential, which CLAUDE.md hard rule 5 says needs a written reason, and choosing
+to add one is a human's call rather than an audit's convenience. `Invoke-MlsGh -Token` exists
+to run that one call under it, restoring the ambient credential afterwards, so the capability
+is ready if the decision is made.
+
+### What this says about the method
+
+Two things, and the second is about me.
+
+**The control was enabled the entire time.** Secret scanning and push protection have been on
+throughout, and V1.2 has been reporting red about them for as long as it has existed. The
+finding was never the estate's posture; it was an auditor that could not reach the evidence
+and phrased that inability as a verdict.
+
+**And the fix I proposed was itself unverified.** I asserted that `administration: read` was
+"a documented `GITHUB_TOKEN` scope" - confidently, in the commit message and to the sponsor -
+without checking. It is not. This register's own standing rule is that **a constant which
+names something in another system is verified against that system, not written from memory**,
+and a permission scope is exactly such a constant. `actionlint` is the check that resolves it,
+it ran, and it caught this in seven seconds.
+
+That is the register's oldest lesson landing on the person maintaining it: the reason the
+rule exists is that plausible-sounding constants are precisely the ones nobody checks.
