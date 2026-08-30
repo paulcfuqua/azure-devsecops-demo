@@ -198,6 +198,46 @@ jobs:
             "az deployment sub list --subscription '${AZURE_SUBSCRIPTION_ID}' --query \"[?location!='${AZURE_LOCATION}'].name\" -o tsv" \
             "az deployment sub delete --subscription '${AZURE_SUBSCRIPTION_ID}' --name"
 
+      - name: Clear the modify-policy Tag Contributor grants so the deploy can recreate them
+        env:
+          MG_NAME: ${{ steps.names.outputs.management-group }}
+        run: |
+          set -euo pipefail
+          # L2 IS NOT IDEMPOTENT WITHOUT THIS, and that is an AVM defect, not a config one.
+          #
+          # avm/ptn/authorization/policy-assignment:0.5.3 (the newest published version)
+          # generates a NEW GUID for the Tag Contributor grant on every run. Azure keys a
+          # role assignment on (scope, principal, role), so the second run is refused:
+          #
+          #   RoleAssignmentExists: The role assignment already exists. The ID of the
+          #   existing role assignment is 346a8f81ef665af79185bcdf4b4be449
+          #
+          # - and that ID is the grant the PREVIOUS run made, for a live, correctly-named
+          # identity. So the layer deploys once and fails on every replay, which is exactly
+          # what a kill/rebuild estate cannot afford. Pinning our own deterministic name
+          # would not help: the conflict is the triple, not the name.
+          #
+          # Deleting first is therefore the only convergent order. Scope is narrow by
+          # construction - Tag Contributor at this management group is granted by nothing
+          # except the six inherit-* modify policies below, and the deploy in the next step
+          # recreates all six. The gap is seconds, and policy remediation does not run
+          # during a deploy.
+          ids=$(az role assignment list --scope "/providers/Microsoft.Management/managementGroups/${MG_NAME}"             --query "[?roleDefinitionName=='Tag Contributor'].id" -o tsv 2>/dev/null || true)
+          if [ -z "${ids}" ]; then
+            echo "No Tag Contributor grants to clear."
+          else
+            echo "${ids}" | while read -r id; do
+              [ -z "${id}" ] && continue
+              echo "::notice title=Clearing modify-policy grant::${id##*/} - recreated by the deploy in this same run."
+              az role assignment delete --ids "${id}" || true
+            done
+          fi
+          remaining=$(az role assignment list --scope "/providers/Microsoft.Management/managementGroups/${MG_NAME}"             --query "length([?roleDefinitionName=='Tag Contributor'])" -o tsv 2>/dev/null || echo 0)
+          if [ "${remaining}" != "0" ]; then
+            echo "::error title=Tag Contributor grants remain::${remaining} left; the deploy below would fail with RoleAssignmentExists."
+            exit 1
+          fi
+
       - name: Resolve every built-in policy definition the template pins
         run: |
           set -euo pipefail

@@ -25,8 +25,8 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F55](#f55), all raised and all fixed on 2026-08-29 during the first live tenant bring-up
-and the first real deployment. Before them, **F13** and **F19** were one problem wearing
+[F56](#f56), all raised and all fixed on 2026-08-29/30 during the first live tenant
+bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
 2026-08-28 (commit c33f06e), on explicit sponsor authorisation — F19's own Fix text below
@@ -165,6 +165,7 @@ made the practice look safe.
 | [F53](#f53) | The estate region was hardcoded in **16 places** and the workflow input silently outvoted `vars.AZURE_LOCATION`, so setting the environment variable did nothing and the next deploy went back to the region that cannot host it | high | CONFIRMED (observed, run 33275398487 cancelled) | 3.4.1, 3.4.2 | sponsor question, 2026-08-29 |
 | [F54](#f54) | A management-group deployment location is immutable, so changing `AZURE_LOCATION` wedges L2 permanently - ten simultaneous Conflicts on names the template must keep stable | medium | CONFIRMED (observed, run 33277220471) | 3.4.2 | region change, 2026-08-29 |
 | [F55](#f55) | A policy assignment location is immutable too, so the region change needed **sixteen assignments deleted** - a G3 action on a management group whose only Owner is the deployer, leaving the human sponsor unable to perform it | high | CONFIRMED (observed, run 33277577651) | 3.4.2, 3.1.5 | region change, 2026-08-29 |
+| [F56](#f56) | **L2 was not idempotent**: AVM regenerates the modify policies' Tag Contributor grant name every run, so the layer deployed once and failed `RoleAssignmentExists` on every replay - fatal for a kill/rebuild estate | high | CONFIRMED (observed, run 33282406046) | 3.4.2, 3.12.1 | region change, 2026-08-30 |
 
 F19–F21 were surfaced building Task 12 (F13's closing task), same day as the rest of this register. All three are the same shape as F2 and F18 — a document asserting something the code never does — but none is a CUI-protection gap the way F1–F13 are, so none maps to an 800-171 control; they are recorded here for the same reason F14/F15 (which also map to no control) are tracked in this document rather than falling through the gap between the security and compliance framings. F22 was surfaced by the Task 14 review and is the same class as F5 — a CI gap meaning something is never actually exercised, not a document mismatch — but it likewise maps to no 800-171 control, so it is tracked here for the same reason. F23 was surfaced by the Task 20 review and generalised by a repo-wide teardown census; unlike F19–F22 it DOES map to a control (CM-6, the same one F18 maps to) and it is the only finding in this register that also violates a CLAUDE.md hard rule directly (the deploy/teardown/audit triplet).
 
@@ -3442,3 +3443,61 @@ The access gap underneath it is worth carrying separately. An estate whose manag
 only its deployer can administer is one where every governance question - *what is actually
 assigned? why did that deny fire?* - is unanswerable by the person accountable for it. That
 is not a region problem and it did not go away with this fix.
+
+
+---
+
+## F56
+
+**The landing zone deployed once and could never deploy again**
+
+- **Severity:** high (a kill/rebuild estate whose landing zone is not replayable is not a kill/rebuild estate)
+- **Confidence:** CONFIRMED - observed after the F55 fix removed the location conflicts that had been masking it
+- **Controls:** 3.4.2 (enforce configuration settings), 3.12.1 (assess controls)
+- **Closed by:** clearing the grants in L2 before converging
+- **Status:** CLOSED
+
+**Found while:** the deploy after [F55](#f55) pinned every assignment's location. That fix
+worked - the sixteen `InvalidLocationUpdate` errors vanished - and revealed what they had
+been hiding:
+
+```
+RoleAssignmentExists: The role assignment already exists.
+  The ID of the existing role assignment is 346a8f81ef665af79185bcdf4b4be449
+```
+
+The reported ids matched the grants **already live at the management group**, held by six
+service principals that resolve, healthy, to `inherit-env`, `inherit-app`, `inherit-owner`,
+`inherit-costcenter`, `inherit-dataclass` and `inherit-managedby` - the modify policies'
+own managed identities. Nothing was orphaned or misconfigured.
+
+`avm/ptn/authorization/policy-assignment:0.5.3` - the newest published version; there is no
+upgrade to take - generates a **new GUID for that grant on every run**. Azure keys a role
+assignment on `(scope, principal, role)`, so the second run is refused as a duplicate of the
+first. **The layer deploys once and fails on every replay.**
+
+That is fatal for this estate specifically. The whole demo rests on
+`docs/runbooks/kill-rebuild.md`: tear the thing down, put it back, prove the clock. A
+landing zone that converges exactly once cannot do that, and nobody had noticed because
+until 2026-08-30 L2 had never been asked to run twice against a tenant where it had already
+succeeded.
+
+**Fix:** L2 deletes the Tag Contributor grants at the management group immediately before
+deploying, and the deploy recreates all six in the same run. Pinning our own deterministic
+name would not have helped - the conflict is the triple, not the name, so delete-then-create
+is the only convergent order. The scope is narrow by construction: nothing except those six
+modify policies grants Tag Contributor at that management group. The step verifies the
+grants are gone and fails loudly rather than handing a doomed deploy to the next step.
+
+### What this says about the method
+
+Each fix tonight has revealed the next defect, which reads like thrash and is not: the
+failures were **stacked**, and only the top one is ever visible. The fabricated GUID
+([F52](#f52)) hid the deployment-record conflict ([F54](#f54)), which hid the assignment
+location conflict ([F55](#f55)), which hid this. No amount of care at any one step would
+have surfaced the one underneath - only running it again would.
+
+The uncomfortable part is that **five of these six had never been executed even once** before
+tonight. `up.ps1` had been run in plan mode repeatedly and reported green; a plan cannot
+reach any of them. The estate's real first deployment was not a test of the deployment - it
+was the first time most of this code had ever run at all.
