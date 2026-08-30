@@ -153,6 +153,50 @@ Describe 'apply-entra manifest schema validation' {
     }
 }
 
+Describe 'one run reports every failure, and still fails' {
+    # L3 stopped at its first failing item on three consecutive runs, so each ~40-minute
+    # attempt bought exactly one finding. A layer that halts on first error makes the
+    # DISCOVERY rate equal to the deploy rate. Items are independent by construction, so
+    # continuing past one costs nothing and shows everything (F72).
+    #
+    # The gate is unchanged, and that is the property these tests exist to hold: collected
+    # failures are still failures, the run still throws, and L4-L8 still skip.
+
+    BeforeEach {
+        Mock Test-GraphConnection { [pscustomobject]@{ TenantId = 'mock-tenant' } }
+        Mock Invoke-PropagationDelay {}
+    }
+
+    It 'continues past a failing group and reports all of them together' {
+        Mock Invoke-GraphApi {
+            $joined = "$Method $Path"
+            if ($joined -like 'GET users*') { return @{ value = @() } }
+            if ($joined -like 'POST users*') { return @{ id = "u-$([guid]::NewGuid())" } }
+            if ($joined -like 'GET groups*') { return @{ value = @() } }
+            if ($joined -like 'POST groups*') { throw 'Request_ResourceNotFound: simulated group failure' }
+            return @{ value = @() }
+        }
+        Mock Wait-EntraPropagation { @{ id = 'x' } }
+
+        $err = $null
+        try { Invoke-ApplyForTest } catch { $err = $_ }
+
+        $err | Should -Not -BeNullOrEmpty -Because 'a layer with failed items must still fail'
+        # Every group, not just the first: the whole point.
+        $err.Exception.Message | Should -Match "$($script:GroupCount) manifest item\(s\) failed"
+    }
+
+    It 'exits clean when nothing fails' {
+        # The counterpart: fail-slow must not turn a healthy run into a reported failure.
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'GET') { return @{ value = @() } }
+            return @{ id = "x-$([guid]::NewGuid())" }
+        }
+        Mock Wait-EntraPropagation { @{ id = 'x' } }
+        { Invoke-ApplyForTest } | Should -Not -Throw
+    }
+}
+
 Describe 'Graph calls survive directory replication' {
     # These mock Invoke-MgGraphRequest, NOT Invoke-GraphApi. The retry lives in
     # Invoke-GraphApi now, so a test that mocks it bypasses the very thing under test -

@@ -754,6 +754,44 @@ function Initialize-CaPolicy {
 
 # --- main ------------------------------------------------------------------------------
 
+function Invoke-ManifestItem {
+    <#
+        Run one manifest item, and on failure RECORD it instead of ending the run.
+
+        WHY THE WHOLE SCRIPT DOES NOT STOP AT THE FIRST ERROR. L3 stopped at its first
+        failing item on three consecutive runs, and each run therefore bought exactly one
+        finding - about forty minutes for one fact, when the same run could have surfaced
+        every remaining problem at once. A layer that halts on first error makes the
+        DISCOVERY rate equal to the deploy rate, and that is what turned two days into two
+        layers.
+
+        This does not weaken the gate. Every failure is still a failure: they are collected,
+        printed together, and the script still exits non-zero at the end, so the layer is
+        still red and L4-L8 are still skipped. What changes is only how much you learn per
+        attempt.
+
+        Items are independent by construction - one user, one group, one app registration -
+        so continuing past a failure cannot corrupt the next item. The ONE dependency that
+        matters is that groups reference user ids, and a user that failed simply has no id
+        to reference: that member is reported as unresolvable, which is the honest outcome
+        and exactly what the -WhatIf path already reports.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Description,
+        [Parameter(Mandatory)][scriptblock]$Action,
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Failures
+    )
+    try {
+        return & $Action
+    }
+    catch {
+        $message = "$Description : $($_.Exception.Message)"
+        $Failures.Add($message)
+        Write-Status "FAILED (continuing): $message" -Color Red
+        return $null
+    }
+}
+
 function Invoke-Main {
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -767,6 +805,9 @@ function Invoke-Main {
     # call sites and silently NOT configure the retry that now does most of the waiting.
     $script:PropagationTimeoutSeconds = $PropagationTimeoutSeconds
     $script:PropagationIntervalSeconds = $PropagationIntervalSeconds
+
+    # Collected, not thrown. See Invoke-ManifestItem for why.
+    $failures = [System.Collections.Generic.List[string]]::new()
 
     $manifest = Get-Manifest -Path $ManifestPath
     Assert-ManifestSchema -Manifest $manifest | Out-Null
@@ -792,9 +833,12 @@ function Invoke-Main {
     # ---- users ---------------------------------------------------------------------
     $userIdByPrefix = @{}
     foreach ($user in @(Get-Field -Object $manifest -Name 'users')) {
-        $result = Initialize-EntraUser -User $user -Domain $effectiveDomain `
-            -TimeoutSeconds $PropagationTimeoutSeconds -IntervalSeconds $PropagationIntervalSeconds
         $prefix = Get-Field -Object $user -Name 'userPrincipalNamePrefix'
+        $result = Invoke-ManifestItem -Description "user $prefix" -Failures $failures -Action {
+            Initialize-EntraUser -User $user -Domain $effectiveDomain `
+                -TimeoutSeconds $PropagationTimeoutSeconds -IntervalSeconds $PropagationIntervalSeconds
+        }
+        if ($null -eq $result) { continue }
         switch ($result.Outcome) {
             'Created' { $summary.UsersCreated++ }
             'Updated' { $summary.UsersUpdated++ }
@@ -810,8 +854,11 @@ function Invoke-Main {
     $groupIdByDisplayName = @{}
     foreach ($group in @(Get-Field -Object $manifest -Name 'groups')) {
         $groupName = Get-Field -Object $group -Name 'displayName'
-        $result = Initialize-EntraGroup -Group $group `
-            -TimeoutSeconds $PropagationTimeoutSeconds -IntervalSeconds $PropagationIntervalSeconds
+        $result = Invoke-ManifestItem -Description "group $groupName" -Failures $failures -Action {
+            Initialize-EntraGroup -Group $group `
+                -TimeoutSeconds $PropagationTimeoutSeconds -IntervalSeconds $PropagationIntervalSeconds
+        }
+        if ($null -eq $result) { continue }
         switch ($result.Outcome) {
             'Created' { $summary.GroupsCreated++ }
             'Unchanged' { $summary.GroupsUnchanged++ }
@@ -831,7 +878,10 @@ function Invoke-Main {
                 Write-Status "(-WhatIf) Member '$member' has no resolvable id yet (user not created) - skipping." -Color Yellow
             }
         }
-        $summary.MembershipsAdded += Initialize-GroupMembership -GroupId $result.Id -GroupName $groupName -MemberIds $memberIds
+        $added = Invoke-ManifestItem -Description "memberships for group $groupName" -Failures $failures -Action {
+            Initialize-GroupMembership -GroupId $result.Id -GroupName $groupName -MemberIds $memberIds
+        }
+        if ($null -ne $added) { $summary.MembershipsAdded += $added }
     }
 
     # ---- app registrations ---------------------------------------------------------
@@ -874,6 +924,15 @@ function Invoke-Main {
 
     $summaryObject = [pscustomobject]$summary
     Write-Status ("Done: " + (($summary.Keys | ForEach-Object { "$_=$($summary[$_])" }) -join ' ')) -Color Cyan
+
+    # THE LAYER STILL FAILS. Collecting failures changes how much one attempt teaches, never
+    # whether a broken layer is allowed through: every item that failed is listed here, and
+    # this throws, so the workflow step exits non-zero and L4-L8 stay skipped.
+    if ($failures.Count -gt 0) {
+        Write-Status "$($failures.Count) manifest item(s) failed:" -Color Red
+        foreach ($failure in $failures) { Write-Status "  - $failure" -Color Red }
+        throw "$($failures.Count) manifest item(s) failed; see the list above. Every one is reported, so a single run shows all of them rather than the first."
+    }
     return $summaryObject
 }
 
