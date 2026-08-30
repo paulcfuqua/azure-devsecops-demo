@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F66](#f66), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F67](#f67), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -96,6 +96,7 @@ claim by one step:
 | [F63](#f63) | **A criterion that fails for reasons outside what it measures is not measuring it.** V1.1 gated the OIDC token exchange on the whole run's conclusion; V1.2 reported secret scanning as off when its token could not read the setting at all. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3, 3.14.6 | verify-l1, 2026-08-30 |
 | [F64](#f64) | **Presence is not readiness.** The Graph SDK being installed was taken as being signed in, so every Graph criterion threw while an already-authenticated `az rest` fallback sat unreachable beneath it. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3 | verify-l1, 2026-08-30 |
 | [F66](#f66) | **An auditor that acquires write access to close a finding has closed the wrong thing** - and the least-privilege alternative I reached for, a `GITHUB_TOKEN` scoped `administration: read`, is not a permission that exists. V1.2 now SKIPs, naming the one credential that would resolve it. The control was enabled all along. | medium | CONFIRMED (both settings read `enabled` under an admin token; actionlint rejected the invented scope) | 3.1.5, 3.14.6 | verify-l1, 2026-08-30 |
+| [F67](#f67) | **When a check and the operation it protects are not asking the same question, the check will pass at exactly the moment it matters.** `Wait-EntraPropagation` confirmed the user and group were VISIBLE; the membership write needs them LINKABLE, and 404'd - killing L3 on its first membership on the first run that ever reached it. | high | CONFIRMED (observed, run 33321360624) | 3.1.1, 3.12.1 | first L3 apply, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -3977,3 +3978,51 @@ it ran, and it caught this in seven seconds.
 
 That is the register's oldest lesson landing on the person maintaining it: the reason the
 rule exists is that plausible-sounding constants are precisely the ones nobody checks.
+
+---
+
+## F67
+
+**Both objects were visible, and the write that links them still failed**
+
+- **Severity:** high (L3 died on its first group membership, on the first run that ever reached L3)
+- **Confidence:** CONFIRMED - run 33321360624: `POST /v1.0/groups/d3ed81c0-.../members/$ref` returned 404 `Request_ResourceNotFound`, immediately after `Wait-EntraPropagation` had confirmed both the group and the user were visible
+- **Controls:** 3.1.1 (limit system access to authorised users), 3.12.1
+- **Closed by:** retrying the membership write for the same propagation budget the creates already use
+- **Status:** CLOSED
+
+**Found while:** the first run to get past L2. [F61](#f61) unblocked the sequence, L2 verified,
+and L3 executed for the first time in the project's life. It failed on its first membership.
+
+`apply-entra.ps1` already handles Entra propagation, and handles it well: `Wait-EntraPropagation`
+polls after each create until the object is VISIBLE, replacing what used to be a blind
+`Start-Sleep`. Both the user and the group had passed that probe.
+
+**The probe asks a weaker question than the write needs.** Visibility is a GET returning the
+object. `POST groups/{id}/members/$ref` needs a replica that can resolve BOTH directory
+objects and link them, and Microsoft Graph answers 404 `Request_ResourceNotFound` when it
+cannot - naming the group, though the message itself hedges: *"or one of its queried
+reference-property objects are not present"*. So the failure named one thing and could have
+meant either, which is the pattern this register keeps recording.
+
+**Fix.** The membership write retries on that 404 for the same propagation budget the creates
+use. Every other failure is raised immediately - a 403 does not become a 200 by waiting, and
+retrying everything would convert a permission problem into a timeout, which is exactly
+[F57](#f57)'s mistake. On exhaustion the error says *directory replication rather than a
+missing object*, because an operator needs to tell "your manifest names a user that does not
+exist" from "the directory has not caught up".
+
+### What this says about the method
+
+**A readiness check that does not check the thing that has to be ready is a delay, not a
+guard.** The code was not missing propagation handling; it had careful, purpose-built
+propagation handling, and that handling verified a precondition adjacent to the one the next
+operation actually required. That is harder to spot than an absent check, because the code
+reads as though the problem was already solved - and it was, for the creates.
+
+This is also the fourth consecutive finding whose shape is *the signal answers a different
+question than the one being asked*: [F60](#f60)'s registration error standing in for a
+management-group read, [F63](#f63)'s run conclusion standing in for a job's, [F64](#f64)'s
+installed SDK standing in for a signed-in one, and now a visibility probe standing in for a
+linkability one. Worth naming as a class: **when a check and the operation it protects are
+not asking the same question, the check will pass at exactly the moment it matters.**

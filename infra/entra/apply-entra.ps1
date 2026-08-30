@@ -485,11 +485,29 @@ function Initialize-EntraGroup {
 }
 
 function Initialize-GroupMembership {
-    <# Add missing members only; returns the number of members added. #>
+    <#
+        Add missing members only; returns the number of members added.
+
+        THE MEMBERSHIP WRITE HAS ITS OWN PROPAGATION PROBLEM, distinct from the one the
+        creates already handle. `Wait-EntraPropagation` polls until the user and the group are
+        each VISIBLE - a GET that returns the object. That is a weaker question than the one
+        this write asks. `POST groups/{id}/members/$ref` needs a replica that can resolve BOTH
+        directory objects and link them, and it answers 404 Request_ResourceNotFound - naming
+        the group, though the message admits it may equally be "one of its queried
+        reference-property objects" - when it cannot. Both objects had been confirmed visible
+        moments earlier; the relationship write still failed, and L3 died on its first
+        membership on the first run that ever reached it (F67).
+
+        So the write retries on that 404 for the same propagation budget the creates use.
+        Every other failure - a real 403, a malformed body, a member id that is genuinely
+        wrong - is raised immediately, because those do not become true by waiting.
+    #>
     param(
         [Parameter(Mandatory)][string]$GroupId,
         [Parameter(Mandatory)][string]$GroupName,
-        [AllowEmptyCollection()][string[]]$MemberIds = @()
+        [AllowEmptyCollection()][string[]]$MemberIds = @(),
+        [int]$TimeoutSeconds = 180,
+        [int]$IntervalSeconds = 5
     )
     $response = Invoke-GraphApi -Method GET -Path "groups/$GroupId/members?`$select=id"
     $currentIds = @(Get-ResponseValue -Response $response | ForEach-Object { Get-Field -Object $_ -Name 'id' })
@@ -497,8 +515,24 @@ function Initialize-GroupMembership {
     foreach ($memberId in $MemberIds) {
         if ($currentIds -contains $memberId) { continue }
         $body = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$memberId" }
-        Invoke-GraphMutation -Target $GroupName -Action "Add member $memberId" `
-            -Method POST -Path "groups/$GroupId/members/`$ref" -Body $body | Out-Null
+
+        $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
+        while ($true) {
+            try {
+                Invoke-GraphMutation -Target $GroupName -Action "Add member $memberId" `
+                    -Method POST -Path "groups/$GroupId/members/`$ref" -Body $body | Out-Null
+                break
+            }
+            catch {
+                $isPropagation = $_.Exception.Message -match '(?i)Request_ResourceNotFound|does not exist or one of its queried reference-property objects'
+                if (-not $isPropagation) { throw }
+                if ([datetime]::UtcNow -ge $deadline) {
+                    throw "Timed out after ${TimeoutSeconds}s adding member $memberId to group '$GroupName': Graph still reports one of the two directory objects as not present. Both were visible to a GET before this write, so this is directory replication rather than a missing object."
+                }
+                Write-Status "Member $memberId not yet linkable to '$GroupName' (directory replication); retrying in ${IntervalSeconds}s." -Color DarkYellow
+                Invoke-PropagationDelay -Seconds $IntervalSeconds
+            }
+        }
         $added++
     }
     return $added
@@ -769,7 +803,8 @@ function Invoke-Main {
                 Write-Status "(-WhatIf) Member '$member' has no resolvable id yet (user not created) - skipping." -Color Yellow
             }
         }
-        $summary.MembershipsAdded += Initialize-GroupMembership -GroupId $result.Id -GroupName $groupName -MemberIds $memberIds
+        $summary.MembershipsAdded += Initialize-GroupMembership -GroupId $result.Id -GroupName $groupName -MemberIds $memberIds `
+            -TimeoutSeconds $PropagationTimeoutSeconds -IntervalSeconds $PropagationIntervalSeconds
     }
 
     # ---- app registrations ---------------------------------------------------------
