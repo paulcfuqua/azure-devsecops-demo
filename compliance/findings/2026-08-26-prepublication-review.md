@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F79](#f79), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F80](#f80), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -109,6 +109,7 @@ claim by one step:
 | [F77](#f77) | **When a check gates a dangerous action it must assert the capability, not the artefact.** Break-glass readiness verified group membership; the account it approved held zero roles and could recover nothing. | high | CONFIRMED (account passed while holding no role) | 3.1.1, 3.5.3 | sponsor question, 2026-08-30 |
 | [F78](#f78) | **A test that can only be satisfied by weakening the system is reasoning backwards.** V3.3 asserted an enabled CA policy where 3.5.3 asks whether MFA is enforced - failing on a tenant secured by Security Defaults, and offering a green result in exchange for baseline MFA. | high | CONFIRMED (tenant enforces MFA; V3.3 failed) | 3.5.3 | first L3 audit, 2026-08-30 |
 | [F79](#f79) | **A documented manual step reads as a design.** The manifest declared five users licensed, V3.4 asserted it, and nothing assigned a licence - C10 asked a human to. L3 does it now, with permissions the deployer already had and seats already bought. | medium | CONFIRMED (observed, run 33335057817) | 3.1.1, 3.5.3 | second L3 audit, 2026-08-30 |
+| [F80](#f80) | **A Key Vault name survives its vault by ninety days.** Soft delete cannot be disabled, so the first rebuild after any teardown fails with `VaultAlreadyExists` naming a vault in no resource group - a second-cycle blocker for an estate whose claim is kill/rebuild. | high | CONFIRMED (observed, run 33336756817) | 3.4.2, 3.12.1 | first L6 deploy, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4552,3 +4553,46 @@ can only run after L3 is not simply part of L3. A runbook entry describing a man
 as a design, and it takes a live run - and a criterion failing against a tenant with 23 idle
 seats - to notice that the manual step had no reason to be manual.
 
+
+---
+
+## F80
+
+**A Key Vault name survives its vault by ninety days, so the second rebuild fails**
+
+- **Severity:** high (blocks the kill/rebuild cycle this estate exists to demonstrate, on every adopter, from the second cycle onward)
+- **Confidence:** CONFIRMED - run 33336756817 failed L6 with `VaultAlreadyExists` for `mls-sec-demo-kv`, soft-deleted the previous day and scheduled for purge on 2026-11-27
+- **Controls:** 3.4.2, 3.12.1
+- **Closed by:** clearing a soft-deleted vault before deploying, differently depending on why it is there
+- **Status:** CLOSED
+
+Key Vault soft delete is on by default and **cannot be disabled**. Deleting a vault reserves
+its globally unique name for the retention period - ninety days here - and the next deploy
+fails with `VaultAlreadyExists` naming a vault that appears in no resource group. The error
+does not mention soft delete.
+
+For an estate whose headline claim is *kill it and rebuild it in under an hour*, that is a
+second-cycle blocker: the first rebuild after any teardown cannot succeed. It was found on
+the first run that ever reached L6, against a vault deleted during the previous day's region
+change.
+
+**Fix, and the three cases are genuinely different:**
+
+- **Purge protection enabled** - nothing can free the name before retention elapses. The
+  workflow fails immediately and says so, rather than retrying something that cannot work.
+- **Deleted in a different region** - a relic of a region change ([F53](#f53)/[F54](#f54)). A
+  vault cannot be recovered into a region it was not deleted from, so the name is released by
+  purging.
+- **Deleted in the region being deployed** - **recovered, not purged.** Recovery is what
+  idempotent replay should mean here: the vault returns with its secrets. Purging would
+  silently discard the Direct Line secret and `mcp-auth-token`, two of the credentials
+  CLAUDE.md hard rule 5 accounts for.
+
+### What this says about the method
+
+The naive fix is one line - purge and redeploy - and it is wrong in the case that matters
+most. A rebuild in the same region is the *normal* path, and purging there destroys exactly
+the secrets the estate is careful about everywhere else. **The cheap fix and the correct fix
+differ only in the case you are least likely to be testing when you write it**, because the
+case in front of you is always the one that just failed - here, a leftover from a region
+change, which is the rarest of the three.
