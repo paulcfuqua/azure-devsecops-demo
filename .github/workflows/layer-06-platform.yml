@@ -166,6 +166,53 @@ jobs:
             --name "${L6_DEPLOYMENT_NAME}" \
             | tee what-if-l6.txt
 
+      - name: Clear a soft-deleted Key Vault holding the name
+        if: ${{ !inputs.dry_run }}
+        env:
+          KEY_VAULT_NAME: ${{ steps.names.outputs.key-vault }}
+        run: |
+          set -euo pipefail
+          # A KEY VAULT NAME IS GLOBALLY RESERVED FOR 90 DAYS AFTER DELETION.
+          #
+          # Soft delete is on by default and cannot be turned off. So the ordinary
+          # kill/rebuild cycle - the thing this estate exists to demonstrate - leaves the
+          # vault name taken, and the next deploy fails with `VaultAlreadyExists` naming a
+          # vault that no longer appears in any resource group. This estate hit it on the
+          # first run that ever reached L6, on a vault deleted the previous day (F80).
+          #
+          # Three cases, and the difference matters:
+          #
+          #   purge protection ON  -> nothing can be done until the retention elapses. Fail
+          #                           loudly and say so, rather than retrying to no purpose.
+          #   different location   -> a relic of a region change (F53/F54). It cannot be
+          #                           recovered into the region we now deploy to, so purge.
+          #   same location        -> RECOVER it. Recovery is idempotent replay done right:
+          #                           the vault comes back with its secrets, which is what a
+          #                           rebuild wants. Purging here would silently discard the
+          #                           Direct Line secret and mcp-auth-token (hard rule 5).
+          deleted=$(az keyvault list-deleted --query "[?name=='${KEY_VAULT_NAME}'] | [0]" -o json)
+          if [ -z "${deleted}" ] || [ "${deleted}" = "null" ]; then
+            echo "No soft-deleted vault named ${KEY_VAULT_NAME}; nothing to clear."
+            exit 0
+          fi
+
+          deleted_location=$(echo "${deleted}" | jq -r '.properties.location // empty')
+          purge_protection=$(echo "${deleted}" | jq -r '.properties.purgeProtectionEnabled // false')
+
+          if [ "${purge_protection}" = "true" ]; then
+            echo "::error title=Soft-deleted vault is purge-protected::'${KEY_VAULT_NAME}' was deleted in ${deleted_location} with purge protection enabled, so the name cannot be released until its retention period elapses. Deploy under a different prefix (infra/bicep/naming.bicep), or wait. Nothing this workflow can do will free the name."
+            exit 1
+          fi
+
+          if [ "${deleted_location}" != "${AZURE_LOCATION}" ]; then
+            echo "::notice title=Purging a vault from another region::'${KEY_VAULT_NAME}' is soft-deleted in ${deleted_location}, but this estate now deploys to ${AZURE_LOCATION}. A vault cannot be recovered into a different region, so the name is released by purging."
+            az keyvault purge --name "${KEY_VAULT_NAME}" --location "${deleted_location}"
+            exit 0
+          fi
+
+          echo "::notice title=Recovering the soft-deleted vault::'${KEY_VAULT_NAME}' is soft-deleted in ${deleted_location}, the region being deployed. Recovering rather than purging, so its secrets survive the rebuild."
+          az keyvault recover --name "${KEY_VAULT_NAME}" --location "${deleted_location}"
+
       - name: Deploy the platform
         id: manifest
         if: ${{ !inputs.dry_run }}
