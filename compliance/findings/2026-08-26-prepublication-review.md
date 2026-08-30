@@ -87,6 +87,7 @@ claim by one step:
 | [F51](#f51) | **A gate that never passes is not a gate.** `up.ps1 -DryRun` could not exit 0 on a fresh estate - the one case a plan exists for - so its red result carried no information and was read as wallpaper, including in the run where it sat beside a genuine failure. |
 | [F52](#f52) | **A plan is not a deployment.** Three green `what-if` runs preceded a deploy that failed on a policy GUID that does not exist, because what-if computes a resource delta and never resolves a definition id. |
 | [F53](#f53) | **A value with more than one source has no source.** The estate's region was written in sixteen places, and the one an operator would naturally set was outranked by fifteen nobody reads. |
+| [F56](#f56) | **Code that has run once is not code that runs.** L2 generated a new GUID for a role assignment on every run, so it converged exactly once and was refused ever after - on an estate whose entire premise is tearing itself down and rebuilding. |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -96,6 +97,14 @@ final day - a fabricated policy GUID ([F52](#f52)) and a region with sixteen sou
 by a failing test, and not by the plan, which was green. A value with one honest source can be
 checked; a value with sixteen cannot.
 
+**Failures stack, and only the top one is visible.** The six defects of the first real
+deployment were not six mistakes in sequence - each was hidden by the one above it. A
+fabricated policy GUID ([F52](#f52)) hid a deployment-record conflict ([F54](#f54)), which
+hid an assignment-location conflict ([F55](#f55)), which hid a landing zone that could only
+deploy once ([F56](#f56)). No amount of care at any one step reaches the next; only running
+it again does. Budget for that shape rather than treating each new error as evidence the
+last fix was wrong.
+
 **A constant that names something in another system must be verified against that system.**
 Three separate findings are the same mistake in different clothes: the Fabric SKU asserted
 three times from memory and documentation before the API said `FTL4` ([F46](#f46)), an OIDC
@@ -103,6 +112,13 @@ subject constructed by hand rather than read from GitHub ([F48](#f48)), and a po
 definition id that was never real ([F52](#f52)). Twenty-three such constants are pinned in
 this repository. Exactly one was wrong, which is why nothing noticed: the other twenty-two
 made the practice look safe.
+
+And the uncomfortable summary of the whole exercise: **five of the six defects the first
+real deployment found had never executed even once before it.** `up.ps1 -DryRun` had been run
+repeatedly and reported green every time. A plan validates a template; it does not create a
+policy assignment, register a managed identity, or replay a role grant, so it cannot reach
+any of them. The green plan was not wrong - it was answering a different question than the
+one anyone was asking of it.
 
 ---
 
