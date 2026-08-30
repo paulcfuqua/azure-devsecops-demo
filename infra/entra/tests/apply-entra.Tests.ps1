@@ -153,101 +153,106 @@ Describe 'apply-entra manifest schema validation' {
     }
 }
 
-Describe 'group membership survives directory replication' {
-    # Wait-EntraPropagation confirms each user and group is VISIBLE before this runs. That is
-    # a GET, and it is a weaker question than the membership write asks: `POST
-    # groups/{id}/members/$ref` needs a replica that can resolve BOTH objects and link them.
-    # Both were visible and the write still 404'd, killing L3 on its first membership on the
-    # first run that ever reached it (F67).
+Describe 'Graph calls survive directory replication' {
+    # These mock Invoke-MgGraphRequest, NOT Invoke-GraphApi. The retry lives in
+    # Invoke-GraphApi now, so a test that mocks it bypasses the very thing under test -
+    # which is what the previous version of these tests did once the retry moved (F70).
+
+    BeforeAll {
+        function global:Invoke-MgGraphRequest {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+                Justification = 'Stub for the Graph SDK cmdlet; the Pester mock supplies the behaviour.')]
+            param($Method, $Uri, $Body, $ContentType)
+        }
+
+        # The shape Invoke-MgGraphRequest actually throws: terse Message, JSON in ErrorDetails.
+        # Deliberately carries NEITHER '404' NOR 'Not Found' in the exception message, so a
+        # predicate reading only Exception.Message cannot pass this by accident (F69).
+        function global:Get-GraphNotFoundRecord {
+            $exception = [System.Net.Http.HttpRequestException]::new('The remote server returned an error.')
+            $record = [System.Management.Automation.ErrorRecord]::new(
+                $exception, 'GraphHttpError', [System.Management.Automation.ErrorCategory]::InvalidResult, $null)
+            $record.ErrorDetails = [System.Management.Automation.ErrorDetails]::new(
+                '{"error":{"code":"Request_ResourceNotFound","message":"Resource does not exist or one of its queried reference-property objects are not present."}}')
+            return $record
+        }
+    }
+    AfterAll {
+        Remove-Item -LiteralPath 'function:global:Invoke-MgGraphRequest' -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath 'function:global:Get-GraphNotFoundRecord' -ErrorAction SilentlyContinue
+    }
 
     BeforeEach {
         Mock Invoke-PropagationDelay {}
+        $script:PropagationTimeoutSeconds = 60
+        $script:PropagationIntervalSeconds = 1
     }
 
-    It 'retries a Request_ResourceNotFound and succeeds once replication catches up' {
-        $script:PostCalls = 0
-        Mock Invoke-GraphApi {
-            if ($Method -eq 'GET') { return @{ value = @() } }
-            $script:PostCalls++
-            if ($script:PostCalls -lt 3) {
-                throw "Request_ResourceNotFound: Resource 'g-1' does not exist or one of its queried reference-property objects are not present."
-            }
-            return @{}
+    It 'retries a GET that 404s on a freshly created object' {
+        # The exact call that failed after the POST was fixed and the GET beside it was not.
+        $script:Calls = 0
+        Mock Invoke-MgGraphRequest {
+            $script:Calls++
+            if ($script:Calls -lt 3) { throw (Get-GraphNotFoundRecord) }
+            return @{ value = @() }
         }
-
-        $added = Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' `
-            -MemberIds @('u-1') -TimeoutSeconds 60 -IntervalSeconds 1
-
-        $added | Should -Be 1
-        $script:PostCalls | Should -Be 3
+        $result = Invoke-GraphApi -Method GET -Path 'groups/g-1/members?$select=id'
+        $result.value | Should -BeNullOrEmpty
+        $script:Calls | Should -Be 3
         Should -Invoke Invoke-PropagationDelay -Exactly -Times 2
     }
 
-    It 'retries when the Graph code is only in ErrorDetails, not in the exception message' {
-        # The shape Invoke-MgGraphRequest actually throws: terse Message, JSON body in
-        # ErrorDetails. Matching Exception.Message alone meant the retry never fired at all
-        # and L3 failed identically with the fix merged (F69).
-        $script:PostCalls = 0
-        Mock Invoke-GraphApi {
-            if ($Method -eq 'GET') { return @{ value = @() } }
-            $script:PostCalls++
-            if ($script:PostCalls -lt 2) {
-                # Deliberately carries NEITHER '404' NOR 'Not Found'. With that text present
-                # the predicate matches Exception.Message alone and this test passes whether
-                # or not ErrorDetails is read at all - it mutation-SURVIVED in that form, so
-                # it was proving nothing about the field it exists to check.
-                $exception = [System.Net.Http.HttpRequestException]::new(
-                    'The remote server returned an error.')
-                $record = [System.Management.Automation.ErrorRecord]::new(
-                    $exception, 'GraphHttpError', [System.Management.Automation.ErrorCategory]::InvalidResult, $null)
-                $record.ErrorDetails = [System.Management.Automation.ErrorDetails]::new(
-                    '{"error":{"code":"Request_ResourceNotFound","message":"Resource does not exist or one of its queried reference-property objects are not present."}}')
-                throw $record
-            }
+    It 'retries a POST the same way' {
+        $script:Calls = 0
+        Mock Invoke-MgGraphRequest {
+            $script:Calls++
+            if ($script:Calls -lt 2) { throw (Get-GraphNotFoundRecord) }
             return @{}
         }
-
-        $added = Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-security-team' `
-            -MemberIds @('u-1') -TimeoutSeconds 60 -IntervalSeconds 1
-        $added | Should -Be 1
-        $script:PostCalls | Should -Be 2
-        Should -Invoke Invoke-PropagationDelay -Exactly -Times 1
+        $null = Invoke-GraphApi -Method POST -Path 'groups/g-1/members/$ref' -Body @{ 'x' = 1 }
+        $script:Calls | Should -Be 2
     }
 
-    It 'raises any other failure immediately, without waiting' {
-        # A 403 does not become a 200 by waiting. Retrying everything would turn a permission
-        # problem into a timeout, which is the confusion F57 was about.
-        Mock Invoke-GraphApi {
-            if ($Method -eq 'GET') { return @{ value = @() } }
-            throw 'Authorization_RequestDenied: Insufficient privileges to complete the operation.'
-        }
+    It 'does NOT retry when the caller said -AllowNotFound' {
+        # "Does this exist?" wants the answer no, immediately. Making a lookup wait out a
+        # propagation budget would turn every create-if-absent into a three-minute stall.
+        Mock Invoke-MgGraphRequest { throw (Get-GraphNotFoundRecord) }
+        Invoke-GraphApi -Method GET -Path 'groups/g-1' -AllowNotFound | Should -BeNullOrEmpty
+        Should -Invoke Invoke-PropagationDelay -Exactly -Times 0
+    }
 
-        { Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' `
-                -MemberIds @('u-1') -TimeoutSeconds 60 -IntervalSeconds 1 } |
+    It 'raises a non-404 immediately, without waiting' {
+        Mock Invoke-MgGraphRequest { throw 'Authorization_RequestDenied: Insufficient privileges.' }
+        { Invoke-GraphApi -Method POST -Path 'groups/g-1/members/$ref' -Body @{ 'x' = 1 } } |
             Should -Throw '*Authorization_RequestDenied*'
         Should -Invoke Invoke-PropagationDelay -Exactly -Times 0
     }
 
     It 'gives up with an error naming replication, not a missing object' {
-        # The operator needs to know the difference between "your manifest names a user that
-        # does not exist" and "the directory has not caught up".
-        Mock Invoke-GraphApi {
-            if ($Method -eq 'GET') { return @{ value = @() } }
-            throw "Request_ResourceNotFound: Resource 'g-1' does not exist or one of its queried reference-property objects are not present."
-        }
-
-        { Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' `
-                -MemberIds @('u-1') -TimeoutSeconds 0 -IntervalSeconds 1 } |
+        $script:PropagationTimeoutSeconds = 0
+        Mock Invoke-MgGraphRequest { throw (Get-GraphNotFoundRecord) }
+        { Invoke-GraphApi -Method GET -Path 'groups/g-1/members' } |
             Should -Throw '*directory replication rather than a missing object*'
     }
+}
+
+Describe 'group membership' {
+    BeforeEach { Mock Invoke-PropagationDelay {} }
 
     It 'does not re-add a member the group already has' {
         Mock Invoke-GraphApi {
             if ($Method -eq 'GET') { return @{ value = @(@{ id = 'u-1' }) } }
             throw 'the POST must not be attempted for a member already present'
         }
-        Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' `
-            -MemberIds @('u-1') -TimeoutSeconds 60 -IntervalSeconds 1 | Should -Be 0
+        Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' -MemberIds @('u-1') | Should -Be 0
+    }
+
+    It 'adds a member the group does not have' {
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'GET') { return @{ value = @() } }
+            return @{}
+        }
+        Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' -MemberIds @('u-1') | Should -Be 1
     }
 }
 
