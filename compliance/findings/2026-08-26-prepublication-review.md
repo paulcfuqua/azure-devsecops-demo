@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F56](#f56), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F57](#f57), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -88,6 +88,7 @@ claim by one step:
 | [F52](#f52) | **A plan is not a deployment.** Three green `what-if` runs preceded a deploy that failed on a policy GUID that does not exist, because what-if computes a resource delta and never resolves a definition id. |
 | [F53](#f53) | **A value with more than one source has no source.** The estate's region was written in sixteen places, and the one an operator would naturally set was outranked by fifteen nobody reads. |
 | [F56](#f56) | **Code that has run once is not code that runs.** L2 generated a new GUID for a role assignment on every run, so it converged exactly once and was refused ever after - on an estate whose entire premise is tearing itself down and rebuilding. |
+| [F57](#f57) | **The Verifier could not see the layer it signs off**, and its retry loop treated "forbidden" as "not yet" - so L2's audit ran the full 60-minute job timeout and produced no report at all | high | CONFIRMED (observed, run 33283413834) | 3.1.5, 3.12.3 | first real L2 audit, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -3517,3 +3518,55 @@ The uncomfortable part is that **five of these six had never been executed even 
 tonight. `up.ps1` had been run in plan mode repeatedly and reported green; a plan cannot
 reach any of them. The estate's real first deployment was not a test of the deployment - it
 was the first time most of this code had ever run at all.
+
+
+---
+
+## F57
+
+**The Verifier could not see the layer it signs off, and waited an hour to not say so**
+
+- **Severity:** high (L2 could never be verified, and the failure mode was a timeout with no report rather than a FAIL)
+- **Confidence:** CONFIRMED - the audit job ran 00:36:53 to 01:37:03, exactly the 60-minute job timeout, and was cancelled
+- **Controls:** 3.1.5 (least privilege), 3.12.3 (monitor controls on an ongoing basis)
+- **Closed by:** a Reader grant in L2, and treating permission failures as final
+- **Status:** CLOSED
+
+**Found while:** the first deploy where L2 actually succeeded. Its audit then ran for exactly
+sixty minutes and was killed by the runner.
+
+It was not slow. **`mls-verifier` has no role assignment at the `mls` management group** - it
+is Reader at *subscription* scope, and a management group is not in that scope. Every V2.x
+criterion that reads MG state threw `AuthorizationFailed`. The layer whose entire output
+lives at the management group could not be verified at all, and never could have been.
+
+**And the audit could not tell "not yet" from "never".** `Invoke-MlsCriterion` retries a
+thrown check for the declared propagation window, which is right for an object that has not
+appeared yet and useless for a permission error - waiting cannot turn *forbidden* into
+*permitted*. Each failing criterion burned its whole window in turn until the job timeout
+killed the run, so the outcome was **no report at all** rather than an actionable FAIL naming
+the missing grant. That is strictly worse than failing: a cancelled job looks like
+infrastructure flakiness, and this one had already been read as "the propagation retry is
+working" earlier the same night.
+
+**Fix, in two parts.** Permission failures are now `-Final`: matched on
+`AuthorizationFailed`, `Authorization_RequestDenied`, `InsufficientPrivileges`, `Forbidden`
+and `403`, they stop the retry loop immediately and report what cannot be seen. And L2 grants
+`mls-verifier` **Reader** on the management group - Reader, not Contributor, because the
+Verifier's independence is that it can only look; the grant widens what it can look *at*,
+never what it can do. It is made by L2 rather than `01-root-oidc.ps1` because the human
+running that script has no authority there either: the deployer created the group and is its
+only Owner, so the deployer is the only principal that can delegate.
+
+### What this says about the method
+
+This is [F51](#f51) again in a more expensive form. There, a gate could never pass and its red
+result was read as wallpaper. Here, a gate could never *finish*, and its cancellation was read
+as a slow propagation window - by me, in this session, an hour before I looked at the
+timestamps and saw 00:36:53 to 01:37:03 was not a coincidence.
+
+**A signal that cannot distinguish "not yet" from "never" will eventually spend its entire
+budget telling you nothing.** The retry window existed for a real reason - Azure policy
+genuinely does take minutes to propagate, and [F46](#f46) warned against calling propagation a
+defect. The error was applying that patience to a class of failure where patience is
+meaningless, and the cost was the one report anybody actually needed.

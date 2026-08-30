@@ -173,6 +173,51 @@ Describe 'Invoke-MlsCriterion' {
     }
 }
 
+Describe 'a permission failure is never a propagation failure' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..' 'MlsAudit.psm1') -Force
+    }
+
+    # L2's audit ran for exactly sixty minutes and was killed by the job timeout. It was not
+    # slow: mls-verifier has no role assignment at the mls management group, so every
+    # criterion reading MG state threw AuthorizationFailed - and the retry loop treated that
+    # as propagation lag and waited out the whole window on each one.
+    #
+    # "Not yet" and "never" are different answers. Retrying a permission error cannot make it
+    # succeed; it only converts an actionable FAIL into a timeout with no report at all,
+    # which is the worst of both (F57).
+
+    It 'fails immediately on <Signature>, without retrying' -ForEach @(
+        @{ Signature = 'AuthorizationFailed'; Message = "(AuthorizationFailed) The client 'x' does not have authorization to perform action 'Microsoft.Authorization/policyAssignments/read'" }
+        @{ Signature = 'Forbidden';           Message = 'Response status code does not indicate success: 403 (Forbidden).' }
+        @{ Signature = 'Authorization_RequestDenied'; Message = 'Authorization_RequestDenied: Insufficient privileges to complete the operation.' }
+    ) {
+        Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
+        Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
+        $context = New-MlsAuditContext -Layer 2 -Title 't' -ScriptName 's' -ReportRoot $TestDrive
+        $message = $Message
+        Invoke-MlsCriterion -Context $context -Id 'V2.1' -Control @('3.4.2') `
+            -Description 'd' -Command 'c' -Expected 'e' `
+            -Test { throw $message } | Out-Null
+        $row = @($context.Criterion)[0]
+        $row.Status | Should -Be 'FAIL'
+        $row.Observed | Should -BeLike '*check threw*'
+        Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Times 0 `
+            -Because 'a permission error cannot become permitted by waiting'
+    }
+
+    It 'still retries a genuine propagation failure' {
+        Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
+        Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
+        $context = New-MlsAuditContext -Layer 2 -Title 't' -ScriptName 's' -ReportRoot $TestDrive
+        Invoke-MlsCriterion -Context $context -Id 'V2.1' -Control @('3.4.2') `
+            -Description 'd' -Command 'c' -Expected 'e' `
+            -Test { throw 'ResourceNotFound: the assignment has not appeared yet' } | Out-Null
+        Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Times 1 -Scope It `
+            -Because 'a missing object may still be propagating'
+    }
+}
+
 Describe 'Wait-MlsRetryInterval' {
     It 'sleeps in short slices so the wait stays interruptible' {
         Mock Start-Sleep {} -ModuleName 'MlsAudit'

@@ -198,6 +198,38 @@ jobs:
             "az deployment sub list --subscription '${AZURE_SUBSCRIPTION_ID}' --query \"[?location!='${AZURE_LOCATION}'].name\" -o tsv" \
             "az deployment sub delete --subscription '${AZURE_SUBSCRIPTION_ID}' --name"
 
+      - name: Grant the Verifier read access to the management group
+        env:
+          MG_NAME: ${{ steps.names.outputs.management-group }}
+          VERIFIER_CLIENT_ID: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          # THE VERIFIER COULD NOT SEE THE LAYER IT SIGNS OFF. mls-verifier is Reader at
+          # SUBSCRIPTION scope; a management group is not in that scope, and nothing ever
+          # granted it anything there. So every V2.x criterion that reads MG state threw
+          # AuthorizationFailed - and L2, the layer whose whole output lives at the
+          # management group, could never be verified at all (F57).
+          #
+          # Granted here rather than in 01-root-oidc.ps1 because the human running that
+          # script has no authority at this management group either: the deployer created it
+          # and is its only Owner, so the deployer is the only principal that can delegate.
+          #
+          # Reader, not Contributor: the Verifier's independence is that it can only look
+          # (CLAUDE.md hard rule 1). This grant widens what it can look AT, never what it can
+          # do.
+          if [ -z "${VERIFIER_CLIENT_ID}" ]; then
+            echo "::notice title=Verifier not configured::AZURE_VERIFIER_CLIENT_ID is unset; skipping the management-group read grant."
+            exit 0
+          fi
+          objectId=$(az ad sp show --id "${VERIFIER_CLIENT_ID}" --query id -o tsv)
+          scope="/providers/Microsoft.Management/managementGroups/${MG_NAME}"
+          if az role assignment list --scope "${scope}" --assignee "${objectId}"                --query "[?roleDefinitionName=='Reader'] | length(@)" -o tsv | grep -qv '^0$'; then
+            echo "Verifier already holds Reader on ${MG_NAME}."
+          else
+            az role assignment create --assignee-object-id "${objectId}"               --assignee-principal-type ServicePrincipal               --role Reader --scope "${scope}"
+            echo "::notice title=Verifier granted Reader::mls-verifier can now read ${MG_NAME}, which V2.x requires."
+          fi
+
       - name: Clear the modify-policy Tag Contributor grants so the deploy can recreate them
         env:
           MG_NAME: ${{ steps.names.outputs.management-group }}
