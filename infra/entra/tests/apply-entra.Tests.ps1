@@ -197,6 +197,72 @@ Describe 'one run reports every failure, and still fails' {
     }
 }
 
+Describe 'L3 licenses the users its manifest declares licensed' {
+    # g0-bootstrap item C10 asked a human to assign licences after L3 created the users, and
+    # V3.4 asserted the result - so the audit checked a state nothing in the deploy path
+    # produced. On an estate claiming agent-managed infrastructure, a manifest field nothing
+    # acts on is a gap rather than a design (F79).
+
+    BeforeEach { Mock Write-Status {} }
+
+    It 'picks a SKU by capability, not by bundle name' {
+        # The tenant runs Microsoft 365 E5, which provides everything EMS Premium does and
+        # is named nothing like it (F73).
+        Mock Invoke-GraphApi {
+            @{ value = @(
+                    @{ skuId = 'e5'; skuPartNumber = 'SPE_E5'
+                        prepaidUnits = @{ enabled = 25 }; consumedUnits = 2
+                        servicePlans = @(
+                            @{ servicePlanName = 'AAD_PREMIUM'; provisioningStatus = 'Success' }
+                            @{ servicePlanName = 'MFA_PREMIUM'; provisioningStatus = 'Success' }
+                        ) }
+                ) }
+        }
+        $sku = Get-CapableLicenseSku
+        $sku.PartNumber | Should -Be 'SPE_E5'
+        $sku.SeatsFree | Should -Be 23
+    }
+
+    It 'refuses a SKU with no free seat rather than failing mid-assignment' {
+        Mock Invoke-GraphApi {
+            @{ value = @(
+                    @{ skuId = 'e5'; skuPartNumber = 'SPE_E5'
+                        prepaidUnits = @{ enabled = 2 }; consumedUnits = 2
+                        servicePlans = @(
+                            @{ servicePlanName = 'AAD_PREMIUM'; provisioningStatus = 'Success' }
+                            @{ servicePlanName = 'MFA_PREMIUM'; provisioningStatus = 'Success' }
+                        ) }
+                ) }
+        }
+        Get-CapableLicenseSku | Should -BeNullOrEmpty -Because 'buying seats is a spend decision, never an implicit one'
+    }
+
+    It 'ignores a SKU missing a required plan' {
+        Mock Invoke-GraphApi {
+            @{ value = @(
+                    @{ skuId = 'b'; skuPartNumber = 'O365_BUSINESS'
+                        prepaidUnits = @{ enabled = 50 }; consumedUnits = 0
+                        servicePlans = @(@{ servicePlanName = 'EXCHANGE_S_STANDARD'; provisioningStatus = 'Success' }) }
+                ) }
+        }
+        Get-CapableLicenseSku | Should -BeNullOrEmpty
+    }
+
+    It 'assigns a licence the user does not have' {
+        Mock Invoke-GraphApi { @{ assignedLicenses = @() } }
+        Mock Invoke-GraphMutation { @{} }
+        Initialize-UserLicense -UserId 'u-1' -Upn 'dana@x' -Sku @{ SkuId = 'e5'; PartNumber = 'SPE_E5' } |
+            Should -Be 'Assigned'
+    }
+
+    It 'is idempotent when the licence is already there' {
+        Mock Invoke-GraphApi { @{ assignedLicenses = @(@{ skuId = 'e5' }) } }
+        Mock Invoke-GraphMutation { throw 'must not re-assign a licence the user already holds' }
+        Initialize-UserLicense -UserId 'u-1' -Upn 'dana@x' -Sku @{ SkuId = 'e5'; PartNumber = 'SPE_E5' } |
+            Should -Be 'Unchanged'
+    }
+}
+
 Describe 'break-glass readiness is capability, not membership' {
     # The check used to verify that SOME cloud-only non-persona account sat in the group and
     # call that ready. It passed on an account holding no directory role whatsoever - one
