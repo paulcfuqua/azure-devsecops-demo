@@ -286,19 +286,23 @@ function Invoke-Main {
 
     # -Control @(): existence/provisioning check for the workspace and lakehouse. No CUI
     # protection is asserted - it is a precondition for V5.2's inventory check.
+    # L05: workspace/lakehouse reads, not the SQL endpoint sync
     Invoke-MlsCriterion -Context $context -Id 'V5.1' -Control @() `
         -Description 'Fabric REST: workspace + lakehouse exist' `
         -Command "GET $($script:FabricApiBaseUrl)/workspaces  # displayName eq '$WorkspaceName'`nGET $($script:FabricApiBaseUrl)/workspaces/<id>/lakehouses  # displayName eq '$LakehouseName'" `
         -Expected "workspace '$WorkspaceName' bound to the configured capacity; exactly one lakehouse '$LakehouseName'" `
+        -RetryWindowMinutes 10 `
         -Test {
         Test-FabricWorkspaceAndLakehouse -Header $header -WorkspaceName $WorkspaceName `
             -LakehouseName $LakehouseName -CapacityId $capacityId -Context $context
     } | Out-Null
 
+    # L05: the SQL analytics endpoint syncs new Delta tables slowly
     Invoke-MlsCriterion -Context $context -Id 'V5.2' -Control @('3.4.1') `
         -Description 'Table list matches manifest' `
         -Command "GET $($script:FabricApiBaseUrl)/workspaces/<id>/lakehouses/<id>/tables" `
         -Expected "exactly the 10 tables: $($ExpectedTable -join ', ') (set equality)" `
+        -RetryWindowMinutes 30 `
         -Test { Test-LakehouseTableList -Header $header -ExpectedTable $ExpectedTable -Context $context } | Out-Null
 
     $endpoint = $SqlEndpoint
@@ -318,10 +322,12 @@ function Invoke-Main {
     # -Control @(): deterministic seed row-count check over synthetic, fictional demo data
     # (CLAUDE.md: synthetic data only) - a data-integrity check, not a CUI protection
     # assertion.
+    # L05: reads the sync V5.2 has already waited out
     Invoke-MlsCriterion -Context $context -Id 'V5.3' -Control @() `
         -Description 'SQL analytics endpoint returns expected row counts (launches = 1,200 +/- 0)' `
         -Command "SELECT 'launches' AS t, COUNT(*) AS n FROM launches UNION ALL ... (one arm per table, all 10) -- against the lakehouse SQL analytics endpoint as mls-verifier" `
         -Expected "launches = $ExpectedLaunchCount exactly; the other nine equal to Track A's committed fixture" `
+        -RetryWindowMinutes 10 `
         -Test {
         Test-SeededRowCount -ExpectedTable $ExpectedTable -ExpectedLaunchCount $ExpectedLaunchCount `
             -ExpectedCount $expectedCount -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName

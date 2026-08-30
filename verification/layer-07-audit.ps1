@@ -328,11 +328,13 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Probe marker' -Value $probeId
     Add-MlsNote -Context $context -Message 'The control tower''s Ask tab ships dark at L7 and is deliberately not part of any L7 criterion, so a dark tab cannot fail this layer (L07.md Purpose).'
 
+    # L07: Container Apps revision readiness
     Invoke-MlsCriterion -Context $context -Id 'V7.1' -Control @('3.4.1') `
         -Description 'Public endpoints return 200 with correct content hash markers' `
         -Command "az containerapp show -g $ResourceGroupName -n <app> --query properties.configuration.ingress.fqdn -o tsv`nGET https://<fqdn>$HealthPath" `
         -Expected 'HTTP 200 from both apps; health payload content-hash marker equals the image digest recorded in the deploy run' `
         -PollIntervalSeconds 60 `
+        -RetryWindowMinutes 10 `
         -Test { Test-PublicEndpoint -ResourceGroupName $ResourceGroupName -AppName $AppName -HealthPath $HealthPath -Manifest $manifest } | Out-Null
 
     # -Control @(): schema-validation of the renderer's own output against golden fixtures
@@ -344,10 +346,12 @@ function Invoke-Main {
         -Expected 'exit 0; every golden spec valid against the component-spec JSON Schema' -NoRetry `
         -Test { Test-GoldenSpec -RepoRoot $repoRoot } | Out-Null
 
+    # L07: App Insights ingestion latency is typically 2-10 min
     Invoke-MlsCriterion -Context $context -Id 'V7.3' -Control @('3.3.1') `
         -Description 'OTel spans from a synthetic request visible in App Insights via KQL' `
         -Command "GET https://<fqdn>$HealthPath`?probe=$probeId   # one per app`naz monitor log-analytics query --workspace <lawCustomerId> --analytics-query `"AppRequests | where Url has 'probe=$probeId' | project TimeGenerated, AppRoleName, OperationId`" --timespan PT1H" `
         -Expected '>= 1 AppRequests row per app carrying the probe marker, with AppRoleName matching the app name from naming.bicep' `
+        -RetryWindowMinutes 15 `
         -Test {
         Test-OtelSpan -ResourceGroupName $ResourceGroupName -AppName $AppName -HealthPath $HealthPath `
             -WorkspaceId $workspaceId -ProbeId $probeId
@@ -358,10 +362,12 @@ function Invoke-Main {
     # change-approval or change-logging assertion (there is no human-review-required gate
     # in play here, and "checks are green" does not by itself evidence 3.4.3's
     # track/review/approve/log workflow).
+    # L07: waits on a canary PR s CI run
     Invoke-MlsCriterion -Context $context -Id 'V7.4' -Control @() `
         -Description 'Per-app CI green on a canary PR' `
         -Command "gh pr view <canary-pr> --json number,headRefOid,files,state`ngh api repos/$repositoryName/commits/<canary-sha>/check-runs" `
         -Expected 'every required check concludes success; path filters fire for the touched app(s) only' `
+        -RetryWindowMinutes 15 `
         -Test { Test-CanaryPipeline -Repository $repositoryName -PullRequestNumber $canary } | Out-Null
 
     # -Control @(): autoscale/idle-cost behaviour check, not CUI protection.

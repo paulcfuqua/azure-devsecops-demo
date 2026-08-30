@@ -237,8 +237,10 @@ Describe 'layer-08-audit' {
             $row.Status | Should -Be 'PASS'
             $row.Attempt | Should -Be 2
             $row.RetryWindowMinutes | Should -Be 5
-            $row.SleptSeconds | Should -Be 300
-            $row.SleptSeconds | Should -BeLessThan (5 * 60 + 1)
+            # One poll interval, not the whole window - asserted against the row's own
+            # cadence rather than a literal (F59).
+            $row.SleptSeconds | Should -Be $row.PollIntervalSecond
+            $row.SleptSeconds | Should -BeLessThan ($row.RetryWindowMinutes * 60 + 1)
             Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Exactly -Times 1
         }
     }

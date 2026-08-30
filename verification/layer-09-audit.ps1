@@ -273,10 +273,12 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'ZAP run id' -Value "$zapRun" -Status $(if ($zapRun) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Download root' -Value $downloads
 
+    # L09: the first CodeQL analysis has to finish
     Invoke-MlsCriterion -Context $context -Id 'V9.1' -Control @('3.11.2') `
         -Description 'GitHub API shows all GHAS features enabled' `
         -Command "gh api repos/$repositoryName --jq '.security_and_analysis'`ngh api repos/$repositoryName/vulnerability-alerts -i   # expect 204`ngh api repos/$repositoryName/code-scanning/analyses --jq '.[0].tool.name'" `
         -Expected "secret scanning + push protection enabled; vulnerability-alerts 204; a completed CodeQL analysis for each of $($CodeQlLanguage -join ', ')" `
+        -RetryWindowMinutes 20 `
         -Test { Test-GhasFeature -Repository $repositoryName -CodeQlLanguage $CodeQlLanguage } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V9.2' -Control @('3.11.2', '3.14.1') `

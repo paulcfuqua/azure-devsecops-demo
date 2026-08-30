@@ -252,10 +252,12 @@ function Invoke-Main {
     }
     $baseline = Get-RecordedLabelGuid -Path $baselinePath
 
+    # L04: label replication across S&C endpoints can lag
     Invoke-MlsCriterion -Context $context -Id 'V4.1' -Control @('3.8.4') `
         -Description 'Get-Label returns the 4 labels with expected GUIDs recorded to verification/reports/' `
         -Command "Connect-IPPSSession -AppId <mls-verifier> -Organization $organizationName -CertificateThumbprint <thumbprint>`nGet-Label | Select-Object DisplayName, Guid | Where-Object DisplayName -in '$($ExpectedLabel -join "','")'" `
         -Expected "exactly 4 labels ($($ExpectedLabel -join ', ')); GUIDs equal to the recorded baseline when one exists" `
+        -RetryWindowMinutes 30 `
         -Test { Test-LabelTaxonomy -ExpectedLabel $ExpectedLabel -Baseline $baseline -Context $context } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V4.2' -Control @('3.8.4') `
@@ -264,10 +266,12 @@ function Invoke-Main {
         -Expected 'same 4 labels, same GUIDs as label-guids.json, at every checkpoint' -NoRetry `
         -Test { Test-LabelPersistence -ExpectedLabel $ExpectedLabel -Baseline $baseline -Checkpoint $Checkpoint } | Out-Null
 
+    # L04: reads the replication V4.1 has already waited out
     Invoke-MlsCriterion -Context $context -Id 'V4.3' -Control @('3.8.4') `
         -Description "Label policy exists, publishing the taxonomy to the demo groups (supplementary - L04.md Failure mode 5, F18)" `
         -Command "Connect-IPPSSession -AppId <mls-verifier> -Organization $organizationName -CertificateThumbprint <thumbprint>`nGet-LabelPolicy -Identity '$ExpectedLabelPolicy' | Select-Object Labels, ExchangeLocation" `
         -Expected "policy '$ExpectedLabelPolicy' exists; Labels == [$($ExpectedLabel -join ', ')]; ExchangeLocation == [$($ExpectedLabelPolicyScope -join ', ')]" `
+        -RetryWindowMinutes 10 `
         -Test { Test-LabelPolicyScope -PolicyName $ExpectedLabelPolicy -ExpectedLabel $ExpectedLabel -ExpectedScope $ExpectedLabelPolicyScope } | Out-Null
 
     return $context

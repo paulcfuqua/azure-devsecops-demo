@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F58](#f58), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F59](#f59), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -90,6 +90,7 @@ claim by one step:
 | [F56](#f56) | **Code that has run once is not code that runs.** L2 generated a new GUID for a role assignment on every run, so it converged exactly once and was refused ever after - on an estate whose entire premise is tearing itself down and rebuilding. |
 | [F57](#f57) | **The Verifier could not see the layer it signs off**, and its retry loop treated "forbidden" as "not yet" - so L2's audit ran the full 60-minute job timeout and produced no report at all | high | CONFIRMED (observed, run 33283413834) | 3.1.5, 3.12.3 | first real L2 audit, 2026-08-30 |
 | [F58](#f58) | **A check that cannot report is not a check.** The audit published its transcript only on exit, declared `ran=true` only on exit, ran `az` with no timeout and gave the whole run no retry budget - so every audit that hit the job timeout destroyed the evidence of why. | high | CONFIRMED (observed, run 33287461494) | 3.3.1, 3.12.3 | second L2 audit, 2026-08-30 |
+| [F59](#f59) | **Patience inherited is patience nobody chose.** 19 of 47 criteria took a 30-minute retry window by default, including one whose answer was settled the moment the deploy step returned - it spent all thirty minutes reaching a verdict its own run's deploy log contradicted. | high | CONFIRMED (observed, run 33307710207) | 3.12.1, 3.12.3 | first L2 audit report, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -3648,3 +3649,77 @@ worse.
 So the ordering rule this establishes: **fix the thing that reports before fixing the thing
 that failed.** A cancelled job that streams its transcript is a bad afternoon. A cancelled
 job that streams nothing is a second night.
+
+---
+
+## F59
+
+**Nineteen criteria inherited a patience nobody chose for them, and one of them answered wrong**
+
+- **Severity:** high (V2.1 returned a FAIL contradicted by the deploy log in the same run, and took thirty minutes to do it - a wrong verdict is worse than no verdict, because it gets believed)
+- **Confidence:** CONFIRMED - run 33307710207: V2.1 FAILed after 7 attempts over 1806.9 s, while that run's own deploy log showed the subscription placed under the management group and the Verifier already holding Reader
+- **Controls:** 3.12.1 (assess controls periodically), 3.12.3 (monitor controls on an ongoing basis)
+- **Closed by:** a short default window with patience opted into per criterion, and a V2.1 that reports what it saw
+- **Status:** CLOSED
+
+**Found while:** reading the first L2 audit report that ever existed - the one [F58](#f58)
+made possible. The report was the point, and the first thing it did was disagree with the
+run that produced it.
+
+**Two defects, and they compounded.**
+
+**V2.1 could not tell "denied" from "absent".** It read the management group with
+`-AllowFailure`, which turns any az failure into `$null`, and then reported that `$null` with
+the same sentence as a genuinely empty result: *"does not report the demo subscription as a
+child (or the MG read was denied)"*. That parenthetical is not a finding, it is two findings
+the criterion could not separate. Worse, `--query` projected the answer away inside az, so the
+report could say only that the projection came back empty - never what the management group
+actually contained. Ground truth was forty minutes earlier in the same run's deploy log:
+`"parent": {"id": "/providers/Microsoft.Management/managementGroups/mls"}` and
+`Verifier already holds Reader on mls.`
+
+**And it spent thirty minutes being wrong**, because it inherited the standard window.
+`$script:StandardRetryWindowMinutes = 30` was the DEFAULT, applied to every criterion that
+did not say otherwise - **19 of the 47 criteria in this repo**. Thirty minutes is right for a
+handful of genuinely slow, eventually consistent checks. It is absurd for one whose answer is
+settled the moment `az account management-group subscription add` returns. The cost was never
+one criterion either: L3 declares four, none of them explicit, which is two hours inside a
+sixty-minute job.
+
+**Fix.** V2.1 drops `-AllowFailure` and drops `--query`: az throws with its own stderr (and
+the criterion loop marks a permission failure Final, per [F57](#f57)), the children are
+filtered in-process, and a FAIL now names what WAS there - `its children are: X [type]`, or
+`it lists no children at all`. And the default window is now **5 minutes, polled every 20
+seconds**, with patience opted into: all nineteen implicit criteria now declare a window taken
+from their own runbook - 45 for L3's Entra propagation, 30 for L4's label replication, 15 for
+L7's App Insights ingestion - each with the reason beside it.
+
+The poll interval mattered as much as the window. At 300 s a criterion that became true at
+t=10 s still waited five minutes, so every propagation-lagged check paid the full interval
+even when it converged immediately.
+
+`audit-run-budget.Tests.ps1` now holds two invariants: no criterion may declare more patience
+than the whole run has, and **no criterion may inherit its window silently**.
+
+### What this says about the method
+
+The sum-of-windows arithmetic is the wrong model, and the first version of that test enforced
+it anyway. Propagation is *shared wall clock*: once V3.1 has waited out 45 minutes, the
+objects V3.2 reads have had 45 minutes too. Summing declared windows would have forced every
+layer's criteria artificially small to satisfy a budget they were never going to spend
+together. What is never defensible is one criterion that can eat the entire budget and leave
+the rest of the layer unmeasured - so that is what the test asserts instead.
+
+Two of the guards written for this finding **survived their first mutation**, and both for the
+same reason: they tested the harness rather than the code.
+
+- The denied-read test mocked `Invoke-MlsAz` to *throw regardless of `-AllowFailure`*. Restoring
+  the bug changed nothing, because the mock was supplying the behaviour under test. It passes
+  only now that the mock honours the real contract and returns `$null` when the flag is set.
+- The window-inventory parser read `-RetryWindowMinutes` as a numeric literal, so V6.4's
+  `-RetryWindowMinutes $SqlIdleWindowMinutes` - a properly declared window held in a variable -
+  counted as an orphan. **Declared** and **readable from here** are different questions.
+
+CLAUDE.md already says a test that supplies the answer it is checking is a mirror, not a test.
+Mutation testing is how a mirror gets caught, and it caught two in one change. A guard nobody
+has tried to break is a guard nobody has tested.
