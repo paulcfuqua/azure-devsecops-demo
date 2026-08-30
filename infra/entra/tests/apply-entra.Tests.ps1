@@ -153,6 +153,73 @@ Describe 'apply-entra manifest schema validation' {
     }
 }
 
+Describe 'group membership survives directory replication' {
+    # Wait-EntraPropagation confirms each user and group is VISIBLE before this runs. That is
+    # a GET, and it is a weaker question than the membership write asks: `POST
+    # groups/{id}/members/$ref` needs a replica that can resolve BOTH objects and link them.
+    # Both were visible and the write still 404'd, killing L3 on its first membership on the
+    # first run that ever reached it (F67).
+
+    BeforeEach {
+        Mock Invoke-PropagationDelay {}
+    }
+
+    It 'retries a Request_ResourceNotFound and succeeds once replication catches up' {
+        $script:PostCalls = 0
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'GET') { return @{ value = @() } }
+            $script:PostCalls++
+            if ($script:PostCalls -lt 3) {
+                throw "Request_ResourceNotFound: Resource 'g-1' does not exist or one of its queried reference-property objects are not present."
+            }
+            return @{}
+        }
+
+        $added = Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' `
+            -MemberIds @('u-1') -TimeoutSeconds 60 -IntervalSeconds 1
+
+        $added | Should -Be 1
+        $script:PostCalls | Should -Be 3
+        Should -Invoke Invoke-PropagationDelay -Exactly -Times 2
+    }
+
+    It 'raises any other failure immediately, without waiting' {
+        # A 403 does not become a 200 by waiting. Retrying everything would turn a permission
+        # problem into a timeout, which is the confusion F57 was about.
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'GET') { return @{ value = @() } }
+            throw 'Authorization_RequestDenied: Insufficient privileges to complete the operation.'
+        }
+
+        { Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' `
+                -MemberIds @('u-1') -TimeoutSeconds 60 -IntervalSeconds 1 } |
+            Should -Throw '*Authorization_RequestDenied*'
+        Should -Invoke Invoke-PropagationDelay -Exactly -Times 0
+    }
+
+    It 'gives up with an error naming replication, not a missing object' {
+        # The operator needs to know the difference between "your manifest names a user that
+        # does not exist" and "the directory has not caught up".
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'GET') { return @{ value = @() } }
+            throw "Request_ResourceNotFound: Resource 'g-1' does not exist or one of its queried reference-property objects are not present."
+        }
+
+        { Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' `
+                -MemberIds @('u-1') -TimeoutSeconds 0 -IntervalSeconds 1 } |
+            Should -Throw '*directory replication rather than a missing object*'
+    }
+
+    It 'does not re-add a member the group already has' {
+        Mock Invoke-GraphApi {
+            if ($Method -eq 'GET') { return @{ value = @(@{ id = 'u-1' }) } }
+            throw 'the POST must not be attempted for a member already present'
+        }
+        Initialize-GroupMembership -GroupId 'g-1' -GroupName 'mls-launch-ops' `
+            -MemberIds @('u-1') -TimeoutSeconds 60 -IntervalSeconds 1 | Should -Be 0
+    }
+}
+
 Describe 'apply-entra propagation polling' {
     BeforeEach {
         Mock Invoke-PropagationDelay {}
