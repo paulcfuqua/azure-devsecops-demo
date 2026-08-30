@@ -73,6 +73,9 @@ jobs:
   collect:
     name: collect compliance state
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -147,6 +150,9 @@ jobs:
     name: commit the dated artifact
     needs: collect
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     # The only job with a write token, and the only job that installs nothing.
     permissions:
       contents: write

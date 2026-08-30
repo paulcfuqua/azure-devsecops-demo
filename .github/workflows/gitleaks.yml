@@ -45,6 +45,9 @@ jobs:
   scan:
     name: scan history for secrets
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:

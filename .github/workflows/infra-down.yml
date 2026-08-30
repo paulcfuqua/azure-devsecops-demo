@@ -69,6 +69,9 @@ jobs:
   preflight:
     name: preflight (demo environment guard)
     runs-on: ubuntu-latest
+    # Bounded: reads repository variables and nothing else. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 10
     environment: demo
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
@@ -116,6 +119,9 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.configured == 'true' && !inputs.skip_fabric }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     environment: demo
     permissions:
       id-token: write
@@ -179,6 +185,9 @@ jobs:
     needs: [preflight, fabric]
     if: ${{ !cancelled() && needs.preflight.outputs.configured == 'true' }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     environment: demo
     permissions:
       id-token: write
@@ -218,6 +227,9 @@ jobs:
     needs: [preflight, cost-export]
     if: ${{ !cancelled() && needs.preflight.outputs.configured == 'true' }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     environment: demo
     permissions:
       id-token: write
@@ -418,6 +430,9 @@ jobs:
     needs: [preflight, fabric, cost-export, resource-groups, verify]
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    # Bounded: collates results already produced. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 15
     steps:
       - name: Write the teardown result table
         env:

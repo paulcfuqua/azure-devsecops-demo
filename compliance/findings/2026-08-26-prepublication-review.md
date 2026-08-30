@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F80](#f80), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F81](#f81), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -110,6 +110,7 @@ claim by one step:
 | [F78](#f78) | **A test that can only be satisfied by weakening the system is reasoning backwards.** V3.3 asserted an enabled CA policy where 3.5.3 asks whether MFA is enforced - failing on a tenant secured by Security Defaults, and offering a green result in exchange for baseline MFA. | high | CONFIRMED (tenant enforces MFA; V3.3 failed) | 3.5.3 | first L3 audit, 2026-08-30 |
 | [F79](#f79) | **A documented manual step reads as a design.** The manifest declared five users licensed, V3.4 asserted it, and nothing assigned a licence - C10 asked a human to. L3 does it now, with permissions the deployer already had and seats already bought. | medium | CONFIRMED (observed, run 33335057817) | 3.1.1, 3.5.3 | second L3 audit, 2026-08-30 |
 | [F80](#f80) | **A Key Vault name survives its vault by ninety days.** Soft delete cannot be disabled, so the first rebuild after any teardown fails with `VaultAlreadyExists` naming a vault in no resource group - a second-cycle blocker for an estate whose claim is kill/rebuild. | high | CONFIRMED (observed, run 33336756817) | 3.4.2, 3.12.1 | first L6 deploy, 2026-08-30 |
+| [F81](#f81) | **A lesson applied only where it was learned is not yet a lesson.** F58 bounded the audit so a stuck check could still report; 65 jobs on the deploy side stayed unbounded on a six-hour default, and a hung `what-if` consumed a whole run in silence. | high | CONFIRMED (36s vs 37min on the same template; reproduced locally) | 3.12.1, 3.12.3 | L6 selective replay, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4596,3 +4597,54 @@ the secrets the estate is careful about everywhere else. **The cheap fix and the
 differ only in the case you are least likely to be testing when you write it**, because the
 case in front of you is always the one that just failed - here, a leftover from a region
 change, which is the rarest of the three.
+
+---
+
+## F81
+
+**Sixty-five jobs had no time limit, and the audit was the only thing anyone had bounded**
+
+- **Severity:** high (a hung step consumed a whole run and reported nothing; every deploy job in the repository could do the same for six hours)
+- **Confidence:** CONFIRMED - L6's `what-if` completed in 36 s against an empty estate and ran 37 minutes without output once thirteen resources existed to diff against; reproduced locally, with and without the SQL admin populated
+- **Controls:** 3.12.1, 3.12.3
+- **Closed by:** bounding every job, bounding `what-if`, and making `what-if` non-blocking
+- **Status:** CLOSED
+
+L6's preview step took **36 seconds** on the run that first reached it. On the next run it hung
+for **37 minutes** producing nothing, and the deploy behind it never started. Reproduced
+locally at 300 s with no output at all - and it is not the SQL administrator, which was the
+obvious suspect: the hang reproduces with those variables empty.
+
+Chasing it exposed the larger fact. **Sixty-five jobs across this repository declared no
+`timeout-minutes`**, inheriting GitHub's six-hour default. Only the *verify* jobs were bounded,
+because [F58](#f58) gave the AUDIT a budget so a stuck check could still report - and that
+reasoning was never carried across to the thing being audited. Every deploy, apply and
+preflight job in the estate could hang for six hours and say nothing.
+
+**A job without a bound is not patient. It is a job whose failure mode is silence.**
+
+**Fix.** Every job is bounded, sized by what it does: 10 minutes for a preflight that only
+reads repository variables, 20 for a plan that creates nothing, 45 for anything talking to a
+cloud API. `what-if` is bounded at 300 s and **no longer gates the deploy** - it stays because
+a readable delta is worth having, and it does not block because [F52](#f52) established it is
+not the safety net it appears to be: it computes a resource delta, never resolves definition
+ids, and passed a fabricated policy GUID three times running. Trading a real deployment for a
+preview that cannot finish is a bad exchange in both directions.
+
+`verification/tests/failure-classes.Tests.ps1` now fails if any job omits a bound.
+
+### What this says about the method
+
+[F58](#f58) is three days old and its lesson was written down: *a check that cannot report is
+not a check*. It was applied to `verification/` and stopped there. The deploy path - larger,
+slower, and the half that actually changes a tenant - kept the defect, and the register
+recorded the rule while the repository disproved it.
+
+**A lesson applied only where it was learned is not yet a lesson.** That is the same shape as
+[F70](#f70)'s call site versus choke point and [F76](#f76)'s three-of-four fail-slow, and the
+three together are specific enough to act on: when a finding is closed, the next question is
+never "is this instance fixed" but "where else does this shape occur, and what check will
+find it there".
+
+The check that catches this class now exists, which is the only reason the count is 65 and
+not 66: writing it is what surfaced the other 64.

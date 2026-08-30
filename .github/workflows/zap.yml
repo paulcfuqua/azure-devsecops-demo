@@ -45,6 +45,9 @@ jobs:
   target:
     name: resolve the scan target
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     environment: demo
     outputs:
       url: ${{ steps.resolve.outputs.url }}
@@ -85,6 +88,9 @@ jobs:
     needs: target
     if: ${{ needs.target.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:

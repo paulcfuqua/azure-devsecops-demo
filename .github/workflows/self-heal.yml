@@ -207,6 +207,9 @@ jobs:
   select:
     name: select the alert to heal
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: read
       security-events: read
@@ -331,6 +334,9 @@ jobs:
     needs: select
     if: ${{ needs.select.outputs.found == 'true' && needs.select.outputs.kind == 'code-scanning' }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: write
       pull-requests: write
@@ -609,6 +615,9 @@ jobs:
     needs: select
     if: ${{ needs.select.outputs.found == 'true' && needs.select.outputs.kind == 'dependabot' }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: write
