@@ -18,9 +18,18 @@ description: >-
 # them recorded "no <thing> supplied" FAILs caused by the pipeline rather than by
 # the estate.
 #
-# Now: the script runs unpiped (so its exit code is its own), the transcript is
-# captured to a file and echoed afterwards, the outputs are always written, and
-# the `args` input carries the per-layer inputs.
+# Now: the transcript STREAMS through `tee` while the audit runs and the exit code
+# comes from PIPESTATUS[0] (so it is still the audit's own), the outputs are
+# written before the run rather than after, and the `args` input carries the
+# per-layer inputs.
+#
+# The 2026-08-24 fix above was half a fix, and the other half cost a night (F58).
+# It repaired `ran=true` for a FAILING audit and left it broken for a CANCELLED
+# one - the case where the report matters even more, because a cancelled job's
+# only evidence is what it managed to say before it died. Writing an output
+# after the process is the same defect as echoing the transcript after the
+# process: both assume the process gets to finish. A timeout is precisely the
+# case where it does not.
 #
 # `args` is ONE ARGUMENT PER LINE. Not a shell string: an argument may contain
 # spaces, and splitting on whitespace would break a tenant domain, a manifest
@@ -56,6 +65,15 @@ inputs:
     description: 'Label for the identity the audit ran as, used in the run summary.'
     required: false
     default: mls-verifier
+  run-budget-minutes:
+    description: >-
+      How long the audit may spend RETRYING in total, across every criterion. Must leave
+      the calling job enough of its timeout-minutes to write and upload the report: a
+      criterion's declared window is clamped to what is left of this, so the audit always
+      reaches its report instead of being killed mid-check (F58). The relationship to the
+      job's timeout-minutes is enforced by verification/tests/audit-run-budget.Tests.ps1.
+    required: false
+    default: '45'
   continue-on-failure:
     description: >-
       'true' records the failure in the outputs and lets the caller decide. Default
@@ -88,6 +106,7 @@ runs:
         AUDIT_REPORT_DIR: ${{ inputs.report-dir }}
         AUDIT_IDENTITY: ${{ inputs.identity }}
         AUDIT_CONTINUE: ${{ inputs.continue-on-failure }}
+        MLS_AUDIT_RUN_BUDGET_MINUTES: ${{ inputs.run-budget-minutes }}
       run: |
         set -euo pipefail
 
@@ -131,20 +150,30 @@ runs:
 
         echo "Running ${script} as ${AUDIT_IDENTITY} with ${#audit_args[@]} argument(s)."
 
-        # No pipeline: `pwsh ... | tee` would hand the step tee's exit code, and
-        # the audit's own code is the Verifier's verdict. Captured first,
-        # published second, acted on last.
-        set +e
-        pwsh -NoProfile -NonInteractive -File "${script}" "${audit_args[@]}" > "${transcript}" 2>&1
-        code=$?
-        set -e
-        cat "${transcript}"
-
+        # ran/report are declared BEFORE the audit starts, not after it ends.
+        # The caller uploads on `always() && ran == 'true'`, and an output written
+        # after the run does not exist when the run is CANCELLED - so a timed-out
+        # audit uploaded nothing, including the partial reports already on disk.
+        # The script exists (checked above); that it will run is knowable now (F58).
         {
           echo "ran=true"
-          echo "exit-code=${code}"
           echo "report=${transcript}"
         } >> "${GITHUB_OUTPUT}"
+
+        # Streamed, not captured-then-echoed. `> file` followed by `cat` publishes
+        # the transcript only if the process exits, so a cancellation discarded
+        # every line the audit had produced - which is exactly the run where the
+        # log is the only evidence. `tee` streams it live AND keeps the file.
+        #
+        # The pipeline is why this was written the other way round: `pwsh | tee`
+        # hands the step tee's exit code, and the audit's own code is the
+        # Verifier's verdict. PIPESTATUS[0] gives it back, so we get both.
+        set +e
+        pwsh -NoProfile -NonInteractive -File "${script}" "${audit_args[@]}" 2>&1 | tee "${transcript}"
+        code=${PIPESTATUS[0]}
+        set -e
+
+        echo "exit-code=${code}" >> "${GITHUB_OUTPUT}"
 
         case "${code}" in
           0) verdict="PASS — no criterion FAILed" ;;

@@ -243,6 +243,9 @@ jobs:
         uses: ./.github/actions/layer-audit
         with:
           layer: '04'
+          # This job's timeout-minutes is 45, not the usual 60, so the audit gets a
+          # smaller retry budget and still leaves room to write its report (F58).
+          run-budget-minutes: '30'
           args: |
             -Organization
             ${{ vars.MLS_TENANT_DOMAIN || vars.PURVIEW_ORGANIZATION }}

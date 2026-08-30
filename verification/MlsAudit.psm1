@@ -58,6 +58,29 @@ Set-StrictMode -Version Latest
 $script:StandardRetryWindowMinutes = 30
 $script:StandardPollIntervalSeconds = 300
 
+# Hard ceiling on how long the WHOLE audit may spend retrying, across every criterion.
+#
+# The per-criterion window is bounded and the run was not, which is not the same thing:
+# L2 declares three criteria at the standard 30-minute window, so its worst case was 90
+# minutes inside a job whose timeout-minutes is 60. There was never any margin - V2.3
+# legitimately waits out the NIST assignment's own 30-minute compliance scan, so ONE
+# unexpected failure anywhere else in the layer was enough to reach the runner's limit
+# and be killed mid-audit, reporting nothing (F58).
+#
+# A criterion that cannot be given its full window is not silently shortened: it says so
+# in its Detail, because "FAIL, and the run ran out of time to keep asking" and "FAIL,
+# and we waited the whole window" are different findings.
+#
+# 45 leaves 15 of a 60-minute job to write the report and upload it. The relationship
+# between this number and the job's timeout-minutes is enforced by
+# verification/tests/audit-run-budget.Tests.ps1, not by this comment.
+$script:DefaultRunBudgetMinutes = 45
+
+# Default ceiling on a SINGLE transport call. An `az` invocation had no timeout at all,
+# so one hung call could consume the entire job while the retry loop above it never got
+# another turn (F58).
+$script:DefaultCommandTimeoutSeconds = 300
+
 # Hard ceiling on how long ONE criterion may block a single audit run. The 24-hour
 # criteria (V6.3 cost export, V10.1/V10.2 self-heal) declare a 24 h window but must not
 # hang the Verifier for a day: they pass -InProcessWaitMinutes 0 -PendingWhenUnexpired,
@@ -401,6 +424,76 @@ function Assert-MlsCommand {
 
 # --- transports (the only code in the repo that talks to anything) ---------------------
 
+function Invoke-MlsBoundedNativeCommand {
+    <#
+    .SYNOPSIS
+        Run a native command with a hard wall-clock ceiling, returning its streams.
+
+    .DESCRIPTION
+        `& az @Argument` cannot be interrupted. A call that never returns holds the audit
+        forever: the retry loop above it never gets another turn, the run budget never gets
+        consulted, and the job dies at the runner's timeout with the process still live -
+        which is what "Terminate orphan process: pid (3399) (python3)" in L2's cancelled
+        job was (F58; `az` is Python).
+
+        stderr is CAPTURED, not discarded. The old call ended in `2>$null`, so when az did
+        fail the reason was thrown away and the criterion could only report an exit code.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Argument,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+    $resolved = (Get-Command -Name $FilePath -ErrorAction Stop)
+    $exe = if ($resolved.CommandType -eq 'Application') { $resolved.Source } else { $FilePath }
+
+    # ProcessStartInfo.ArgumentList, NOT Start-Process -ArgumentList. The latter joins the
+    # array into one command line with no per-argument quoting, so the first az query
+    # containing a space - `--query "children[?contains(id, '<sub>')].displayName"`, which
+    # is V2.1 - would arrive as two arguments and the call would fail. ArgumentList escapes
+    # each element on Windows and passes argv straight through on Unix.
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $exe
+    foreach ($value in $Argument) { $psi.ArgumentList.Add($value) }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $process = [System.Diagnostics.Process]::Start($psi)
+    try {
+        # Drain both pipes concurrently. Reading one to the end before the other deadlocks
+        # as soon as a command fills the pipe it is not being read from - and `az` output is
+        # routinely larger than a pipe buffer.
+        $outTask = $process.StandardOutput.ReadToEndAsync()
+        $errTask = $process.StandardError.ReadToEndAsync()
+
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try {
+                $process.Kill($true)
+            }
+            catch {
+                # It exited between the timeout expiring and the kill, or the OS refused.
+                # Either way the wait is over and TimedOut is still the answer.
+                Write-Verbose "could not kill $exe after timeout: $($_.Exception.Message)"
+            }
+            return [pscustomobject]@{ TimedOut = $true; ExitCode = -1; StdOut = ''; StdErr = '' }
+        }
+        # The overload that takes a timeout returns as soon as the process exits; the
+        # parameterless one additionally waits for the redirected streams to flush.
+        $process.WaitForExit()
+        return [pscustomobject]@{
+            TimedOut = $false
+            ExitCode = $process.ExitCode
+            StdOut   = ([string]$outTask.GetAwaiter().GetResult())
+            StdErr   = ([string]$errTask.GetAwaiter().GetResult())
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Invoke-MlsAz {
     <#
     .SYNOPSIS
@@ -409,15 +502,25 @@ function Invoke-MlsAz {
     param(
         [Parameter(Mandatory)][string[]]$Argument,
         [switch]$AllowFailure,
-        [switch]$Raw
+        [switch]$Raw,
+        [int]$TimeoutSeconds = 0
     )
     Assert-MlsReadOnlyAzArgument -Argument $Argument
     Assert-MlsCommand -Name 'az' -Hint 'Install the Azure CLI and sign in as mls-verifier (az login --service-principal ...).'
-    $output = & az @Argument 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        if ($AllowFailure) { return $null }
-        throw "az $($Argument -join ' ') failed with exit code $LASTEXITCODE."
+    if ($TimeoutSeconds -le 0) { $TimeoutSeconds = $script:DefaultCommandTimeoutSeconds }
+    $run = Invoke-MlsBoundedNativeCommand -FilePath 'az' -Argument $Argument -TimeoutSeconds $TimeoutSeconds
+    if ($run.TimedOut) {
+        # A timeout is NOT swallowed by -AllowFailure. -AllowFailure means "this command is
+        # allowed to come back empty-handed"; a hang means we never found out, and reporting
+        # "not there" for "could not tell" is the mistake F57 was about.
+        throw "az $($Argument -join ' ') did not return within $TimeoutSeconds s and was terminated."
     }
+    if ($run.ExitCode -ne 0) {
+        if ($AllowFailure) { return $null }
+        $why = if ([string]::IsNullOrWhiteSpace($run.StdErr)) { '' } else { ": $($run.StdErr.Trim())" }
+        throw "az $($Argument -join ' ') failed with exit code $($run.ExitCode)$why"
+    }
+    $output = $run.StdOut
     $text = ($output | Out-String).Trim()
     if ([string]::IsNullOrWhiteSpace($text)) { return $null }
     if ($Raw) { return $text }
@@ -433,16 +536,23 @@ function Invoke-MlsGh {
     param(
         [Parameter(Mandatory)][string[]]$Argument,
         [switch]$AllowFailure,
-        [switch]$Raw
+        [switch]$Raw,
+        [int]$TimeoutSeconds = 0
     )
     Assert-MlsReadOnlyGhArgument -Argument $Argument
     Assert-MlsCommand -Name 'gh' -Hint 'Install the GitHub CLI and export the Verifier read token as GH_TOKEN.'
-    $output = & gh @Argument 2>$null
-    $exitCode = $LASTEXITCODE
+    if ($TimeoutSeconds -le 0) { $TimeoutSeconds = $script:DefaultCommandTimeoutSeconds }
+    $run = Invoke-MlsBoundedNativeCommand -FilePath 'gh' -Argument $Argument -TimeoutSeconds $TimeoutSeconds
+    if ($run.TimedOut) {
+        throw "gh $($Argument -join ' ') did not return within $TimeoutSeconds s and was terminated."
+    }
+    $exitCode = $run.ExitCode
     if ($exitCode -ne 0) {
         if ($AllowFailure) { return $null }
-        throw "gh $($Argument -join ' ') failed with exit code $exitCode."
+        $why = if ([string]::IsNullOrWhiteSpace($run.StdErr)) { '' } else { ": $($run.StdErr.Trim())" }
+        throw "gh $($Argument -join ' ') failed with exit code $exitCode$why"
     }
+    $output = $run.StdOut
     $text = ($output | Out-String).Trim()
     if ([string]::IsNullOrWhiteSpace($text)) { return $null }
     if ($Raw) { return $text }
@@ -813,12 +923,28 @@ function New-MlsAuditContext {
         [double]$RetryWindowMinutes = -1,
         [double]$PollIntervalSeconds = -1,
         [double]$MaxWaitMinutes = -1,
+        [double]$RunBudgetMinutes = -1,
         [string]$Identity = 'mls-verifier (Reader + Directory.Read.All + Policy.Read.All) - read-only by contract',
         [switch]$NoRetry
     )
     if ($RetryWindowMinutes -lt 0) { $RetryWindowMinutes = $script:StandardRetryWindowMinutes }
     if ($PollIntervalSeconds -le 0) { $PollIntervalSeconds = $script:StandardPollIntervalSeconds }
     if ($MaxWaitMinutes -lt 0) { $MaxWaitMinutes = $script:DefaultMaxWaitMinutes }
+    if ($RunBudgetMinutes -lt 0) {
+        # The runner knows the job's timeout; the script does not. MLS_AUDIT_RUN_BUDGET_MINUTES
+        # is how the workflow tells it, so the two numbers stay related in one place
+        # (CLAUDE.md: every value has one source).
+        $fromEnv = $env:MLS_AUDIT_RUN_BUDGET_MINUTES
+        $parsed = 0.0
+        $RunBudgetMinutes = if (-not [string]::IsNullOrWhiteSpace($fromEnv) -and
+            [double]::TryParse($fromEnv, [ref]$parsed) -and $parsed -gt 0) {
+            $parsed
+        }
+        else {
+            $script:DefaultRunBudgetMinutes
+        }
+    }
+    $startedUtc = [datetime]::UtcNow
     if ([string]::IsNullOrWhiteSpace($ReportRoot)) {
         $ReportRoot = Join-Path -Path $PSScriptRoot -ChildPath 'reports'
     }
@@ -831,9 +957,11 @@ function New-MlsAuditContext {
         RetryWindowMinutes  = $RetryWindowMinutes
         PollIntervalSeconds = $PollIntervalSeconds
         MaxWaitMinutes      = $MaxWaitMinutes
+        RunBudgetMinutes    = $RunBudgetMinutes
         NoRetry             = [bool]$NoRetry
         Identity            = $Identity
-        StartedUtc          = [datetime]::UtcNow
+        StartedUtc          = $startedUtc
+        DeadlineUtc         = $startedUtc.AddMinutes($RunBudgetMinutes)
         Criterion           = [System.Collections.Generic.List[object]]::new()
         Preflight           = [System.Collections.Generic.List[object]]::new()
         Note                = [System.Collections.Generic.List[string]]::new()
@@ -955,6 +1083,22 @@ function Invoke-MlsCriterion {
 
     $started = [datetime]::UtcNow
     $budgetSeconds = $budget * 60
+
+    # Clamp this criterion's window to what is left of the WHOLE run's budget. Without
+    # this each criterion got its own full window in turn and the run's worst case was
+    # the sum of them, which for L2 was 90 minutes inside a 60-minute job: the runner
+    # killed the audit mid-criterion and no report was ever written (F58).
+    #
+    # Exhausted budget does not skip the check - it still runs, once, and reports what it
+    # sees. It only stops the WAITING, because waiting is the part there is no time for.
+    $runBudgetExhausted = $false
+    if ($Context.PSObject.Properties['DeadlineUtc'] -and $budgetSeconds -gt 0) {
+        $remainingSeconds = ($Context.DeadlineUtc - [datetime]::UtcNow).TotalSeconds
+        if ($remainingSeconds -lt $budgetSeconds) {
+            $runBudgetExhausted = $true
+            $budgetSeconds = [math]::Max(0, $remainingSeconds)
+        }
+    }
     $attempt = 0
     $sleptSeconds = 0.0
     $result = $null
@@ -993,6 +1137,14 @@ function Invoke-MlsCriterion {
     $elapsed = ($finishedUtc - $started).TotalSeconds
     $status = 'FAIL'
     $detail = $result.Detail
+
+    # Say so when the answer is "we ran out of time to keep asking", so a reader never
+    # mistakes a truncated window for a completed one.
+    if ($runBudgetExhausted -and -not $result.Passed -and $result.Status -ne 'SKIP') {
+        $shortfall = [math]::Round($budget - ($budgetSeconds / 60), 1)
+        $detail = ("run budget exhausted: this criterion retried for {0} of its declared {1} min window ({2} min short) because the audit's overall {3} min budget ran out. Re-run it on its own to give it the full window. {4}" -f `
+                [math]::Round($budgetSeconds / 60, 1), $budget, $shortfall, $Context.RunBudgetMinutes, $detail).Trim()
+    }
     if ($result.Status -eq 'SKIP') {
         $status = 'SKIP'
     }
