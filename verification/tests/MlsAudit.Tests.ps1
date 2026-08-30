@@ -454,7 +454,11 @@ Describe 'transport wrappers' {
 
     It 'falls back to az rest when the SDK is installed but nobody signed in' {
         # Exactly the runner's state. This is the case that produced V1.4's failure.
-        function global:Invoke-MgGraphRequest { param($Method, $Uri, $OutputType) }
+        function global:Invoke-MgGraphRequest {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+                Justification = 'Stub for the Graph SDK cmdlet; the Pester mock supplies the behaviour. The parameters exist only so Invoke-MlsGraph binds against them.')]
+            param($Method, $Uri, $OutputType)
+        }
         function global:Get-MgContext { }
         try {
             Mock Get-MgContext { $null } -ModuleName 'MlsAudit'
@@ -473,7 +477,11 @@ Describe 'transport wrappers' {
 
     It 'falls back to az rest when a signed-in SDK call fails anyway' {
         # Two transports are only worth having if one of them working is enough.
-        function global:Invoke-MgGraphRequest { param($Method, $Uri, $OutputType) }
+        function global:Invoke-MgGraphRequest {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+                Justification = 'Stub for the Graph SDK cmdlet; the Pester mock supplies the behaviour. The parameters exist only so Invoke-MlsGraph binds against them.')]
+            param($Method, $Uri, $OutputType)
+        }
         function global:Get-MgContext { }
         try {
             Mock Write-MlsStatus { } -ModuleName 'MlsAudit'
