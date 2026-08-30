@@ -59,13 +59,24 @@ function Test-ManagementGroupPlacement {
     # --query projected the answer away: on a failure the report could say only that the
     # projection was empty, never what the management group actually contained. The children
     # are filtered here so the observed value can name what WAS found.
-    $mg = Invoke-MlsAz -Argument @(
-        'account', 'management-group', 'show', '--name', $ManagementGroupName,
-        '--expand', '--recurse', '--output', 'json')
+    # `az rest`, NOT `az account management-group show`. The CLI wrapper attempts
+    # `Microsoft.Management/register/action` at SUBSCRIPTION scope before it reads, and a
+    # Reader cannot perform a register action - so the criterion failed with a message about
+    # provider registration on a subscription while claiming to be a statement about a
+    # management group's children. The provider was already Registered; the CLI asks anyway.
+    #
+    # This is the same read with none of that: one ARM GET, needing only
+    # Microsoft.Management/managementGroups/read, which is exactly what the Verifier's Reader
+    # grant provides. Assert-MlsReadOnlyAzArgument already permits `rest --method get` (F60).
+    $uri = 'https://management.azure.com/providers/Microsoft.Management/managementGroups/' +
+    $ManagementGroupName + '?api-version=2021-04-01&$expand=children&$recurse=true'
+    $mg = Invoke-MlsAz -Argument @('rest', '--method', 'get', '--url', $uri)
 
+    # ARM nests children under `properties`; the CLI wrapper used to flatten them.
     $children = @()
-    if ($null -ne $mg -and (Test-MlsHasProperty -InputObject $mg -Name 'children')) {
-        $children = @(Get-MlsProperty -InputObject $mg -Name 'children' | Where-Object { $null -ne $_ })
+    $properties = if ($null -ne $mg) { Get-MlsProperty -InputObject $mg -Name 'properties' } else { $null }
+    if ($null -ne $properties -and (Test-MlsHasProperty -InputObject $properties -Name 'children')) {
+        $children = @(Get-MlsProperty -InputObject $properties -Name 'children' | Where-Object { $null -ne $_ })
     }
     $found = @($children | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'id')" -like "*$SubscriptionId*" })
 
@@ -123,11 +134,53 @@ function Test-CanaryPolicyDenial {
 }
 
 function Test-NistComplianceData {
-    <# V2.3 - the NIST 800-53 R5 initiative assignment must appear with a results block. #>
+    <#
+        V2.3 - the NIST 800-53 R5 initiative must be ASSIGNED, and once the estate holds
+        resources, must be producing compliance data for them.
+
+        THIS CRITERION USED TO BE UNPASSABLE ON A FRESH ESTATE, and that made the whole
+        run unpassable with it:
+
+            V2.3 needs compliance data
+              -> compliance data needs resources for Policy to evaluate
+                -> resources are deployed by L3-L8
+                  -> L3-L8 are gated on L2's audit passing
+                    -> L2's audit is this criterion
+
+        A kill/rebuild starts with zero resources by definition, so `az policy state
+        summarize` correctly returns zero rows, and L2 failed, and nothing downstream ever
+        ran. Every run stopped in exactly the same place for exactly this reason (F61).
+
+        So the criterion is split along what is actually knowable when it runs. The
+        ASSIGNMENT existing is a hard requirement checkable the moment L2 deploys - if it is
+        missing, L2 genuinely failed and this FAILs. Compliance DATA is a consequence of
+        resources that do not exist yet, so its absence records PENDING against the declared
+        window rather than blocking the layer - the same shape V6.3 uses for the cost export
+        it cannot make arrive sooner.
+    #>
     param(
         [Parameter(Mandatory)][string]$SubscriptionId,
         [Parameter(Mandatory)][string]$NistAssignmentPattern
     )
+    # The assignment itself: present or not, answerable immediately, no waiting involved.
+    $assignments = @(Invoke-MlsAz -Argument @(
+            'policy', 'assignment', 'list', '--subscription', $SubscriptionId,
+            '--query', "[?contains(id,'$NistAssignmentPattern')].{id:id, displayName:displayName}",
+            '--output', 'json'
+        ))
+    $assigned = @($assignments | Where-Object { $null -ne $_ -and $null -ne (Get-MlsProperty -InputObject $_ -Name 'id') })
+    if ($assigned.Count -eq 0) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "no policy assignment whose id contains '$NistAssignmentPattern' is assigned at or above the subscription" `
+            -Detail 'The ASSIGNMENT is L2 deliverable and does not depend on anything downstream, so its absence is a real L2 failure and is not retried.'
+    }
+    $assignmentId = Get-MlsProperty -InputObject $assigned[0] -Name 'id'
+
+    # Compliance data: only meaningful once there is something to evaluate.
+    $resources = @(Invoke-MlsAz -Argument @(
+            'resource', 'list', '--subscription', $SubscriptionId, '--query', '[].id', '--output', 'json'))
+    $resourceCount = @($resources | Where-Object { -not [string]::IsNullOrWhiteSpace("$_") }).Count
+
     $summaries = @(Invoke-MlsAz -AllowFailure -Argument @(
             'policy', 'state', 'summarize', '--subscription', $SubscriptionId,
             '--query', "policyAssignments[?contains(policyAssignmentId,'$NistAssignmentPattern')].{id:policyAssignmentId, nonCompliant:results.nonCompliantResources}",
@@ -135,9 +188,17 @@ function Test-NistComplianceData {
         ))
     $matched = @($summaries | Where-Object { $null -ne $_ -and $null -ne (Get-MlsProperty -InputObject $_ -Name 'id') })
     if ($matched.Count -eq 0) {
+        if ($resourceCount -eq 0) {
+            # Not a failure and not a wait: Policy has nothing to evaluate. Waiting longer
+            # cannot produce compliance data about resources that do not exist, and failing
+            # here is what made a fresh estate unable to get past L2 at all (F61).
+            return New-MlsCheckResult -Status SKIP `
+                -Observed "$assignmentId is assigned; the subscription holds 0 resources, so Azure Policy has produced no compliance data yet" `
+                -Detail 'Re-assert once the estate holds resources: L11 re-runs this after L3-L8, and `gh workflow run layer-02-landing-zone.yml` re-checks it on demand.'
+        }
         return New-MlsCheckResult -Passed $false `
-            -Observed "no policy assignment whose id contains '$NistAssignmentPattern' appears in the policy state summary" `
-            -Detail 'Explicitly a 30-minute window from assignment (master plan L2). A first evaluation cycle beyond 30 minutes is a criterion failure, not a longer wait.'
+            -Observed "$assignmentId is assigned and the subscription holds $resourceCount resource(s), but no compliance summary has appeared" `
+            -Detail 'Explicitly a 30-minute window from assignment (master plan L2). With resources present, a first evaluation cycle beyond 30 minutes is a criterion failure, not a longer wait.'
     }
     $withResults = @($matched | Where-Object { $null -ne (Get-MlsProperty -InputObject $_ -Name 'nonCompliant') })
     if ($withResults.Count -eq 0) {
@@ -179,7 +240,7 @@ function Invoke-Main {
     # L02: MG moves propagate in minutes - the long default was never this criterion s need (F59)
     Invoke-MlsCriterion -Context $context -Id 'V2.1' -Control @() `
         -Description 'az account management-group show mls shows the sub' `
-        -Command "az account management-group show --name $ManagementGroupName --expand --recurse --output json  # children filtered in-process, so a FAIL can name what WAS there" `
+        -Command "az rest --method get --url 'https://management.azure.com/providers/Microsoft.Management/managementGroups/$ManagementGroupName`?api-version=2021-04-01&`$expand=children&`$recurse=true'  # ARM read, not the CLI wrapper: that one register-actions on the subscription first (F60)" `
         -Expected 'exactly one child returned - the demo subscription' `
         -RetryWindowMinutes 5 `
         -Test { Test-ManagementGroupPlacement -ManagementGroupName $ManagementGroupName -SubscriptionId $subscription } | Out-Null

@@ -214,9 +214,22 @@ jobs:
           fi
 
           echo '::notice title=Falling back to a pull request::Direct push to main was refused (branch protection is the expected cause). Opening a PR instead.'
-          branch="compliance-state/${MLS_COMMIT}"
+
+          # ONE branch, force-updated - not one per commit.
+          #
+          # This was `compliance-state/${MLS_COMMIT}`, which looks unique and is not: the
+          # nightly schedule runs against whatever `main` is, so an unchanged `main` produces
+          # the SAME branch name with DIFFERENT content the next night. The second push was
+          # refused non-fast-forward, `set -e` killed the step, and the job went red - while
+          # 23 branches accumulated that nobody could turn into pull requests, because
+          # opening one needs an Actions setting this repo deliberately leaves off (F65).
+          #
+          # A single branch that the nightly overwrites has neither problem: one open PR that
+          # updates in place, and nothing to accumulate. --force-with-lease rather than
+          # --force so a human editing that branch is never silently clobbered.
+          branch='compliance-state'
           git switch -c "${branch}"
-          git push --set-upstream origin "${branch}"
+          git push --force-with-lease --set-upstream origin "${branch}"
           # The branch is pushed, so the artifact is safe either way. Opening the PR
           # is best-effort on purpose: creating one requires the repository setting
           # "Allow GitHub Actions to create and approve pull requests", and that single
@@ -226,7 +239,15 @@ jobs:
           # Observed on the first public run: the branch pushed, `gh pr create` returned
           # "GitHub Actions is not permitted to create or approve pull requests", and the
           # job failed for a reason nobody needed to act on urgently.
-          if gh pr create --base main --head "${branch}"               --title "verify(compliance): state at ${MLS_COMMIT}"               --body 'Automated compliance state artifact. Counts by status and provenance; deliberately no blended percentage.'; then
+          # An open PR from a reused branch is the NORMAL state now, not an error: the push
+          # above has already updated it in place.
+          existing=$(gh pr list --head "${branch}" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -n "${existing}" ]; then
+            echo "::notice title=Compliance state updated on an open pull request::Pushed to ${branch}; pull request #${existing} now carries the state at ${MLS_COMMIT}."
+            exit 0
+          fi
+
+          if gh pr create --base main --head "${branch}"               --title 'verify(compliance): nightly state artifact'               --body 'Automated compliance state artifact, force-updated by .github/workflows/compliance.yml on every run. Counts by status and provenance; deliberately no blended percentage.'; then
             echo 'Pull request opened.'
             exit 0
           fi

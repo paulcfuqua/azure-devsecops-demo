@@ -425,21 +425,67 @@ Describe 'transport wrappers' {
         }
     }
 
-    It 'Invoke-MlsGraph uses Invoke-MgGraphRequest when the Graph SDK is present' {
-        function global:Invoke-MgGraphRequest {
-            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
-                Justification = 'Stub for the Graph SDK cmdlet: its parameters exist so Invoke-MlsGraph binds against them and Should -Invoke -ParameterFilter can inspect them. The body is intentionally empty - the Pester mock supplies the behaviour.')]
-            param($Method, $Uri, $OutputType)
-        }
+    # These three replace a single test that asserted "the SDK is PRESENT, so use it". That
+    # was the defect written down as a contract: the CI runner has the Graph module installed
+    # and never calls Connect-MgGraph, so every Graph criterion threw "Authentication needed"
+    # while the working az fallback sat unreachable beneath it (F64).
+
+    function global:Invoke-MgGraphRequest {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+            Justification = 'Stub for the Graph SDK cmdlet: its parameters exist so Invoke-MlsGraph binds against them and Should -Invoke -ParameterFilter can inspect them. The body is intentionally empty - the Pester mock supplies the behaviour.')]
+        param($Method, $Uri, $OutputType)
+    }
+    function global:Get-MgContext { }
+
+    It 'Invoke-MlsGraph uses the Graph SDK when it is present AND signed in' {
         try {
+            Mock Get-MgContext { [pscustomobject]@{ ClientId = 'verifier-app-id' } } -ModuleName 'MlsAudit'
             Mock Invoke-MgGraphRequest { [pscustomobject]@{ value = @(@{ id = 'app-1' }) } } -ModuleName 'MlsAudit'
-            Mock Invoke-MlsAz { throw 'must not fall back to az when the SDK is present' } -ModuleName 'MlsAudit'
+            Mock Invoke-MlsAz { throw 'must not fall back to az when the SDK is present and connected' } -ModuleName 'MlsAudit'
             $response = Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/applications'
             $response.value[0].id | Should -Be 'app-1'
             Should -Invoke Invoke-MgGraphRequest -ModuleName 'MlsAudit' -Exactly -Times 1 -ParameterFilter { $Method -eq 'GET' }
         }
         finally {
             Remove-Item -LiteralPath 'function:global:Invoke-MgGraphRequest' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-MgContext' -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'falls back to az rest when the SDK is installed but nobody signed in' {
+        # Exactly the runner's state. This is the case that produced V1.4's failure.
+        function global:Invoke-MgGraphRequest { param($Method, $Uri, $OutputType) }
+        function global:Get-MgContext { }
+        try {
+            Mock Get-MgContext { $null } -ModuleName 'MlsAudit'
+            Mock Invoke-MgGraphRequest { throw 'Authentication needed. Please call Connect-MgGraph.' } -ModuleName 'MlsAudit'
+            Mock Invoke-MlsAz { [pscustomobject]@{ value = @(@{ id = 'app-from-az' }) } } -ModuleName 'MlsAudit'
+            $response = Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/applications'
+            $response.value[0].id | Should -Be 'app-from-az'
+            Should -Invoke Invoke-MgGraphRequest -ModuleName 'MlsAudit' -Exactly -Times 0 `
+                -Because 'an unauthenticated SDK must not be tried at all'
+        }
+        finally {
+            Remove-Item -LiteralPath 'function:global:Invoke-MgGraphRequest' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-MgContext' -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'falls back to az rest when a signed-in SDK call fails anyway' {
+        # Two transports are only worth having if one of them working is enough.
+        function global:Invoke-MgGraphRequest { param($Method, $Uri, $OutputType) }
+        function global:Get-MgContext { }
+        try {
+            Mock Write-MlsStatus { } -ModuleName 'MlsAudit'
+            Mock Get-MgContext { [pscustomobject]@{ ClientId = 'verifier-app-id' } } -ModuleName 'MlsAudit'
+            Mock Invoke-MgGraphRequest { throw 'token expired' } -ModuleName 'MlsAudit'
+            Mock Invoke-MlsAz { [pscustomobject]@{ value = @(@{ id = 'app-from-az' }) } } -ModuleName 'MlsAudit'
+            $response = Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/applications'
+            $response.value[0].id | Should -Be 'app-from-az'
+        }
+        finally {
+            Remove-Item -LiteralPath 'function:global:Invoke-MgGraphRequest' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-MgContext' -ErrorAction SilentlyContinue
         }
     }
 

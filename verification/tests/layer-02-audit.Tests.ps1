@@ -36,19 +36,22 @@ Describe 'layer-02-audit' {
         Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
         Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
 
-        # The shape `az account management-group show --expand --recurse` actually returns.
-        # This fixture used to be @('mls-demo-subscription') - the old --query projection -
-        # which could not represent "the MG has children, none of them the subscription",
-        # the exact state the live run hit (F59).
-        $script:ManagementGroupChildren = [pscustomobject]@{
-            name     = 'mls'
-            children = @(
-                [pscustomobject]@{
-                    id          = '/providers/Microsoft.Management/managementGroups/mls/subscriptions/22222222-2222-2222-2222-222222222222'
-                    displayName = 'mls-demo-subscription'
-                    type        = 'Microsoft.Management/managementGroups/subscriptions'
-                }
-            )
+        # ARM's own shape, which nests children under `properties`. It was the CLI's
+        # flattened shape until V2.1 stopped using the CLI wrapper - that wrapper
+        # register-actions on the subscription before reading, which a Reader cannot do
+        # (F60). Before that it was @('mls-demo-subscription'), the old --query projection,
+        # which could not even represent "the MG has children, none of them ours" (F59).
+        $script:ManagementGroup = [pscustomobject]@{
+            name       = 'mls'
+            properties = [pscustomobject]@{
+                children = @(
+                    [pscustomobject]@{
+                        id          = '/providers/Microsoft.Management/managementGroups/mls/subscriptions/22222222-2222-2222-2222-222222222222'
+                        displayName = 'mls-demo-subscription'
+                        type        = 'Microsoft.Management/managementGroups/subscriptions'
+                    }
+                )
+            }
         }
         $script:CanaryEvents = @(
             [pscustomobject]@{
@@ -58,6 +61,16 @@ Describe 'layer-02-audit' {
             }
         )
         $script:CanaryExists = 'false'
+        # V2.3 asks three questions now: is the initiative ASSIGNED (hard), does the estate
+        # hold resources, and has Policy produced a summary. An unassigned initiative is a
+        # real L2 failure; an empty estate is not (F61).
+        $script:NistAssignments = @(
+            [pscustomobject]@{
+                id          = "/subscriptions/$($script:Subscription)/providers/Microsoft.Authorization/policyAssignments/mls-nist-800-53-r5"
+                displayName = 'NIST SP 800-53 Rev. 5'
+            }
+        )
+        $script:ResourceIds = @("/subscriptions/$($script:Subscription)/resourceGroups/mls-rg-ops/providers/Microsoft.Sql/servers/mls-ops-demo-sql")
         $script:PolicySummary = @(
             [pscustomobject]@{
                 id           = "/subscriptions/$($script:Subscription)/providers/Microsoft.Authorization/policyAssignments/mls-nist-800-53-r5"
@@ -67,9 +80,11 @@ Describe 'layer-02-audit' {
 
         Mock Invoke-MlsAz {
             $joined = $Argument -join ' '
-            if ($joined -like 'account management-group show*') { return $script:ManagementGroupChildren }
+            if ($joined -like '*managementGroups/*') { return $script:ManagementGroup }
             if ($joined -like 'monitor activity-log list*') { return $script:CanaryEvents }
             if ($joined -like 'group exists*') { return $script:CanaryExists }
+            if ($joined -like 'policy assignment list*') { return $script:NistAssignments }
+            if ($joined -like 'resource list*') { return $script:ResourceIds }
             if ($joined -like 'policy state summarize*') { return $script:PolicySummary }
             throw "unexpected az call: $joined"
         }
@@ -103,7 +118,7 @@ Describe 'layer-02-audit' {
         }
 
         It 'fails V2.1 when the subscription is not under the management group' {
-            $script:ManagementGroupChildren = [pscustomobject]@{ name = 'mls'; children = @() }
+            $script:ManagementGroup = [pscustomobject]@{ name = 'mls'; properties = [pscustomobject]@{ children = @() } }
             $context = Invoke-AuditForTest -NoRetry
             (Get-Row -Context $context -Id 'V2.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V2.1').Observed | Should -BeLike '*does not list the demo subscription as a child*'
@@ -115,15 +130,15 @@ Describe 'layer-02-audit' {
             # The live failure was not "no children" - it was a verdict that could not say
             # which of several causes it meant. A wrong-subscription MG must read differently
             # from an empty one.
-            $script:ManagementGroupChildren = [pscustomobject]@{
-                name     = 'mls'
-                children = @(
+            $script:ManagementGroup = [pscustomobject]@{
+                name       = 'mls'
+                properties = [pscustomobject]@{ children = @(
                     [pscustomobject]@{
                         id          = '/providers/Microsoft.Management/managementGroups/mls/subscriptions/11111111-1111-1111-1111-111111111111'
                         displayName = 'somebody-elses-subscription'
                         type        = 'Microsoft.Management/managementGroups/subscriptions'
                     }
-                )
+                ) }
             }
             $context = Invoke-AuditForTest -NoRetry
             (Get-Row -Context $context -Id 'V2.1').Status | Should -Be 'FAIL'
@@ -139,15 +154,62 @@ Describe 'layer-02-audit' {
         }
     }
 
+    Context 'the estate is fresh' {
+        # L2 could not pass on an empty estate, and nothing downstream could run because of
+        # it: V2.3 wanted compliance data, compliance data needs resources, resources come
+        # from L3-L8, and L3-L8 are gated on this audit. Every run stopped here (F61).
+
+        It 'records V2.3 as SKIP, not FAIL, when the estate holds no resources' {
+            $script:ResourceIds = @()
+            $script:PolicySummary = @()
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V2.3'
+            $row.Status | Should -Be 'SKIP' -Because 'Policy cannot evaluate resources that do not exist'
+            $row.Observed | Should -BeLike '*0 resources*'
+            $row.Observed | Should -BeLike '*is assigned*' -Because 'the assignment is the part that IS checkable now'
+        }
+
+        It 'still exits 0 so the layers that create those resources can run' {
+            # The whole point. A SKIP here must not gate L3-L8, or the cycle stays closed.
+            $script:ResourceIds = @()
+            $script:PolicySummary = @()
+            $context = Invoke-AuditForTest
+            Get-MlsExitCode -Context $context | Should -Be 0
+        }
+
+        It 'FAILs and does not retry when the NIST initiative is not assigned at all' {
+            # The assignment is L2's own deliverable and depends on nothing downstream, so
+            # its absence is a real failure of this layer - never softened to SKIP.
+            $script:NistAssignments = @()
+            $script:ResourceIds = @()
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V2.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Attempt | Should -Be 1 -Because 'a missing assignment is not a propagation delay'
+            $row.Observed | Should -BeLike '*no policy assignment*'
+        }
+
+        It 'FAILs when resources exist but Policy has produced no summary' {
+            # With something to evaluate, silence from Policy is a real finding again.
+            $script:PolicySummary = @()
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V2.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*1 resource*'
+        }
+    }
+
     Context 'retry' {
         It 'retries V2.3 until compliance data appears, without sleeping the whole window' {
             $script:PolicySummary = @()
             $script:Calls = 0
             Mock Invoke-MlsAz {
                 $joined = $Argument -join ' '
-                if ($joined -like 'account management-group show*') { return $script:ManagementGroupChildren }
+                if ($joined -like '*managementGroups/*') { return $script:ManagementGroup }
                 if ($joined -like 'monitor activity-log list*') { return $script:CanaryEvents }
                 if ($joined -like 'group exists*') { return 'false' }
+                if ($joined -like 'policy assignment list*') { return $script:NistAssignments }
+                if ($joined -like 'resource list*') { return $script:ResourceIds }
                 if ($joined -like 'policy state summarize*') {
                     $script:Calls++
                     if ($script:Calls -lt 2) { return @() }
@@ -176,16 +238,18 @@ Describe 'layer-02-audit' {
             # criterion loop marks a permission failure Final (F57/F59).
             Mock Invoke-MlsAz {
                 $joined = $Argument -join ' '
-                if ($joined -like 'account management-group show*') {
+                if ($joined -like '*managementGroups/*') {
                     # This mock HONOURS -AllowFailure, returning $null exactly as the real
                     # transport does. A mock that throws either way cannot tell the two code
                     # paths apart, and this test then passes whether the fix is present or
                     # not - it mutation-SURVIVED in that form, which is how it was caught.
                     if ($AllowFailure) { return $null }
-                    throw "az account management-group show failed with exit code 1: (AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.Management/managementGroups/read'."
+                    throw "az rest --method get --url .../managementGroups/mls failed with exit code 1: (AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.Management/managementGroups/read'."
                 }
                 if ($joined -like 'monitor activity-log list*') { return $script:CanaryEvents }
                 if ($joined -like 'group exists*') { return 'false' }
+                if ($joined -like 'policy assignment list*') { return $script:NistAssignments }
+                if ($joined -like 'resource list*') { return $script:ResourceIds }
                 if ($joined -like 'policy state summarize*') { return $script:PolicySummary }
                 throw "unexpected az call: $joined"
             }
@@ -201,9 +265,11 @@ Describe 'layer-02-audit' {
         It 'records V2.1 as FAIL and still evaluates V2.2 and V2.3' {
             Mock Invoke-MlsAz {
                 $joined = $Argument -join ' '
-                if ($joined -like 'account management-group show*') { throw "az account management-group show failed with exit code 3" }
+                if ($joined -like '*managementGroups/*') { throw "az rest --method get --url .../managementGroups/mls failed with exit code 3" }
                 if ($joined -like 'monitor activity-log list*') { return $script:CanaryEvents }
                 if ($joined -like 'group exists*') { return 'false' }
+                if ($joined -like 'policy assignment list*') { return $script:NistAssignments }
+                if ($joined -like 'resource list*') { return $script:ResourceIds }
                 if ($joined -like 'policy state summarize*') { return $script:PolicySummary }
                 throw "unexpected az call: $joined"
             }

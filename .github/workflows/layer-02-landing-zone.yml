@@ -230,6 +230,49 @@ jobs:
             echo "::notice title=Verifier granted Reader::mls-verifier can now read ${MG_NAME}, which V2.x requires."
           fi
 
+      - name: Grant the human sponsor read access to the management group
+        env:
+          MG_NAME: ${{ steps.names.outputs.management-group }}
+          SPONSOR_OBJECT_ID: ${{ vars.MLS_SPONSOR_OBJECT_ID }}
+        run: |
+          set -euo pipefail
+          # THE PERSON WHO OWNS THE SUBSCRIPTION CANNOT SEE THE MANAGEMENT GROUP.
+          #
+          # An agent created `mls` and, by creating it, became its only Owner. Nothing
+          # grants the human anything there - not the subscription's Owner role, which
+          # stops at the subscription, and not the G0 bootstrap, which runs before the
+          # group exists. So the sponsor cannot list the assignments deployed into their
+          # own estate, cannot audit what the deployer did, and cannot perform the G3
+          # deletions that CLAUDE.md reserves for a human (F55, and the half of it F57
+          # left open by fixing only the Verifier).
+          #
+          # That is not a missing convenience. An estate whose owner can only watch an
+          # agent operate it is demonstrating the opposite of what this repo argues.
+          #
+          # Reader, deliberately. The sponsor gets sight of everything and authority over
+          # nothing, because widening to Owner here would let a workflow hand a principal
+          # full control of a tenant object - and the whole point of G3 is that a human
+          # decides that, in the portal, on purpose. A sponsor who needs to delete the
+          # group elevates through Entra (`Access management for Azure resources`) as a
+          # deliberate, logged act.
+          #
+          # Optional by design: an unset variable skips the grant with a notice, so a
+          # stranger cloning this repo is never blocked by an object id that means
+          # nothing in their tenant. Set it to YOUR object id:
+          #   az ad signed-in-user show --query id -o tsv
+          #   gh variable set MLS_SPONSOR_OBJECT_ID --env demo --body "<that id>"
+          if [ -z "${SPONSOR_OBJECT_ID}" ]; then
+            echo "::notice title=Sponsor read access not configured::MLS_SPONSOR_OBJECT_ID is unset on the demo environment, so no human was granted read access to ${MG_NAME}. The deployer remains its only principal. See docs/runbooks/layers/L02.md."
+            exit 0
+          fi
+          scope="/providers/Microsoft.Management/managementGroups/${MG_NAME}"
+          if az role assignment list --scope "${scope}" --assignee "${SPONSOR_OBJECT_ID}"                --query "[?roleDefinitionName=='Reader'] | length(@)" -o tsv | grep -qv '^0$'; then
+            echo "Sponsor already holds Reader on ${MG_NAME}."
+          else
+            az role assignment create --assignee-object-id "${SPONSOR_OBJECT_ID}"               --assignee-principal-type User --role Reader --scope "${scope}"
+            echo "::notice title=Sponsor granted Reader::The human sponsor can now read ${MG_NAME} and everything L2 deploys into it."
+          fi
+
       - name: Clear the modify-policy Tag Contributor grants so the deploy can recreate them
         env:
           MG_NAME: ${{ steps.names.outputs.management-group }}

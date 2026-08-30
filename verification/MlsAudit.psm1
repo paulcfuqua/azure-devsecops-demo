@@ -636,8 +636,28 @@ function Invoke-MlsGraph {
         [Parameter(Mandatory)][string]$Uri,
         [ValidateSet('GET')][string]$Method = 'GET'
     )
-    if (Get-Command -Name 'Invoke-MgGraphRequest' -ErrorAction SilentlyContinue) {
-        return Invoke-MgGraphRequest -Method $Method -Uri $Uri -OutputType PSObject
+    # THE CMDLET BEING INSTALLED IS NOT THE SAME AS BEING SIGNED IN.
+    #
+    # This preferred the SDK whenever `Invoke-MgGraphRequest` RESOLVED, and the CI runner has
+    # the Graph module installed but never calls Connect-MgGraph - so every Graph criterion
+    # threw "Authentication needed. Please call Connect-MgGraph." while the `az rest` fallback
+    # underneath, which would have worked (the job is already OIDC-logged-in as mls-verifier),
+    # was unreachable by construction (F64).
+    #
+    # So the test is a live CONTEXT, not a resolvable command. And an SDK call that fails on
+    # authentication still falls through rather than ending the criterion: the point of having
+    # two transports is that one of them working is enough.
+    $sdk = Get-Command -Name 'Invoke-MgGraphRequest' -ErrorAction SilentlyContinue
+    if ($sdk) {
+        $context = try { Get-MgContext -ErrorAction Stop } catch { $null }
+        if ($null -ne $context -and -not [string]::IsNullOrWhiteSpace("$(Get-MlsProperty -InputObject $context -Name 'ClientId')")) {
+            try {
+                return Invoke-MgGraphRequest -Method $Method -Uri $Uri -OutputType PSObject
+            }
+            catch {
+                Write-MlsStatus -Message "Graph SDK call failed ($($_.Exception.Message)); falling back to az rest." -Color ([ConsoleColor]::DarkYellow)
+            }
+        }
     }
     return Invoke-MlsAz -Argument @('rest', '--method', 'get', '--url', $Uri, '--resource', 'https://graph.microsoft.com')
 }
