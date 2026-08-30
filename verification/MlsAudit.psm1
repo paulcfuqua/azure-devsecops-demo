@@ -446,6 +446,43 @@ function Assert-MlsCommand {
 
 # --- transports (the only code in the repo that talks to anything) ---------------------
 
+function Assert-MlsTransportAllowed {
+    <#
+    .SYNOPSIS
+        Refuse a real network call while Pester is running.
+
+    .DESCRIPTION
+        Every test file in this repo claims "every transport is mocked; zero cloud calls".
+        That claim is enforced by nothing, and it is one keystroke from being false: a mock
+        declared with `-ModuleName 'MlsAudit'` intercepts calls made INSIDE the module and
+        NOT calls made from a dot-sourced audit script, so the mock appears to be in place,
+        the test appears to pass or fail on its own merits, and the transport quietly runs
+        for real. Three tests written that way read live tenant data before anyone noticed
+        - the give-away was a Graph 404 naming a user that only exists in a fixture (F74).
+
+        The blast radius was bounded by Assert-MlsReadOnlyAzArgument, so those calls could
+        only ever read. That is luck holding a door shut, not a lock.
+
+        The signal is the Pester module being loaded. Nothing in the deploy or audit path
+        loads Pester: the audits run as `pwsh -File`, and CI invokes them the same way.
+        MLS_ALLOW_LIVE_TRANSPORT=1 is the escape hatch for the deliberate case - a test that
+        genuinely means to reach a live endpoint must say so out loud.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Description,
+        [Parameter(Mandatory)][string]$FilePath
+    )
+
+    # Only the commands that leave the machine. The bounded runner also spawns local
+    # processes - `pwsh` in its own tests - and blocking those would make the guard
+    # something people switch off rather than something they trust.
+    if ($FilePath -notin @('az', 'gh')) { return }
+    if ($env:MLS_ALLOW_LIVE_TRANSPORT -eq '1') { return }
+    if (-not (Get-Module -Name 'Pester')) { return }
+
+    throw "Refusing a live transport call while Pester is loaded: $Description. A unit test reached the network, which almost always means a mock is scoped wrong - `Mock Invoke-MlsGraph { } -ModuleName 'MlsAudit'` intercepts calls from inside the module only, not from a dot-sourced audit script. Drop -ModuleName, or set MLS_ALLOW_LIVE_TRANSPORT=1 if the call is deliberate."
+}
+
 function Invoke-MlsBoundedNativeCommand {
     <#
     .SYNOPSIS
@@ -466,6 +503,7 @@ function Invoke-MlsBoundedNativeCommand {
         [Parameter(Mandatory)][string[]]$Argument,
         [Parameter(Mandatory)][int]$TimeoutSeconds
     )
+    Assert-MlsTransportAllowed -FilePath $FilePath -Description "$FilePath $($Argument -join ' ')"
     $resolved = (Get-Command -Name $FilePath -ErrorAction Stop)
     $exe = if ($resolved.CommandType -eq 'Application') { $resolved.Source } else { $FilePath }
 

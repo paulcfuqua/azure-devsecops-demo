@@ -36,6 +36,9 @@ param(
     [string]$ManifestPath,
     [string]$Domain,
     [string]$LicenseSkuPartNumber = 'EMSPREMIUM',
+    # The service plans L3's own features need: Entra ID Premium (Conditional Access) and
+    # MFA. Any bundle that provisions these satisfies V3.4, whatever it is called (F73).
+    [string[]]$RequiredServicePlan = @('AAD_PREMIUM', 'MFA_PREMIUM'),
     [string]$NamingPrefix = 'mls',
     [string]$ReportRoot,
     [switch]$NoRetry
@@ -366,18 +369,48 @@ function Test-LicenseAssignment {
     param(
         [Parameter(Mandatory)]$Manifest,
         [Parameter(Mandatory)][string]$Domain,
-        [Parameter(Mandatory)][string]$LicenseSkuPartNumber
+        [Parameter(Mandatory)][string]$LicenseSkuPartNumber,
+        [string[]]$RequiredServicePlan = @('AAD_PREMIUM', 'MFA_PREMIUM')
     )
     $target = @(Get-ManifestUserPrincipalName -Manifest $Manifest -Domain $Domain -LicensedOnly)
     if ($target.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed 'no manifest user is flagged licensed - nothing to assert' `
             -Detail 'Every user carries "licensed": false, so the demo is running fully unlicensed: no sign-in risk feed and no enforceable CA. Deliberate after trial expiry; if it is not deliberate, the flags are wrong.'
     }
+    # MATCH THE CAPABILITY, NOT THE BUNDLE NAME.
+    #
+    # This asked "is a SKU literally called EMSPREMIUM present" when what L3 needs is
+    # "are these users licensed for the Entra features it deploys" - Conditional Access and
+    # MFA, which are the AAD_PREMIUM* and MFA_PREMIUM service plans. A tenant on Microsoft
+    # 365 E5 (SPE_E5) has every one of them and would have failed this check, because E5 is
+    # a superset that does not contain the substring EMSPREMIUM anywhere (F73).
+    #
+    # A bundle name is a constant naming something in another system, and CLAUDE.md says
+    # those are resolved against that system rather than written from memory. Microsoft sells
+    # these capabilities under many names and adds more; enumerating the bundles is a list
+    # that goes stale. The service plans are what the features actually key on.
     $skus = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/subscribedSkus'))
+
+    # Named exactly, in preference order: an explicit -LicenseSkuPartNumber still wins, so a
+    # caller who means one specific bundle can still say so.
     $sku = @($skus | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'skuPartNumber') -eq $LicenseSkuPartNumber })
+
     if ($sku.Count -eq 0) {
-        return New-MlsCheckResult -Passed $false -Observed "SKU '$LicenseSkuPartNumber' is not present on the tenant" `
-            -Detail 'L03 failure mode 2: trial not activated, or the SKU was never added. Human action in the M365 admin center.'
+        # Otherwise: any subscribed SKU that provisions the plans L3's features need.
+        $sku = @($skus | Where-Object {
+                $plans = @(Get-MlsProperty -InputObject $_ -Name 'servicePlans')
+                $names = @($plans |
+                        Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'provisioningStatus')" -eq 'Success' } |
+                        ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'servicePlanName')" })
+                @($RequiredServicePlan | Where-Object { $_ -notin $names }).Count -eq 0
+            })
+    }
+
+    if ($sku.Count -eq 0) {
+        $available = @($skus | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'skuPartNumber')" })
+        return New-MlsCheckResult -Passed $false `
+            -Observed "no subscribed SKU provides $($RequiredServicePlan -join ' + '); tenant has: $(if ($available.Count) { $available -join ', ' } else { '(none)' })" `
+            -Detail 'L03 failure mode 2: trial not activated, or no SKU on this tenant carries Entra ID Premium and MFA. Any bundle providing those plans satisfies this - EMS E3/E5, Microsoft 365 E3/E5, or Entra ID P1/P2 standalone. Human action in the M365 admin center.'
     }
     $skuId = Get-MlsProperty -InputObject $sku[0] -Name 'skuId'
     $problem = [System.Collections.Generic.List[string]]::new()
@@ -410,6 +443,7 @@ function Invoke-Main {
         [string]$ManifestPath,
         [string]$Domain,
         [string]$LicenseSkuPartNumber = 'EMSPREMIUM',
+        [string[]]$RequiredServicePlan = @('AAD_PREMIUM', 'MFA_PREMIUM'),
         [string]$NamingPrefix = 'mls',
         [string]$ReportRoot,
         [switch]$NoRetry
@@ -503,7 +537,7 @@ function Invoke-Main {
         -Command "GET /v1.0/subscribedSkus`nGET /v1.0/users/<upn>?`$select=licenseAssignmentStates" `
         -Expected "each of the $($licensedUser.Count) manifest user(s) flagged licensed carries the $LicenseSkuPartNumber assignment with State == Active and no error" `
         -RetryWindowMinutes 10 `
-        -Test { Test-LicenseAssignment -Manifest $manifest -Domain $tenantDomain -LicenseSkuPartNumber $LicenseSkuPartNumber } | Out-Null
+        -Test { Test-LicenseAssignment -Manifest $manifest -Domain $tenantDomain -LicenseSkuPartNumber $LicenseSkuPartNumber -RequiredServicePlan $RequiredServicePlan } | Out-Null
 
     return $context
 }
@@ -511,8 +545,8 @@ function Invoke-Main {
 if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -ManifestPath $ManifestPath -Domain $Domain `
-            -LicenseSkuPartNumber $LicenseSkuPartNumber -NamingPrefix $NamingPrefix `
-            -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -LicenseSkuPartNumber $LicenseSkuPartNumber -RequiredServicePlan $RequiredServicePlan `
+            -NamingPrefix $NamingPrefix -ReportRoot $ReportRoot -NoRetry:$NoRetry
     }
     catch {
         Write-MlsStatus -Message "layer-03-audit could not start: $($_.Exception.Message)" -Color Red
