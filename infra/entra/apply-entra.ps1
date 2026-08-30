@@ -638,15 +638,40 @@ function Resolve-CaPolicyCondition {
     return @{ Conditions = $conditions; Unresolved = @($unresolved) }
 }
 
+# Global Administrator's role TEMPLATE id: identical in every tenant, which is what makes it
+# safe to pin. Resolved against this tenant before use, per CLAUDE.md - `GET
+# /directoryRoles?$filter=displayName eq 'Global Administrator'` returns roleTemplateId
+# 62e90394-69f5-4237-9190-012177145e10 (the role's own object id differs per tenant and is
+# deliberately NOT used here).
+$script:GlobalAdministratorRoleTemplateId = '62e90394-69f5-4237-9190-012177145e10'
+
 function Test-BreakGlassReady {
     <#
         Is there an emergency-access account to fall back on if this policy is wrong?
 
-        Ready means: some break-glass group holds at least one member that is NOT one of
-        this manifest's fictional demo personas (a persona is not an emergency account - no
-        human holds its credential) and is not synced from on-premises (a break-glass
-        account must be cloud-only, or an outage in the sync source takes the recovery path
-        down with it). Returns @{ Ready; Reason }.
+        Ready means the account can ACTUALLY RECOVER THE TENANT, which is three things:
+
+          1. It is not one of this manifest's fictional demo personas. A persona is not an
+             emergency account - no human holds its credential.
+          2. It is cloud-only. An outage in the on-premises sync source must not take the
+             recovery path down with it.
+          3. It holds Global Administrator as an ACTIVE, permanently assigned role.
+
+        The third condition is new, and it is the one that matters. This check used to
+        verify MEMBERSHIP and call that readiness, so it passed on an account holding no
+        role whatsoever - an account that satisfies every condition for being in the group
+        and cannot recover anything. The enforced MFA policy would have deployed on the
+        strength of a safety net nobody had tested (F77).
+
+        ELIGIBLE (PIM) IS NOT ACTIVE, and the distinction is the whole point. Just-in-time
+        elevation is better practice nearly everywhere; for emergency access it is worse,
+        because activating a PIM role needs a successful sign-in, a healthy PIM service, and
+        usually MFA - which is frequently the exact control being escaped. Break-glass exists
+        to have zero dependencies at the moment everything else has failed. An eligible-only
+        account is reported as a warning rather than a hard block: it will probably work, it
+        just is not what an emergency account is for.
+
+        Returns @{ Ready; Reason }.
     #>
     param(
         [AllowEmptyCollection()][string[]]$GroupName = @(),
@@ -663,13 +688,42 @@ function Test-BreakGlassReady {
             if ($DemoUserId -contains $memberId) { continue }
             $user = Invoke-GraphApi -Method GET -Path "users/$memberId`?`$select=id,userPrincipalName,onPremisesSyncEnabled" -AllowNotFound
             if ($user -and (Get-Field -Object $user -Name 'onPremisesSyncEnabled') -eq $true) { continue }
-            return @{ Ready = $true; Reason = "break-glass group '$name' holds an emergency-access account" }
+            $upn = if ($user) { Get-Field -Object $user -Name 'userPrincipalName' } else { $memberId }
+
+            # Can it actually recover the tenant? Membership is not capability.
+            $memberOf = Invoke-GraphApi -Method GET -Path "users/$memberId/transitiveMemberOf" -AllowNotFound
+            $activeRoles = @(Get-ResponseValue -Response $memberOf |
+                    Where-Object { "$(Get-Field -Object $_ -Name 'roleTemplateId')" -eq $script:GlobalAdministratorRoleTemplateId })
+            if ($activeRoles.Count -eq 0) {
+                Write-Status "Break-glass candidate '$upn' is in '$name' but holds NO ACTIVE Global Administrator role. If it is PIM-ELIGIBLE, activation needs a sign-in, a healthy PIM service and usually MFA - the controls an emergency account exists to bypass. Make the assignment permanent." -Color Red
+                continue
+            }
+            return @{ Ready = $true; Reason = "break-glass group '$name' holds '$upn' with an active Global Administrator role" }
         }
     }
     return @{
         Ready  = $false
-        Reason = "no break-glass group ($($GroupName -join ', ')) holds a cloud-only emergency-access account that is not one of the manifest's demo personas"
+        Reason = "no break-glass group ($($GroupName -join ', ')) holds a cloud-only emergency-access account that is not one of the manifest's demo personas AND carries an active (not PIM-eligible) Global Administrator role"
     }
+}
+
+function Test-SecurityDefaultsEnabled {
+    <#
+        Is the tenant running Security Defaults?
+
+        Graph refuses to create an ENABLED Conditional Access policy while they are on:
+        "Security Defaults is enabled in the tenant. You must disable Security defaults
+        before enabling a Conditional Access policy." Report-only policies are accepted,
+        which is why two of this manifest's three apply cleanly and the third 400s (F75).
+
+        Unreadable is treated as NOT enabled, deliberately: the tenants that cannot read
+        this are the ones where the deployer lacks Policy.Read.All, and refusing to deploy
+        on a permissions gap would be a worse failure than letting Graph answer for itself.
+        The 400 is still caught below either way.
+    #>
+    $policy = Invoke-GraphApi -Method GET -Path 'policies/identitySecurityDefaultsEnforcementPolicy' -AllowNotFound
+    if ($null -eq $policy) { return $false }
+    return [bool](Get-Field -Object $policy -Name 'isEnabled')
 }
 
 function Initialize-CaPolicy {
@@ -699,6 +753,24 @@ function Initialize-CaPolicy {
     # about to enforce something - never on the -WhatIf plan path below, where the group it
     # would look at has not been created yet and the answer would be meaningless.
     $breakGlass = @{ Ready = $true; Reason = 'not an enforced policy' }
+
+    # SECURITY DEFAULTS AND AN ENFORCED CA POLICY CANNOT COEXIST, and the way out is a
+    # posture decision rather than a switch to flip on the operator's behalf.
+    #
+    # Turning Security Defaults off to let this policy through would take baseline MFA away
+    # from EVERY user and replace it with this manifest's policies - of which only the
+    # dashboard one is enforced. Admin MFA and the legacy-auth block are deliberately
+    # report-only. The tenant would come out of that trade WEAKER than it went in, and an
+    # estate that quietly does this to an adopter's tenant is demonstrating the opposite of
+    # what it claims (F75).
+    #
+    # So this refuses, in the same fail-safe direction as the break-glass refusal above: no
+    # policy means no lockout, everything else in the layer still applies, and the operator
+    # is told what the trade actually is.
+    if ($enforced -and (Test-SecurityDefaultsEnabled)) {
+        Write-Status "SKIPPED enforced CA policy '$displayName': Security Defaults is enabled on this tenant, and Graph will not accept an enabled Conditional Access policy alongside them." -Color Red
+        return 'Blocked'
+    }
 
     $existing = Get-CaPolicy -DisplayName $displayName
     if ($existing) {
@@ -907,9 +979,16 @@ function Invoke-Main {
     $breakGlassGroupName = Get-BreakGlassGroupName -Manifest $manifest
     $demoUserId = @($userIdByPrefix.Values)
     foreach ($policy in @(Get-Field -Object $manifest -Name 'conditionalAccessPolicies')) {
-        $outcome = Initialize-CaPolicy -Policy $policy `
-            -AppIdByDisplayName $appIdByDisplayName -GroupIdByDisplayName $groupIdByDisplayName `
-            -BreakGlassGroupName $breakGlassGroupName -DemoUserId $demoUserId
+        # Wrapped like every other manifest item. F72 fail-slowed users, groups and
+        # memberships - the three that were failing at the time - and left the CA loop
+        # aborting on first error, which is the same partial fix this register keeps
+        # recording (F76).
+        $outcome = Invoke-ManifestItem -Description "CA policy $(Get-Field -Object $policy -Name 'displayName')" -Failures $failures -Action {
+            Initialize-CaPolicy -Policy $policy `
+                -AppIdByDisplayName $appIdByDisplayName -GroupIdByDisplayName $groupIdByDisplayName `
+                -BreakGlassGroupName $breakGlassGroupName -DemoUserId $demoUserId
+        }
+        if ($null -eq $outcome) { continue }
         switch ($outcome) {
             'Created' { $summary.CaCreated++ }
             'Updated' { $summary.CaUpdated++ }
@@ -919,7 +998,9 @@ function Invoke-Main {
         }
     }
     if ($summary.CaBlocked -gt 0) {
-        Write-Status "$($summary.CaBlocked) enforced CA polic(y/ies) NOT created: no break-glass account exists yet. MFA is NOT being enforced. Add an emergency-access account to the break-glass group ($($breakGlassGroupName -join ', ')) per docs/runbooks/g0-bootstrap.md item 13 and re-run this layer; V3.3 fails until you do." -Color Red
+        Write-Status "$($summary.CaBlocked) enforced CA polic(y/ies) NOT created. MFA is NOT being enforced by this layer, and V3.3 fails until it is. Two causes, both requiring a human:" -Color Red
+        Write-Status "  1. No emergency-access account in the break-glass group ($($breakGlassGroupName -join ', ')). Add one per docs/runbooks/g0-bootstrap.md item 13." -Color Red
+        Write-Status "  2. Security Defaults are enabled on the tenant. Graph will not accept an enabled CA policy alongside them - but DO NOT simply turn them off: this manifest enforces only the dashboard policy, so the tenant would lose baseline MFA for every user and gain one enforced policy. Either raise mls-ca-require-mfa-admins to 'enabled' in the manifest first, or accept report-only CA and leave Security Defaults on." -Color Red
     }
 
     $summaryObject = [pscustomobject]$summary

@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F74](#f74), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F78](#f78), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -104,6 +104,10 @@ claim by one step:
 | [F72](#f72) | **A layer that stops at its first error makes the discovery rate equal to the deploy rate.** Three ~40-minute runs each returned one finding. L3 now reports every failed item in one run - and still fails. | high | CONFIRMED (runs 33321360624, 33323094630, 33324015966) | 3.12.1 | throughput review, 2026-08-30 |
 | [F73](#f73) | **The licence check asked for a bundle name when it needed a capability.** V3.4 reported a gap on a tenant holding 25 seats of a superset SKU, and nearly went to the sponsor as a spend request. | medium | CONFIRMED (observed, run 33326778474) | 3.1.1, 3.5.3 | first L3 audit, 2026-08-30 |
 | [F74](#f74) | **A test suite that can reach production is not a test suite.** Three unit tests read live tenant data because -ModuleName scoped their mock to the module, not the dot-sourced script. | high | CONFIRMED (Graph 404 naming a fixture-only user) | 3.12.1, 3.4.2 | writing the F73 tests, 2026-08-30 |
+| [F75](#f75) | **A control that only works after you disable a stronger control is not the improvement it appears to be.** Graph refuses an enforced CA policy under Security Defaults; the obvious fix would have left an adopter's tenant with report-only admin MFA. | high | CONFIRMED (observed, run 33330915631) | 3.5.3, 3.1.1 | first enforced CA attempt, 2026-08-30 |
+| [F76](#f76) | **Fail-slow was wired into three of four item types.** F72 covered users, groups and memberships - the three failing at the time - and left the CA loop aborting on first error. | medium | CONFIRMED (the F75 run stopped dead) | 3.12.1 | same run, 2026-08-30 |
+| [F77](#f77) | **When a check gates a dangerous action it must assert the capability, not the artefact.** Break-glass readiness verified group membership; the account it approved held zero roles and could recover nothing. | high | CONFIRMED (account passed while holding no role) | 3.1.1, 3.5.3 | sponsor question, 2026-08-30 |
+| [F78](#f78) | **A test that can only be satisfied by weakening the system is reasoning backwards.** V3.3 asserted an enabled CA policy where 3.5.3 asks whether MFA is enforced - failing on a tenant secured by Security Defaults, and offering a green result in exchange for baseline MFA. | high | CONFIRMED (tenant enforces MFA; V3.3 failed) | 3.5.3 | first L3 audit, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4338,3 +4342,161 @@ consistent enough to state plainly: **mocks are where beliefs about other system
 confirmed rather than tested**, and every reliable correction this session has come from
 running against something real - which is exactly what makes a test that ACCIDENTALLY runs
 against something real so dangerous. It passes for the right reasons and the wrong ones at once.
+
+---
+
+## F75
+
+**Running this demo on a tenant with Security Defaults would leave it less secure than before**
+
+- **Severity:** high (every adopter hits this, and the obvious way past it is a net posture reduction the estate would have invited silently)
+- **Confidence:** CONFIRMED - run 33330915631: `POST /identity/conditionalAccess/policies` returned 400 `Security Defaults is enabled in the tenant. You must disable Security defaults before enabling a Conditional Access policy.`
+- **Controls:** 3.5.3 (multifactor authentication), 3.1.1
+- **Closed by:** refusing the enforced policy and naming the trade, rather than inviting the operator to switch Security Defaults off
+- **Status:** CLOSED
+
+Graph accepts report-only Conditional Access policies alongside Security Defaults and refuses
+an ENABLED one. That is why two of this manifest's three policies applied cleanly for days and
+the third only surfaced once a break-glass account unlocked the code path that creates it.
+
+**The obvious remedy is the dangerous one.** Turning Security Defaults off to let the policy
+through trades baseline MFA for every user against this manifest's policies - of which only
+the dashboard one is enforced:
+
+| | Security Defaults on | Security Defaults off, manifest applied |
+| --- | --- | --- |
+| Admin MFA | enforced | **report-only** |
+| Legacy auth block | enforced | **report-only** |
+| Dashboard MFA | - | enforced |
+
+An adopter following the error message would end up weaker than they started, having run a
+security demo. `apply-entra.ps1` now refuses the enforced policy when Security Defaults are
+on - the same fail-safe direction as the break-glass refusal, so no policy means no lockout -
+and prints the actual trade instead of the switch to flip. An unreadable Security Defaults
+policy is treated as NOT enabled, because the tenants that cannot read it are the ones missing
+`Policy.Read.All`, and refusing to deploy on a permissions gap is a worse failure than letting
+Graph answer for itself.
+
+### What this says about the method
+
+The demo's own thesis is that it deploys a defensible estate. It took a live tenant to
+discover that its first act on a well-configured one would be to talk the operator into
+lowering the baseline. **A control that only works after you disable a stronger control is not
+the improvement it appears to be**, and no amount of unit testing surfaces that - the 400 only
+exists on a tenant that had Security Defaults on, which is the default for new tenants and
+therefore the majority case for adopters.
+
+---
+
+## F76
+
+**Fail-slow was wired into three of four item types**
+
+- **Severity:** medium (the CA loop still aborted on first error, so the run that found F75 could not have reported anything after it)
+- **Confidence:** CONFIRMED - the F75 failure ended the layer immediately, with app registrations and the remaining policies unattempted
+- **Controls:** 3.12.1
+- **Closed by:** wrapping the CA loop in `Invoke-ManifestItem` like the others
+- **Status:** CLOSED
+
+[F72](#f72) made `apply-entra.ps1` collect failures and continue, and wired it into users,
+groups and memberships - **the three that were failing at the time**. The Conditional Access
+loop kept aborting on first error, which is how the very next run returned one finding again.
+
+This is the same partial fix the register keeps recording, committed immediately after writing
+the rule that names it. The lesson from [F70](#f70) applies unchanged: the question is never
+"where did it fail" but "what class does this belong to, and where else does the class occur".
+
+---
+
+## F77
+
+**The break-glass check verified membership and called it readiness**
+
+- **Severity:** high (the enforced MFA policy would deploy on the strength of a recovery account that could not recover anything)
+- **Confidence:** CONFIRMED - the account created in this session satisfied `Test-BreakGlassReady` while holding zero directory roles and zero Azure RBAC
+- **Controls:** 3.1.1, 3.5.3
+- **Closed by:** requiring an active Global Administrator assignment, and distinguishing eligible from active
+- **Status:** CLOSED
+
+`Test-BreakGlassReady` gated the enforced MFA policy on there being a cloud-only, non-persona
+account in the break-glass group. It never asked whether that account could **do** anything.
+
+An emergency-access account holding no role passes every one of those conditions and cannot
+recover a tenant. The gate that exists so a wrong MFA policy is survivable would have opened
+on an account that makes it exactly as unsurvivable.
+
+**Eligible is not active, and for this one purpose eligible is worse.** Just-in-time elevation
+through PIM is better practice nearly everywhere; for emergency access it adds precisely the
+dependencies the account exists to remove - a successful sign-in, a healthy PIM service, and
+usually MFA, which is frequently the control being escaped. An eligible-only assignment does
+not appear in `transitiveMemberOf`, so the check now reports it with the reason rather than
+silently accepting or silently refusing.
+
+The role is matched on the role TEMPLATE id, which is identical in every tenant, and it was
+resolved against this tenant before being pinned - the directory role's own object id differs
+per tenant and is deliberately not used.
+
+### What this says about the method
+
+Fifth instance this session of a check asking a different question than the one that matters,
+after [F60](#f60), [F63](#f63), [F64](#f64) and [F67](#f67). The others cost deploys. This one
+would have cost a tenant.
+
+**The pattern is specific enough to state as a rule: when a check gates a dangerous action, it
+must assert the capability that makes the action safe, not the artefact that usually
+accompanies it.** Membership in a group named `mls-break-glass` is an artefact. Holding Global
+Administrator, permanently, from a cloud-only account whose credential a human controls, is
+the capability.
+
+---
+
+## F78
+
+**V3.3 asserted the mechanism where the control asks for the capability**
+
+- **Severity:** high (the criterion failed on a tenant that satisfies the control it maps to, and the only way to make it green was to weaken that tenant)
+- **Confidence:** CONFIRMED - the tenant enforces MFA through Security Defaults, and V3.3 reported `2 of 3 manifest CA policies visible` as a failure
+- **Controls:** 3.5.3 (multifactor authentication)
+- **Closed by:** asserting that MFA is enforced, by Conditional Access or by Security Defaults, and saying which
+- **Status:** CLOSED
+
+V3.3 maps to 3.5.3, which asks whether multifactor authentication is **enforced**. It checked
+whether an *enabled Conditional Access policy exists* - one mechanism among the two Microsoft
+ships. Security Defaults are the other, they are **on by default in every new tenant**, and
+Graph refuses an enabled CA policy while they are active ([F75](#f75)).
+
+So the criterion failed against an estate whose MFA was enforced, on the configuration most
+adopters will have, and the only route to green was to disable the control that was providing
+the capability.
+
+**The route to green was the trap.** This manifest enforces one policy - the dashboards one -
+and leaves admin MFA and the legacy-auth block report-only by design. Disabling Security
+Defaults to satisfy V3.3 would have taken baseline MFA from every user and returned one
+enforced policy. **A test that can only be satisfied by weakening the system is a test
+reasoning backwards**, and the estate would have talked its operator into doing it.
+
+V3.3 now passes when Security Defaults enforce MFA and *only the enforced policies* are
+absent, naming the mechanism in the observed value and naming the safe migration path in the
+detail. It still fails when Security Defaults are off and the enforced policy is missing -
+there is no mechanism then - and still fails when a **report-only** policy is missing, because
+Graph accepts those happily and their absence is real drift that Security Defaults do not
+explain.
+
+### What this says about the method
+
+This is [F77](#f77) one level up, found within the hour, and the pair is worth stating as a
+single rule: **break-glass readiness asserted "an account is in the group" when it needed "an
+account can recover the tenant"; V3.3 asserted "an enabled policy exists" when it needed "MFA
+is enforced".** Both proxies were correct on the estate they were written against and wrong on
+the estate that mattered - one on a tenant whose emergency account held no role, the other on
+a tenant that was already secure.
+
+An artefact is a proxy for a capability. Proxies hold right up until the moment the difference
+matters, which is the moment a gate exists for.
+
+The documentation carried the same defect as the code, and that is the part worth remembering.
+`g0-bootstrap.md` item 13 spent six careful bullets on the break-glass account - cloud-only,
+not a persona, credential out of band, monitored, two accounts in production - and **never
+said the account needs a role**. The prose described the artefact as faithfully as the check
+did. Writing the guidance did not surface the gap, because the guidance and the check were
+written from the same picture.

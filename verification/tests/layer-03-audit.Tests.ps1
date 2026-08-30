@@ -123,6 +123,12 @@ Describe 'layer-03-audit' {
             if ($Uri -like '*subscribedSkus*') {
                 return [pscustomobject]@{ value = @([pscustomobject]@{ skuPartNumber = 'EMSPREMIUM'; skuId = $script:SkuId }) }
             }
+            if ($Uri -like '*identitySecurityDefaultsEnforcementPolicy*') {
+                # V3.3 asks whether MFA is enforced, not whether a CA policy exists, so it
+                # reads this too (F78). Default OFF: the existing tests model a tenant that
+                # has already moved to Conditional Access.
+                return [pscustomobject]@{ isEnabled = $script:SecurityDefaultsOn }
+            }
             if ($Uri -like '*conditionalAccess/policies*') {
                 return [pscustomobject]@{ value = @($script:Manifest.conditionalAccessPolicies | ForEach-Object { New-LiveCaPolicy -Declared $_ }) }
             }
@@ -336,7 +342,8 @@ Describe 'layer-03-audit' {
 
         It 'fails when the break-glass group is excluded but empty' {
             # An exclusion pointing at an empty group only looks like a recovery path.
-            $script:BreakGlassMember = @()
+            $script:SecurityDefaultsOn = $false
+        $script:BreakGlassMember = @()
             $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.3'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*no such group holds a cloud-only emergency-access account*'
@@ -360,7 +367,13 @@ Describe 'layer-03-audit' {
             # What the tenant looks like after apply-entra.ps1 REFUSES an enforced policy
             # for want of a break-glass account: the policy is simply absent.
             Mock Invoke-MlsGraph {
-                if ($Uri -like '*conditionalAccess/policies*') {
+                if ($Uri -like '*identitySecurityDefaultsEnforcementPolicy*') {
+                # V3.3 asks whether MFA is enforced, not whether a CA policy exists, so it
+                # reads this too (F78). Default OFF: the existing tests model a tenant that
+                # has already moved to Conditional Access.
+                return [pscustomobject]@{ isEnabled = $script:SecurityDefaultsOn }
+            }
+            if ($Uri -like '*conditionalAccess/policies*') {
                     return [pscustomobject]@{ value = @($script:Manifest.conditionalAccessPolicies |
                                 Where-Object { $_.state -ne 'enabled' } | ForEach-Object { New-LiveCaPolicy -Declared $_ }) }
                 }
@@ -465,7 +478,13 @@ Describe 'layer-03-audit' {
                 if ($Uri -like '*subscribedSkus*') {
                     return [pscustomobject]@{ value = @([pscustomobject]@{ skuPartNumber = 'EMSPREMIUM'; skuId = $script:SkuId }) }
                 }
-                if ($Uri -like '*conditionalAccess/policies*') {
+                if ($Uri -like '*identitySecurityDefaultsEnforcementPolicy*') {
+                # V3.3 asks whether MFA is enforced, not whether a CA policy exists, so it
+                # reads this too (F78). Default OFF: the existing tests model a tenant that
+                # has already moved to Conditional Access.
+                return [pscustomobject]@{ isEnabled = $script:SecurityDefaultsOn }
+            }
+            if ($Uri -like '*conditionalAccess/policies*') {
                     return [pscustomobject]@{ value = @($script:Manifest.conditionalAccessPolicies | ForEach-Object {
                                 [pscustomobject]@{ displayName = $_.displayName; state = 'enabledForReportingButNotEnforced' } })
                     }
@@ -504,7 +523,13 @@ Describe 'layer-03-audit' {
     Context 'a check that throws' {
         It 'records V3.3 as FAIL and still evaluates the other criteria' {
             Mock Invoke-MlsGraph {
-                if ($Uri -like '*conditionalAccess/policies*') { throw 'Authorization_RequestDenied: Policy.Read.All is not consented on mls-verifier.' }
+                if ($Uri -like '*identitySecurityDefaultsEnforcementPolicy*') {
+                # V3.3 asks whether MFA is enforced, not whether a CA policy exists, so it
+                # reads this too (F78). Default OFF: the existing tests model a tenant that
+                # has already moved to Conditional Access.
+                return [pscustomobject]@{ isEnabled = $script:SecurityDefaultsOn }
+            }
+            if ($Uri -like '*conditionalAccess/policies*') { throw 'Authorization_RequestDenied: Policy.Read.All is not consented on mls-verifier.' }
                 if ($Uri -like '*subscribedSkus*') { return [pscustomobject]@{ value = @([pscustomobject]@{ skuPartNumber = 'EMSPREMIUM'; skuId = $script:SkuId }) } }
                 if ($Uri -like '*/users/*licenseAssignmentStates*') { return [pscustomobject]@{ licenseAssignmentStates = @([pscustomobject]@{ skuId = $script:SkuId; state = 'Active'; error = 'None' }) } }
                 if ($Uri -like '*/users/*') { return [pscustomobject]@{ id = 'u' } }
@@ -610,5 +635,63 @@ Describe 'V3.4 matches the licence capability, not the bundle name' {
 
         $result = Test-LicenseAssignment -Manifest $script:Manifest3 -Domain 'contoso.example' -LicenseSkuPartNumber 'EMSPREMIUM'
         $result.Passed | Should -BeFalse
+    }
+}
+
+Describe 'V3.3 asserts MFA enforcement, not the mechanism that provides it' {
+    # 3.5.3 asks whether multifactor authentication is enforced. Security Defaults enforce
+    # it, and Graph refuses an enabled CA policy while they are on - so on a default tenant,
+    # which is every new tenant, V3.3 failed against an estate whose MFA was in fact
+    # enforced. Making that green by disabling Security Defaults would take baseline MFA
+    # from every user to satisfy a test (F75/F78).
+
+    BeforeAll {
+        Import-Module (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'MlsAudit.psm1') -Force
+        $env:MLS_SKIP_MAIN = '1'
+        . (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-03-audit.ps1')
+    }
+
+    BeforeEach {
+        $script:Declared = [pscustomobject]@{ conditionalAccessPolicies = @(
+                [pscustomobject]@{ displayName = 'mls-ca-require-mfa-admins'; state = 'enabledForReportingButNotEnforced' }
+                [pscustomobject]@{ displayName = 'mls-ca-block-legacy-auth'; state = 'enabledForReportingButNotEnforced' }
+                [pscustomobject]@{ displayName = 'mls-ca-require-mfa-dashboards'; state = 'enabled' }
+            ) }
+        # Only the report-only policies exist: exactly what Security Defaults permits.
+        $script:LivePolicies = @(
+            [pscustomobject]@{ displayName = 'mls-ca-require-mfa-admins'; state = 'enabledForReportingButNotEnforced' }
+            [pscustomobject]@{ displayName = 'mls-ca-block-legacy-auth'; state = 'enabledForReportingButNotEnforced' }
+        )
+    }
+
+    It 'PASSES when Security Defaults enforce MFA and only the enforced policy is absent' {
+        Mock Invoke-MlsGraph {
+            if ($Uri -like '*identitySecurityDefaultsEnforcementPolicy*') { return [pscustomobject]@{ isEnabled = $true } }
+            return [pscustomobject]@{ value = $script:LivePolicies }
+        }
+        $result = Test-ConditionalAccessState -Manifest $script:Declared -Domain 'x.example'
+        $result.Passed | Should -BeTrue
+        $result.Observed | Should -BeLike '*enforced by Security Defaults*'
+        $result.Detail | Should -BeLike '*Do not disable Security Defaults*' -Because 'the obvious remedy is the dangerous one'
+    }
+
+    It 'still FAILS when Security Defaults are off and the enforced policy is missing' {
+        # No other mechanism is enforcing MFA, so a missing enforced policy is a real gap.
+        Mock Invoke-MlsGraph {
+            if ($Uri -like '*identitySecurityDefaultsEnforcementPolicy*') { return [pscustomobject]@{ isEnabled = $false } }
+            return [pscustomobject]@{ value = $script:LivePolicies }
+        }
+        (Test-ConditionalAccessState -Manifest $script:Declared -Domain 'x.example').Passed | Should -BeFalse
+    }
+
+    It 'still FAILS when a REPORT-ONLY policy is missing, even under Security Defaults' {
+        # Security Defaults explain an absent ENFORCED policy. They explain nothing about a
+        # report-only one, which Graph accepts happily - that is real drift.
+        $script:LivePolicies = @([pscustomobject]@{ displayName = 'mls-ca-require-mfa-admins'; state = 'enabledForReportingButNotEnforced' })
+        Mock Invoke-MlsGraph {
+            if ($Uri -like '*identitySecurityDefaultsEnforcementPolicy*') { return [pscustomobject]@{ isEnabled = $true } }
+            return [pscustomobject]@{ value = $script:LivePolicies }
+        }
+        (Test-ConditionalAccessState -Manifest $script:Declared -Domain 'x.example').Passed | Should -BeFalse
     }
 }

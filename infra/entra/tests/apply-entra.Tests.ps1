@@ -197,6 +197,117 @@ Describe 'one run reports every failure, and still fails' {
     }
 }
 
+Describe 'break-glass readiness is capability, not membership' {
+    # The check used to verify that SOME cloud-only non-persona account sat in the group and
+    # call that ready. It passed on an account holding no directory role whatsoever - one
+    # that satisfies every condition for being in the group and can recover nothing. The
+    # enforced MFA policy would have deployed on a safety net nobody had tested (F77).
+
+    BeforeEach {
+        Mock Write-Status {}
+        # Defined here, not in the Describe body: a variable set at discovery time is not in
+        # scope when an It block actually runs.
+        $script:ActiveGa = @{
+            '@odata.type'  = '#microsoft.graph.directoryRole'
+            roleTemplateId = '62e90394-69f5-4237-9190-012177145e10'
+            displayName    = 'Global Administrator'
+        }
+    }
+
+    It 'is ready when the account holds an ACTIVE Global Administrator role' {
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like 'groups/*/members*' } -MockWith { @{ value = @(@{ id = 'bg-1' }) } }
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like 'users/bg-1?*' } -MockWith { @{ id = 'bg-1'; userPrincipalName = 'bg@x.onmicrosoft.com'; onPremisesSyncEnabled = $false } }
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like '*transitiveMemberOf*' } -MockWith { @{ value = @($script:ActiveGa) } }
+
+        $result = Test-BreakGlassReady -GroupName @('mls-break-glass') -GroupIdByDisplayName @{ 'mls-break-glass' = 'g-1' }
+        $result.Ready | Should -BeTrue
+        $result.Reason | Should -BeLike '*active Global Administrator*'
+    }
+
+    It 'is NOT ready when the account holds no role at all' {
+        # Exactly the account this session created before the role was assigned.
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like 'groups/*/members*' } -MockWith { @{ value = @(@{ id = 'bg-1' }) } }
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like 'users/bg-1?*' } -MockWith { @{ id = 'bg-1'; userPrincipalName = 'bg@x.onmicrosoft.com'; onPremisesSyncEnabled = $false } }
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like '*transitiveMemberOf*' } -MockWith { @{ value = @() } }
+
+        (Test-BreakGlassReady -GroupName @('mls-break-glass') -GroupIdByDisplayName @{ 'mls-break-glass' = 'g-1' }).Ready |
+            Should -BeFalse -Because 'an account that cannot administer the tenant cannot recover it'
+    }
+
+    It 'is NOT ready on a PIM-eligible-only assignment, and says why' {
+        # An eligible role does not appear in transitiveMemberOf: it is not held until it is
+        # activated, and activation needs a sign-in, a healthy PIM service and usually MFA -
+        # the controls an emergency account exists to bypass.
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like 'groups/*/members*' } -MockWith { @{ value = @(@{ id = 'bg-1' }) } }
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like 'users/bg-1?*' } -MockWith { @{ id = 'bg-1'; userPrincipalName = 'bg@x.onmicrosoft.com'; onPremisesSyncEnabled = $false } }
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like '*transitiveMemberOf*' } -MockWith { @{ value = @(@{ '@odata.type' = '#microsoft.graph.group'; displayName = 'mls-break-glass' }) } }
+
+        (Test-BreakGlassReady -GroupName @('mls-break-glass') -GroupIdByDisplayName @{ 'mls-break-glass' = 'g-1' }).Ready | Should -BeFalse
+        Should -Invoke Write-Status -ParameterFilter { $Message -like '*PIM-ELIGIBLE*' } -Times 1 -Scope It
+    }
+
+    It 'still rejects an on-premises synced account even with the role' {
+        # An emergency path that depends on the sync source is not an emergency path.
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like 'groups/*/members*' } -MockWith { @{ value = @(@{ id = 'bg-1' }) } }
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like 'users/bg-1?*' } -MockWith { @{ id = 'bg-1'; userPrincipalName = 'bg@x'; onPremisesSyncEnabled = $true } }
+        Mock Invoke-GraphApi -ParameterFilter { $Path -like '*transitiveMemberOf*' } -MockWith { @{ value = @($script:ActiveGa) } }
+
+        (Test-BreakGlassReady -GroupName @('mls-break-glass') -GroupIdByDisplayName @{ 'mls-break-glass' = 'g-1' }).Ready | Should -BeFalse
+    }
+}
+
+Describe 'Security Defaults and an enforced CA policy cannot coexist' {
+    # Graph refuses an ENABLED Conditional Access policy while Security Defaults are on, and
+    # accepts report-only ones - which is why two of this manifest's three applied cleanly
+    # and the third came back 400. The way out is a posture decision, not a switch to flip
+    # on the operator's behalf: this manifest enforces only the dashboard policy, so turning
+    # Security Defaults off would take baseline MFA from every user and give back one
+    # enforced policy (F75).
+
+    BeforeEach {
+        Mock Invoke-PropagationDelay {}
+        Mock Write-Status {}
+    }
+
+    It 'refuses an enforced policy while Security Defaults are enabled' {
+        Mock Invoke-GraphApi {
+            if ($Path -like 'policies/identitySecurityDefaultsEnforcementPolicy*') { return @{ isEnabled = $true } }
+            if ($Path -like '*conditionalAccess/policies*') { return @{ value = @() } }
+            return @{ value = @() }
+        }
+        $outcome = Initialize-CaPolicy -Policy ([pscustomobject]@{ displayName = 'mls-ca-require-mfa-dashboards'; state = 'enabled' }) `
+            -BreakGlassGroupName @('mls-break-glass') -GroupIdByDisplayName @{ 'mls-break-glass' = 'g-1' }
+        $outcome | Should -Be 'Blocked' -Because 'the fail-safe direction is no policy, not a weakened tenant'
+    }
+
+    It 'allows a report-only policy while Security Defaults are enabled' {
+        # These are accepted by Graph, and they are most of the manifest.
+        Mock Invoke-GraphApi {
+            if ($Path -like 'policies/identitySecurityDefaultsEnforcementPolicy*') { return @{ isEnabled = $true } }
+            if ($Path -like '*conditionalAccess/policies*' -and $Method -eq 'GET') { return @{ value = @() } }
+            return @{ id = 'ca-1' }
+        }
+        $outcome = Initialize-CaPolicy -Policy ([pscustomobject]@{ displayName = 'mls-ca-require-mfa-admins'; state = 'enabledForReportingButNotEnforced' }) `
+            -BreakGlassGroupName @('mls-break-glass') -GroupIdByDisplayName @{ 'mls-break-glass' = 'g-1' }
+        $outcome | Should -Not -Be 'Blocked'
+    }
+
+    It 'treats an unreadable Security Defaults policy as not enabled' {
+        # The tenants that cannot read this are the ones missing Policy.Read.All. Refusing to
+        # deploy on a permissions gap would be a worse failure than letting Graph answer.
+        Mock Invoke-GraphApi {
+            if ($Path -like 'policies/identitySecurityDefaultsEnforcementPolicy*') { return $null }
+            if ($Path -like '*conditionalAccess/policies*' -and $Method -eq 'GET') { return @{ value = @() } }
+            if ($Path -like 'groups/*/members*') { return @{ value = @(@{ id = 'bg-1' }) } }
+            if ($Path -like 'users/*') { return @{ id = 'bg-1'; onPremisesSyncEnabled = $false } }
+            return @{ id = 'ca-1' }
+        }
+        $outcome = Initialize-CaPolicy -Policy ([pscustomobject]@{ displayName = 'mls-ca-require-mfa-dashboards'; state = 'enabled' }) `
+            -BreakGlassGroupName @('mls-break-glass') -GroupIdByDisplayName @{ 'mls-break-glass' = 'g-1' }
+        $outcome | Should -Not -Be 'Blocked'
+    }
+}
+
 Describe 'Graph calls survive directory replication' {
     # These mock Invoke-MgGraphRequest, NOT Invoke-GraphApi. The retry lives in
     # Invoke-GraphApi now, so a test that mocks it bypasses the very thing under test -
@@ -363,6 +474,13 @@ Describe 'apply-entra idempotency + WhatIf' {
         # human credential, never a fictional persona), so tests seed it here. Empty by
         # default, which is the true state of a first-ever apply.
         $script:BreakGlassMember = @()
+        # Active Global Administrator, which is what makes an emergency account one. A test
+        # models "no role" or "PIM-eligible only" by setting this to @().
+        $script:BreakGlassRoles = @(@{
+                '@odata.type'  = '#microsoft.graph.directoryRole'
+                roleTemplateId = '62e90394-69f5-4237-9190-012177145e10'
+                displayName    = 'Global Administrator'
+            })
         $script:BreakGlassUser = @{}
         $script:PostOrder = [System.Collections.Generic.List[string]]::new()
         # The exact bodies that would reach Graph, asserted on directly: a ParameterFilter
@@ -374,6 +492,14 @@ Describe 'apply-entra idempotency + WhatIf' {
         Mock Invoke-GraphApi {
             $cleanPath = $Path.Split('?')[0]
             if ($Method -eq 'GET') {
+                if ($cleanPath -like 'users/*/transitiveMemberOf') {
+                    # Membership is not capability: Test-BreakGlassReady now requires an
+                    # ACTIVE Global Administrator role, because the check used to pass on an
+                    # account holding none at all (F77). $BreakGlassRoles lets a test model
+                    # the no-role and PIM-eligible-only cases, which both read as no active
+                    # role here.
+                    return @{ value = $script:BreakGlassRoles }
+                }
                 if ($cleanPath -like 'users/uid-*') {
                     return @{ id = ($cleanPath -split '/')[1] } # propagation probe
                 }

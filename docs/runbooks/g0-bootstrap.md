@@ -599,6 +599,20 @@ it is still about sign-in risk and auto-labeling, nothing else.
 
     **What to create** (Microsoft's emergency-access guidance, applied to this estate):
 
+    - **Global Administrator, ACTIVE and permanent — not PIM-eligible.** This bullet was
+      missing until 2026-08-30, and its absence was not cosmetic: the account created for
+      this estate satisfied every other condition here while holding **no directory role at
+      all**, and both `apply-entra.ps1` and V3.3 accepted it. An emergency-access account
+      that cannot administer the tenant cannot recover it, and the enforced MFA policy would
+      have deployed on the strength of that (F77).
+
+      *Eligible is not active, and here eligible is worse.* Just-in-time elevation through
+      PIM is better practice nearly everywhere; for break-glass it reintroduces exactly the
+      dependencies the account exists to remove — a successful sign-in, a healthy PIM
+      service, and usually MFA, which is frequently the control you are breaking glass to
+      escape. Microsoft's emergency-access guidance says permanently assigned, and means it.
+      `Test-BreakGlassReady` now checks `transitiveMemberOf` for an active assignment, so an
+      eligible-only account is refused with the reason.
     - **Cloud-only.** A `<something>@<tenant>.onmicrosoft.com` account, never federated
       and never synced from on-premises — a break-glass account that depends on the sync
       source dies with it. `apply-entra.ps1` and V3.3 both refuse an account with
@@ -607,6 +621,17 @@ it is still about sign-in risk and auto-labeling, nothing else.
       fictional and this repository is public (CLAUDE.md rule 4); no human holds their
       credentials, so none of them is an emergency account. Both the apply script and
       V3.3 refuse a break-glass group whose only members are manifest personas.
+    - **Check whether Security Defaults are on before expecting the enforced policy.**
+      Graph refuses an *enabled* Conditional Access policy while Security Defaults are
+      enabled, and accepts report-only ones — so on a default tenant this estate deploys two
+      of its three policies and declines the third, on purpose. **Do not simply turn Security
+      Defaults off to get past it.** This manifest enforces only the dashboard policy, so
+      that trade takes baseline MFA away from every user and gives back one policy: you would
+      finish a security demo weaker than you started (F75). V3.3 passes on such a tenant,
+      because MFA *is* enforced — by a different mechanism, which is what control 3.5.3
+      actually asks about. To move to Conditional Access properly: raise the two broad
+      policies to `enabled` in the manifest first, register MFA for the accounts they scope,
+      *then* disable Security Defaults.
     - **Excluded from every Conditional Access policy**, not just this one. In this repo
       the other two policies are report-only, so today only this one has an exclusion to
       make; the moment you enforce another, exclude the same group.
