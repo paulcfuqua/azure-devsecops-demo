@@ -68,6 +68,9 @@ jobs:
   generate:
     name: generate SPDX SBOMs
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     # READ ONLY. This job resolves and executes third-party dependency code
     # (npm ci, including apps/vuln-lab's deliberately vulnerable tree and its
     # postinstall scripts) and runs a third-party action. It must never hold a
@@ -148,6 +151,9 @@ jobs:
     name: attach the SBOMs to the release
     needs: generate
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     # A release event carries its own tag; a workflow_call from the L9 layer run
     # names the release it just created. Nothing to attach to otherwise.
     if: ${{ github.event_name == 'release' || inputs.release_tag != '' }}

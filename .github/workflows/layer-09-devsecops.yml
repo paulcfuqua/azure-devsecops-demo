@@ -151,6 +151,9 @@ jobs:
   preflight:
     name: preflight (demo environment guard)
     runs-on: ubuntu-latest
+    # Bounded: reads repository variables and nothing else. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 10
     environment: demo
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
@@ -181,6 +184,9 @@ jobs:
   ghas:
     name: confirm GHAS feature state
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: read
       security-events: read
@@ -284,6 +290,9 @@ jobs:
   trivy-negative-fail:
     name: trivy-negative-fail
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -377,6 +386,9 @@ jobs:
   trivy-negative-pass:
     name: trivy-negative-pass
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -437,6 +449,9 @@ jobs:
     name: create the SBOM release
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: write
     outputs:

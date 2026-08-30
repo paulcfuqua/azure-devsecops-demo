@@ -75,6 +75,9 @@ jobs:
   preflight:
     name: preflight (demo environment guard)
     runs-on: ubuntu-latest
+    # Bounded: reads repository variables and nothing else. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 10
     environment: demo
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
@@ -143,6 +146,11 @@ jobs:
       # "Warn if the security action group has no email receiver" step below for
       # what leaving it unset costs.
       MLS_ALERT_EMAIL: ${{ vars.MLS_ALERT_EMAIL }}
+    # THE DEPLOY JOB HAD NO TIMEOUT, so it inherited GitHub's six-hour default. A what-if
+    # that hung would have burned that entire budget producing nothing - the same failure
+    # F58 fixed for the audit, unfixed one layer down in the thing being audited (F81).
+    timeout-minutes: 45
+
     steps:
       - uses: actions/checkout@v7
 
@@ -159,12 +167,32 @@ jobs:
       - name: What-if the platform deployment
         run: |
           set -euo pipefail
-          az deployment sub what-if \
+          # BOUNDED, AND NOT A GATE.
+          #
+          # This step took 36 seconds against an empty estate and then hung indefinitely
+          # once 13 resources existed to diff against - reproduced locally, no output at
+          # all, with and without the SQL admin populated. Left unbounded it consumed the
+          # whole job.
+          #
+          # It stays because a readable delta is worth having. It does not BLOCK, because
+          # F52 established what-if is not the safety net it appears to be: it computes a
+          # resource delta and never resolves definition ids, and passed a fabricated policy
+          # GUID three times running. Trading a real deploy for a preview that cannot finish
+          # is a bad exchange in both directions (F81).
+          set +e
+          timeout 300 az deployment sub what-if \
             --location "${AZURE_LOCATION}" \
             --template-file infra/bicep/platform/main.bicep \
             --parameters infra/bicep/platform/demo.bicepparam \
             --name "${L6_DEPLOYMENT_NAME}" \
             | tee what-if-l6.txt
+          whatif_rc=${PIPESTATUS[0]}
+          set -e
+          if [ "${whatif_rc}" -eq 124 ]; then
+            echo "::warning title=what-if timed out::The preview did not complete in 300s and was skipped. The deploy below is unaffected - what-if creates nothing and gates nothing. See F81."
+          elif [ "${whatif_rc}" -ne 0 ]; then
+            echo "::warning title=what-if failed::Exit ${whatif_rc}. Continuing to the deploy, which is the authoritative operation."
+          fi
 
       - name: Clear a soft-deleted Key Vault holding the name
         if: ${{ !inputs.dry_run }}

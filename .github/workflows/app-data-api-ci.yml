@@ -94,6 +94,9 @@ jobs:
     # environment at all, and the deploy job below carries the same guard.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
+    # Bounded: reads repository variables and nothing else. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 10
     environment: demo
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
@@ -110,6 +113,9 @@ jobs:
   build-test:
     name: build and contract tests
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -151,6 +157,9 @@ jobs:
     name: container build, scan and push (data-api)
     needs: build-test
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -316,6 +325,9 @@ jobs:
     needs: [preflight, image]
     if: ${{ needs.preflight.outputs.configured == 'true' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     environment: demo
     permissions:
       id-token: write

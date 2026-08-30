@@ -105,6 +105,9 @@ jobs:
   preflight:
     name: preflight (demo environment guard)
     runs-on: ubuntu-latest
+    # Bounded: reads repository variables and nothing else. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 10
     environment: demo
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
@@ -124,6 +127,9 @@ jobs:
   plan:
     name: plan layer selection
     runs-on: ubuntu-latest
+    # Bounded: a preview; it creates nothing. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 20
     outputs:
       l2: ${{ steps.select.outputs.l2 }}
       l3: ${{ steps.select.outputs.l3 }}
@@ -169,6 +175,9 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.configured == 'true' }}
     runs-on: ubuntu-latest
+    # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 45
     environment: demo
     permissions:
       id-token: write
@@ -309,6 +318,9 @@ jobs:
     needs: [preflight, plan, oidc-login, layer-02, layer-03, layer-04, layer-05, layer-06, layer-07, layer-08]
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    # Bounded: collates results already produced. An unbounded job inherits GitHub's six-hour
+    # default, which is how a hung what-if consumed a whole run (F81).
+    timeout-minutes: 15
     steps:
       - name: Write the layer result table
         env:

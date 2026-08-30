@@ -141,3 +141,53 @@ Describe 'error predicates read the field that carries the value' {
             -Because 'the Graph error code lives in ErrorDetails.Message; a predicate reading only Exception.Message never fires (F69)'
     }
 }
+
+Describe 'every job that runs is bounded' {
+
+    BeforeAll {
+        # Resolved here rather than relying on a $script: variable set in another scope. The
+        # first version of this Describe scanned ZERO files and its main assertion passed on
+        # an empty offender list - which is exactly the vacuity the second test below exists
+        # to catch, and did.
+        $script:BoundedWorkflowDir = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path '.github/workflows'
+    }
+
+    # F58 gave the AUDIT a budget so a stuck check could still report. The same reasoning was
+    # never applied to the thing being audited: 65 jobs across this repo declared no
+    # timeout-minutes at all, inheriting GitHub's six-hour default. A `what-if` that took 36
+    # seconds against an empty estate hung indefinitely once there were resources to diff
+    # against, and would have consumed that entire budget producing nothing (F81).
+    #
+    # A job without a bound is not "patient", it is a job whose failure mode is silence.
+
+    It 'every job declares timeout-minutes' {
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in (Get-ChildItem -Path $script:BoundedWorkflowDir -Filter '*.yml' -File)) {
+            $lines = Get-Content -LiteralPath $file.FullName
+            $starts = [System.Collections.Generic.List[int]]::new()
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match '^  [A-Za-z0-9_.-]+:\s*$') { $starts.Add($i) }
+            }
+            $starts.Add($lines.Count)
+            for ($s = 0; $s -lt $starts.Count - 1; $s++) {
+                $from = $starts[$s]; $to = $starts[$s + 1]
+                $block = ($lines[$from..($to - 1)]) -join "`n"
+                # Only real jobs: a `jobs:` child with a runner.
+                if ($block -notmatch '(?m)^    runs-on:') { continue }
+                if ($block -notmatch '(?m)^    timeout-minutes:') {
+                    $offender.Add("$($file.Name):$($lines[$from].Trim().TrimEnd(':'))")
+                }
+            }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'an unbounded job inherits a six-hour default, and a hung step then reports nothing at all'
+    }
+
+    It 'finds jobs to check, so the assertion is not vacuous' {
+        $jobCount = 0
+        foreach ($file in (Get-ChildItem -Path $script:BoundedWorkflowDir -Filter '*.yml' -File)) {
+            $jobCount += ([regex]::Matches((Get-Content -LiteralPath $file.FullName -Raw), '(?m)^    runs-on:')).Count
+        }
+        $jobCount | Should -BeGreaterThan 20
+    }
+}
