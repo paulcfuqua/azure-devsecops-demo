@@ -325,8 +325,36 @@ function Test-ConditionalAccessState {
             "$(Get-MlsProperty -InputObject $_ -Name 'displayName')=$(Get-MlsProperty -InputObject $_ -Name 'state')"
         })
     if ($relevant.Count -ne @($expectedName).Count) {
+        # MFA ENFORCEMENT IS THE CONTROL. AN ENABLED CA POLICY IS ONE WAY TO GET IT.
+        #
+        # This criterion maps to 3.5.3, which asks whether multifactor authentication is
+        # enforced - not whether a particular mechanism is present. Microsoft ships Security
+        # Defaults precisely to enforce MFA on tenants that have not built Conditional Access
+        # yet, and Graph REFUSES an enabled CA policy while they are on. So on a default
+        # tenant - which is every new tenant, and therefore most adopters - this criterion
+        # failed against an estate whose MFA was, in fact, enforced (F78).
+        #
+        # Making that green by disabling Security Defaults would be reasoning backwards from
+        # the test: this manifest enforces only the dashboard policy, so the trade would take
+        # baseline MFA from every user and give back one policy (F75). The criterion was
+        # asserting the artefact where the control is the capability - the same error
+        # [F77] found in the break-glass check, one level up.
+        $securityDefaults = Invoke-MlsGraph -Uri 'https://graph.microsoft.com/v1.0/policies/identitySecurityDefaultsEnforcementPolicy'
+        $defaultsOn = [bool](Get-MlsProperty -InputObject $securityDefaults -Name 'isEnabled')
+        $missing = @($expectedName | Where-Object { $_ -notin @($relevant | ForEach-Object { Get-MlsProperty -InputObject $_ -Name 'displayName' }) })
+        $enforcedMissing = @($declared | Where-Object { $_.state -eq 'enabled' -and $_.displayName -in $missing })
+
+        if ($defaultsOn -and $enforcedMissing.Count -eq $missing.Count -and $missing.Count -gt 0) {
+            # Only the ENFORCED policies are absent, and Security Defaults explain exactly
+            # that. The report-only policies are present and auditable; MFA is enforced by a
+            # different mechanism, and the estate declined to weaken it.
+            return New-MlsCheckResult -Passed $true `
+                -Observed "MFA is enforced by Security Defaults; $($relevant.Count) of $(@($expectedName).Count) manifest CA policies are live ($($observed -join ', ')). The enforced polic(y/ies) $($enforcedMissing.displayName -join ', ') were refused because Graph will not accept an enabled CA policy alongside Security Defaults." `
+                -Detail 'Control 3.5.3 asks whether MFA is enforced, and it is. Do not disable Security Defaults to create these policies: this manifest enforces only the dashboard policy, so the tenant would lose baseline MFA for every user (F75). To move to Conditional Access properly, raise the broad policies to enabled in the manifest FIRST, register MFA for the accounts they scope, then disable Security Defaults.'
+        }
+
         return New-MlsCheckResult -Passed $false `
-            -Observed "$($relevant.Count) of $(@($expectedName).Count) manifest CA policies visible: $($observed -join ', ')" `
+            -Observed "$($relevant.Count) of $(@($expectedName).Count) manifest CA policies visible: $($observed -join ', ')$(if ($defaultsOn) { ' [Security Defaults: ON]' })" `
             -Detail 'CA propagation can take up to 45 min worst case; the audit retries inside the standard 30-minute window. An enforced policy the apply script REFUSED to create (no break-glass account) also lands here - see docs/runbooks/g0-bootstrap.md item 13.'
     }
 

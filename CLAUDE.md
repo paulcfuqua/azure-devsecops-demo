@@ -77,6 +77,13 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   (`AZURE_LOCATION` and friends); a default elsewhere silently outranks them, because a
   workflow input beats an environment variable. When a value looks wrong, ask where it comes
   from before asking whether it is correct.
+- **A check that gates a dangerous action asserts the capability, not the artefact that
+  usually accompanies it.** Break-glass readiness meant "an account is in the group" and
+  passed on one holding no role, so the enforced MFA policy would have deployed on a recovery
+  path that could not recover anything. V3.3 meant "an enabled CA policy exists" and failed
+  on a tenant whose MFA was enforced by Security Defaults. Ask what makes the action safe, or
+  what the control actually requires, and assert that — the artefact is a proxy that is right
+  until the day it matters.
 - **A run is an expensive, rate-limited observation: it returns everything it saw.** A step
   iterating over independent items reports on all of them and fails at the end, rather than
   stopping at the first. Fail-fast is right for a deploy that must not proceed broken - and
