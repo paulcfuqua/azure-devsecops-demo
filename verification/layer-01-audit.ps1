@@ -89,11 +89,23 @@ function Test-OidcRoundTrip {
     $jobs = @(Get-MlsCollection -Response (Invoke-MlsGh -Argument @('api', "repos/$Repository/actions/runs/$runId/jobs")))
     $oidcJob = @($jobs | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'name') -eq $OidcJobName })
     $jobConclusion = if ($oidcJob.Count -ge 1) { Get-MlsProperty -InputObject $oidcJob[0] -Name 'conclusion' } else { '(job absent)' }
-    $observed = "run $runId conclusion=$conclusion; job $OidcJobName conclusion=$jobConclusion"
-    $passed = ($conclusion -eq 'success' -and $jobConclusion -eq 'success')
+    $observed = "job $OidcJobName conclusion=$jobConclusion (run $runId conclusion=$conclusion)"
+
+    # THE JOB IS THE EVIDENCE, NOT THE RUN. This used to require the whole run to succeed,
+    # so L1 reported the OIDC token exchange as broken whenever any LATER layer failed - and
+    # on the run that exposed it, `oidc-login` had succeeded and L2's audit had not. A
+    # criterion that fails for reasons outside what it measures is not measuring it (F63).
+    #
+    # The run's conclusion stays in the observed value because it is useful context, and
+    # because a run that never reached this job is a different situation from one where the
+    # job failed - the '(job absent)' branch below.
+    $passed = ($jobConclusion -eq 'success')
     $detail = ''
     if (-not $passed -and $jobConclusion -eq '(job absent)') {
         $detail = "The run carries no job named '$OidcJobName'; the OIDC login job is what proves the token exchange landed in the demo subscription."
+    }
+    elseif ($passed -and $conclusion -ne 'success') {
+        $detail = "The run as a whole concluded '$conclusion', for reasons downstream of the login. V1.1 is a statement about the token exchange only; the failing layer reports itself."
     }
     return New-MlsCheckResult -Passed $passed -Observed $observed -Detail $detail
 }
@@ -103,6 +115,21 @@ function Test-SecretScanning {
     param([Parameter(Mandatory)][string]$Repository)
     $repo = Invoke-MlsGh -Argument @('api', "repos/$Repository")
     $analysis = Get-MlsProperty -InputObject $repo -Name 'security_and_analysis'
+
+    # AN ABSENT FIELD IS NOT A DISABLED SETTING. GitHub returns `security_and_analysis` only
+    # to a token with ADMIN on the repository; the Verifier's token is deliberately read-only,
+    # so the block came back absent and every lookup produced an empty string. The criterion
+    # then compared '' to 'enabled', failed, and reported `{"ss":"","pp":""}` - which reads
+    # like "both settings are off" and actually meant "this identity cannot see them" (F63).
+    #
+    # Same confusion as F57, in a different API: waiting will not turn unreadable into
+    # readable, and neither will re-running. Say which one it is.
+    if ($null -eq $analysis) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "the repository response carries no 'security_and_analysis' block, so this identity cannot read the setting" `
+            -Detail "GitHub returns that block only to a token with admin on the repository. MLS_VERIFIER_GH_TOKEN is read-only by contract (CLAUDE.md), so V1.2 cannot be evaluated as the Verifier: grant the token repository admin, or move this criterion to a check that runs under the deployer's token. This is NOT evidence that secret scanning is disabled."
+    }
+
     $secretScanning = Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $analysis -Name 'secret_scanning') -Name 'status'
     $pushProtection = Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $analysis -Name 'secret_scanning_push_protection') -Name 'status'
     $observed = "{`"ss`":`"$secretScanning`",`"pp`":`"$pushProtection`"}"
@@ -125,6 +152,22 @@ function Test-CommittedIdentifier {
         return New-MlsCheckResult -Passed $false -Observed "git grep failed with exit code $($generic.ExitCode)" `
             -Detail 'V1.3 greps a fresh clone of main; a non-zero-non-one exit means the grep itself failed.'
     }
+    # AN ALLOWLIST THAT CAN HIDE A REAL IDENTIFIER IS WORSE THAN NO ALLOWLIST.
+    #
+    # V1.3 exists to catch the estate's own ids being committed. The moment it gained a
+    # 57-entry allowlist, the cheapest way to make it green stopped being "remove the id"
+    # and became "add a line to the list" - so the list is checked against the live values
+    # FIRST, and listing one is itself the finding (F62).
+    $laundered = @($SecretValue |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { $_.ToLowerInvariant() } |
+            Where-Object { $_ -in $AllowedGuid })
+    if ($laundered.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "$($laundered.Count) live estate identifier(s) appear in the GUID allowlist" `
+            -Detail 'A real tenant, subscription or client id must never be allowlisted: remove it from verification/guid-allowlist.txt and from whatever committed it. The allowlist is for public, tenant-independent and invented ids only.'
+    }
+
     $unexpected = [System.Collections.Generic.List[string]]::new()
     foreach ($line in $generic.Line) {
         foreach ($match in [regex]::Matches($line, $genericPattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) {

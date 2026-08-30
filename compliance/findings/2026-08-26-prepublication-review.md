@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F59](#f59), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F65](#f65), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -91,6 +91,10 @@ claim by one step:
 | [F57](#f57) | **The Verifier could not see the layer it signs off**, and its retry loop treated "forbidden" as "not yet" - so L2's audit ran the full 60-minute job timeout and produced no report at all | high | CONFIRMED (observed, run 33283413834) | 3.1.5, 3.12.3 | first real L2 audit, 2026-08-30 |
 | [F58](#f58) | **A check that cannot report is not a check.** The audit published its transcript only on exit, declared `ran=true` only on exit, ran `az` with no timeout and gave the whole run no retry budget - so every audit that hit the job timeout destroyed the evidence of why. | high | CONFIRMED (observed, run 33287461494) | 3.3.1, 3.12.3 | second L2 audit, 2026-08-30 |
 | [F59](#f59) | **Patience inherited is patience nobody chose.** 19 of 47 criteria took a 30-minute retry window by default, including one whose answer was settled the moment the deploy step returned - it spent all thirty minutes reaching a verdict its own run's deploy log contradicted. | high | CONFIRMED (observed, run 33307710207) | 3.12.1, 3.12.3 | first L2 audit report, 2026-08-30 |
+| [F61](#f61) | **A failure that always reproduces is not necessarily one failure.** V2.3 wanted compliance data, compliance data needs resources, resources come from L3-L8, and L3-L8 were gated on this audit - so L2 could never pass on the empty estate the demo exists to rebuild. | high | CONFIRMED (measured, 0 resources / 0 summary rows) | 3.12.1, 3.12.3 | L2 audit report, 2026-08-30 |
+| [F62](#f62) | **An allowlist that can hide a real identifier is worse than none.** The GUID allowlist file never existed, so V1.3 flagged all 57 ids in the repo and was permanently red; creating it made "add a line" the cheapest way to green, so live ids are now checked against the list first. | medium | CONFIRMED (file absent) | 3.1.1, 3.4.1 | verify-l1, 2026-08-30 |
+| [F63](#f63) | **A criterion that fails for reasons outside what it measures is not measuring it.** V1.1 gated the OIDC token exchange on the whole run's conclusion; V1.2 reported secret scanning as off when its token could not read the setting at all. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3, 3.14.6 | verify-l1, 2026-08-30 |
+| [F64](#f64) | **Presence is not readiness.** The Graph SDK being installed was taken as being signed in, so every Graph criterion threw while an already-authenticated `az rest` fallback sat unreachable beneath it. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3 | verify-l1, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -3723,3 +3727,195 @@ same reason: they tested the harness rather than the code.
 CLAUDE.md already says a test that supplies the answer it is checking is a mirror, not a test.
 Mutation testing is how a mirror gets caught, and it caught two in one change. A guard nobody
 has tried to break is a guard nobody has tested.
+
+---
+
+## F60
+
+**The CLI asked to register a provider before it would read, and a Reader cannot ask**
+
+- **Severity:** medium (V2.1 failed with a message about provider registration on a subscription while claiming to be a statement about a management group's children)
+- **Confidence:** CONFIRMED - run 33313700780, and `az provider show -n Microsoft.Management` reports `Registered`, so the registration the CLI attempted was not even needed
+- **Controls:** 3.1.5 (least privilege), 3.12.3
+- **Closed by:** reading ARM directly instead of through the CLI's management-group wrapper
+- **Status:** CLOSED
+
+`az account management-group show` attempts `Microsoft.Management/register/action` at
+SUBSCRIPTION scope before it reads. The Verifier holds Reader, a register action is not a
+read, and so the call failed - with an error naming a subscription and an action nobody had
+asked for, about a criterion that is a statement about a management group.
+
+The provider was already registered. The CLI asks anyway.
+
+`az rest --method get` against the Management API is the same read with none of the wrapper:
+it needs `Microsoft.Management/managementGroups/read` and nothing else, which is exactly what
+[F57](#f57)'s Reader grant provides. `Assert-MlsReadOnlyAzArgument` already permitted
+`rest --method get`, so the guard needed no widening - the capability was there the whole time.
+
+---
+
+## F61
+
+**L2 could never pass on a fresh estate, and everything downstream was gated on L2**
+
+- **Severity:** high (the entire layer sequence was unreachable past L2 on exactly the estate the demo claims to rebuild in under an hour)
+- **Confidence:** CONFIRMED - `az policy assignment list` shows `nist-800-53-r5` assigned; `az policy state summarize` returns 0 rows; `az resource list` returns 0
+- **Controls:** 3.12.1, 3.12.3
+- **Closed by:** splitting V2.3 into what is knowable now and what depends on resources that do not exist yet
+- **Status:** CLOSED
+
+V2.3 required NIST compliance DATA. Azure Policy produces compliance data by evaluating
+resources. On a fresh estate there are none, so the query correctly returns nothing:
+
+```
+V2.3 needs compliance data
+  -> compliance data needs resources
+    -> resources are deployed by L3-L8
+      -> L3-L8 are gated on L2's audit
+        -> L2's audit is V2.3
+```
+
+A kill/rebuild starts empty by definition, which is the whole premise of the estate. **Every
+run stopped in the same place for this reason**, and each night it was read as whatever
+defect had been found most recently - a missing grant, a truncated window, a blind error
+message. Those were all real. None of them was this.
+
+**Fix.** The ASSIGNMENT existing is L2's own deliverable, depends on nothing downstream, and
+is answerable the moment the layer deploys - so its absence is a `-Final` FAIL. Compliance
+DATA is a consequence of later layers, so on an estate with zero resources V2.3 records SKIP
+with its reason and the layer proceeds. With resources present and no summary, it FAILs as
+before.
+
+### What this says about the method
+
+Four defects in a row were found by asking why L2's audit failed, and each was genuinely
+there. The fifth was the one that had been stopping the run the entire time, and it was
+invisible precisely because the other four kept producing plausible explanations. **A failure
+that always reproduces is not necessarily one failure.** Fixing the top of the stack is what
+lets the next one become visible - which is [F58](#f58)'s stacking lesson again, one level up:
+the stack was not four deep, it was five, and the bottom item was a design error rather than a
+bug.
+
+---
+
+## F62
+
+**The GUID allowlist did not exist, so the check that depends on it was permanently red**
+
+- **Severity:** medium (V1.3 reported 195 hits across 57 ids on every run and had never once been actionable)
+- **Confidence:** CONFIRMED - `verification/guid-allowlist.txt` was absent from the repository
+- **Controls:** 3.1.1, 3.4.1
+- **Closed by:** a reviewed allowlist with provenance, plus a guard against laundering real ids into it
+- **Status:** CLOSED
+
+V1.3 sweeps the repository for GUIDs and fails on any not in a reviewed allowlist. That file
+was never created, so every GUID in the repository was unexpected - Graph app-role ids, Azure
+RBAC role definitions, policy definitions, Entra role templates, and invented fixture data.
+The criterion was red from the first run and stayed red, which is the same thing as being
+absent.
+
+**What V1.3 is actually for was never in danger.** Checked before writing the list: the tenant
+id, subscription id, deployer client id, Verifier object id and sponsor object id appear in
+**zero** committed files. They live in GitHub environment variables, as CLAUDE.md hard rule 5
+requires.
+
+**But an allowlist changes the incentive.** Before it, the only way to make V1.3 green was to
+stop committing the id. After it, adding a line is cheaper. So the live identifiers are
+checked against the list FIRST, and finding one there is its own `-Final` failure: an
+allowlist that can hide a real identifier is worse than no allowlist.
+
+Writing that guard immediately caught its own test suite, which injected repeating-digit ids
+that appear throughout the fixtures and are therefore allowlisted - so every test looked like
+laundering. The tests now use identifiers shaped like real ones.
+
+Noted and not fixed: `.gitleaks.toml` carries most of these same GUIDs in its own allowlist.
+One list, two files, and V1.3 read neither.
+
+---
+
+## F63
+
+**Two L1 criteria reported conclusions their evidence did not support**
+
+- **Severity:** medium (V1.1 failed whenever any unrelated layer failed; V1.2 reported a control as off when it could not see it)
+- **Confidence:** CONFIRMED - run 33309963273: V1.1 observed `run ... conclusion=failure; job oidc-login conclusion=success`; V1.2 observed two empty status strings
+- **Controls:** 3.12.3, 3.14.6
+- **Closed by:** gating V1.1 on the job it measures, and making V1.2 distinguish unreadable from disabled
+- **Status:** CLOSED
+
+**V1.1** asked whether the OIDC token exchange works and gated on the RUN concluding success
+as well as the job. The run's conclusion covers L2 through L8. So on the run that exposed it,
+`oidc-login` had succeeded and L2's audit had not, and L1 reported the token exchange as
+broken. **A criterion that fails for reasons outside what it measures is not measuring it.**
+The job is now the verdict; the run's conclusion stays in the observed value as context.
+
+**V1.2** read `security_and_analysis` from the repository API. GitHub returns that block only
+to a token with ADMIN on the repository, and `MLS_VERIFIER_GH_TOKEN` is read-only by
+contract - so the block was absent, both lookups produced empty strings, and the criterion
+compared an empty string to `enabled` and reported both settings as empty. That reads as
+*both settings are off*. It meant *this identity cannot see them*.
+
+Same confusion as [F57](#f57) in a different API, and the same rule applies: waiting will not
+turn unreadable into readable, and neither will re-running. V1.2 now says which one it is, and
+names the two honest ways forward - grant the token admin, or move the criterion to an
+identity that has it.
+
+---
+
+## F64
+
+**An installed SDK was treated as a signed-in one, so a working fallback was unreachable**
+
+- **Severity:** medium (every Graph criterion threw instead of running, on a runner where the alternative transport was already authenticated)
+- **Confidence:** CONFIRMED - run 33309963273, V1.4 observed `check threw: Authentication needed. Please call Connect-MgGraph.`
+- **Controls:** 3.12.3
+- **Closed by:** testing for a live Graph context rather than a resolvable cmdlet
+- **Status:** CLOSED
+
+`Invoke-MlsGraph` preferred the Graph PowerShell SDK whenever `Invoke-MgGraphRequest`
+resolved, and fell back to `az rest` otherwise. The CI runner has the Graph module installed
+and never calls `Connect-MgGraph`. So the cmdlet resolved, the SDK path was taken, and it
+threw - while the `az rest` fallback beneath it, which would have worked because the job is
+already OIDC-logged-in as `mls-verifier`, was unreachable by construction.
+
+**Presence is not readiness.** The check is now a live `Get-MgContext`, and a signed-in SDK
+call that fails anyway falls through to `az rest` rather than ending the criterion - because
+the point of having two transports is that one of them working is enough.
+
+The test that covered this asserted *"uses the SDK when the SDK is present"*: the defect
+written down as a contract, passing forever. It is now three tests - present and signed in,
+present and not signed in, signed in but failing.
+
+---
+
+## F65
+
+**A branch named after an unchanged commit is not a unique branch**
+
+- **Severity:** medium (the nightly compliance job was red every night and 23 orphan branches accumulated)
+- **Confidence:** CONFIRMED - run 33288325859 rejected the push to `compliance-state/be6f55fb...` as non-fast-forward
+- **Controls:** 3.4.1, 3.12.3
+- **Closed by:** one force-updated branch instead of one per commit
+- **Status:** CLOSED
+
+`compliance.yml` commits a dated state artifact and pushes to `main`, with a branch-and-PR
+fallback for when branch protection refuses. The protection landed - the workflow's own
+comment predicted it - and the fallback ran. The fallback names its branch after the commit
+SHA, which looks unique and is not: the nightly schedule runs against whatever `main` is, so
+an unchanged `main` produces the SAME branch name with DIFFERENT content the next night. The
+second push is refused non-fast-forward, `set -e` kills the step, the job goes red.
+
+Meanwhile the workflow deliberately cannot open the pull requests, because that needs an
+Actions setting which also grants self-approval. So 23 branches accumulated, none merged, and
+the artifact never landed.
+
+**Fix:** one `compliance-state` branch, force-updated with `--force-with-lease`, and an
+existing open PR treated as the normal case rather than an error. One PR that updates in
+place, and nothing to accumulate.
+
+### What this says about the method
+
+The comment above that code correctly predicted branch protection landing and correctly
+described what would break. It did not predict the collision, because the branch name *looks*
+unique - it contains a commit SHA. The variable that makes it unique is the one thing a
+scheduled workflow does not vary.

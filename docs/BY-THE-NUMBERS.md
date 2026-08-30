@@ -91,8 +91,8 @@ numbers say more:
   that has never been deployed, that is the only truthful board there is. The platform is
   built so a human's strongest written claim cannot derive to `COMPLIANT`, and so that no
   blended percentage exists anywhere to paper over the difference.
-- **59 security findings** (36 pre-publication, 23 more raised by the first live
-  tenant bring-up and the first three real deployments, 2026-08-29/30), each with severity, `file:line`, an attack
+- **65 security findings** (36 pre-publication, 29 more raised by the first live
+  tenant bring-up and the first four real deployments, 2026-08-29/30), each with severity, `file:line`, an attack
   path and a fix — found by reviewing this repository before publishing it, and closed on
   this branch. **All nineteen control records now assert `CLOSED`**, so there are zero
   `GAP` rows on the board — and `CLOSED` still means only "no known open finding", which

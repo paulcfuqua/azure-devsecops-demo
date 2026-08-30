@@ -41,9 +41,13 @@ AfterAll {
 Describe 'layer-01-audit' {
     BeforeEach {
         $env:GH_TOKEN = 'ghp-verifier-read-only'
-        $env:AZURE_TENANT_ID = '11111111-1111-1111-1111-111111111111'
-        $env:AZURE_SUBSCRIPTION_ID = '22222222-2222-2222-2222-222222222222'
-        $env:FABRIC_CAPACITY_ID = '33333333-3333-3333-3333-333333333333'
+        # Deliberately NOT repeating-digit ids. Those appear throughout the repo's fixtures
+        # and are therefore on the reviewed GUID allowlist, so using them here made every
+        # test look like the estate had laundered its live identifiers into that list - the
+        # exact condition V1.3 now refuses (F62). A real tenant id looks like this.
+        $env:AZURE_TENANT_ID = 'c0ffee11-dead-4bee-9abc-0123456789ab'
+        $env:AZURE_SUBSCRIPTION_ID = 'facade22-cafe-4dad-8def-9876543210fe'
+        $env:FABRIC_CAPACITY_ID = 'badc0de3-feed-4fab-b012-13579bdf2468'
 
         Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
         Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
@@ -135,6 +139,18 @@ Describe 'layer-01-audit' {
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*refs/heads/**'
             $row.Detail | Should -BeLike '*Do not widen the subject*'
+        }
+
+        It 'fails V1.3 when a live identifier has been added to the GUID allowlist' {
+            # The allowlist made "make V1.3 green" cheap in two ways: remove the id, or list
+            # it. Listing it must be the louder failure of the two, or the check becomes a
+            # formality that certifies whatever it was told (F62).
+            Mock Get-AllowedGuid { @($env:AZURE_TENANT_ID.ToLowerInvariant(), 'b24988ac-6180-42a0-ab88-20f7382dd24c') }
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V1.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*live estate identifier*'
+            $row.Detail | Should -BeLike '*never be allowlisted*'
         }
 
         It 'fails V1.3 when a committed identifier is found' {
