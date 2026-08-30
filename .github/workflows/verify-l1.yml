@@ -71,12 +71,11 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      # V1.2 reads `security_and_analysis`, which GitHub returns only to a caller holding
-      # repository administration. Granting that to the Verifier's long-lived token would
-      # give it WRITE - the one thing its contract forbids - so the job's own ephemeral
-      # token carries it instead: read-only, this repository only, gone when the job ends
-      # (F66). It does not become a seventh long-lived credential (CLAUDE.md hard rule 5).
-      administration: read
+      # NO `administration: read` here. It is not a GITHUB_TOKEN permission scope - it exists
+      # only on fine-grained PATs - and actionlint rejected it, correctly, before this
+      # shipped. See F66: the least-privilege fix that first suggested itself was built on a
+      # capability that does not exist, and V1.2 now reports the limitation instead of
+      # pretending to have solved it.
     env:
       # V1.3's first sweep greps the working tree for these three values, so the
       # audit needs them in its environment to know what to look FOR. They are
@@ -86,8 +85,12 @@ jobs:
       FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
       GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
-      # Used by V1.2 alone, for the one read the Verifier's token cannot perform.
-      MLS_REPO_SETTINGS_TOKEN: ${{ github.token }}
+      # V1.2 reads a repository setting GitHub returns only to a caller holding repository
+      # ADMINISTRATION. Set this to a token that has it - a fine-grained PAT scoped
+      # `Administration: Read-only` - if you want V1.2 to return a verdict. Left unset, V1.2
+      # records SKIP naming exactly what it could not see, which is the honest outcome for a
+      # read-only auditor that structurally cannot reach the evidence (F66).
+      MLS_REPO_SETTINGS_TOKEN: ${{ secrets.MLS_REPO_SETTINGS_TOKEN }}
     steps:
       # Full history: V1.3 runs `git grep` over the checked-out tree, and a
       # shallow clone is still a complete tree at that ref, which is what the

@@ -95,7 +95,7 @@ claim by one step:
 | [F62](#f62) | **An allowlist that can hide a real identifier is worse than none.** The GUID allowlist file never existed, so V1.3 flagged all 57 ids in the repo and was permanently red; creating it made "add a line" the cheapest way to green, so live ids are now checked against the list first. | medium | CONFIRMED (file absent) | 3.1.1, 3.4.1 | verify-l1, 2026-08-30 |
 | [F63](#f63) | **A criterion that fails for reasons outside what it measures is not measuring it.** V1.1 gated the OIDC token exchange on the whole run's conclusion; V1.2 reported secret scanning as off when its token could not read the setting at all. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3, 3.14.6 | verify-l1, 2026-08-30 |
 | [F64](#f64) | **Presence is not readiness.** The Graph SDK being installed was taken as being signed in, so every Graph criterion threw while an already-authenticated `az rest` fallback sat unreachable beneath it. | medium | CONFIRMED (observed, run 33309963273) | 3.12.3 | verify-l1, 2026-08-30 |
-| [F66](#f66) | **An auditor that acquires write access to close a finding has closed the wrong thing.** V1.2 needed repository administration to read a setting; granting the Verifier's long-lived token admin would have given it write, so the job's ephemeral `administration: read` token does that one call instead. The control was enabled all along. | medium | CONFIRMED (both settings read `enabled` under an admin token) | 3.1.5, 3.14.6 | verify-l1, 2026-08-30 |
+| [F66](#f66) | **An auditor that acquires write access to close a finding has closed the wrong thing** - and the least-privilege alternative I reached for, a `GITHUB_TOKEN` scoped `administration: read`, is not a permission that exists. V1.2 now SKIPs, naming the one credential that would resolve it. The control was enabled all along. | medium | CONFIRMED (both settings read `enabled` under an admin token; actionlint rejected the invented scope) | 3.1.5, 3.14.6 | verify-l1, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -3925,46 +3925,55 @@ scheduled workflow does not vary.
 
 ## F66
 
-**The check could not see the control it verifies, and the obvious fix was the wrong one**
+**The check cannot see the control it verifies, and the least-privilege fix I reached for does not exist**
 
-- **Severity:** medium (V1.2 could not evaluate at all; the tempting remedy would have given the Verifier write access to the repository)
-- **Confidence:** CONFIRMED - `gh api repos/paulcfuqua/azure-devsecops-demo` under an admin token returns `secret_scanning: enabled` and `secret_scanning_push_protection: enabled`, so the control was on the whole time and only the Verifier could not see it
+- **Severity:** medium (V1.2 cannot be evaluated by a read-only identity; the control itself has been enabled throughout)
+- **Confidence:** CONFIRMED - under an admin token the repository reports `secret_scanning: enabled` and `secret_scanning_push_protection: enabled`, so the control was on the whole time and only the Verifier could not see it
 - **Controls:** 3.1.5 (least privilege), 3.14.6
-- **Closed by:** the job's ephemeral token, scoped `administration: read`, used for that one call
+- **Closed by:** reporting the limitation as SKIP, naming the one credential that would resolve it, and NOT widening the Verifier
 - **Status:** CLOSED
 
 [F63](#f63) established that V1.2's empty result meant *this identity cannot read the
-setting*, not *the setting is off*. That left the actual question: how should a read-only
-Verifier read a setting GitHub shows only to a caller holding repository administration?
+setting*, not *the setting is off*. This is the question that left open: how should a
+read-only Verifier read a setting GitHub returns only to a caller holding repository
+administration?
 
-**The obvious answer was to grant `MLS_VERIFIER_GH_TOKEN` admin, and it is the wrong one.**
-GitHub's repository administration permission includes WRITE - settings, collaborators,
-deletion. The Verifier's entire contract is that it cannot write anything (CLAUDE.md hard
-rule 1), and [F57](#f57) turned down exactly this trade once already: *"Reader, not
-Contributor - this grant widens what it can look AT, never what it can do."* Widening a
-long-lived credential to fix a read is how a read-only auditor stops being one.
+**The first answer - grant `MLS_VERIFIER_GH_TOKEN` admin - is wrong**, and stays wrong.
+GitHub's administration permission includes WRITE: settings, collaborators, deletion. The
+Verifier's entire contract is that it cannot write (CLAUDE.md hard rule 1), and
+[F57](#f57) turned this exact trade down once already: *"Reader, not Contributor - this grant
+widens what it can look AT, never what it can do."*
 
-**What it does instead.** GitHub Actions can scope a job's own `GITHUB_TOKEN` to
-`administration: read`. That token is repository-scoped, read-only, and expires when the job
-ends. `verify-l1.yml` declares that permission and passes the token as
-`MLS_REPO_SETTINGS_TOKEN`; `Invoke-MlsGh` gained a `-Token` parameter that runs ONE call
-under it and restores the ambient credential afterwards. The read-only ARGUMENT guard still
-applies - a different token changes who is asking, never what may be asked.
+**The second answer was to scope the job's own `GITHUB_TOKEN` to `administration: read` -
+ephemeral, repository-scoped, expiring with the job. That permission scope does not exist.**
+`administration` is a fine-grained PAT permission; the workflow token's scopes are `actions`,
+`checks`, `contents`, `id-token`, `security-events` and a dozen others, and `administration`
+is not among them. The repository's own `actionlint` step rejected it before it merged.
 
-It is also not a seventh long-lived credential, so CLAUDE.md hard rule 5's written-reason
-requirement is not triggered. Nothing was added to the rotation list.
-
-Off a runner there is no ephemeral token, and V1.2 correctly reports what it cannot see
-rather than erroring on a missing input.
+**So the honest answer is that a read-only identity cannot verify this control through this
+API at all.** V1.2 now records SKIP - never silent, never failing the run - naming what it
+could not see and the single thing that would change it: a fine-grained PAT scoped
+`Administration: Read-only`, supplied as `MLS_REPO_SETTINGS_TOKEN`. That would be a seventh
+long-lived credential, which CLAUDE.md hard rule 5 says needs a written reason, and choosing
+to add one is a human's call rather than an audit's convenience. `Invoke-MlsGh -Token` exists
+to run that one call under it, restoring the ambient credential afterwards, so the capability
+is ready if the decision is made.
 
 ### What this says about the method
 
-The control was **enabled the entire time**. Secret scanning and push protection have been on
-throughout, and V1.2 has been reporting a red criterion about them for as long as it has
-existed. So the finding was never about the estate's posture; it was about an auditor that
-could not reach the evidence and said so in a way that read like a verdict.
+Two things, and the second is about me.
 
-And the fix that presents itself first - *give the checker more permission* - is the one that
-would have quietly dismantled the property the checker exists to demonstrate. **An auditor
-that acquires write access to close a finding has closed the wrong thing.** The narrow,
-expiring, single-purpose credential does the same job and keeps the claim true.
+**The control was enabled the entire time.** Secret scanning and push protection have been on
+throughout, and V1.2 has been reporting red about them for as long as it has existed. The
+finding was never the estate's posture; it was an auditor that could not reach the evidence
+and phrased that inability as a verdict.
+
+**And the fix I proposed was itself unverified.** I asserted that `administration: read` was
+"a documented `GITHUB_TOKEN` scope" - confidently, in the commit message and to the sponsor -
+without checking. It is not. This register's own standing rule is that **a constant which
+names something in another system is verified against that system, not written from memory**,
+and a permission scope is exactly such a constant. `actionlint` is the check that resolves it,
+it ran, and it caught this in seven seconds.
+
+That is the register's oldest lesson landing on the person maintaining it: the reason the
+rule exists is that plausible-sounding constants are precisely the ones nobody checks.

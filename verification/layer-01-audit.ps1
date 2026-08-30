@@ -131,9 +131,13 @@ function Test-SecretScanning {
     # Same confusion as F57, in a different API: waiting will not turn unreadable into
     # readable, and neither will re-running. Say which one it is.
     if ($null -eq $analysis) {
-        return New-MlsCheckResult -Passed $false -Final `
+        # SKIP, not FAIL. The Verifier structurally cannot reach this evidence, and that is a
+        # property of the identity rather than of the control - reporting FAIL would be the
+        # same error F63 fixed, one level up: a verdict where there is only an absence. SKIP
+        # never fails the run and is never silent (F66).
+        return New-MlsCheckResult -Status SKIP `
             -Observed "the repository response carries no 'security_and_analysis' block, so this identity cannot read the setting" `
-            -Detail "GitHub returns that block only to a caller holding repository administration, and the Verifier's own long-lived token must never hold it - admin includes write. The workflow supplies the job's ephemeral GITHUB_TOKEN scoped 'administration: read' via MLS_REPO_SETTINGS_TOKEN instead. An absent block therefore means that variable is unset, or the job's permissions block does not declare 'administration: read'. This is NOT evidence that secret scanning is disabled."
+            -Detail "GitHub returns that block only to a caller holding repository ADMINISTRATION, and the Verifier's own token must never hold it - administration includes write, and a read-only auditor that acquires write has stopped being one. There is no GITHUB_TOKEN permission scope for this either: `administration` exists only on fine-grained PATs. To get a verdict, set MLS_REPO_SETTINGS_TOKEN to a fine-grained PAT scoped 'Administration: Read-only' - a deliberate seventh long-lived credential, which CLAUDE.md hard rule 5 says needs a written reason. Until then this is SKIP, and it is NOT evidence that secret scanning is disabled."
     }
 
     $secretScanning = Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $analysis -Name 'secret_scanning') -Name 'status'
