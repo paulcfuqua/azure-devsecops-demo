@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F84](#f84), all raised and all fixed on 2026-08-29/31 during the first live tenant
+[F86](#f86), all raised and all fixed on 2026-08-29/31 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -114,6 +114,8 @@ claim by one step:
 | [F82](#f82) | **Three resource providers were unregistered, each waiting to fail a different layer.** L6 died on `Microsoft.CostManagementExports`; a sweep found `Microsoft.Security` (L9) and `Microsoft.PowerPlatform` (L8) queued to do the same, one run apiece. | medium | CONFIRMED (400 RP Not Registered; sweep) | 3.4.1, 3.12.1 | first L6 deploy success, 2026-08-30 |
 | [F83](#f83) | **App CI rolled an image onto a container app no layer had created.** The deploy job gated on the demo environment being configured, which says nothing about whether the app exists - L7 creates it, and L7 has never run. | medium | CONFIRMED (five workflows failed together) | 3.4.1, 3.12.1 | push to main, 2026-08-30 |
 | [F84](#f84) | **A test suite tests the language it is written in.** The SQL admin had to be a group holding both the human and the deployer; then the schema failed to parse on a RAISERROR taking a function call - in a file nothing in the repo had ever parsed. | high | CONFIRMED (login failure, then syntax error) | 3.1.1, 3.5.2 | ninth L6 attempt, 2026-08-31 |
+| [F85](#f85) | **The documentation was ahead of the code and ahead of me.** L06.md named this failure, prescribed recover-mode, and warned against purging; the mechanism was fully built and nothing ever set it. | medium | CONFIRMED (`keyVaultCreateMode` defaults to `default`, never assigned) | 3.4.2, 3.12.1 | post-run review, 2026-08-31 |
+| [F86](#f86) | **Ask what it would take for the check to pass.** V6.2 probed reachability with `Heartbeat`, an agent table this agentless estate can never fill, and failed against a workspace holding 5,424 readable rows. | medium | CONFIRMED (Heartbeat empty; six other tables populated) | 3.3.1, 3.12.3 | first L6 audit, 2026-08-31 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4777,3 +4779,82 @@ in this repo, and the honest statement is that it narrows the gap rather than cl
 attempt failed before the schema step. A defect at the end of a long serial path is protected
 by every defect in front of it - which is the same reason [F61](#f61) hid behind four others,
 and the argument for [F72](#f72)'s fail-slow restated at the layer level.
+
+---
+
+## F85
+
+**The runbook named this failure, documented the fix, warned against my workaround, and the fix was never wired**
+
+- **Severity:** medium (the kill/rebuild blocker of [F80](#f80) had a designed solution that nothing ever activated)
+- **Confidence:** CONFIRMED - `keyVaultCreateMode` exists with `@allowed(['default','recover'])`, is threaded through `demo.bicepparam` to `KEY_VAULT_CREATE_MODE`, is read by the workflow, and defaults to `default` with no code path that ever sets it otherwise
+- **Controls:** 3.4.2, 3.12.1
+- **Closed by:** the workflow deciding the mode from the tenant and the template acting on it
+- **Status:** CLOSED
+
+`docs/runbooks/layers/L06.md` failure mode 2 is titled *"Key Vault name collision with a
+soft-deleted vault"*. It names the error, prescribes *"the recover-mode template path"*, and
+adds: **"never `purge` reflexively; purge is irreversible and unnecessary once recover-mode is
+in place."**
+
+The mechanism is fully built. `param keyVaultCreateMode` is `@allowed(['default','recover'])`,
+passed to the AVM module as `createMode`, sourced from `KEY_VAULT_CREATE_MODE` via
+`demo.bicepparam`, and consumed by the workflow. **It defaults to `default`, and nothing sets
+it.** A human was expected to flip a repository variable on the runs where they happened to
+know a soft-deleted vault existed - which is [F79](#f79) again: a documented manual step reads
+as a design.
+
+The workflow now decides per run: same region gets `createMode=recover` so the vault returns
+with its secrets, a different region is purged because a vault cannot be recovered across
+regions, and purge protection fails loudly.
+
+### What this says about the method
+
+I diagnosed [F80](#f80) from the error text and built a parallel mechanism in the workflow
+without reading the runbook for the layer I was fixing. The runbook had the answer, and an
+explicit warning against the thing I then did - I purged a vault. In that instance purging was
+correct, because the vault was in the abandoned region and recovery across regions is
+impossible, but I did not know that when I did it.
+
+**The documentation was ahead of the code and ahead of me.** The reflex on a cloud error is to
+read the error; the runbook for that layer is the cheaper source and it was written by someone
+who had already thought about the failure. Reading it first would have produced a smaller,
+better fix in less time.
+
+---
+
+## F86
+
+**A reachability probe queried a table this architecture can never fill**
+
+- **Severity:** medium (V6.2 failed against a workspace holding 5,424 readable rows)
+- **Confidence:** CONFIRMED - `Heartbeat | take 1` returns `[]`; the same workspace returns rows from AzureMetrics, AzureActivity, StorageBlobLogs, AzureDiagnostics, Usage and AppServiceAuditLogs
+- **Controls:** 3.3.1, 3.12.3
+- **Closed by:** probing with `print 1`, which needs no table
+- **Status:** CLOSED
+
+V6.2 asserts the Verifier can REACH the Log Analytics workspace - its own comment says it
+passes on *"query succeeded as the verifier"*. It proved that with `Heartbeat | take 1`.
+
+`Heartbeat` is an agent table, written by Azure Monitor Agent running on virtual machines.
+This estate has none: Container Apps, Functions, Azure SQL. The table is empty and always will
+be, so the criterion reported *"the query returned no result (HTTP error, or the Reader
+identity cannot query this workspace)"* about a workspace it could read perfectly well.
+
+That parenthetical is the same disjunction [F57](#f57) and [F60](#f60) were about, and it was
+wrong on both branches: not an HTTP error, not a permissions problem, and not a statement about
+the workspace at all.
+
+`print 1` requires no table, no ingestion and no agent. It succeeds exactly when the identity
+can execute a query and fails exactly when it cannot. Whether audit records exist is a
+different question with a different control mapping, which V7.3 already asks against a table
+this estate writes.
+
+### What this says about the method
+
+Seventh instance of asserting an artefact where the question is a capability - after
+[F60](#f60), [F63](#f63), [F64](#f64), [F67](#f67), [F77](#f77), [F78](#f78) and
+[F83](#f83). The shape is now so consistent that it is worth stating as a diagnostic question
+rather than a lesson: **when a check fails, ask what it would take for the check to pass, and
+whether that is the same thing as the property being asserted.** For V6.2 the answer was "a
+virtual machine", and this estate has never had one.
