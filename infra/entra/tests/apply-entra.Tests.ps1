@@ -25,6 +25,13 @@ BeforeAll {
     $script:UserCount = @($manifest.users).Count
     $script:GroupCount = @($manifest.groups).Count
     $script:AppCount = @($manifest.appRegistrations).Count
+    # Every registration gets a service principal; only the Easy Auth dashboards get the
+    # Verifier's probe role. Derived from the manifest so adding either is felt here (F89).
+    # Get-Field, not $_.verifierProbeRole: Set-StrictMode -Version Latest is ON in this
+    # harness by design (F49), and a bare property access throws on the one registration
+    # that does not declare the field.
+    $script:ProbeRoleCount = @($manifest.appRegistrations |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string](Get-Field -Object $_ -Name 'verifierProbeRole')) }).Count
     $script:CaCount = @($manifest.conditionalAccessPolicies).Count
     $script:MembershipCount = (@($manifest.groups) | ForEach-Object { @($_.members).Count } | Measure-Object -Sum).Sum
 
@@ -526,10 +533,38 @@ Describe 'apply-entra idempotency + WhatIf' {
             $script:ExistingMembers["gid-$($group.displayName)"] = @($group.members | ForEach-Object { @{ id = "uid-$_" } })
         }
         $script:ExistingApps = @{}
+        $script:ExistingServicePrincipals = @{}
+        $script:ExistingAppRoleAssignments = [System.Collections.Generic.List[object]]::new()
         foreach ($app in $manifest.appRegistrations) {
+            # A POPULATED TENANT NOW INCLUDES THE PRINCIPAL AND THE ROLE. It did not, and
+            # the replay test caught the change honestly: an application object without its
+            # service principal is a half-created object, so "fully populated" had to grow
+            # to mean both (F89). The role id is computed the same way the script computes
+            # it, never pasted, so a change to that derivation fails here instead of
+            # silently re-PATCHing every app on every replay.
+            $roles = @()
+            $probeRole = [string](Get-Field -Object $app -Name 'verifierProbeRole')
+            if (-not [string]::IsNullOrWhiteSpace($probeRole)) {
+                $roleId = New-DeterministicGuid -Text "$($app.displayName)/$probeRole"
+                $roles = @(@{
+                        id                 = $roleId
+                        value              = $probeRole
+                        allowedMemberTypes = @('Application')
+                        isEnabled          = $true
+                    })
+                $script:ExistingAppRoleAssignments.Add(@{
+                        resourceId = "spid-$($app.displayName)"
+                        appRoleId  = $roleId
+                    })
+            }
             $script:ExistingApps[$app.displayName] = @{
                 id = "aid-$($app.displayName)"; appId = "client-$($app.displayName)"
                 displayName = $app.displayName; signInAudience = $app.signInAudience
+                appRoles = $roles
+            }
+            $script:ExistingServicePrincipals["client-$($app.displayName)"] = @{
+                id = "spid-$($app.displayName)"; appId = "client-$($app.displayName)"
+                displayName = $app.displayName
             }
         }
         $script:ExistingCaPolicies = @($manifest.conditionalAccessPolicies | ForEach-Object {
@@ -603,6 +638,27 @@ Describe 'apply-entra idempotency + WhatIf' {
                     if ($script:TenantEmpty) { return @{ value = @() } }
                     return @{ value = $script:ExistingCaPolicies }
                 }
+                if ($cleanPath -like 'servicePrincipals/*/appRoleAssignments') {
+                    if ($script:TenantEmpty) { return @{ value = @() } }
+                    return @{ value = $script:ExistingAppRoleAssignments.ToArray() }
+                }
+                if ($cleanPath -eq 'servicePrincipals') {
+                    # mls-verifier's principal is created OUT OF BAND by
+                    # scripts/bootstrap/01-root-oidc.ps1, so it exists in both branches -
+                    # the same treatment the break-glass members get above, and for the
+                    # same reason: this script never creates it.
+                    if ($Path -match "displayName eq '([^']+)'") {
+                        if ($Matches[1] -eq 'mls-verifier') {
+                            return @{ value = @(@{ id = 'spid-mls-verifier'; displayName = 'mls-verifier' }) }
+                        }
+                        return @{ value = @() }
+                    }
+                    if ($script:TenantEmpty) { return @{ value = @() } }
+                    if ($Path -match "appId eq '([^']+)'") {
+                        return @{ value = @($script:ExistingServicePrincipals[$Matches[1]]) }
+                    }
+                    return @{ value = @() }
+                }
                 return $null
             }
             if ($Method -eq 'POST') {
@@ -616,6 +672,13 @@ Describe 'apply-entra idempotency + WhatIf' {
                 # could not be scoped to named applications at all.
                 if ($cleanPath -eq 'applications') { return @{ id = "aid-$($Body['displayName'])"; appId = "client-$($Body['displayName'])" } }
                 if ($cleanPath -eq 'identity/conditionalAccess/policies') { return @{ id = "cid-$($Body['displayName'])" } }
+                # Same id shape as the populated fixture above (spid-<displayName>), so a
+                # test cannot pass in one idempotency branch and fail in the other purely
+                # because the mock invented two different naming schemes.
+                if ($cleanPath -eq 'servicePrincipals') {
+                    return @{ id = "spid-$($Body['appId'] -replace '^client-', '')"; appId = $Body['appId'] }
+                }
+                if ($cleanPath -like 'servicePrincipals/*/appRoleAssignments') { return @{ id = 'ara-1' } }
             }
             return @{}
         }
@@ -640,6 +703,64 @@ Describe 'apply-entra idempotency + WhatIf' {
             Should -Invoke Invoke-GraphApi -Exactly -Times $script:MembershipCount -ParameterFilter { $Method -eq 'POST' -and $Path -like 'groups/*/members/*' }
             Should -Invoke Invoke-GraphApi -Exactly -Times $script:AppCount -ParameterFilter { $Method -eq 'POST' -and $Path -eq 'applications' }
             Should -Invoke Invoke-GraphApi -Exactly -Times $script:ReportOnlyCaCount -ParameterFilter { $Method -eq 'POST' -and $Path -eq 'identity/conditionalAccess/policies' }
+        }
+
+        It 'creates a service principal for EVERY app registration, not just the ones with a probe role' {
+            # An application object is a definition; the service principal is the tenant
+            # identity that app role assignments, permission grants, enterprise-app
+            # visibility and sign-in logs all address. Registering applications without
+            # them left four half-objects in a live tenant (F89), and nothing failed
+            # visibly - interactive sign-in still works, because Entra creates the
+            # principal on first consent. Only client-credentials issuance broke, which
+            # is why it survived until V7.3 needed a token.
+            $summary = Invoke-ApplyForTest
+            $summary.ServicePrincipalsCreated | Should -Be $script:AppCount
+            Should -Invoke Invoke-GraphApi -Exactly -Times $script:AppCount -ParameterFilter {
+                $Method -eq 'POST' -and $Path -eq 'servicePrincipals'
+            }
+        }
+
+        It 'assigns the probe role to the Verifier for the dashboards only' {
+            $summary = Invoke-ApplyForTest
+            $summary.ProbeRolesAssigned | Should -Be $script:ProbeRoleCount
+            $script:ProbeRoleCount | Should -BeLessThan $script:AppCount `
+                -Because 'the probe role belongs on the Easy Auth dashboards, not on every registration - mcp-tools authenticates with a shared bearer token and needs no audience'
+            Should -Invoke Invoke-GraphApi -Exactly -Times $script:ProbeRoleCount -ParameterFilter {
+                $Method -eq 'POST' -and $Path -like 'servicePrincipals/*/appRoleAssignments'
+            }
+        }
+
+        It 'assigns the role on the Verifier principal, naming the dashboard as the resource' {
+            Invoke-ApplyForTest | Out-Null
+            # principalId is the VERIFIER (the grantee) and resourceId is the DASHBOARD
+            # (the grantor). Swapping them is a silent no-op that grants nothing, so the
+            # direction is asserted rather than assumed.
+            Should -Invoke Invoke-GraphApi -Exactly -Times $script:ProbeRoleCount -ParameterFilter {
+                $Method -eq 'POST' -and $Path -eq 'servicePrincipals/spid-mls-verifier/appRoleAssignments' -and
+                $Body['principalId'] -eq 'spid-mls-verifier' -and
+                $Body['resourceId'] -like 'spid-mls-*-demo-app'
+            }
+        }
+
+        It 'declares the probe role for Application members only, so no user can hold it' {
+            Invoke-ApplyForTest | Out-Null
+            Should -Invoke Invoke-GraphApi -Exactly -Times $script:ProbeRoleCount -ParameterFilter {
+                $Method -eq 'PATCH' -and $Path -like 'applications/*' -and
+                $null -ne $Body['appRoles'] -and
+                @($Body['appRoles'] | Where-Object {
+                        $_['allowedMemberTypes'] -contains 'Application' -and
+                        $_['allowedMemberTypes'] -notcontains 'User'
+                    }).Count -ge 1
+            }
+        }
+
+        It 'uses a stable role id, so a replay does not revoke the grant it just made' {
+            # An assignment references its role BY id. A fresh GUID per run would make every
+            # deploy dangle the previous run's assignment while reporting success.
+            $first = New-DeterministicGuid -Text 'mls-launch-ops-demo-app/Telemetry.Probe'
+            $second = New-DeterministicGuid -Text 'mls-launch-ops-demo-app/Telemetry.Probe'
+            $first | Should -Be $second
+            $first | Should -Not -Be (New-DeterministicGuid -Text 'mls-control-tower-demo-app/Telemetry.Probe')
         }
 
         It 'creates the broad CA policies in report-only mode exactly as the manifest declares' {

@@ -66,25 +66,36 @@
       "displayName": "mls-flight-operations",
       "mailNickname": "mls-flight-operations",
       "description": "Flight operations staff - launch-ops app users",
-      "members": ["dana.reyes", "priya.natarajan"]
+      "members": [
+        "dana.reyes",
+        "priya.natarajan"
+      ]
     },
     {
       "displayName": "mls-security-team",
       "mailNickname": "mls-security-team",
       "description": "Security analysts - control-tower security tab",
-      "members": ["miles.okafor"]
+      "members": [
+        "miles.okafor"
+      ]
     },
     {
       "displayName": "mls-finance",
       "mailNickname": "mls-finance",
       "description": "Finance - cost dashboards and budget alerts",
-      "members": ["sofia.lindqvist", "marcus.webb"]
+      "members": [
+        "sofia.lindqvist",
+        "marcus.webb"
+      ]
     },
     {
       "displayName": "mls-executives",
       "mailNickname": "mls-executives",
       "description": "Executive readout audience - control-tower consumers",
-      "members": ["marcus.webb", "dana.reyes"]
+      "members": [
+        "marcus.webb",
+        "dana.reyes"
+      ]
     },
     {
       "displayName": "mls-break-glass",
@@ -99,13 +110,15 @@
       "displayName": "mls-launch-ops-demo-app",
       "appKey": "launch-ops",
       "signInAudience": "AzureADMyOrg",
-      "notes": "Launch operations dashboard (apps/launch-ops)"
+      "notes": "Launch operations dashboard (apps/launch-ops)",
+      "verifierProbeRole": "Telemetry.Probe"
     },
     {
       "displayName": "mls-control-tower-demo-app",
       "appKey": "control-tower",
       "signInAudience": "AzureADMyOrg",
-      "notes": "Executive control tower (apps/control-tower)"
+      "notes": "Executive control tower (apps/control-tower)",
+      "verifierProbeRole": "Telemetry.Probe"
     },
     {
       "displayName": "mls-mcp-tools-demo-app",
@@ -117,7 +130,8 @@
       "displayName": "mls-compliance-demo-app",
       "appKey": "compliance",
       "signInAudience": "AzureADMyOrg",
-      "notes": "Compliance board (apps/compliance). Added by F25: Container Apps Easy Auth on the three human-facing dashboards needs one app registration each, and this was the one the manifest never declared - g0-bootstrap.md's own box said so. Its application (client) id goes into the MLS_COMPLIANCE_CLIENT_ID variable; the launch-ops and control-tower registrations above now feed MLS_LAUNCH_OPS_CLIENT_ID and MLS_CONTROL_TOWER_CLIENT_ID the same way. Each app's Easy Auth redirect URI is https://<that app's ingress fqdn>/.auth/login/aad/callback, which only exists after L7 - see docs/runbooks/layers/L03.md."
+      "notes": "Compliance board (apps/compliance). Added by F25: Container Apps Easy Auth on the three human-facing dashboards needs one app registration each, and this was the one the manifest never declared - g0-bootstrap.md's own box said so. Its application (client) id goes into the MLS_COMPLIANCE_CLIENT_ID variable; the launch-ops and control-tower registrations above now feed MLS_LAUNCH_OPS_CLIENT_ID and MLS_CONTROL_TOWER_CLIENT_ID the same way. Each app's Easy Auth redirect URI is https://<that app's ingress fqdn>/.auth/login/aad/callback, which only exists after L7 - see docs/runbooks/layers/L03.md.",
+      "verifierProbeRole": "Telemetry.Probe"
     }
   ],
   "conditionalAccessPolicies": [
@@ -140,13 +154,19 @@
           ]
         },
         "applications": {
-          "includeApplications": ["All"]
+          "includeApplications": [
+            "All"
+          ]
         },
-        "clientAppTypes": ["all"]
+        "clientAppTypes": [
+          "all"
+        ]
       },
       "grantControls": {
         "operator": "OR",
-        "builtInControls": ["mfa"]
+        "builtInControls": [
+          "mfa"
+        ]
       }
     },
     {
@@ -154,16 +174,25 @@
       "state": "enabledForReportingButNotEnforced",
       "conditions": {
         "users": {
-          "includeUsers": ["All"]
+          "includeUsers": [
+            "All"
+          ]
         },
         "applications": {
-          "includeApplications": ["All"]
+          "includeApplications": [
+            "All"
+          ]
         },
-        "clientAppTypes": ["exchangeActiveSync", "other"]
+        "clientAppTypes": [
+          "exchangeActiveSync",
+          "other"
+        ]
       },
       "grantControls": {
         "operator": "OR",
-        "builtInControls": ["block"]
+        "builtInControls": [
+          "block"
+        ]
       }
     },
     {
@@ -171,8 +200,12 @@
       "state": "enabled",
       "conditions": {
         "users": {
-          "includeUsers": ["All"],
-          "excludeGroupsByDisplayName": ["mls-break-glass"]
+          "includeUsers": [
+            "All"
+          ],
+          "excludeGroupsByDisplayName": [
+            "mls-break-glass"
+          ]
         },
         "applications": {
           "includeApplicationsByDisplayName": [
@@ -181,11 +214,15 @@
             "mls-compliance-demo-app"
           ]
         },
-        "clientAppTypes": ["all"]
+        "clientAppTypes": [
+          "all"
+        ]
       },
       "grantControls": {
         "operator": "OR",
-        "builtInControls": ["mfa"]
+        "builtInControls": [
+          "mfa"
+        ]
       }
     }
   ]
