@@ -540,6 +540,46 @@ Describe 'the estate can be renamed from one place' {
             -Because 'names in the manifest must be written as ${prefix}-... so a rebrand reaches identity as well as Azure'
     }
 
+    It 'every prefix resolver honours the environment override' {
+        # The override was added to the bicepparams, the naming action, apply-entra and the
+        # Fabric scripts - and NOT to Purview, the policy teardown, the L4 audit or
+        # down.ps1, which kept parsing naming.bicep alone. Set MLS_COMPANY_PREFIX and the
+        # estate splits: Azure named acme-*, sensitivity labels still mls-*, and down.ps1
+        # deleting resource groups that do not exist while reporting a clean teardown -
+        # "indistinguishable from success", the same shape as the Entra teardown (F91).
+        #
+        # THE RULE IS TOTAL, WITH A NAMED ALLOWLIST. The first version of this test tried
+        # to detect "is a resolver" by pattern and matched nothing at all - it scanned zero
+        # files and passed, which a mutation caught. Every mention now counts unless it is
+        # listed below with a reason.
+        # .bicep is OUT OF SCOPE, not allowlisted: a template cannot read an environment
+        # variable at all (readEnvironmentVariable is bicepparam-only), so `param
+        # companyPrefix string = naming.defaultCompanyPrefix` is the correct shape and the
+        # override reaches it through demo.bicepparam. Scoping this sweep to .bicep flagged
+        # all three templates, which is the check being wrong rather than the code.
+        $allowed = @{
+            'layer-04-purview.yml'      = 'names the variable in a comment only; delegates to labels.ps1'
+            'failure-classes.Tests.ps1' = 'this test'
+        }
+        $seen = [System.Collections.Generic.List[string]]::new()
+        $offender = [System.Collections.Generic.List[string]]::new()
+        $roots = @('scripts', 'infra', 'verification', '.github') |
+            ForEach-Object { Join-Path $script:Root $_ } | Where-Object { Test-Path $_ }
+        foreach ($file in (Get-ChildItem -Path $roots -Recurse -Include *.ps1, *.psm1, *.yml -File)) {
+            if ($file.FullName -like '*node_modules*') { continue }
+            $content = Get-Content -LiteralPath $file.FullName -Raw
+            if ($content -notmatch 'defaultCompanyPrefix') { continue }
+            $seen.Add($file.Name)
+            if ($allowed.ContainsKey($file.Name)) { continue }
+            if ($content -notmatch 'MLS_COMPANY_PREFIX') { $offender.Add($file.Name) }
+        }
+        # Non-vacuity: this must actually find the resolvers, or it asserts nothing.
+        $seen.Count | Should -BeGreaterThan 8 `
+            -Because 'the sweep must reach every file naming defaultCompanyPrefix; finding almost none means the scan is broken, not that the repo is clean'
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'a resolver that reads naming.bicep but ignores MLS_COMPANY_PREFIX disagrees with every one that honours it'
+    }
+
     It 'ships estate.env.example documenting every variable the code reads' {
         $example = Join-Path $script:Root 'estate.env.example'
         Test-Path -LiteralPath $example | Should -BeTrue

@@ -172,7 +172,13 @@ The Azure credit is now the shortest clock in the system, so it governs everythi
 | M365 E5 trial | 30 days | none, but it only has to outlive label *creation*; the labels persist |
 | Fabric trial capacity | 60 days | 30 days spare |
 | EMS E5 trial | 90 days | 60 days spare |
-| Copilot Studio PAYG meter | indefinite | n/a — a meter, not a trial |
+| Power Apps Developer Plan | perpetual | n/a — but the environment is **disabled after 30 days of inactivity**, taking the Copilot Studio agent with it |
+
+**Dates, cancellation, and what teardown does not touch** are in
+[lifecycle-and-shutdown.md](lifecycle-and-shutdown.md). `down.ps1` deletes four resource
+groups and nothing else: every licence, trial, Entra object, Purview label, Fabric
+workspace and Power Platform environment survives it, and none of them is billed to the
+Azure subscription — so the spending limit does not protect you from any of them.
 
 **Keep the spending limit ON.** Azure free accounts enable it by default; when the credit
 is exhausted or expires, Azure **disables resources rather than charging the card**. That
@@ -414,26 +420,68 @@ it is still about sign-in risk and auto-labeling, nothing else.
 
    **Adding `mls-github-deployer` as capacity administrator happens after C3**, not here:
    the app registration does not exist until `01-root-oidc.ps1` has run.
-5. ⚠ **Power Platform environment + Copilot Studio pay-as-you-go meter** (blocks L8).
-   Three sub-steps, all portal, ~15 minutes total:
-   1. In the [Power Platform admin center](https://admin.powerplatform.microsoft.com/),
-      create an environment of type **Production** or **Sandbox** with a Dataverse
-      database. Not a Developer-Plan environment — those cannot carry the meter (§ B).
-      Check **Resources → Capacity** first for available Dataverse capacity.
-   2. **Licensing → Pay-as-you-go plans → New billing plan**: pick this Azure
-      subscription and a resource group, select **Copilot Studio** under Power Platform
-      products, and add the environment you just created. This creates a hidden *Power
-      Platform account* resource in that resource group — tag it like anything else. You
-      need Owner/Contributor on the subscription and Power Platform (or Global) admin, or
-      Environment admin on that environment, to do this.
-   3. Grant yourself authoring rights the free way: create an Entra security group, add
-      yourself, and assign it to the **Copilot Studio authors** setting in the Power
-      Platform admin center tenant settings. Do *not* buy a Copilot Credit pack; the
-      meter is the payment path.
+5. ⚠ **Power Platform environment + Copilot Studio authoring** (blocks L8).
+   Four sub-steps, all portal, ~15 minutes. **Total cost: $0.**
 
-   Verify: the environment is listed under the billing plan, and
-   [copilotstudio.microsoft.com](https://copilotstudio.microsoft.com) opens with that
-   environment selectable.
+   > **This item was rewritten on 2026-08-31 after being executed for the first time.**
+   > It previously told you to create a **Production or Sandbox** environment and attach a
+   > **pay-as-you-go meter**. Both are unreachable on a trial tenant, and neither is
+   > necessary. Following the old text cost an hour and produced three separate
+   > conclusions that a purchase was required. None of them was. § B's licensing research
+   > was right about the *authors role*; it was wrong about everything downstream of it.
+
+   1. **Sign up for the [Power Apps Developer Plan](https://www.microsoft.com/power-platform/products/power-apps/free)**
+      as your admin account. Free, perpetual, and it auto-provisions a developer
+      environment with a 2 GB Dataverse database. Sign in with the **work or school**
+      account — personal accounts are refused.
+
+      *Not* a Power Apps Premium trial. A trial licence grants **0 GB** of Dataverse
+      capacity and can only create *Trial* environments; the 10 GB tenant default arrives
+      with a **purchased** subscription, which is what "first subscription" means in
+      Microsoft's storage documentation. Verified against a live tenant: the API refuses
+      with `NotEnoughCapacity_HasTrialLicense_ProvisionEnvironment`.
+
+   2. **Create the Entra security group and assign it** to the **Copilot Studio authors**
+      setting (Power Platform admin center → tenant settings). `infra/entra/manifest.json`
+      declares `${prefix}-copilot-authors` so L3 creates the group for you — you add the
+      human who will author the agent, and make the assignment.
+
+      **This is the only free authoring path.** Without it Copilot Studio offers a
+      licence-gated "Select a team" dialog and nothing else. The Copilot Studio *user*
+      licence is "free of charge" but gated behind a **prepaid Copilot Credit pack**
+      ($200/pack/month), and the Copilot Studio *trial* licence
+      [cannot publish an agent](https://learn.microsoft.com/en-us/microsoft-copilot-studio/billing-licensing).
+
+      Group membership is a token claim: **sign out and back in** afterwards, or you will
+      keep hitting the dialog with a token minted before you joined.
+
+   3. **Turn OFF the "New experience" toggle** on the Copilot Studio home page.
+
+      This one is easy to miss and silently fatal. The new *GitHub Copilot harness* has a
+      deliberately reduced channel list with **no Direct Line** — its "Native app" tile is
+      marked unavailable — and this demo consumes the agent over Direct Line. The
+      *standard harness* has the full channel set. Both coexist in the same environment;
+      the toggle chooses which you author on.
+
+   4. **Turn on Require secured access** — Settings → Security → **Web channel security** —
+      and copy **Secret 1**. That is the Direct Line secret CLAUDE.md's credential
+      inventory refers to, exchanged server-side for a short-lived token.
+
+      Without it, *"anyone who knows the agent ID can immediately access the agent through
+      the Demo website and Custom website channels"*. Allow **up to two hours** to
+      propagate; no republish needed.
+
+   **No pay-as-you-go meter is required**, and attaching one is a **G2** rather than a
+   configuration step — Power Platform is licensed separately from Azure, so its charges
+   fall **outside** the $200 spending limit. See
+   [lifecycle-and-shutdown.md](lifecycle-and-shutdown.md) § 4.
+
+   Verify: [copilotstudio.microsoft.com](https://copilotstudio.microsoft.com) opens on
+   your developer environment, **Channels** lists *Native app* and *Web app*, and a test
+   agent answers a real question in the test pane. Copilot Studio does not remember the
+   environment — bookmark the environment-scoped URL
+   (`.../environments/<environment-id>/home`) or it drops you into the tenant Default,
+   which has no Dataverse and reports "Dataverse isn't set up in this environment".
 6. ⚠ **Fabric data agent enablement** (blocks L8's knowledge source only — L8 has a
    documented fallback, see § B and `docs/runbooks/layers/L08.md`). In the Fabric admin
    portal, enable the **cross-geo processing for AI** and **cross-geo storing for AI**
