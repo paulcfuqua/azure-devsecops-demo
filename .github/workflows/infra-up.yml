@@ -80,9 +80,12 @@ on:
         type: boolean
         default: false
       image_tag:
-        description: 'GHCR tag for the L7 apps deployment (empty keeps the placeholder image)'
+        description: >-
+          GHCR tag for the L7 apps deployment. Defaults to `latest`, what the per-app
+          CI workflows publish. Empty deploys the containerapps-helloworld placeholder
+          instead, which provisions cleanly and serves none of the demo (F88).
         type: string
-        default: ''
+        default: latest
       enable_fabric_data_agent:
         description: >-
           L8 only: also create the Fabric connected agent. OFF by default — it needs a

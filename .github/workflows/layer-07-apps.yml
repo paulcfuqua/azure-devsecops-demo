@@ -42,10 +42,15 @@ on:
         required: false
         default: false
       image_tag:
-        description: GHCR tag to deploy for all four apps (empty keeps the bicepparam placeholder).
+        description: >-
+          GHCR tag to deploy for all five apps. Defaults to `latest`, which is what
+          the per-app CI workflows publish. Set it to the empty string to deploy the
+          `containerapps-helloworld` placeholder instead - a deliberate choice, not
+          the default, because a placeholder estate reports success while serving
+          none of the demo (F88).
         type: string
         required: false
-        default: ''
+        default: latest
       canary_pr:
         description: >-
           Canary PR number for V7.4. The L7 lead opens it (the Verifier never writes to
@@ -66,10 +71,15 @@ on:
         required: false
         default: false
       image_tag:
-        description: GHCR tag to deploy for all four apps (empty keeps the bicepparam placeholder).
+        description: >-
+          GHCR tag to deploy for all five apps. Defaults to `latest`, which is what
+          the per-app CI workflows publish. Set it to the empty string to deploy the
+          `containerapps-helloworld` placeholder instead - a deliberate choice, not
+          the default, because a placeholder estate reports success while serving
+          none of the demo (F88).
         type: string
         required: false
-        default: ''
+        default: latest
       canary_pr:
         description: >-
           Canary PR number for V7.4 (empty falls back to the MLS_L7_CANARY_PR demo variable).
@@ -128,15 +138,21 @@ jobs:
       # variable at all - which is why every layer used to carry `default: eastus`
       # instead. An explicit `location` input still overrides, for a one-off (F53).
       AZURE_LOCATION: ${{ inputs.location || vars.AZURE_LOCATION }}
-      # P-1: flip these to 8080 by setting the demo environment variables.
-      LAUNCH_OPS_PORT: ${{ vars.LAUNCH_OPS_PORT || '80' }}
-      CONTROL_TOWER_PORT: ${{ vars.CONTROL_TOWER_PORT || '80' }}
+      # THE TARGET PORTS ARE NOT DECLARED HERE. They are derived from the image
+      # decision by the "Resolve GHCR image references" step below and written to
+      # GITHUB_ENV, because THE PORT IS NOT INDEPENDENT OF THE IMAGE: the real
+      # images listen on 8080 (verified EXPOSE in all five app Dockerfiles) and
+      # `containerapps-helloworld` listens on 80. Two knobs that must agree, with
+      # separate defaults that did not, is what F88 was. This closes open item P-1.
+      #
+      # A `vars.<APP>_PORT` override still wins; the step reads those itself, from
+      # its own step-level `env:`. Declaring them at job level as well would put a
+      # job-level `env:` and a GITHUB_ENV write of the same name in the same job,
+      # and nothing should depend on which of those two wins (the F36 rule, applied
+      # to the Easy Auth client IDs a few lines below for the same reason).
+      #
       # mcp-tools ingress is external unconditionally (Copilot Studio connects
       # server-to-server from Microsoft's cloud), so there is no ingress toggle.
-      MCP_TOOLS_PORT: ${{ vars.MCP_TOOLS_PORT || '80' }}
-      DATA_API_PORT: ${{ vars.DATA_API_PORT || '80' }}
-      # Task 13/15: compliance board port, same P-1 pattern as the other three.
-      COMPLIANCE_PORT: ${{ vars.COMPLIANCE_PORT || '80' }}
       # data-api cloud mode. Without the Fabric SQL analytics endpoint the app
       # provisions in LOCAL mode, which answers 503 on every table route because
       # data/generated is not baked into the image — the template says so in its
@@ -170,23 +186,52 @@ jobs:
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
           REPO: ${{ github.repository }}
+          # Optional deliberate overrides, read here rather than at job level (F36).
+          LAUNCH_OPS_PORT_OVERRIDE: ${{ vars.LAUNCH_OPS_PORT }}
+          CONTROL_TOWER_PORT_OVERRIDE: ${{ vars.CONTROL_TOWER_PORT }}
+          MCP_TOOLS_PORT_OVERRIDE: ${{ vars.MCP_TOOLS_PORT }}
+          DATA_API_PORT_OVERRIDE: ${{ vars.DATA_API_PORT }}
+          COMPLIANCE_PORT_OVERRIDE: ${{ vars.COMPLIANCE_PORT }}
         run: |
           set -euo pipefail
-          # ghcr.io/<owner>/<repo>/<app>:<tag> — free anonymous pull on a public
+          # ghcr.io/<owner>/<repo>/<app>:<tag> - free anonymous pull on a public
           # repo, so there is no ACR resource and no registry credential.
+          #
+          # THIS STEP DECIDES THE IMAGE AND THE PORT TOGETHER, because they are one
+          # decision wearing two names. Deploying the real images on port 80, or the
+          # placeholder on 8080, produces five container apps that provision fine and
+          # answer nothing - which is exactly what F88 was: L7 reported success while
+          # every app served `containerapps-helloworld`, and V7.1, V7.3 and V7.5 all
+          # failed downstream of that one fact.
           if [ -z "${IMAGE_TAG}" ]; then
-            echo "No image_tag supplied; keeping the demo.bicepparam placeholder images."
-            exit 0
+            echo "::warning title=Deploying placeholder images::image_tag is empty, so all five apps deploy the containerapps-helloworld placeholder on port 80. The estate will provision and serve NONE of the demo, and V7.1/V7.3/V7.5 will fail - correctly."
+            port=80
+          else
+            registry="ghcr.io/$(printf '%s' "${REPO}" | tr '[:upper:]' '[:lower:]')"
+            {
+              echo "LAUNCH_OPS_IMAGE=${registry}/launch-ops:${IMAGE_TAG}"
+              echo "CONTROL_TOWER_IMAGE=${registry}/control-tower:${IMAGE_TAG}"
+              echo "MCP_TOOLS_IMAGE=${registry}/mcp-tools:${IMAGE_TAG}"
+              echo "DATA_API_IMAGE=${registry}/data-api:${IMAGE_TAG}"
+              echo "COMPLIANCE_IMAGE=${registry}/compliance:${IMAGE_TAG}"
+            } >> "${GITHUB_ENV}"
+            # Every app Dockerfile EXPOSEs 8080 (nginx listens 8080 on the three
+            # static frontends; Node binds it on data-api and mcp-tools). Verified
+            # against the Dockerfiles rather than remembered - CLAUDE.md's rule for
+            # a constant that names something in another system.
+            port=8080
+            echo "resolved=true" >> "${GITHUB_OUTPUT}"
           fi
-          registry="ghcr.io/$(printf '%s' "${REPO}" | tr '[:upper:]' '[:lower:]')"
+
+          # A deliberate per-app override still wins over the derived value.
           {
-            echo "LAUNCH_OPS_IMAGE=${registry}/launch-ops:${IMAGE_TAG}"
-            echo "CONTROL_TOWER_IMAGE=${registry}/control-tower:${IMAGE_TAG}"
-            echo "MCP_TOOLS_IMAGE=${registry}/mcp-tools:${IMAGE_TAG}"
-            echo "DATA_API_IMAGE=${registry}/data-api:${IMAGE_TAG}"
-            echo "COMPLIANCE_IMAGE=${registry}/compliance:${IMAGE_TAG}"
+            echo "LAUNCH_OPS_PORT=${LAUNCH_OPS_PORT_OVERRIDE:-${port}}"
+            echo "CONTROL_TOWER_PORT=${CONTROL_TOWER_PORT_OVERRIDE:-${port}}"
+            echo "MCP_TOOLS_PORT=${MCP_TOOLS_PORT_OVERRIDE:-${port}}"
+            echo "DATA_API_PORT=${DATA_API_PORT_OVERRIDE:-${port}}"
+            echo "COMPLIANCE_PORT=${COMPLIANCE_PORT_OVERRIDE:-${port}}"
           } >> "${GITHUB_ENV}"
-          echo "resolved=true" >> "${GITHUB_OUTPUT}"
+          echo "Image tag: ${IMAGE_TAG:-<placeholder>}; target port: ${port}"
 
       - name: Azure login (OIDC, mls-github-deployer)
         uses: azure/login@v3

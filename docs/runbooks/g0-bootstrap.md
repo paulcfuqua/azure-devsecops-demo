@@ -502,8 +502,34 @@ it is still about sign-in risk and auto-labeling, nothing else.
     Generate a token and store it in the L6 vault:
 
     ```
-    az keyvault secret set --vault-name <kv> --name mcp-auth-token       --value "$(openssl rand -base64 32)"
+    # Two things bite here. Both cost an hour on 2026-08-31 (F87).
+    #
+    # 1. SUBSTITUTE THE VAULT NAME. `<kv>` is not a prompt, it is shell syntax: bash reads
+    #    `<kv>` as a redirect from a file called kv and answers
+    #    "bash: kv: No such file or directory". The command never runs, and nothing you
+    #    check afterwards says so.
+    # 2. OWNER IS NOT ENOUGH. The vault has enableRbacAuthorization, so Owner and Reader
+    #    grant no data-plane access at all: `secret set` returns Forbidden. Grant yourself
+    #    Key Vault Secrets Officer first and wait ~60s for it to propagate.
+    #
+    # Note `az role assignment create` may itself fail with (MissingSubscription) even with
+    # --subscription supplied; `az rest` against the same ARM endpoint works.
+
+    kv=mls-sec-demo-kv     # or <prefix>-sec-<env>-kv from infra/bicep/naming.bicep
+    me=$(az ad signed-in-user show --query id -o tsv)
+    sub=$(az account show --query id -o tsv)
+
+    az role assignment create --assignee "$me" --role "Key Vault Secrets Officer" \
+      --scope "/subscriptions/$sub/resourceGroups/mls-rg-platform/providers/Microsoft.KeyVault/vaults/$kv"
+
+    az keyvault secret set --vault-name "$kv" --name mcp-auth-token \
+      --value "$(openssl rand -base64 32)"
     ```
+
+    **Read the output.** Success prints JSON containing
+    `"id": "https://<kv>.vault.azure.net/secrets/mcp-auth-token/..."`. `Forbidden` means the
+    role has not propagated yet - wait and repeat. A silent shell prompt means the command
+    did not run at all.
 
     The **layer-07 workflow never reads, exports, or touches this token at all.** The
     container app resolves it directly from Key Vault at runtime through its own

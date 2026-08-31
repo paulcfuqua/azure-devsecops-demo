@@ -1,0 +1,15 @@
+{
+  "MLS_L11_UP_START": "2026-08-31T02:28:57Z",
+  "MLS_L11_UP_COMPLETED": "2026-08-31T03:29:48Z",
+  "repository": "paulcfuqua/azure-devsecops-demo",
+  "runId": 33350809268,
+  "runUrl": "https://github.com/paulcfuqua/azure-devsecops-demo/actions/runs/33350809268",
+  "conclusion": "failure",
+  "elapsedMinutes": 60.84,
+  "budgetMinutes": 60.0,
+  "withinBudget": false,
+  "githubRunCreatedAt": "2026-08-31T02:29:02Z",
+  "githubRunUpdatedAt": "2026-08-31T03:29:33Z",
+  "clockDefinition": "kill-rebuild.md section 5: starts at up.ps1 invocation, stops at the last synchronous layer audit green. Excluded by definition and closed on their own clocks: V6.3 first cost export (<= 24 h), V6.4 SQL auto-pause (+75 min), V11.5 idle run-rate (next-day consumption).",
+  "recordedBy": "scripts/up.ps1"
+}

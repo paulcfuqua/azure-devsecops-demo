@@ -328,3 +328,86 @@ Describe 'a reachability probe does not depend on data existing' {
             -Because 'this estate runs no Azure Monitor Agent, so an agent table is empty regardless of whether the query succeeded'
     }
 }
+
+
+Describe 'a deploy default never stands up a placeholder image' {
+    # L7 deployed five container apps, reported success, and served
+    # `mcr.microsoft.com/azuredocs/containerapps-helloworld` from every one of them. The
+    # audit was right and the deploy was wrong: V7.1 (no image digest), V7.3 (no telemetry)
+    # and V7.5 (scale profile) were three symptoms of the one fact that none of the demo's
+    # applications were running (F88).
+    #
+    # Two independent knobs caused it. `image_tag` defaulted to '' meaning "keep the
+    # placeholder", and the target ports defaulted to 80 - the placeholder's port, not the
+    # 8080 every real app Dockerfile EXPOSEs. Either alone produces an estate that
+    # provisions cleanly and answers nothing, so neither may carry a placeholder default.
+    #
+    # This is CLAUDE.md's "every value has one source" with a second edge: the caller's
+    # input outranks the callee's default, so infra-up.yml is checked too, not just the
+    # layer workflow it calls.
+
+    BeforeAll {
+        $script:WorkflowRoot = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path '.github/workflows'
+        $script:PlaceholderImages = @(
+            'containerapps-helloworld',
+            'k8se/quickstart'
+        )
+    }
+
+    It 'finds workflows declaring an image tag, so the assertion is not vacuous' {
+        $found = @(Get-ChildItem -Path $script:WorkflowRoot -Filter '*.yml' -File |
+            Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match '(?m)^\s*image_tag:\s*$' })
+        $found.Count | Should -BeGreaterThan 0 `
+            -Because 'if no workflow declares an image_tag input, this whole Describe asserts nothing'
+    }
+
+    It 'no image_tag input defaults to the placeholder path' {
+        # An empty default means "deploy the placeholder". That is a legitimate thing to
+        # ASK for and the wrong thing to GET by omission.
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in (Get-ChildItem -Path $script:WorkflowRoot -Filter '*.yml' -File)) {
+            $lines = Get-Content -LiteralPath $file.FullName
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -notmatch '(?m)^\s*image_tag:\s*$') { continue }
+                # The input's own `default:` is the first one before the next input key.
+                for ($j = $i + 1; $j -lt [Math]::Min($i + 12, $lines.Count); $j++) {
+                    if ($lines[$j] -match "^\s*default:\s*(''|""""|)\s*$") {
+                        $offender.Add("$($file.Name):$($j + 1) image_tag defaults to empty")
+                        break
+                    }
+                    if ($lines[$j] -match '^\s*default:') { break }
+                }
+            }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'an empty image_tag deploys containerapps-helloworld, which provisions cleanly and serves none of the demo (F88)'
+    }
+
+    It 'no job-level env defaults a container target port to the placeholder port' {
+        # The port is not independent of the image: real images listen on 8080, the
+        # placeholder on 80. Defaulting the port separately is how the two disagreed.
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in (Get-ChildItem -Path $script:WorkflowRoot -Filter '*.yml' -File)) {
+            $lines = Get-Content -LiteralPath $file.FullName
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match "^\s*[A-Z_]+_PORT:\s*\`$\{\{\s*vars\.[A-Z_]+\s*\|\|\s*'80'\s*\}\}") {
+                    $offender.Add("$($file.Name):$($i + 1)")
+                }
+            }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'the target port must be derived from the image actually being deployed, not defaulted to the placeholder port alongside it (F88)'
+    }
+
+    It 'the bicepparam placeholder images stay reachable as a deliberate opt-in' {
+        # The placeholder itself is not the defect and must not be deleted: it is what
+        # keeps the layer deployable before the first image publishes. This asserts it
+        # still EXISTS, so a later cleanup does not quietly remove the fallback while
+        # thinking it is removing the bug.
+        $bicepparam = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path 'infra/bicep/apps/demo.bicepparam'
+        $content = Get-Content -LiteralPath $bicepparam -Raw
+        ($script:PlaceholderImages | Where-Object { $content -match [regex]::Escape($_) }).Count |
+            Should -BeGreaterThan 0 `
+            -Because 'the placeholder remains the documented fallback for an estate with no published images; F88 was about which path is the DEFAULT, not about the fallback existing'
+    }
+}
