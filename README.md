@@ -108,6 +108,11 @@ Decisions in force: monorepo, dual E5 trials, Fabric trial capacity first; the
 - [Compliance platform design](docs/superpowers/specs/2026-08-26-compliance-platform-design.md)
   and [`compliance/README.md`](compliance/README.md) — showpiece #4's vocabulary, and the
   rules that stop it overclaiming
+- [Tenant bootstrap (G0)](docs/runbooks/g0-bootstrap.md) — the accounts, trials and portal
+  steps you do by hand before anything deploys. **Start here if you are cloning this.**
+- [Lifecycle and shutdown](docs/runbooks/lifecycle-and-shutdown.md) — what expires when,
+  what bills outside the Azure spending limit, and what `down.ps1` deliberately does not
+  touch. Read it before the credit lapses, not after
 - [Layer playbooks L01–L12](docs/runbooks/layers/) · [demo script](docs/runbooks/demo-script.md)
 - [Working agreements for all agents](CLAUDE.md)
 
