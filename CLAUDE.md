@@ -109,8 +109,13 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
 ## Naming and tagging
 
 - Resource names: `mls-<app|role>-<env>-<type>` (e.g. `mls-mcp-demo-ca`,
-  `mls-ops-demo-sql`). Company name and prefix are set once in
-  `infra/bicep/naming.bicep` — do not hardcode `mls` elsewhere.
+  `mls-ops-demo-sql`). `infra/bicep/naming.bicep` holds the **defaults**; a deployment
+  overrides them with `MLS_COMPANY_PREFIX` / `MLS_ENV_SEGMENT` (from `estate.env`
+  locally, the `demo` GitHub environment in CI). Do not hardcode `mls` anywhere else —
+  and that now includes identity: `infra/entra/manifest.json` is tokenised `${prefix}` /
+  `${env}`, resolved by every reader of it. Rebranding used to reach Azure and leave 22
+  Entra names and the Fabric workspace behind, which is half a rebrand and the half
+  nobody sees (F90).
 - Required tags on every RG (policy-enforced): `env`, `app`, `costCenter`, `owner`,
   `dataClassification`, `managedBy=iac`. Resources inherit via modify policy.
 - Demo RGs: `mls-rg-platform`, `mls-rg-apps`, `mls-rg-data`, `mls-rg-ops`. Teardown =

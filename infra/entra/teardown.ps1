@@ -202,13 +202,43 @@ function Get-ResponseValue {
     return @($Response)
 }
 
+function Get-NamingDefault {
+    <# Read a default out of infra/bicep/naming.bicep - CLAUDE.md's single source of estate
+       naming. Parsed, never duplicated: a second literal here is a second source of truth. #>
+    param(
+        [Parameter(Mandatory)][string]$VariableName,
+        [Parameter(Mandatory)][string]$Fallback
+    )
+    $namingFile = Join-Path $PSScriptRoot '..' 'bicep' 'naming.bicep'
+    if (-not (Test-Path -LiteralPath $namingFile)) { return $Fallback }
+    $match = Select-String -LiteralPath $namingFile -Pattern "^var $VariableName = '([^']*)'" |
+        Select-Object -First 1
+    if ($match -and $match.Matches[0].Groups[1].Value) { return $match.Matches[0].Groups[1].Value }
+    return $Fallback
+}
+
 function Get-Manifest {
+    <# Resolves ${prefix}/${env} exactly as apply-entra.ps1 does.
+
+       THIS MATTERS MORE HERE THAN THERE. A teardown that read the raw manifest would look
+       for a group literally named '${prefix}-break-glass', find nothing, and report a
+       clean removal having deleted none of the objects it was asked to remove - the worst
+       kind of wrong, because it is indistinguishable from success (F90). #>
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Manifest not found at '$Path'."
     }
+    $companyPrefix = $env:MLS_COMPANY_PREFIX
+    if ([string]::IsNullOrWhiteSpace($companyPrefix)) {
+        $companyPrefix = Get-NamingDefault -VariableName 'defaultCompanyPrefix' -Fallback 'mls'
+    }
+    $envSegment = $env:MLS_ENV_SEGMENT
+    if ([string]::IsNullOrWhiteSpace($envSegment)) {
+        $envSegment = Get-NamingDefault -VariableName 'defaultEnv' -Fallback 'demo'
+    }
     try {
-        return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $text = (Get-Content -LiteralPath $Path -Raw).Replace('${prefix}', $companyPrefix).Replace('${env}', $envSegment)
+        return $text | ConvertFrom-Json
     }
     catch {
         throw "Manifest at '$Path' is not valid JSON: $($_.Exception.Message)"
