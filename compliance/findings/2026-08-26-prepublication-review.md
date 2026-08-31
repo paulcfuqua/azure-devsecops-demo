@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F83](#f83), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F84](#f84), all raised and all fixed on 2026-08-29/31 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -113,6 +113,7 @@ claim by one step:
 | [F81](#f81) | **A lesson applied only where it was learned is not yet a lesson.** F58 bounded the audit so a stuck check could still report; 65 jobs on the deploy side stayed unbounded on a six-hour default, and a hung `what-if` consumed a whole run in silence. | high | CONFIRMED (36s vs 37min on the same template; reproduced locally) | 3.12.1, 3.12.3 | L6 selective replay, 2026-08-30 |
 | [F82](#f82) | **Three resource providers were unregistered, each waiting to fail a different layer.** L6 died on `Microsoft.CostManagementExports`; a sweep found `Microsoft.Security` (L9) and `Microsoft.PowerPlatform` (L8) queued to do the same, one run apiece. | medium | CONFIRMED (400 RP Not Registered; sweep) | 3.4.1, 3.12.1 | first L6 deploy success, 2026-08-30 |
 | [F83](#f83) | **App CI rolled an image onto a container app no layer had created.** The deploy job gated on the demo environment being configured, which says nothing about whether the app exists - L7 creates it, and L7 has never run. | medium | CONFIRMED (five workflows failed together) | 3.4.1, 3.12.1 | push to main, 2026-08-30 |
+| [F84](#f84) | **A test suite tests the language it is written in.** The SQL admin had to be a group holding both the human and the deployer; then the schema failed to parse on a RAISERROR taking a function call - in a file nothing in the repo had ever parsed. | high | CONFIRMED (login failure, then syntax error) | 3.1.1, 3.5.2 | ninth L6 attempt, 2026-08-31 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4726,3 +4727,53 @@ deployed app, in the sense that one usually accompanies the other. Nearly is wha
 It also took a change of mine to surface it, which is worth saying plainly: the defect was
 latent for as long as nobody pushed a change to an app's own files. **A workflow that has
 never run on the path that matters is untested**, however green its history looks.
+
+---
+
+## F84
+
+**The SQL admin had to be a group, and the schema file had never been parsed by anything**
+
+- **Severity:** high (L6 could not complete: first the automation could not log in, then the schema would not parse)
+- **Confidence:** CONFIRMED - `Login failed for user '<token-identified principal>'` with a human as sole admin, then `Incorrect syntax near 'ERROR_MESSAGE'` once the login worked
+- **Controls:** 3.1.1, 3.5.2
+- **Closed by:** an Entra group holding both principals, and a T-SQL fix with a check that would have caught it
+- **Status:** CLOSED
+
+Two defects in sequence, in the last step standing between L6 and completion.
+
+**The Entra admin could not be one principal.** `SQL_AAD_ADMIN_OBJECT_ID` was set to the human
+operator's account, so the deployer service principal - which is what actually runs the schema
+script - had no login. When the sponsor asked earlier whether the existing admin account would
+serve, the answer given was that an automation-only admin would stop a human querying the
+database. The mirror was equally true and went unsaid: **a human-only admin stops the
+automation**, and there was no reason to choose. `infra/bicep/platform/main.bicep` had said so
+all along - `param sqlAadAdminPrincipalType string = 'Group'` - and was handed a user.
+`mls-sql-admins` now holds both.
+
+**Then the schema did not parse.** With the login fixed, `900-contained-users.sql` failed on:
+
+```
+RAISERROR ('... (%s) ...', 10, 1, ERROR_MESSAGE()) WITH NOWAIT;
+```
+
+`RAISERROR` accepts constants or variables as substitution arguments and never a function
+call. Both occurrences now capture `ERROR_MESSAGE()` into a variable first.
+
+### What this says about the method
+
+**The file had never been parsed by anything.** `data/seed/tests/sql-seed.Tests.ps1` and
+`seed.Tests.ps1` cover the PowerShell that runs the SQL - how it finds files, orders them,
+handles failure - and never the SQL itself. A test suite tests the language it is written in,
+and the .sql files sat in the repository for days as text nothing could reject.
+
+That is a broader gap than one syntax error. Every non-PowerShell artefact this estate ships -
+SQL, KQL in the alert rules, JMESPath in the audits - has the same property: reviewed by
+humans, executed only against a live service, and unparsed in between. The check added here
+covers the specific defect and one structural sibling; it does not make SQL a tested language
+in this repo, and the honest statement is that it narrows the gap rather than closing it.
+
+**The estate reached this bug on day four**, on the ninth attempt at L6, because every earlier
+attempt failed before the schema step. A defect at the end of a long serial path is protected
+by every defect in front of it - which is the same reason [F61](#f61) hid behind four others,
+and the argument for [F72](#f72)'s fail-slow restated at the layer level.
