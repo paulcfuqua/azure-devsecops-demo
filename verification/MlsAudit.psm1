@@ -1097,7 +1097,10 @@ function New-MlsAuditContext {
         [double]$MaxWaitMinutes = -1,
         [double]$RunBudgetMinutes = -1,
         [string]$Identity = 'mls-verifier (Reader + Directory.Read.All + Policy.Read.All) - read-only by contract',
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        # Run only these criterion ids (e.g. 'V7.3'). Everything else reports SKIP with the
+        # reason, and the run exits 3 - see Get-MlsExitCode. A DIAGNOSTIC, NEVER A SIGN-OFF.
+        [string[]]$OnlyCriterion = @()
     )
     if ($RetryWindowMinutes -lt 0) { $RetryWindowMinutes = $script:StandardRetryWindowMinutes }
     if ($PollIntervalSeconds -le 0) { $PollIntervalSeconds = $script:StandardPollIntervalSeconds }
@@ -1122,6 +1125,7 @@ function New-MlsAuditContext {
     }
     return [pscustomobject]@{
         Layer               = $Layer
+        OnlyCriterion       = @($OnlyCriterion)
         LayerId             = ('L{0:d2}' -f $Layer)
         Title               = $Title
         ScriptName          = $ScriptName
@@ -1247,6 +1251,33 @@ function Invoke-MlsCriterion {
                 throw "Invoke-MlsCriterion -Control '$controlId' (criterion $Id) is not a requirement id in compliance/catalog/nist-800-171r2.json. Check for a typo, or confirm the catalog actually carries this id (Task 1 is authoritative)."
             }
         }
+    }
+    # SELECTION IS CHECKED FIRST, BEFORE ANY WORK. An unselected criterion must cost
+    # nothing - the whole point of the filter is that a 55-minute audit can answer one
+    # question in five. It reports SKIP naming the reason, never silence: a criterion
+    # missing from a report reads as an oversight, and one marked "not selected" reads as
+    # a choice somebody made.
+    if (@($Context.OnlyCriterion).Count -gt 0 -and $Id -notin $Context.OnlyCriterion) {
+        $skipRow = [pscustomobject]@{
+            Id                 = $Id
+            Description        = $Description
+            Command            = $Command
+            Expected           = $Expected
+            Observed           = "not selected (-OnlyCriterion $($Context.OnlyCriterion -join ', '))"
+            Status             = 'SKIP'
+            Detail             = 'This run is a DIAGNOSTIC, not a sign-off: it exits 3 and no layer can be signed off from it. Re-run without -OnlyCriterion for a verdict.'
+            Attempt            = 0
+            ElapsedSeconds     = 0
+            SleptSeconds       = 0
+            RetryWindowMinutes = 0
+            PollIntervalSecond = 0
+            StartedUtc         = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            FinishedUtc        = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            Control            = @($Control)
+        }
+        $Context.Criterion.Add($skipRow) | Out-Null
+        Write-MlsStatus -Message ("[SKIP   ] {0}  {1}  (not selected)" -f $Id, $Description) -Color DarkGray
+        return $skipRow
     }
     $window = if ($RetryWindowMinutes -ge 0) { $RetryWindowMinutes } else { $Context.RetryWindowMinutes }
     $poll = if ($PollIntervalSeconds -gt 0) { $PollIntervalSeconds } else { $Context.PollIntervalSeconds }
@@ -1432,9 +1463,21 @@ function Get-MlsExitCode {
     .SYNOPSIS
         0 when no criterion FAILed, 1 otherwise. SKIP and PENDING do not fail a run - they
         are loud in the report instead (L06.md V6.3 signs off PENDING by design).
+
+        3 when the run was FILTERED with -OnlyCriterion, whatever the results.
+    .DESCRIPTION
+        The exit code is what automation reads, and SKIP does not fail a run. Without the
+        third code, an audit run as `-OnlyCriterion V7.3` would exit 0 with four criteria
+        skipped and be indistinguishable from a full green run - a filter that could
+        manufacture a sign-off by selecting only the criteria that pass.
+
+        So a filtered run is never 0 and never 1: 3 says "diagnostic, no verdict". A real
+        failure inside a filtered run still returns 1, because a criterion that FAILED is
+        a fact worth surfacing over the filter.
     #>
     param([Parameter(Mandatory)]$Context)
     if ((Get-MlsFailCount -Context $Context) -gt 0) { return 1 }
+    if (@($Context.OnlyCriterion).Count -gt 0) { return 3 }
     return 0
 }
 
