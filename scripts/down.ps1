@@ -289,6 +289,15 @@ Nothing was dispatched and no estate was touched.
 "@
     }
 
+    # MLS_COMPANY_PREFIX FIRST, naming.bicep SECOND. naming.bicep holds the DEFAULT;
+    # estate.env (locally) and the `demo` GitHub environment (in CI) override it. A
+    # resolver that reads only the file disagrees with every one that honours the
+    # override, and the estate splits down the middle - Azure named acme-*, these
+    # names still mls-* (F91).
+    if (-not [string]::IsNullOrWhiteSpace($env:MLS_COMPANY_PREFIX)) {
+        return $env:MLS_COMPANY_PREFIX
+    }
+
     $content = Get-Content -LiteralPath $Path -Raw
     $match = [regex]::Match($content, "var\s+defaultCompanyPrefix\s*=\s*'([^']+)'")
     if (-not $match.Success) {

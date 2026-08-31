@@ -72,6 +72,15 @@ function Get-CompanyPrefix {
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Cannot resolve the label-name prefix: '$Path' does not exist. Names come from infra/bicep/naming.bicep and nowhere else (CLAUDE.md). Run this audit from a clone of the repository, or pass -ExpectedLabel explicitly."
     }
+    # MLS_COMPANY_PREFIX FIRST, naming.bicep SECOND. naming.bicep holds the DEFAULT;
+    # estate.env (locally) and the `demo` GitHub environment (in CI) override it. A
+    # resolver that reads only the file disagrees with every one that honours the
+    # override, and the estate splits down the middle - Azure named acme-*, these
+    # names still mls-* (F91).
+    if (-not [string]::IsNullOrWhiteSpace($env:MLS_COMPANY_PREFIX)) {
+        return $env:MLS_COMPANY_PREFIX
+    }
+
     $content = Get-Content -LiteralPath $Path -Raw
     $match = [regex]::Match($content, "var\s+defaultCompanyPrefix\s*=\s*'([^']+)'")
     if (-not $match.Success) {
