@@ -25,7 +25,7 @@ claim — and the pointer immediately after `**Status:** CLOSED` names the
 `compliance/assessment/*.json` record(s) that carry the full remediation account
 (rationale, evidence, and the closing commit SHA) for that control. **No finding in this
 document is open.** The most recent to close were [F46](#f46) through
-[F81](#f81), all raised and all fixed on 2026-08-29/30 during the first live tenant
+[F83](#f83), all raised and all fixed on 2026-08-29/30 during the first live tenant
 bring-up and the first real deployment. Before them, **F13** and **F19** were one problem wearing
 two labels: F13's seventh workload RBAC grant had no principal to be written against
 because F19 meant `apps/cost-ingest` had no Function App and no identity. Both closed on
@@ -111,6 +111,8 @@ claim by one step:
 | [F79](#f79) | **A documented manual step reads as a design.** The manifest declared five users licensed, V3.4 asserted it, and nothing assigned a licence - C10 asked a human to. L3 does it now, with permissions the deployer already had and seats already bought. | medium | CONFIRMED (observed, run 33335057817) | 3.1.1, 3.5.3 | second L3 audit, 2026-08-30 |
 | [F80](#f80) | **A Key Vault name survives its vault by ninety days.** Soft delete cannot be disabled, so the first rebuild after any teardown fails with `VaultAlreadyExists` naming a vault in no resource group - a second-cycle blocker for an estate whose claim is kill/rebuild. | high | CONFIRMED (observed, run 33336756817) | 3.4.2, 3.12.1 | first L6 deploy, 2026-08-30 |
 | [F81](#f81) | **A lesson applied only where it was learned is not yet a lesson.** F58 bounded the audit so a stuck check could still report; 65 jobs on the deploy side stayed unbounded on a six-hour default, and a hung `what-if` consumed a whole run in silence. | high | CONFIRMED (36s vs 37min on the same template; reproduced locally) | 3.12.1, 3.12.3 | L6 selective replay, 2026-08-30 |
+| [F82](#f82) | **Three resource providers were unregistered, each waiting to fail a different layer.** L6 died on `Microsoft.CostManagementExports`; a sweep found `Microsoft.Security` (L9) and `Microsoft.PowerPlatform` (L8) queued to do the same, one run apiece. | medium | CONFIRMED (400 RP Not Registered; sweep) | 3.4.1, 3.12.1 | first L6 deploy success, 2026-08-30 |
+| [F83](#f83) | **App CI rolled an image onto a container app no layer had created.** The deploy job gated on the demo environment being configured, which says nothing about whether the app exists - L7 creates it, and L7 has never run. | medium | CONFIRMED (five workflows failed together) | 3.4.1, 3.12.1 | push to main, 2026-08-30 |
 
 Two practical rules come out of that, and both earned their place the expensive way.
 
@@ -4648,3 +4650,79 @@ find it there".
 
 The check that catches this class now exists, which is the only reason the count is 65 and
 not 66: writing it is what surfaced the other 64.
+
+---
+
+## F82
+
+**Three resource providers were unregistered, each waiting to fail a different layer**
+
+- **Severity:** medium (L6 died wiring the cost export; L8 and L9 would each have died the same way, one run apiece)
+- **Confidence:** CONFIRMED - `400 RP Not Registered. Register destination storage account subscription with Microsoft.CostManagementExports`, and a sweep found `Microsoft.Security` and `Microsoft.PowerPlatform` also NotRegistered
+- **Controls:** 3.4.1, 3.12.1
+- **Closed by:** registering every provider the estate uses, once, at the start of a run
+- **Status:** CLOSED
+
+L6 deployed Key Vault and Azure SQL cleanly - the first time either existed - and then failed
+wiring the Cost Management daily export, because `Microsoft.CostManagementExports` was not
+registered on the subscription. The error names a provider; it does not name the layer, the
+step, or the fact that registration is a one-line subscription-level action.
+
+Sweeping the rest found two more sitting in exactly the same state: `Microsoft.Security`,
+which L9 needs for its Defender toggles, and `Microsoft.PowerPlatform`, which L8 needs. Each
+would have failed its own layer, on its own run, minutes into a deploy - **three findings
+spread across three separate attempts, all of them the same fact.**
+
+`infra-up.yml` now registers every provider the estate uses in the `oidc-login` job, which
+already holds Azure auth and runs exactly once. It does **not wait**: registration is
+asynchronous and takes minutes, so blocking every run on it would cost more than it saves.
+Kicking it off at the start means the layer that needs it, several minutes later, finds it
+done.
+
+The list is the thing that goes stale, so `failure-classes.Tests.ps1` checks it against the
+namespaces the templates actually reference.
+
+### What this says about the method
+
+Same shape as [F81](#f81), one day and one layer apart: a defect that presents as one
+instance and is really a class, where the instances are separated by *time* rather than by
+code. Three unregistered providers do not look like a pattern when the first one fails - they
+look like a missing prerequisite. It is only worth sweeping because [F81](#f81) had just
+established that sweeping is what turns one finding into all of them.
+
+---
+
+## F83
+
+**App CI rolled an image onto a container app that no layer had created yet**
+
+- **Severity:** medium (five workflows failed on a push to main; the images themselves were built, scanned and pushed correctly)
+- **Confidence:** CONFIRMED - `ERROR: The containerapp 'mls-compliance-demo-ca' does not exist`, on all five app CI workflows at once
+- **Controls:** 3.4.1, 3.12.1
+- **Closed by:** checking the container app exists before rolling an image onto it
+- **Status:** CLOSED
+
+Each app's CI builds an image, scans it, pushes it, and rolls it onto a Container App. The
+deploy job is gated on `needs.preflight.outputs.configured` - whether the `demo` environment
+carries its identity variables - which says nothing whatsoever about whether the container app
+exists. **The apps are created by L7, which has never run.**
+
+It had gone unnoticed because app CI only fires when an app's paths change, and no such push
+had landed since L6 first created the Container Apps *environment*. A commit touching all five
+workflow files was the first, and all five failed together.
+
+The images were fine. Building an image and having somewhere to roll it are different facts,
+and the workflow treated the first as evidence of the second. It now checks for the app and
+exits cleanly with a notice when it is absent - the image is built, scanned and pushed, and
+the next L7 deploy uses it.
+
+### What this says about the method
+
+**The guard checked an artefact adjacent to the one it needed**, which is now the most common
+single shape in this register - [F60](#f60), [F63](#f63), [F64](#f64), [F67](#f67),
+[F77](#f77), [F78](#f78) and now this. A configured environment is *nearly* the same as a
+deployed app, in the sense that one usually accompanies the other. Nearly is what fails.
+
+It also took a change of mine to surface it, which is worth saying plainly: the defect was
+latent for as long as nobody pushed a change to an app's own files. **A workflow that has
+never run on the path that matters is untested**, however green its history looks.

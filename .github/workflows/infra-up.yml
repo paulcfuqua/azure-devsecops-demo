@@ -209,6 +209,50 @@ jobs:
             echo "\`azure/login\` succeeded and \`az account show\` matched \`vars.AZURE_SUBSCRIPTION_ID\`."
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Ensure every resource provider this estate uses is registered
+        run: |
+          set -euo pipefail
+          # AN UNREGISTERED PROVIDER FAILS THE LAYER THAT FIRST TOUCHES IT, NOT BEFORE.
+          #
+          # L6 deployed Key Vault and Azure SQL cleanly and then died wiring the cost export:
+          #   400 RP Not Registered. Register destination storage account subscription
+          #       with Microsoft.CostManagementExports.
+          # A sweep found two more waiting on the same shape - Microsoft.Security for L9's
+          # Defender toggles and Microsoft.PowerPlatform for L8 - each of which would have
+          # surfaced one layer and one run at a time, minutes into a deploy, in an error
+          # naming a provider rather than the layer that needed it (F82).
+          #
+          # Registration is idempotent, subscription-scoped, free, and asynchronous. This does
+          # not WAIT: a provider takes minutes to move Registering -> Registered, and blocking
+          # every run on that would cost more than it saves. It kicks the registration off
+          # early enough that the layer needing it, several minutes later, finds it done.
+          #
+          # A provider missing from this list is the finding, not a provider that fails to
+          # register - so verification/tests/failure-classes.Tests.ps1 checks the list against
+          # what the templates actually reference.
+          for ns in \
+            Microsoft.App \
+            Microsoft.CostManagement \
+            Microsoft.CostManagementExports \
+            Microsoft.EventGrid \
+            Microsoft.Insights \
+            Microsoft.KeyVault \
+            Microsoft.ManagedIdentity \
+            Microsoft.OperationalInsights \
+            Microsoft.PowerPlatform \
+            Microsoft.Security \
+            Microsoft.Sql \
+            Microsoft.Storage \
+            Microsoft.Web ; do
+            state=$(az provider show -n "${ns}" --query registrationState -o tsv 2>/dev/null || echo 'Unknown')
+            if [ "${state}" = "Registered" ]; then
+              continue
+            fi
+            echo "::notice title=Registering ${ns}::state was ${state}; registration is asynchronous and this run does not wait for it."
+            az provider register --namespace "${ns}" >/dev/null 2>&1 || \
+              echo "::warning title=Could not register ${ns}::The deployer may lack permission. The layer that needs it will fail with 'RP Not Registered' until someone registers it."
+          done
+
   layer-02:
     name: L2 landing zone
     needs: [preflight, plan, oidc-login]

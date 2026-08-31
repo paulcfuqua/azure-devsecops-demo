@@ -374,6 +374,23 @@ jobs:
           # build. --set-env-vars, not --replace-env-vars: MLS_DATA_BACKENDS and
           # the whole cloud-mode block came from the L7 template and must survive
           # a per-app image roll.
+          # THE APP IS CREATED BY L7, AND THIS WORKFLOW DOES NOT KNOW THAT.
+          #
+          # The job is gated on `preflight.outputs.configured` - the demo environment having
+          # its identity variables - which says nothing about whether the container app
+          # exists. It had never been noticed because app CI only fires when an app's paths
+          # change, and no such push had landed since L6 first created the Container Apps
+          # ENVIRONMENT. The moment one did, five workflows failed with
+          # `The containerapp '<name>' does not exist` (F83).
+          #
+          # An image build succeeding and there being nowhere to roll it are different facts.
+          # Missing app: report and stop cleanly. The image is built, scanned and pushed, and
+          # the next L7 deploy picks it up.
+          if ! az containerapp show --resource-group "${RG_APPS}" --name "${APP_NAME}" >/dev/null 2>&1; then
+            echo "::notice title=Container app not deployed yet::'${APP_NAME}' does not exist in ${RG_APPS}, so there is nothing to roll the new image onto. L7 creates it; the image is already built, scanned and pushed, and the next L7 deploy will use it."
+            exit 0
+          fi
+
           az containerapp update \
             --resource-group "${RG_APPS}" \
             --name "${APP_NAME}" \
