@@ -87,7 +87,10 @@ outputs:
     description: "'true' when the audit script existed and was executed."
     value: ${{ steps.audit.outputs.ran }}
   exit-code:
-    description: 'Exit code of the audit script (0 = no criterion FAILed; 2 = the audit could not start).'
+    description: >-
+      Exit code of the audit script. 0 = no criterion FAILed; 2 = the audit could not
+      start; 3 = the run was FILTERED with -OnlyCriterion and is a diagnostic, never a
+      sign-off. 3 is deliberately non-zero so a filtered run cannot be mistaken for one.
     value: ${{ steps.audit.outputs.exit-code }}
   report:
     description: 'Path of the console transcript written by this step (empty when the audit did not run).'
@@ -175,9 +178,15 @@ runs:
 
         echo "exit-code=${code}" >> "${GITHUB_OUTPUT}"
 
+        # 3 is not a failure and not a pass. A filtered run (-OnlyCriterion) skips
+        # criteria it was not asked about, and SKIP does not fail a run - so without a
+        # code of its own it would exit 0 and be indistinguishable from a full green
+        # audit. It stays non-zero here so nothing downstream can read it as a sign-off,
+        # but it must not be REPORTED as a failure either: nothing failed.
         case "${code}" in
           0) verdict="PASS — no criterion FAILed" ;;
           2) verdict="COULD NOT START — a required input was missing or an identity was wrong" ;;
+          3) verdict="DIAGNOSTIC — filtered run (-OnlyCriterion); no verdict, and no layer can be signed off from it" ;;
           *) verdict="FAIL — at least one criterion FAILed" ;;
         esac
 
@@ -188,6 +197,11 @@ runs:
           echo "Reports: \`${AUDIT_REPORT_DIR}/L${AUDIT_LAYER}-<timestamp>.md\` and its"
           echo "\`.json\` sibling, plus this console transcript — all uploaded as a run artifact."
         } >> "${GITHUB_STEP_SUMMARY}"
+
+        if [ "${code}" -eq 3 ]; then
+          echo "::warning title=L${AUDIT_LAYER} verification was FILTERED::${verdict} Re-run without only_criterion for a verdict."
+          exit 3
+        fi
 
         if [ "${code}" -ne 0 ]; then
           if [ "${AUDIT_CONTINUE}" = "true" ]; then
