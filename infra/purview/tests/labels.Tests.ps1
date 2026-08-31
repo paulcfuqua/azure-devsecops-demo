@@ -163,7 +163,10 @@ Describe 'labels' {
     Context 'label policy scope definition' {
         It 'names the policy and scopes it to exactly the four demo groups L04.md names' {
             Get-LabelPolicyName -Prefix $script:Prefix | Should -Be $script:ExpectedPolicyName
-            Get-LabelPolicyScope | Should -Be $script:ExpectedGroups
+            # -Prefix, because the scope now derives it: a hand-kept list of fully
+            # qualified names published the policy to groups that exist in no renamed
+            # tenant (F94).
+            Get-LabelPolicyScope -Prefix $script:Prefix | Should -Be $script:ExpectedGroups
         }
     }
 
