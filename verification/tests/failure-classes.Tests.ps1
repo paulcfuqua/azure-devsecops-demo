@@ -464,3 +464,88 @@ Describe 'an identity the estate authenticates to actually exists' {
             -Because 'every non-excluded path returns 401 at Easy Auth, so an anonymous probe cannot reach application code however long it retries'
     }
 }
+
+
+Describe 'the estate can be renamed from one place' {
+    # Every AZURE name derived from naming.bicep's companyPrefix, while every ENTRA name was
+    # hardcoded 'mls-...' - 22 of them - and the Fabric workspace was pinned to
+    # 'mls-operations'. A cloner who set the prefix therefore got acme-rg-platform resource
+    # groups sitting beside mls-flight-operations groups: half a rebrand, and the half that
+    # is hardest to notice because Entra and Fabric are not the portal blade you are looking
+    # at (F90).
+    #
+    # naming.bicep stays the single source of the DEFAULTS. estate.env (locally) and the
+    # `demo` GitHub environment (in CI) override them. These tests hold that line.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:NamingFile = Join-Path $script:Root 'infra/bicep/naming.bicep'
+        $script:BicepParams = @(Get-ChildItem -Path (Join-Path $script:Root 'infra/bicep') -Filter '*.bicepparam' -Recurse -File)
+        function Get-NamingLiteral {
+            param([string]$Name)
+            $m = Select-String -LiteralPath $script:NamingFile -Pattern "^var $Name = '([^']*)'" | Select-Object -First 1
+            if ($m) { return $m.Matches[0].Groups[1].Value }
+            return ''
+        }
+    }
+
+    It 'finds naming.bicep and the bicepparam files, so nothing here is vacuous' {
+        Test-Path -LiteralPath $script:NamingFile | Should -BeTrue
+        $script:BicepParams.Count | Should -BeGreaterThan 0
+        Get-NamingLiteral -Name 'defaultCompanyPrefix' | Should -Not -BeNullOrEmpty
+    }
+
+    It 'every bicepparam fallback equals naming.bicep, so the second copy cannot drift' {
+        # A .bicepparam cannot import a var from the template it targets, so the literal is
+        # unavoidably duplicated. Duplication that is ASSERTED is a cache; duplication that
+        # is not is a second source of truth waiting to disagree.
+        $prefix = Get-NamingLiteral -Name 'defaultCompanyPrefix'
+        $envSeg = Get-NamingLiteral -Name 'defaultEnv'
+        foreach ($file in $script:BicepParams) {
+            $content = Get-Content -LiteralPath $file.FullName -Raw
+            if ($content -match "MLS_COMPANY_PREFIX', ''\)\) \? '([^']*)'") {
+                $Matches[1] | Should -Be $prefix -Because "$($file.Name) must fall back to naming.bicep's defaultCompanyPrefix"
+            }
+            if ($content -match "MLS_ENV_SEGMENT', ''\)\) \? '([^']*)'") {
+                $Matches[1] | Should -Be $envSeg -Because "$($file.Name) must fall back to naming.bicep's defaultEnv"
+            }
+        }
+    }
+
+    It 'no bicepparam trusts readEnvironmentVariable to supply the estate default' {
+        # readEnvironmentVariable's own default fires only when the variable is UNSET, and an
+        # undefined GitHub variable expands to the EMPTY STRING (F26). Verified live: with
+        # MLS_COMPANY_PREFIX= set empty, the unguarded form yielded '' and every resource
+        # would have been named '-rg-platform'.
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in $script:BicepParams) {
+            foreach ($variable in @('MLS_COMPANY_PREFIX', 'MLS_ENV_SEGMENT')) {
+                $content = Get-Content -LiteralPath $file.FullName -Raw
+                if ($content -notmatch [regex]::Escape($variable)) { continue }
+                if ($content -notmatch "empty\(readEnvironmentVariable\('$variable'") {
+                    $offender.Add("$($file.Name):$variable")
+                }
+            }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'an empty environment variable must fall back to the estate default, not name every resource after nothing'
+    }
+
+    It 'the Entra manifest holds no literal company prefix' {
+        # The manifest is tokenised so one edit renames every group, user, app registration
+        # and CA policy. A literal that creeps back renames only itself.
+        $prefix = Get-NamingLiteral -Name 'defaultCompanyPrefix'
+        $manifest = Get-Content -LiteralPath (Join-Path $script:Root 'infra/entra/manifest.json') -Raw
+        $manifest | Should -Not -Match "\`"$prefix-" `
+            -Because 'names in the manifest must be written as ${prefix}-... so a rebrand reaches identity as well as Azure'
+    }
+
+    It 'ships estate.env.example documenting every variable the code reads' {
+        $example = Join-Path $script:Root 'estate.env.example'
+        Test-Path -LiteralPath $example | Should -BeTrue
+        $content = Get-Content -LiteralPath $example -Raw
+        foreach ($variable in @('MLS_COMPANY_PREFIX', 'MLS_ENV_SEGMENT')) {
+            $content | Should -Match $variable -Because 'a knob the code reads but the template never mentions is a knob nobody finds'
+        }
+    }
+}

@@ -8,7 +8,12 @@ BeforeAll {
     # that way, so the harness must not relax the language mode it is testing (F49).
 
     function Get-FreshManifest {
-        return Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+        # Get-Manifest, not raw ConvertFrom-Json: the manifest is tokenised (${prefix},
+        # ${env}) and the script under test resolves those before it sees a single name.
+        # A test that read the raw file would assert against '${prefix}-break-glass' while
+        # the script created 'mls-break-glass' - a harness testing a different string than
+        # the code produces, which is the mirror this suite exists to avoid (F90).
+        return Get-Manifest -Path $script:ManifestPath
     }
 
     function Invoke-ApplyForTest {

@@ -260,13 +260,77 @@ function Get-ResponseValue {
 
 # --- manifest --------------------------------------------------------------------------
 
+function Get-NamingDefault {
+    <# Read a default out of infra/bicep/naming.bicep, which CLAUDE.md names as the single
+       source of the estate's naming. Parsed rather than duplicated: a second copy of 'mls'
+       in this script is a second source of truth, and the one that drifts. #>
+    param(
+        [Parameter(Mandatory)][string]$VariableName,
+        [Parameter(Mandatory)][string]$Fallback
+    )
+    $namingFile = Join-Path $PSScriptRoot '..' 'bicep' 'naming.bicep'
+    if (-not (Test-Path -LiteralPath $namingFile)) { return $Fallback }
+    $match = Select-String -LiteralPath $namingFile -Pattern "^var $VariableName = '([^']*)'" |
+        Select-Object -First 1
+    if ($match -and $match.Matches[0].Groups[1].Value) { return $match.Matches[0].Groups[1].Value }
+    return $Fallback
+}
+
+function Resolve-ManifestToken {
+    <# Expand ${prefix} and ${env} in the manifest.
+
+       WHY THE MANIFEST IS TOKENISED. Every Entra name used to be hardcoded 'mls-...', while
+       every AZURE name derived from naming.bicep's companyPrefix. A cloner who set the
+       prefix therefore got acme-rg-platform resource groups next to mls-flight-operations
+       groups - half a rebrand, and the half that is hardest to spot because Entra objects
+       are not in the portal blade you are looking at (F90).
+
+       Expansion happens on the RAW TEXT before ConvertFrom-Json, so it reaches every string
+       in one pass - including the cross-references that must stay consistent, like the
+       dashboard CA policy naming the three app registrations it scopes to. Expanding after
+       parsing would mean walking the object graph and remembering every place a name can
+       appear, which is the same enumeration problem F70 was. #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][string]$CompanyPrefix,
+        [Parameter(Mandatory)][string]$EnvSegment
+    )
+    return $Text.Replace('${prefix}', $CompanyPrefix).Replace('${env}', $EnvSegment)
+}
+
 function Get-Manifest {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [AllowEmptyString()][string]$CompanyPrefix = '',
+        [AllowEmptyString()][string]$EnvSegment = ''
+    )
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Manifest not found at '$Path'."
     }
+    if ([string]::IsNullOrWhiteSpace($CompanyPrefix)) {
+        $CompanyPrefix = $env:MLS_COMPANY_PREFIX
+        if ([string]::IsNullOrWhiteSpace($CompanyPrefix)) {
+            $CompanyPrefix = Get-NamingDefault -VariableName 'defaultCompanyPrefix' -Fallback 'mls'
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($EnvSegment)) {
+        $EnvSegment = $env:MLS_ENV_SEGMENT
+        if ([string]::IsNullOrWhiteSpace($EnvSegment)) {
+            $EnvSegment = Get-NamingDefault -VariableName 'defaultEnv' -Fallback 'demo'
+        }
+    }
+    # Validated here as well as in the naming action, because this script is also run
+    # directly. An invalid prefix must fail with a sentence, not inside Graph.
+    if ($CompanyPrefix -notmatch '^[a-z][a-z0-9]{1,9}$') {
+        throw "MLS_COMPANY_PREFIX '$CompanyPrefix' must be 2-10 characters, lowercase letters and digits, starting with a letter."
+    }
+    if ($EnvSegment -notmatch '^[a-z0-9]{2,6}$') {
+        throw "MLS_ENV_SEGMENT '$EnvSegment' must be 2-6 characters, lowercase letters and digits."
+    }
     try {
-        return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $text = Resolve-ManifestToken -Text (Get-Content -LiteralPath $Path -Raw) `
+            -CompanyPrefix $CompanyPrefix -EnvSegment $EnvSegment
+        return $text | ConvertFrom-Json
     }
     catch {
         throw "Manifest at '$Path' is not valid JSON: $($_.Exception.Message)"

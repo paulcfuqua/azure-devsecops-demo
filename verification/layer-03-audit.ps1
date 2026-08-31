@@ -480,11 +480,21 @@ function Invoke-Main {
     $manifestFile = Resolve-MlsInput -Name 'ManifestPath' -Value $ManifestPath -EnvironmentVariable @('MLS_ENTRA_MANIFEST') `
         -DefaultValue (Join-Path -Path $repoRoot -ChildPath 'infra' -AdditionalChildPath 'entra', 'manifest.json') `
         -Hint 'The identity manifest is the source of every expected value in this audit.'
-    $manifest = Get-MlsJsonFile -Path $manifestFile -Purpose 'L3 identity manifest - the audit reads the manifest, not the plan text'
+    # The manifest ships tokenised so the estate can be rebranded from one place; resolve
+    # the tokens exactly as apply-entra.ps1 does, or every name compared below is a literal
+    # '${prefix}-...' that exists in no tenant (F90).
+    $estateNaming = Get-MlsEstateNaming
+    $manifest = Get-MlsJsonFile -Path $manifestFile -Purpose 'L3 identity manifest - the audit reads the manifest, not the plan text' `
+        -TokenReplacement @{ '${prefix}' = $estateNaming.Prefix; '${env}' = $estateNaming.Env }
 
     $manifestDomain = "$(Get-MlsProperty -InputObject $manifest -Name 'domain')"
     $domainDefault = ''
-    if ($manifestDomain -and $manifestDomain -ne 'mls.example') { $domainDefault = $manifestDomain }
+    # `.example` is RESERVED BY RFC 2606 for documentation and can never be a real verified
+    # domain, so the suffix identifies the placeholder for any prefix. This used to compare
+    # against the literal 'mls.example', which stopped recognising the placeholder the moment
+    # the manifest became rebrandable - a cloner's 'acme.example' would have been accepted as
+    # a real tenant domain and every UPN composed against it (F90).
+    if ($manifestDomain -and $manifestDomain -notlike '*.example') { $domainDefault = $manifestDomain }
     $tenantDomain = Resolve-MlsInput -Name 'Domain' -Value $Domain -EnvironmentVariable @('MLS_TENANT_DOMAIN', 'TENANT_DOMAIN') `
         -DefaultValue $domainDefault `
         -Hint "The tenant's verified domain. UPNs are composed as <prefix>@<domain>; the manifest ships the placeholder 'mls.example', which apply-entra.ps1 overrides at apply time, so the audit cannot guess it."

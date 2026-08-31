@@ -56,7 +56,7 @@ param(
     [Parameter(Mandatory)]
     [string]$CapacityId,
 
-    [string]$WorkspaceName = 'mls-operations',
+    [string]$WorkspaceName = '',   # empty = derive from the estate prefix
 
     # Lakehouse names allow letters, digits and underscores only.
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]*$')]
@@ -92,6 +92,30 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# --- estate naming -----------------------------------------------------------------
+# The workspace name follows the estate prefix. It used to be pinned to 'mls-operations',
+# which left a cloner who set MLS_COMPANY_PREFIX with a Fabric workspace named after
+# somebody else's company sitting next to their own resource groups - half a rebrand, and
+# the half nobody notices because it lives in a different portal (F90).
+#
+# Resolved HERE rather than in the parameter default: a script's param() block must be the
+# first statement, so its defaults cannot call a function declared in the same file. An
+# empty value means "derive it"; pass -WorkspaceName explicitly to override.
+
+function Get-EstatePrefix {
+    <# MLS_COMPANY_PREFIX, else naming.bicep's default. Parsed, never duplicated. #>
+    if (-not [string]::IsNullOrWhiteSpace($env:MLS_COMPANY_PREFIX)) { return $env:MLS_COMPANY_PREFIX }
+    $namingFile = Join-Path $PSScriptRoot '..' 'bicep' 'naming.bicep'
+    if (Test-Path -LiteralPath $namingFile) {
+        $match = Select-String -LiteralPath $namingFile -Pattern "^var defaultCompanyPrefix = '([^']*)'" |
+            Select-Object -First 1
+        if ($match -and $match.Matches[0].Groups[1].Value) { return $match.Matches[0].Groups[1].Value }
+    }
+    return 'mls'
+}
+
+if ([string]::IsNullOrWhiteSpace($WorkspaceName)) { $WorkspaceName = "$(Get-EstatePrefix)-operations" }
 
 function Write-Status {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',

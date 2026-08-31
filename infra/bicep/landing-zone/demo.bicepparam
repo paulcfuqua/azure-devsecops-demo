@@ -5,6 +5,19 @@
 // an empty subscription ID compiles but skips the NIST assignment.
 using './main.bicep'
 
+// ESTATE IDENTITY. naming.bicep holds the defaults and every name derives from
+// these two; estate.env (locally) or the `demo` GitHub environment (in CI) is how
+// a deployment overrides them. The literal fallbacks below MUST equal
+// naming.bicep's defaultCompanyPrefix / defaultEnv - verification/tests asserts
+// exactly that, because a bicepparam cannot import a var from the template it
+// targets and an unchecked second copy is how two sources of truth start.
+//
+// empty(...) ? default : value, NOT readEnvironmentVariable's own default argument:
+// that default fires only when the variable is UNSET, and an undefined GitHub
+// variable expands to the EMPTY STRING (F26). Without this guard a workflow passing
+// an unset vars.MLS_COMPANY_PREFIX would name every resource '-rg-platform'.
+param companyPrefix = empty(readEnvironmentVariable('MLS_COMPANY_PREFIX', '')) ? 'mls' : readEnvironmentVariable('MLS_COMPANY_PREFIX', '')
+
 param demoSubscriptionId = readEnvironmentVariable('AZURE_SUBSCRIPTION_ID', '')
 
 param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus')

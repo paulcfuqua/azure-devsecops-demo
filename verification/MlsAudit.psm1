@@ -328,20 +328,73 @@ function Resolve-MlsInput {
     throw "Required input '$Name' was not supplied. $Hint Set one of: $($sources -join ', ')."
 }
 
+function Get-MlsEstateNaming {
+    <#
+    .SYNOPSIS
+        The estate's company prefix and environment segment.
+    .DESCRIPTION
+        MLS_COMPANY_PREFIX / MLS_ENV_SEGMENT if set (estate.env locally, the `demo` GitHub
+        environment in CI), else parsed out of infra/bicep/naming.bicep, which CLAUDE.md
+        names as the single source of estate naming.
+
+        PARSED, NEVER DUPLICATED. A second literal 'mls' inside the Verifier is a second
+        source of truth, and the one that silently disagrees with the deploy - the Verifier
+        would then audit an estate nobody deployed.
+    #>
+    param(
+        [AllowEmptyString()][string]$RepoRoot = ''
+    )
+    if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+        $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+    }
+    $prefix = $env:MLS_COMPANY_PREFIX
+    $segment = $env:MLS_ENV_SEGMENT
+    $namingFile = Join-Path $RepoRoot 'infra/bicep/naming.bicep'
+    if (Test-Path -LiteralPath $namingFile) {
+        if ([string]::IsNullOrWhiteSpace($prefix)) {
+            $m = Select-String -LiteralPath $namingFile -Pattern "^var defaultCompanyPrefix = '([^']*)'" | Select-Object -First 1
+            if ($m) { $prefix = $m.Matches[0].Groups[1].Value }
+        }
+        if ([string]::IsNullOrWhiteSpace($segment)) {
+            $m = Select-String -LiteralPath $namingFile -Pattern "^var defaultEnv = '([^']*)'" | Select-Object -First 1
+            if ($m) { $segment = $m.Matches[0].Groups[1].Value }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($prefix)) { $prefix = 'mls' }
+    if ([string]::IsNullOrWhiteSpace($segment)) { $segment = 'demo' }
+    return [pscustomobject]@{ Prefix = $prefix; Env = $segment }
+}
+
 function Get-MlsJsonFile {
     <#
     .SYNOPSIS
         Read and parse a JSON file, or throw a message that names the file and its purpose.
+    .PARAMETER TokenReplacement
+        Literal string replacements applied to the RAW TEXT before parsing. The Entra
+        manifest ships tokenised (${prefix}, ${env}) so one repo can be rebranded without
+        editing 22 names; the audit must resolve them the same way apply-entra.ps1 does, or
+        it compares '${prefix}-break-glass' against a tenant containing no such group and
+        reports drift that does not exist (F90).
+
+        Applied before parsing, so it reaches every string in one pass - including the
+        cross-references, like the CA policy that names the app registrations it scopes to.
     #>
     param(
         [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Purpose
+        [Parameter(Mandatory)][string]$Purpose,
+        [hashtable]$TokenReplacement
     )
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "File not found: '$Path' ($Purpose)."
     }
     try {
-        return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+        $text = Get-Content -LiteralPath $Path -Raw
+        if ($TokenReplacement) {
+            foreach ($key in $TokenReplacement.Keys) {
+                $text = $text.Replace([string]$key, [string]$TokenReplacement[$key])
+            }
+        }
+        return ($text | ConvertFrom-Json)
     }
     catch {
         throw "'$Path' ($Purpose) is not valid JSON: $($_.Exception.Message)"
@@ -1644,6 +1697,7 @@ function Test-MlsMonotonicTimestamp {
 }
 
 Export-ModuleMember -Function @(
+    'Get-MlsEstateNaming'
     'Write-MlsStatus',
     'Get-MlsProperty',
     'Get-MlsCollection',

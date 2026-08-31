@@ -106,14 +106,14 @@ param(
     # trial capacity work.
     [switch]$SkipCapacityCheck,
 
-    [string]$WorkspaceName = 'mls-operations',
+    [string]$WorkspaceName = '',   # empty = derive from the estate prefix
 
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]*$')]
     [string]$LakehouseName = 'mls_operations',
 
     # Display name of the data agent item. Kept in step with the Copilot Studio
     # agent name in infra/copilot-studio/agent-definition.md.
-    [string]$DataAgentName = 'mls-operations-data-agent',
+    [string]$DataAgentName = '',   # empty = derive from the estate prefix
 
     # Restrict the binding to these Delta tables. Empty (default) selects every
     # table the lakehouse currently reports - the L5 seed creates exactly ten.
@@ -131,6 +131,31 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# --- estate naming -----------------------------------------------------------------
+# The workspace name follows the estate prefix. It used to be pinned to 'mls-operations',
+# which left a cloner who set MLS_COMPANY_PREFIX with a Fabric workspace named after
+# somebody else's company sitting next to their own resource groups - half a rebrand, and
+# the half nobody notices because it lives in a different portal (F90).
+#
+# Resolved HERE rather than in the parameter default: a script's param() block must be the
+# first statement, so its defaults cannot call a function declared in the same file. An
+# empty value means "derive it"; pass -WorkspaceName explicitly to override.
+
+function Get-EstatePrefix {
+    <# MLS_COMPANY_PREFIX, else naming.bicep's default. Parsed, never duplicated. #>
+    if (-not [string]::IsNullOrWhiteSpace($env:MLS_COMPANY_PREFIX)) { return $env:MLS_COMPANY_PREFIX }
+    $namingFile = Join-Path $PSScriptRoot '..' 'bicep' 'naming.bicep'
+    if (Test-Path -LiteralPath $namingFile) {
+        $match = Select-String -LiteralPath $namingFile -Pattern "^var defaultCompanyPrefix = '([^']*)'" |
+            Select-Object -First 1
+        if ($match -and $match.Matches[0].Groups[1].Value) { return $match.Matches[0].Groups[1].Value }
+    }
+    return 'mls'
+}
+
+if ([string]::IsNullOrWhiteSpace($WorkspaceName)) { $WorkspaceName = "$(Get-EstatePrefix)-operations" }
+if ([string]::IsNullOrWhiteSpace($DataAgentName)) { $DataAgentName = "$(Get-EstatePrefix)-operations-data-agent" }
 
 # The natural-language framing the data agent applies to every question. This is
 # the Fabric-side half of the system prompt; the Copilot Studio half lives in

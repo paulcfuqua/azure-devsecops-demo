@@ -45,3 +45,7 @@ pester-results.xml
 # would have swept every transcript into a public repository. Ignored at the
 # root, where the rule survives a reorganisation.
 .superpowers/
+
+# Per-deployment estate identity (prefix, env segment, company name, tags).
+# estate.env.example is the template and IS committed; the real one never is.
+estate.env
