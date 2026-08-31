@@ -580,6 +580,53 @@ Describe 'the estate can be renamed from one place' {
             -Because 'a resolver that reads naming.bicep but ignores MLS_COMPANY_PREFIX disagrees with every one that honours it'
     }
 
+    It 'every consumer that PARSES the entra manifest resolves its tokens' {
+        # F91 swept for files naming defaultCompanyPrefix. That was the wrong signal, and
+        # the miss took the estate offline: .github/workflows/layer-07-apps.yml parses the
+        # manifest to resolve Easy Auth client IDs, names no prefix variable at all, and
+        # read display names of the literal form "${prefix}-launch-ops-${env}-app". They
+        # matched no app registration, no client ID was produced, and main.bicep fails
+        # closed to INTERNAL ingress - so the deploy succeeded and every dashboard left the
+        # internet. V7.1 404, V7.5 no scale-out, V7.3 unable to probe: three criteria, one
+        # unresolved token (F93).
+        #
+        # The signal is PARSING, not naming: a file that only passes the path, or mentions
+        # it in a comment, resolves nothing and needs nothing.
+        $offender = [System.Collections.Generic.List[string]]::new()
+        $parsers = [System.Collections.Generic.List[string]]::new()
+        $roots = @('scripts', 'infra', 'verification', '.github') |
+            ForEach-Object { Join-Path $script:Root $_ } | Where-Object { Test-Path $_ }
+        foreach ($file in (Get-ChildItem -Path $roots -Recurse -Include *.ps1, *.psm1, *.yml -File)) {
+            if ($file.FullName -like '*node_modules*') { continue }
+            $content = Get-Content -LiteralPath $file.FullName -Raw
+            # A PARSE is a read of that file piped into ConvertFrom-Json, or a call to the
+            # helper that does it. Anything else is a mention.
+            # SCOPED TO THE ENTRA MANIFEST. verification/layer-07-audit.ps1 parses a
+            # different manifest.json - the deploy manifest of per-app image digests -
+            # which carries no tokens and needs no resolution. The first version of this
+            # check flagged it, which was the check being wrong rather than the code.
+            if ($content -notmatch "entra['/\\, ]+manifest\.json") { continue }
+            $parses = ($content -match "manifest\.json'\)?\s*-Raw" -and $content -match 'ConvertFrom-Json') -or
+                      ($content -match 'Get-MlsJsonFile[^\n]*ManifestPath') -or
+                      ($content -match 'Get-Manifest -Path')
+            if (-not $parses) { continue }
+            $parsers.Add($file.Name)
+            # AN ACTUAL RESOLUTION, NOT A MENTION OF ONE. Matching a bare '${prefix}'
+            # anywhere in the file counts the explanatory COMMENT as the fix: a mutation
+            # that deleted the Replace() call but left the comment above it still passed,
+            # which is what a mirror looks like.
+            $resolves = $content -match 'Replace\(''\$\{prefix\}''' -or
+                        $content -match 'TokenReplacement' -or
+                        $content -match 'Resolve-ManifestToken' -or
+                        $content -match 'Get-Manifest -Path'
+            if (-not $resolves) { $offender.Add($file.Name) }
+        }
+        $parsers.Count | Should -BeGreaterThan 3 `
+            -Because 'the sweep must actually find the manifest parsers; finding almost none means it is broken, not that the repo is clean'
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'a consumer that parses the tokenised manifest without resolving ${prefix}/${env} looks up names that exist in no tenant, and main.bicep then fails closed to internal ingress'
+    }
+
     It 'ships estate.env.example documenting every variable the code reads' {
         $example = Join-Path $script:Root 'estate.env.example'
         Test-Path -LiteralPath $example | Should -BeTrue

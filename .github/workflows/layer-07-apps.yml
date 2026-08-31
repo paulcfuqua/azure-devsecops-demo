@@ -309,7 +309,24 @@ jobs:
             }
           }
 
-          $manifest = Get-Content -LiteralPath 'infra/entra/manifest.json' -Raw | ConvertFrom-Json
+          # THE MANIFEST IS TOKENISED; RESOLVE BEFORE PARSING. Reading it raw yields
+          # display names of the literal form "${prefix}-launch-ops-${env}-app", which
+          # match no app registration in any tenant. The lookup below then finds nothing,
+          # no client ID is produced, and main.bicep FAILS CLOSED to internal ingress -
+          # so the deploy "succeeds" and every dashboard silently leaves the internet.
+          #
+          # That is exactly what happened on 2026-08-31: V7.1 returned 404 from
+          # <app>.INTERNAL.<region>.azurecontainerapps.io, V7.5 saw no scale-out because
+          # nothing could reach the app, and V7.3 could not probe at all. Three criteria,
+          # one unresolved token (F93).
+          #
+          # The naming action publishes both values to GITHUB_ENV earlier in this job, so
+          # this resolves the SAME prefix every other consumer resolved rather than
+          # deriving its own.
+          $companyPrefix = if ($env:MLS_COMPANY_PREFIX) { $env:MLS_COMPANY_PREFIX } else { 'mls' }
+          $envSegment = if ($env:MLS_ENV_SEGMENT) { $env:MLS_ENV_SEGMENT } else { 'demo' }
+          $manifest = (Get-Content -LiteralPath 'infra/entra/manifest.json' -Raw).
+            Replace('${prefix}', $companyPrefix).Replace('${env}', $envSegment) | ConvertFrom-Json
 
           # appKey, not a display-name literal: the manifest owns the names.
           $targets = @(
