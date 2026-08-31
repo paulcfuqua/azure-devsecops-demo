@@ -65,9 +65,13 @@ BEGIN TRY
     END
 END TRY
 BEGIN CATCH
+    -- RAISERROR takes constants or variables only: passing ERROR_MESSAGE()
+    -- directly is a syntax error, and this file had never executed against a
+    -- real database to find that out (F84).
+    DECLARE @mls_err NVARCHAR(2048) = ERROR_MESSAGE();
     RAISERROR (
         'Could not create contained user ''mls-data-api-demo-id'' (%s). Expected before L7 provisions the identity in Microsoft Entra ID — re-run data/seed/seed.ps1 -Target sql after L7 completes to finish this grant (see F20).',
-        10, 1, ERROR_MESSAGE()) WITH NOWAIT;
+        10, 1, @mls_err) WITH NOWAIT;
 END CATCH;
 GO
 
@@ -85,9 +89,13 @@ BEGIN TRY
     END
 END TRY
 BEGIN CATCH
+    -- RAISERROR takes constants or variables only: passing ERROR_MESSAGE()
+    -- directly is a syntax error, and this file had never executed against a
+    -- real database to find that out (F84).
+    DECLARE @mls_err NVARCHAR(2048) = ERROR_MESSAGE();
     RAISERROR (
         'Could not add ''mls-data-api-demo-id'' to db_datareader (%s). Expected before the user above exists — re-run data/seed/seed.ps1 -Target sql after L7 completes (see F20).',
-        10, 1, ERROR_MESSAGE()) WITH NOWAIT;
+        10, 1, @mls_err) WITH NOWAIT;
 END CATCH;
 GO
 

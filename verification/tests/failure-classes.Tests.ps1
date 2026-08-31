@@ -236,3 +236,53 @@ Describe 'every provider the estate uses is registered up front' {
             -Because 'a provider the templates use but the list omits fails the layer that reaches it, not this test'
     }
 }
+
+Describe 'the SQL this estate ships is syntactically valid' {
+    # data/seed/sql/900-contained-users.sql passed every test in this repo and was a syntax
+    # error. RAISERROR accepts constants or variables and never a function call, so
+    # `RAISERROR('...%s', 10, 1, ERROR_MESSAGE())` does not parse - and nothing executed the
+    # file until L6 finally reached a live database, four days in (F84).
+    #
+    # The .ps1 that RUNS the SQL was well covered. The SQL was not covered at all, because a
+    # test suite tests the language it is written in.
+
+    BeforeAll {
+        $script:SqlRoot = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path 'data/seed/sql'
+    }
+
+    It 'finds SQL files to check' {
+        @(Get-ChildItem -Path $script:SqlRoot -Filter '*.sql' -File -Recurse).Count |
+            Should -BeGreaterThan 0 -Because 'a scan matching nothing would make this vacuous'
+    }
+
+    It 'never passes a function call as a RAISERROR argument' {
+        # The specific defect, encoded. RAISERROR's substitution arguments are constants or
+        # variables; a call like ERROR_MESSAGE() or DB_NAME() is a parse error, and the parser
+        # is the only thing that will tell you.
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in (Get-ChildItem -Path $script:SqlRoot -Filter '*.sql' -File -Recurse)) {
+            $lines = Get-Content -LiteralPath $file.FullName
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                # An argument position ending in `()` on a RAISERROR continuation line.
+                if ($lines[$i] -match '^\s*\d+\s*,\s*\d+\s*,.*[A-Z_]+\(\)\s*\)') {
+                    $offender.Add("$($file.Name):$($i + 1)")
+                }
+            }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'RAISERROR takes constants or variables; a function call there is a syntax error the parser finds and no unit test does'
+    }
+
+    It 'every TRY block has a matching CATCH and END CATCH' {
+        # A cheap structural check. Unbalanced blocks are the other way these files fail to
+        # parse, and they fail at the same moment: against a real database, late.
+        foreach ($file in (Get-ChildItem -Path $script:SqlRoot -Filter '*.sql' -File -Recurse)) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            $try = ([regex]::Matches($text, '(?im)^\s*BEGIN\s+TRY\b')).Count
+            $catch = ([regex]::Matches($text, '(?im)^\s*BEGIN\s+CATCH\b')).Count
+            $endCatch = ([regex]::Matches($text, '(?im)^\s*END\s+CATCH\b')).Count
+            "$($file.Name): try=$try catch=$catch endCatch=$endCatch" |
+                Should -Be "$($file.Name): try=$try catch=$try endCatch=$try"
+        }
+    }
+}
