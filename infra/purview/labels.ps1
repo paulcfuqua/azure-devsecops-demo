@@ -144,13 +144,24 @@ function Get-LabelPolicyScope {
     <#
         The demo groups the label policy is published to. Source of truth:
         infra/entra/manifest.json groups[].displayName (all four - every demo user
-        belongs to at least one). Kept as a literal list here, same as
-        Get-LabelTaxonomy's literal label names, rather than reading the manifest file
-        at runtime: labels.ps1 has no dependency on L3's manifest today and a read-only
-        script inspecting another layer's input file is a bigger coupling than one
-        four-item list kept in sync by hand.
+        belongs to at least one). The SUFFIXES are still a literal list here rather than a
+        runtime read of another layer's input file, for the reason this comment always
+        gave: labels.ps1 has no dependency on L3's manifest, and a read-only script
+        inspecting one is a bigger coupling than four names.
+
+        WHAT CHANGED IS THE PREFIX. The list used to be four fully-qualified literals
+        "kept in sync by hand", which was true while the prefix was fixed. It stopped being
+        true when the estate became renameable: a deployment with MLS_COMPANY_PREFIX=acme
+        publishes its label policy to four groups that exist in no tenant, and L4 fails on
+        names the operator never typed (F94).
+
+        Only the prefix is derived. The suffixes remain the hand-kept list, so adding a
+        group to the manifest still requires adding it here - which is the coupling this
+        function deliberately accepts.
     #>
-    return @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
+    param([Parameter(Mandatory)][string]$Prefix)
+    return @('flight-operations', 'security-team', 'finance', 'executives') |
+        ForEach-Object { "$Prefix-$_" }
 }
 
 function Test-IppSession {
@@ -292,7 +303,7 @@ function Invoke-Main {
             -DisplayName $label.DisplayName -Tooltip $label.Tooltip
     }
     $outcomes['LabelPolicy'] = Initialize-LabelPolicy -Name (Get-LabelPolicyName -Prefix $prefix) `
-        -LabelName $taxonomy.Name -ExchangeLocation (Get-LabelPolicyScope)
+        -LabelName $taxonomy.Name -ExchangeLocation (Get-LabelPolicyScope -Prefix $prefix)
     Write-Status ("Labels: " + (($outcomes.Keys | ForEach-Object { "$_=$($outcomes[$_])" }) -join ' ')) -Color Cyan
     return [pscustomobject]$outcomes
 }

@@ -73,7 +73,21 @@ server {
     location /api/ {
         proxy_pass ${DATA_API_ORIGIN}/;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        # SNI, AND THE UPSTREAM'S OWN HOST. Both are required because DATA_API_ORIGIN is an
+        # HTTPS Container Apps INTERNAL ingress, and that ingress routes by SNI/Host - it is
+        # a shared envoy fronting every app in the environment, not a private address.
+        #
+        # Without proxy_ssl_server_name, nginx opens TLS with no server name and envoy has
+        # nothing to route on. And `Host $host` - the stock reverse-proxy recipe, which
+        # assumes a local upstream - sends the FRONTEND's hostname to the data-api endpoint,
+        # so even a completed handshake asks envoy for the wrong app.
+        #
+        # The symptom is a 502 that looks exactly like an unreachable upstream, which is
+        # what the comment at the top of this file predicts for a misconfigured origin. L7
+        # V7.3 spent three runs upstream of this and reached it on the fourth: the probe got
+        # a token, passed Easy Auth, hit nginx, and died on this hop (F95).
+        proxy_ssl_server_name on;
+        proxy_set_header Host $proxy_host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         # W3C trace context, so a browser span and the server span join up.
