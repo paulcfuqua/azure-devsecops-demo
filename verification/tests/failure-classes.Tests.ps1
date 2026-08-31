@@ -411,3 +411,56 @@ Describe 'a deploy default never stands up a placeholder image' {
             -Because 'the placeholder remains the documented fallback for an estate with no published images; F88 was about which path is the DEFAULT, not about the fallback existing'
     }
 }
+
+
+Describe 'an identity the estate authenticates to actually exists' {
+    # Four app registrations sat in a live tenant with no service principal. Nothing failed
+    # visibly: an application object is a DEFINITION, and Entra creates the principal on
+    # first interactive consent, so sign-in worked. Only client-credentials issuance was
+    # broken - and nothing asked for one until V7.3 needed a token to get past Easy Auth
+    # and reach application code (F89).
+    #
+    # Two checks, because the finding had two halves. The deploy path must create the
+    # principal for EVERY registration, unconditionally; and a criterion that asserts
+    # telemetry must not probe the liveness path, which is by design answered without
+    # running application code.
+
+    BeforeAll {
+        $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:ApplyEntra = Join-Path $script:RepoRoot 'infra/entra/apply-entra.ps1'
+        $script:EntraManifest = Join-Path $script:RepoRoot 'infra/entra/manifest.json'
+    }
+
+    It 'finds the manifest and the apply script, so the assertions are not vacuous' {
+        Test-Path -LiteralPath $script:ApplyEntra | Should -BeTrue
+        Test-Path -LiteralPath $script:EntraManifest | Should -BeTrue
+        $manifest = Get-Content -LiteralPath $script:EntraManifest -Raw | ConvertFrom-Json
+        @($manifest.appRegistrations).Count | Should -BeGreaterThan 0
+    }
+
+    It 'creates a service principal for every app registration, with no flag to skip it' {
+        $content = Get-Content -LiteralPath $script:ApplyEntra -Raw
+        $content | Should -Match 'Initialize-EntraServicePrincipal' `
+            -Because 'an application registered without its principal is a half-created object that fails only where a token is requested'
+        # A manifest flag defaulting to true that nobody would ever set false is the F85
+        # pattern - a documented manual step reading as a design. The principal is not
+        # optional, so no per-app flag may gate it.
+        $content | Should -Not -Match "Get-Field -Object \`$app -Name 'createServicePrincipal'" `
+            -Because 'gating the principal on a manifest flag reintroduces the half-created state for anyone who omits it'
+    }
+
+    It 'never probes for telemetry down the liveness path' {
+        # /healthz is excluded from Easy Auth and answered by nginx from its own config:
+        # no application code runs, so no span can exist. Reusing it as the telemetry
+        # probe is what made V7.3 unsatisfiable rather than merely failing.
+        $audit = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'verification/layer-07-audit.ps1') -Raw
+        $audit | Should -Not -Match 'Test-OtelSpan[^\n]*-HealthPath' `
+            -Because 'a liveness endpoint is deliberately cheap and often served without touching application code, so it cannot evidence application telemetry'
+    }
+
+    It 'sends the telemetry probe with an Authorization header' {
+        $audit = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'verification/layer-07-audit.ps1') -Raw
+        $audit | Should -Match 'Authorization\s*=\s*"Bearer' `
+            -Because 'every non-excluded path returns 401 at Easy Auth, so an anonymous probe cannot reach application code however long it retries'
+    }
+}

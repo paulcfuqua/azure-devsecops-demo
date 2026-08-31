@@ -545,7 +545,7 @@ Describe 'apply-entra idempotency + WhatIf' {
             $roles = @()
             $probeRole = [string](Get-Field -Object $app -Name 'verifierProbeRole')
             if (-not [string]::IsNullOrWhiteSpace($probeRole)) {
-                $roleId = New-DeterministicGuid -Text "$($app.displayName)/$probeRole"
+                $roleId = Get-DeterministicGuid -Text "$($app.displayName)/$probeRole"
                 $roles = @(@{
                         id                 = $roleId
                         value              = $probeRole
@@ -757,10 +757,10 @@ Describe 'apply-entra idempotency + WhatIf' {
         It 'uses a stable role id, so a replay does not revoke the grant it just made' {
             # An assignment references its role BY id. A fresh GUID per run would make every
             # deploy dangle the previous run's assignment while reporting success.
-            $first = New-DeterministicGuid -Text 'mls-launch-ops-demo-app/Telemetry.Probe'
-            $second = New-DeterministicGuid -Text 'mls-launch-ops-demo-app/Telemetry.Probe'
+            $first = Get-DeterministicGuid -Text 'mls-launch-ops-demo-app/Telemetry.Probe'
+            $second = Get-DeterministicGuid -Text 'mls-launch-ops-demo-app/Telemetry.Probe'
             $first | Should -Be $second
-            $first | Should -Not -Be (New-DeterministicGuid -Text 'mls-control-tower-demo-app/Telemetry.Probe')
+            $first | Should -Not -Be (Get-DeterministicGuid -Text 'mls-control-tower-demo-app/Telemetry.Probe')
         }
 
         It 'creates the broad CA policies in report-only mode exactly as the manifest declares' {

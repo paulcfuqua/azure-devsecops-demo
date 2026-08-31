@@ -133,13 +133,54 @@ function Test-GoldenSpec {
         -Detail 'V7.2 rolls back in the repo only - no cloud state is involved; fix the schema or the fixtures via PR and re-run.'
 }
 
+function Get-AppEasyAuthClientId {
+    <# The Entra client id an app's Easy Auth validates tokens against, read from the
+       running app rather than supplied. It is the audience the probe must request, and
+       Easy Auth publishes it in its own WWW-Authenticate `resource_id` on a 401. #>
+    param(
+        [Parameter(Mandatory)][string]$ResourceGroupName,
+        [Parameter(Mandatory)][string]$Name
+    )
+    return "$(Invoke-MlsAz -AllowFailure -Raw -Argument @(
+            'containerapp', 'auth', 'show', '--resource-group', $ResourceGroupName, '--name', $Name,
+            '--query', 'identityProviders.azureActiveDirectory.registration.clientId', '--output', 'tsv'
+        ))".Trim()
+}
+
 function Test-OtelSpan {
-    <# V7.3 - one tagged synthetic request per app (a read, permitted to the Verifier),
-       then look for it in App Insights via KQL. #>
+    <# V7.3 - a tagged synthetic request per app that actually REACHES application code,
+       then look for its span in App Insights via KQL.
+
+       WHY THE PROBE IS AUTHENTICATED. This criterion spent two runs failing against an
+       App Insights resource that was correctly wired - right component, right
+       instrumentation key on every container - and completely empty. The cause was not
+       ingestion latency and not sampling:
+
+         * the three dashboards are nginx serving a static React bundle, and Easy Auth's
+           ONLY excluded path is /healthz, which nginx answers from its own config. No
+           application code runs, so nothing emits a span.
+         * every other path returns 401 AT EASY AUTH, so it never reaches data-api - the
+           one app in the request chain that would emit an AppRequests row.
+         * the browser SDK in each frontend never executes, because the probe is curl.
+
+       So there was no request an ANONYMOUS probe could make that would produce a span,
+       and no retry window could have changed that (F89).
+
+       The fix is not to open an unauthenticated path - that would add anonymous surface
+       to the app tier of a compliance demo to satisfy a check, which is backwards. Easy
+       Auth already publishes the way in, and the Verifier already federates as
+       mls-verifier, so it needs a token rather than a new credential. The deploy path
+       grants it a probe role that confers NO application capability; a 403 from the app
+       is a perfectly good result here, because the claim is "the request traversed Easy
+       Auth and reached the application", not "the Verifier may read data".
+
+       The emitting role is data-api, not the frontend, because the frontends emit
+       nothing server-side. Per-app attribution therefore comes from the probe marker,
+       which carries the frontend's name, not from AppRoleName. #>
     param(
         [Parameter(Mandatory)][string]$ResourceGroupName,
         [Parameter(Mandatory)][string[]]$AppName,
-        [Parameter(Mandatory)][string]$HealthPath,
+        [Parameter(Mandatory)][string]$ProbePath,
         [AllowEmptyString()][string]$WorkspaceId,
         [Parameter(Mandatory)][string]$ProbeId
     )
@@ -149,30 +190,61 @@ function Test-OtelSpan {
     }
     $problem = [System.Collections.Generic.List[string]]::new()
     $observed = [System.Collections.Generic.List[string]]::new()
+    $statusByApp = @{}
     foreach ($name in $AppName) {
+        $roleName = ($name -replace '^mls-', '') -replace '-demo-ca$', ''
         $fqdn = Get-AppFqdn -ResourceGroupName $ResourceGroupName -Name $name
         if ([string]::IsNullOrWhiteSpace($fqdn)) {
             $problem.Add("$name has no ingress FQDN")
             continue
         }
-        Invoke-MlsHttp -Uri "https://$fqdn$HealthPath`?probe=$ProbeId" -TimeoutSec 60 | Out-Null
+        $clientId = Get-AppEasyAuthClientId -ResourceGroupName $ResourceGroupName -Name $name
+        if ([string]::IsNullOrWhiteSpace($clientId) -or $clientId -eq 'None') {
+            $problem.Add("$name has no Easy Auth client id, so no audience to request a token for")
+            continue
+        }
+        $token = "$(Invoke-MlsAz -AllowFailure -Raw -Argument @(
+                'account', 'get-access-token', '--resource', $clientId, '--query', 'accessToken', '--output', 'tsv'
+            ))".Trim()
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            # Distinguish "cannot get a token" from "got in and saw nothing": they have
+            # completely different fixes, and the old message conflated them.
+            $problem.Add("$roleName could not obtain a token for audience $clientId - the app registration needs a service principal and the Verifier needs its probe role (L3 applies both; see F89)")
+            continue
+        }
+        $marker = "$ProbeId-$roleName"
+        $response = Invoke-MlsHttp -Uri "https://$fqdn$ProbePath`?probe=$marker" -TimeoutSec 60 `
+            -Header @{ Authorization = "Bearer $token" }
+        $status = "$(Get-MlsProperty -InputObject $response -Name 'StatusCode')"
+        $statusByApp[$roleName] = $status
+        # 401 means Easy Auth REJECTED the token, and no span can follow. Any other status -
+        # including 403 or 404 from the application - means the request got through, which
+        # is the whole claim.
+        if ($status -eq '401') {
+            $problem.Add("$roleName still 401 with a bearer token: Easy Auth rejected it, so the request never reached the application")
+        }
     }
-    $query = "AppRequests | where Url has 'probe=$ProbeId' | project TimeGenerated, AppRoleName, OperationId"
+    $query = "AppRequests | where Url has 'probe=$ProbeId' | project TimeGenerated, AppRoleName, Url, OperationId"
     $rows = @(Invoke-MlsAz -AllowFailure -Argument @(
             'monitor', 'log-analytics', 'query', '--workspace', $WorkspaceId,
             '--analytics-query', $query, '--timespan', 'PT1H', '--output', 'json'
         ))
     foreach ($name in $AppName) {
         $roleName = ($name -replace '^mls-', '') -replace '-demo-ca$', ''
-        $matched = @($rows | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'AppRoleName')" -like "*$roleName*" })
-        $observed.Add("$roleName rows=$($matched.Count)")
-        if ($matched.Count -lt 1) { $problem.Add("no AppRequests row carrying probe=$ProbeId for AppRoleName ~ '$roleName'") }
+        $marker = "$ProbeId-$roleName"
+        # Matched on the MARKER, not on AppRoleName: the span is emitted by whichever app
+        # in the chain runs instrumented code (data-api), while the marker identifies which
+        # front door the request came through.
+        $matched = @($rows | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'Url')" -like "*probe=$marker*" })
+        $status = if ($statusByApp.ContainsKey($roleName)) { $statusByApp[$roleName] } else { 'not probed' }
+        $observed.Add("$roleName http=$status rows=$($matched.Count)")
+        if ($matched.Count -lt 1) { $problem.Add("no AppRequests row carrying probe=$marker") }
     }
     if ($problem.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
     }
     return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
-        -Detail 'App Insights ingestion latency is typically 2-10 minutes; the standard 30-minute window covers it. Persistent emptiness means the connection string is not injected or sampling is 0 (L07 failure mode 3).'
+        -Detail 'A non-401 status with zero rows is an emission problem (connection string or sampling). A 401 is an access problem - the probe never reached the app, so no span could exist (L07 failure mode 3).'
 }
 
 function Test-CanaryPipeline {
@@ -234,7 +306,10 @@ function Test-CanaryPipeline {
 function Test-ReplicaScaling {
     <# V7.5 - three phases per app: 0 before load, >= 1 under load, back to 0 after the
        idle window. Phase 3 waits 15 minutes before the first read; a nonzero count at
-       +30 minutes is a FAIL (idle-cost model broken). #>
+       +30 minutes is a FAIL (idle-cost model broken).
+
+       Phase 0 first waits for the app to BE at zero, because V7.1 has already curled every
+       endpoint by the time this runs and left them warm (F89). #>
     param(
         [Parameter(Mandatory)][string]$ResourceGroupName,
         [Parameter(Mandatory)][string[]]$AppName,
@@ -246,10 +321,35 @@ function Test-ReplicaScaling {
     $problem = [System.Collections.Generic.List[string]]::new()
     $observed = [System.Collections.Generic.List[string]]::new()
     foreach ($name in $AppName) {
-        $phaseOne = [int](Invoke-MlsAz -AllowFailure -Raw -Argument @(
-                'containerapp', 'replica', 'list', '--resource-group', $ResourceGroupName, '--name', $name,
-                '--query', 'length(@)', '--output', 'tsv'
-            ))
+        # PHASE 0 - ESTABLISH THE PRECONDITION, DO NOT ASSERT IT.
+        #
+        # This criterion used to open by reading the replica count and failing if it was
+        # not 0. It observed launch-ops at 1->1->0 and failed, while control-tower next to
+        # it managed 0->1->0 - not because the apps differ, but because V7.1 runs FIRST in
+        # the same audit and curls every endpoint, which wakes them. An earlier criterion
+        # in the same run guaranteed the precondition of a later one was false, and which
+        # app happened to have scaled back down by then was a race (F89).
+        #
+        # "Starts at 0" is not the claim. The claim is "goes 0 -> N -> 0". So wait for the
+        # app to be at 0 before starting, and if it will not settle, THAT is the finding -
+        # an app that never scales to zero is exactly what this criterion exists to catch,
+        # and it is now reported as itself rather than as a corrupted phase 1.
+        $settleWaited = 0.0
+        $phaseOne = -1
+        while ($true) {
+            $phaseOne = [int](Invoke-MlsAz -AllowFailure -Raw -Argument @(
+                    'containerapp', 'replica', 'list', '--resource-group', $ResourceGroupName, '--name', $name,
+                    '--query', 'length(@)', '--output', 'tsv'
+                ))
+            if ($phaseOne -eq 0 -or $settleWaited -ge $ScaleInDeadlineMinutes) { break }
+            Wait-MlsRetryInterval -Seconds ([math]::Min($ScaleInWaitMinutes, [math]::Max($ScaleInDeadlineMinutes - $settleWaited, 0)) * 60)
+            $settleWaited += $ScaleInWaitMinutes
+        }
+        if ($phaseOne -ne 0) {
+            $observed.Add("$name never settled to 0 (still $phaseOne after $settleWaited min idle)")
+            $problem.Add("$name did not scale to 0 within $ScaleInDeadlineMinutes min before the probe, so the 0->N->0 cycle could not be observed")
+            continue
+        }
         $fqdn = Get-AppFqdn -ResourceGroupName $ResourceGroupName -Name $name
         if ([string]::IsNullOrWhiteSpace($fqdn)) {
             $problem.Add("$name has no ingress FQDN")
@@ -273,8 +373,8 @@ function Test-ReplicaScaling {
                 ))
             if ($phaseThree -eq 0 -or $waited -ge $ScaleInDeadlineMinutes) { break }
         }
-        $observed.Add("$name 0->N->0 observed as $phaseOne->$phaseTwo->$phaseThree (phase 3 at +$waited min)")
-        if ($phaseOne -ne 0) { $problem.Add("$name had $phaseOne replica(s) before load, expected 0") }
+        $observed.Add("$name 0->N->0 observed as $phaseOne->$phaseTwo->$phaseThree (settled after $settleWaited min, phase 3 at +$waited min)")
+        # No phase-1 assertion: phase 0 above establishes it or reports why it could not.
         if ($phaseTwo -lt 1) { $problem.Add("$name did not scale out under load (still $phaseTwo)") }
         if ($phaseThree -ne 0) { $problem.Add("$name still has $phaseThree replica(s) at +$waited min") }
     }
@@ -291,6 +391,11 @@ function Invoke-Main {
     param(
         [string]$ResourceGroupName = 'mls-rg-apps',
         [string[]]$AppName = @(),
+        # The path V7.3 probes THROUGH Easy Auth. It must reach application code, unlike
+        # $HealthPath, which nginx answers from its own config. Any /api/* path works:
+        # even a 404 from data-api is an emitted span, which is the claim being tested,
+        # so this does not go stale when routes change.
+        [string]$ProbePath = '/api/launches',
         [string]$DeployManifestPath,
         [string]$LogAnalyticsWorkspaceId,
         [string]$Repository,
@@ -349,11 +454,11 @@ function Invoke-Main {
     # L07: App Insights ingestion latency is typically 2-10 min
     Invoke-MlsCriterion -Context $context -Id 'V7.3' -Control @('3.3.1') `
         -Description 'OTel spans from a synthetic request visible in App Insights via KQL' `
-        -Command "GET https://<fqdn>$HealthPath`?probe=$probeId   # one per app`naz monitor log-analytics query --workspace <lawCustomerId> --analytics-query `"AppRequests | where Url has 'probe=$probeId' | project TimeGenerated, AppRoleName, OperationId`" --timespan PT1H" `
-        -Expected '>= 1 AppRequests row per app carrying the probe marker, with AppRoleName matching the app name from naming.bicep' `
+        -Command "az account get-access-token --resource <easy-auth-client-id>`nGET https://<fqdn>$ProbePath`?probe=$probeId-<app>  -H 'Authorization: Bearer <token>'   # one per app`naz monitor log-analytics query --workspace <lawCustomerId> --analytics-query `"AppRequests | where Url has 'probe=$probeId' | project TimeGenerated, AppRoleName, Url, OperationId`" --timespan PT1H" `
+        -Expected '>= 1 AppRequests row per app carrying that app''s probe marker; the row''s AppRoleName is the instrumented app in the chain (data-api), not the static frontend' `
         -RetryWindowMinutes 15 `
         -Test {
-        Test-OtelSpan -ResourceGroupName $ResourceGroupName -AppName $AppName -HealthPath $HealthPath `
+        Test-OtelSpan -ResourceGroupName $ResourceGroupName -AppName $AppName -ProbePath $ProbePath `
             -WorkspaceId $workspaceId -ProbeId $probeId
     } | Out-Null
 

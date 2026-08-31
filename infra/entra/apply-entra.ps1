@@ -618,7 +618,7 @@ function Initialize-EntraApplication {
     return @{ AppId = $null; ObjectId = $null; AppRoles = @(); Outcome = 'WhatIf' }
 }
 
-function New-DeterministicGuid {
+function Get-DeterministicGuid {
     <# A stable GUID from a string, so re-running this script does not churn app role ids.
 
        An app role's id is its identity: change it and every existing assignment dangles,
@@ -707,7 +707,7 @@ function Initialize-VerifierProbeRole {
         [Parameter(Mandatory)][string]$VerifierAppName
     )
     $applicationId = $ApplicationObjectId
-    $roleId = New-DeterministicGuid -Text "$DisplayName/$RoleValue"
+    $roleId = Get-DeterministicGuid -Text "$DisplayName/$RoleValue"
 
     $existingRoles = @($ExistingRoles)
     $hasRole = @($existingRoles | Where-Object { (Get-Field -Object $_ -Name 'value') -eq $RoleValue }).Count -ge 1
@@ -1089,6 +1089,8 @@ function Invoke-ManifestItem {
 }
 
 function Invoke-Main {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+        Justification = 'VerifierAppName is consumed inside the Invoke-ManifestItem scriptblock; PSSA cannot see through scriptblock closures.')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$ManifestPath,
