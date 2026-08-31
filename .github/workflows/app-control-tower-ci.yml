@@ -383,7 +383,7 @@ jobs:
             --query properties.configuration.ingress.targetPort -o tsv)"
           echo "Current ingress target port: ${current}"
           if [ "${current}" = "80" ] && [ -z "${CONFIGURED_PORT}" ]; then
-            echo "::warning title=P-1 open — target port still 80::${APP_NAME} serves a real image on 8080 but ingress still targets the placeholder port 80. Set CONTROL_TOWER_PORT=8080 in the demo environment and re-run layer-07-apps.yml. Ingress was deliberately NOT mutated here."
+            echo "::warning title=Ingress still on the placeholder port::${APP_NAME} serves a real image on 8080 but ingress still targets port 80, so this app was last deployed by an L7 run that took the placeholder path. Re-run layer-07-apps.yml - it now derives the port from the image it deploys (F88), so no variable needs setting. Ingress is deliberately NOT mutated here."
           fi
 
       - name: Deployment summary
