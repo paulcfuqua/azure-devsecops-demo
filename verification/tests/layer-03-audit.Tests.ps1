@@ -117,6 +117,9 @@ Describe 'layer-03-audit' {
         $script:EnforcedExcludeGroup = $null
         # A real emergency-access account: cloud-only, and not one of the demo personas.
         $script:BreakGlassMember = @([pscustomobject]@{ id = 'bg-1'; userPrincipalName = "emergency.access@$($script:Domain)" })
+        # A populated tenant holds these; individual tests may blank it to prove the
+        # empty-group failure is real rather than assumed.
+        $script:ExternallyManagedMember = @([pscustomobject]@{ id = 'ext-1'; userPrincipalName = "operator@$($script:Domain)" })
         $script:LicenseState = 'Active'
         $script:LicenseError = 'None'
         $script:MissingMember = ''
@@ -140,6 +143,17 @@ Describe 'layer-03-audit' {
                 # Break-glass membership is put there by a human, not by the manifest.
                 if ($groupName -in @($script:BreakGlassGroup.displayName)) {
                     return [pscustomobject]@{ value = @($script:BreakGlassMember) }
+                }
+                # Same for every group the manifest flags membershipManagedExternally: the
+                # operator who authors the agent, and the human plus deploy service principal
+                # that make up the SQL Entra admin. A populated tenant HAS these members, so
+                # a fixture returning none would assert the opposite of what V3.2 now checks.
+                # $script:ExternallyManagedMember lets a test empty one deliberately.
+                $externallyManaged = @($script:Manifest.groups |
+                        Where-Object { $_.PSObject.Properties.Name -contains 'membershipManagedExternally' } |
+                        ForEach-Object { $_.displayName })
+                if ($groupName -in $externallyManaged) {
+                    return [pscustomobject]@{ value = @($script:ExternallyManagedMember) }
                 }
                 $group = Get-GroupByName -Name $groupName
                 $member = @($group.members | Where-Object { $_ -ne $script:MissingMember } | ForEach-Object {
@@ -465,6 +479,28 @@ Describe 'layer-03-audit' {
         }
     }
 
+    Context 'membership managed outside the manifest' {
+        It 'fails V3.2 when such a group is empty, because an empty group grants nothing' {
+            # The flag exempts a group from SET EQUALITY, not from being checked. Declaring
+            # members: [] and asserting equality would require the group to be EMPTY - the
+            # opposite of what is wanted for the operator who authors the Copilot Studio
+            # agent, or the SQL Entra admin (F92). So the assertion becomes non-empty, and
+            # this proves it is real rather than a skip wearing a check's name.
+            $script:ExternallyManagedMember = @()
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V3.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'grants nothing'
+        }
+
+        It 'passes V3.2 without naming the members, when the group is populated' {
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V3.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -Match 'managed outside the manifest'
+        }
+    }
+
     Context 'retry' {
         It 'retries V3.1 through propagation lag and passes without sleeping the whole window' {
             $script:Calls = 0
@@ -494,6 +530,12 @@ Describe 'layer-03-audit' {
                 }
                 if ($Uri -match '/groups/(?<id>[^/]+)/members') {
                     $group = Get-GroupByName -Name ($Matches['id'] -replace '^id-', '')
+                    # A group whose membership is managed outside the manifest is populated in
+                    # a real tenant; returning the manifest's empty list would make V3.2 fail
+                    # and retry, consuming the wait budget this test measures on V3.1.
+                    if ($group.PSObject.Properties.Name -contains 'membershipManagedExternally') {
+                        return [pscustomobject]@{ value = @($script:ExternallyManagedMember) }
+                    }
                     return [pscustomobject]@{ value = @($group.members | ForEach-Object { [pscustomobject]@{ userPrincipalName = "$_@$($script:Domain)" } }) }
                 }
                 if ($Uri -like '*/groups?*startswith*') {

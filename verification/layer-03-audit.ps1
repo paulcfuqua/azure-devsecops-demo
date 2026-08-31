@@ -137,7 +137,20 @@ function Test-GroupMembership {
        adds it out of band. Asserting set equality there would fail the moment the account
        an adopter is REQUIRED to create actually exists. Its membership is not unchecked -
        V3.3 asserts the stronger property, that the group holds a usable emergency-access
-       account, because that is what makes the enforced MFA policy safe to turn on. #>
+       account, because that is what makes the enforced MFA policy safe to turn on.
+
+       AND EXCEPT "membershipManagedExternally": true, which is the same reasoning applied
+       to groups that hold identities the repo cannot name: the operator who authors the
+       Copilot Studio agent, and the human plus deploy service principal that make up the
+       Azure SQL Entra admin. Both were reported as drift the first time this ran against a
+       tenant where they existed, and both times the manifest was wrong rather than the
+       tenant (F92).
+
+       THESE ARE NOT SKIPPED. Set equality against an empty list asserts the group must be
+       EMPTY, which is the opposite of what is wanted: a copilot-authors group with no
+       members grants nobody anything, and an empty SQL admin group means nobody can
+       administer the database. So the assertion becomes NON-EMPTY - weaker than naming the
+       members, stronger than requiring there be none, and the only one that is true. #>
     param(
         [Parameter(Mandatory)]$Manifest,
         [Parameter(Mandatory)][string]$Domain
@@ -155,8 +168,20 @@ function Test-GroupMembership {
             continue
         }
         $groupId = Get-MlsProperty -InputObject $found[0] -Name 'id'
-        $member = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups/$groupId/members") |
-                ForEach-Object { Get-MlsProperty -InputObject $_ -Name 'userPrincipalName' })
+        $rawMember = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups/$groupId/members"))
+        if (Get-MlsProperty -InputObject $group -Name 'membershipManagedExternally') {
+            # Counted RAW, not by userPrincipalName: a service principal is a legitimate
+            # member of the SQL admin group and carries no UPN, so filtering by one would
+            # read a correctly-populated group as empty.
+            if (@($rawMember).Count -lt 1) {
+                $problem.Add("$($group.displayName) is empty; its membership is managed outside the manifest, but a group with no members grants nothing")
+            }
+            else {
+                $observed.Add("$($group.displayName): $(@($rawMember).Count) member(s), managed outside the manifest")
+            }
+            continue
+        }
+        $member = @($rawMember | ForEach-Object { Get-MlsProperty -InputObject $_ -Name 'userPrincipalName' })
         $expected = @($group.members | ForEach-Object { "$_@$Domain" })
         $comparison = Test-MlsSetEquality -Actual $member -Expected $expected
         $observed.Add("$($group.displayName): $(@($member).Count) member(s)")
