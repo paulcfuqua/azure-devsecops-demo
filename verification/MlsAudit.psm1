@@ -1102,6 +1102,12 @@ function New-MlsAuditContext {
         # reason, and the run exits 3 - see Get-MlsExitCode. A DIAGNOSTIC, NEVER A SIGN-OFF.
         [string[]]$OnlyCriterion = @()
     )
+    # COMMA-SPLIT ON THE WAY IN. `pwsh -File` cannot bind a string[] from separate argv
+    # tokens - a space-separated list silently drops the tail - so CI can only ever hand
+    # this ONE token. Splitting here is what makes `-OnlyCriterion V7.3,V7.5` work from a
+    # workflow input while `-OnlyCriterion V7.3, V7.5` still works from a pwsh prompt.
+    $OnlyCriterion = @($OnlyCriterion | ForEach-Object { "$_" -split ',' } |
+            ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($RetryWindowMinutes -lt 0) { $RetryWindowMinutes = $script:StandardRetryWindowMinutes }
     if ($PollIntervalSeconds -le 0) { $PollIntervalSeconds = $script:StandardPollIntervalSeconds }
     if ($MaxWaitMinutes -lt 0) { $MaxWaitMinutes = $script:DefaultMaxWaitMinutes }

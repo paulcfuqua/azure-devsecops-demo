@@ -636,3 +636,61 @@ Describe 'the estate can be renamed from one place' {
         }
     }
 }
+
+
+Describe 'a criterion correlates on a field the system actually emits' {
+    # V7.3 tagged its synthetic probe with `?probe=<run>-<app>` and looked for that marker
+    # in the span's Url. It ran five times over two days and matched nothing, while 70
+    # perfectly good spans sat in the table: data-api's AppRequests rows have Url EMPTY,
+    # always (F97).
+    #
+    # That is not a bug to fix in the app. Span attributes come from an ALLOWLIST which
+    # deliberately excludes the raw path and query string as caller-controlled free text,
+    # along with every header and any SQL. So the criterion was not just reading the wrong
+    # column - it was quietly asking the application to start recording caller-supplied
+    # text in telemetry so that an audit could pass. A check may not ask the system to
+    # weaken itself in order to go green.
+    #
+    # Two checks, because the finding has two halves that fail independently: no query may
+    # filter on the empty column, and the reason it is empty must stay true.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'never filters an App* telemetry table on Url' {
+        $queries = [System.Collections.Generic.List[string]]::new()
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in Get-ChildItem -Path (Join-Path $script:Root 'verification') -Filter '*.ps1' -Recurse -File) {
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                # A KQL line, not prose about one: it must both name an App* table and pipe
+                # into an operator. Comments explaining the finding mention AppRequests, and
+                # counting those would make the sweep pass on its own documentation.
+                if ($line -notmatch '\bApp(Requests|Dependencies|Traces|Exceptions|Events)\b\s*\|') { continue }
+                if ($line -match '^\s*#') { continue }
+                $queries.Add("$($file.Name): $($line.Trim())")
+                if ($line -match '\|\s*where[^|]*\bUrl\b') { $offender.Add($file.Name) }
+            }
+        }
+        $queries.Count | Should -BeGreaterThan 0 `
+            -Because 'the sweep must actually find the telemetry queries; finding none means the pattern is broken, not that the repo is clean'
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'data-api never sets a URL span attribute, so Url is always empty and a filter on it can only ever return zero rows - correlate on OperationId (W3C trace context), which the request middleware does populate'
+    }
+
+    It 'keeps caller-supplied text out of data-api span attributes' {
+        # The premise the check above rests on. If this ever stops being true, the reason
+        # Url is empty has changed and the rule needs revisiting - which is exactly what a
+        # failing test here should prompt, rather than someone quietly re-adding the marker.
+        $attributes = Get-Content -LiteralPath (Join-Path $script:Root 'apps/data-api/src/telemetry/attributes.ts') -Raw
+        foreach ($forbidden in @('ATTR_URL_FULL', 'ATTR_URL_QUERY', 'ATTR_URL_PATH', 'ATTR_CLIENT_ADDRESS',
+                'http.url', 'url.full', 'url.query', 'originalUrl', 'req.query', 'req.headers')) {
+            $attributes | Should -Not -BeLike "*$forbidden*" `
+                -Because 'the span attribute allowlist is the estate''s "we never emit caller text" claim; adding a URL, query string, header or client address to it breaks that claim to make an audit convenient'
+        }
+        # Non-vacuity: prove the file really is the attribute builder and not an empty stub
+        # that would pass every assertion above by containing nothing at all.
+        $attributes | Should -BeLike '*ATTR_HTTP_ROUTE*' `
+            -Because 'the low-cardinality route template is what the allowlist emits INSTEAD of the raw path'
+    }
+}

@@ -7,6 +7,7 @@ BeforeAll {
     # No Set-StrictMode -Off: the audit scripts set -Version Latest and CI runs them
     # that way, so the harness must not relax the language mode it is testing (F49).
 
+    $script:RepoRoot = (Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..')).Path
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l07-$([guid]::NewGuid().ToString('n'))"
     New-Item -ItemType Directory -Path $script:ReportRoot -Force | Out-Null
     $script:App = @('mls-launch-ops-demo-ca', 'mls-control-tower-demo-ca')
@@ -54,23 +55,37 @@ Describe 'layer-07-audit' {
         $script:HealthStatus = 200
         $script:ReplicaSequence = @{ 'mls-launch-ops-demo-ca' = @(0, 3, 0); 'mls-control-tower-demo-ca' = @(0, 2, 0) }
         $script:ReplicaCall = @{ 'mls-launch-ops-demo-ca' = 0; 'mls-control-tower-demo-ca' = 0 }
-        # V7.3 matches on the PROBE MARKER in the row's Url, not on AppRoleName: the span
-        # is emitted by whichever app in the chain runs instrumented code (data-api), while
-        # the marker says which front door the request came through (F89). The probe id is
-        # a timestamp minted at run time, so the mock reads it back out of the KQL it was
-        # handed rather than pinning a literal the test would have to keep in step.
+        # V7.3 correlates on the W3C TRACE ID it sent, not on AppRoleName: the span is
+        # emitted by whichever app in the chain runs instrumented code (data-api), while the
+        # trace id says which front door the request came through (F89, F97).
+        #
+        # THE FAKE MODELS THE SYSTEM, NOT THE QUERY. It records the trace ids the audit
+        # actually put on the wire, and returns a row only where a recorded id is also one
+        # the KQL asked for. So an audit that sends no traceparent, sends one the proxy
+        # would strip, or queries an id it never issued, matches nothing here - which is the
+        # only reason this is a test rather than a mirror. The earlier fake read the marker
+        # back out of the KQL it was handed and echoed a matching row, which would have
+        # passed against a criterion that never made a request at all.
         $script:SpanEmittingRole = 'data-api'
+        $script:SentTraceId = [System.Collections.Generic.List[string]]::new()
+        function Register-ProbeTrace {
+            param($Header)
+            if ($null -eq $Header -or -not $Header.ContainsKey('traceparent')) { return }
+            $field = "$($Header['traceparent'])" -split '-'
+            if ($field.Count -ge 3) { $script:SentTraceId.Add($field[1]) }
+        }
         function Get-SpanRowsForQuery {
             param([string]$Query)
-            if ($Query -notmatch "probe=([^']+)'") { return @() }
-            $probeId = $Matches[1]
-            return @('launch-ops', 'control-tower' | ForEach-Object {
-                    [pscustomobject]@{
-                        AppRoleName = $script:SpanEmittingRole
-                        Url         = "https://$_.mls.eastus.azurecontainerapps.io/api/launches?probe=$probeId-$_"
-                        OperationId = "op-$_"
-                    }
-                })
+            return @($script:SentTraceId | Sort-Object -Unique |
+                    Where-Object { $Query -like "*'$_'*" } |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            AppRoleName = $script:SpanEmittingRole
+                            OperationId = $_
+                            ResultCode  = '200'
+                            Name        = 'GET /tables/:table'
+                        }
+                    })
         }
         $script:CheckRun = @(
             [pscustomobject]@{ name = 'app-launch-ops-ci / build'; conclusion = 'success' }
@@ -105,6 +120,7 @@ Describe 'layer-07-audit' {
         }
 
         Mock Invoke-MlsHttp {
+            Register-ProbeTrace -Header $Header
             $name = ($Uri -split '//')[1].Split('.')[0]
             return [pscustomobject]@{
                 StatusCode = $script:HealthStatus
@@ -323,6 +339,7 @@ Describe 'layer-07-audit' {
 
         It 'fails V7.3 saying Easy Auth rejected the token when the probe still 401s' {
             Mock Invoke-MlsHttp {
+                Register-ProbeTrace -Header $Header
                 return [pscustomobject]@{ StatusCode = 401; Content = ''; Headers = @{}; Error = $null }
             }
             $context = Invoke-AuditForTest
@@ -337,12 +354,54 @@ Describe 'layer-07-audit' {
             # deliberately grants no data access, so demanding a 200 would be demanding a
             # privilege the Verifier is not supposed to have.
             Mock Invoke-MlsHttp {
+                Register-ProbeTrace -Header $Header
                 return [pscustomobject]@{ StatusCode = 403; Content = ''; Headers = @{}; Error = $null }
             }
             $context = Invoke-AuditForTest
             $row = Get-Row -Context $context -Id 'V7.3'
             $row.Status | Should -Be 'PASS'
             $row.Observed | Should -Match 'http=403'
+            # The emitting role is named in the evidence, so a reader can see the span came
+            # from the instrumented app in the chain rather than from the static frontend.
+            $row.Observed | Should -Match 'via data-api'
+        }
+
+        It 'fails V7.3 when the probe carries no trace context to correlate on' {
+            # The mutation that matters: strip the traceparent header. Every other signal
+            # stays green - the token is issued, the app answers 200 - and the criterion
+            # must still fail, because a span nobody can attribute to a front door does not
+            # evidence per-app telemetry. Without this, dropping the header would look like
+            # a passing audit (F97).
+            Mock Invoke-MlsHttp {
+                return [pscustomobject]@{ StatusCode = 200; Content = ''; Headers = @{}; Error = $null }
+            }
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V7.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'no AppRequests row correlated to'
+        }
+
+        It 'probes a real data-api route rather than one that only ever 404s' {
+            # nginx's trailing-slash proxy_pass strips the /api prefix, so the probe path
+            # must be /api/<route> where <route> is a route data-api actually serves. The
+            # original default, /api/launches, arrived as /launches and 404'd on all 70
+            # probes of a real run: satisfiable, but only ever exercising a route the
+            # product does not have (F97).
+            $script:ProbeUri = [System.Collections.Generic.List[string]]::new()
+            Mock Invoke-MlsHttp {
+                Register-ProbeTrace -Header $Header
+                if ($null -ne $Header -and $Header.ContainsKey('traceparent')) { $script:ProbeUri.Add("$Uri") }
+                return [pscustomobject]@{ StatusCode = 200; Content = ''; Headers = @{}; Error = $null }
+            }
+            Invoke-AuditForTest | Out-Null
+            @($script:ProbeUri).Count | Should -Be 2
+            $allowed = (Get-Content -LiteralPath (Join-Path $script:RepoRoot 'apps/data-api/src/contract/allowlist.ts') -Raw)
+            foreach ($uri in $script:ProbeUri) {
+                ($uri -match '/api/(tables|feeds)/([a-z_]+)$') | Should -BeTrue `
+                    -Because 'the proxy strips the /api prefix, so what follows it must be a route data-api serves'
+                $allowed | Should -BeLike "*`"$($Matches[2])`"*" `
+                    -Because 'the segment is matched against data-api''s frozen allowlist, and anything else is a 404'
+            }
         }
 
         It 'waits for a warm app to settle to zero instead of failing V7.5 on the spot' {

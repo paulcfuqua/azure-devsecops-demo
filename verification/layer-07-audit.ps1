@@ -32,6 +32,7 @@ param(
     [string]$Repository,
     [string]$CanaryPrNumber,
     [string]$HealthPath = '/healthz',
+    [string]$ProbePath = '/api/tables/launches',
     [int]$LoadRequestCount = 20,
     [double]$ScaleInWaitMinutes = 15,
     [double]$ScaleInDeadlineMinutes = 30,
@@ -156,6 +157,20 @@ function Get-AppEasyAuthClientId {
         ))".Trim()
 }
 
+function New-MlsHexToken {
+    <# Cryptographically random lowercase hex - W3C trace-context ids are 16 bytes
+       (trace id) and 8 bytes (span id), and both must be non-zero. #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Returns a random string; the audit changes no state anywhere.')]
+    param([Parameter(Mandatory)][int]$ByteCount)
+    $byte = [byte[]]::new($ByteCount)
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($byte)
+    # An all-zero trace id is invalid per the spec and would be dropped silently rather
+    # than rejected loudly, so force one bit rather than trusting 2^-128.
+    $byte[0] = $byte[0] -bor 1
+    return -join ($byte | ForEach-Object { $_.ToString('x2') })
+}
+
 function Test-OtelSpan {
     <# V7.3 - a tagged synthetic request per app that actually REACHES application code,
        then look for its span in App Insights via KQL.
@@ -184,14 +199,36 @@ function Test-OtelSpan {
        Auth and reached the application", not "the Verifier may read data".
 
        The emitting role is data-api, not the frontend, because the frontends emit
-       nothing server-side. Per-app attribution therefore comes from the probe marker,
-       which carries the frontend's name, not from AppRoleName. #>
+       nothing server-side. So AppRoleName cannot say which front door a request came
+       through, and per-app attribution needs a carrier of its own.
+
+       WHY THE CARRIER IS TRACEPARENT AND NOT A URL MARKER. The first version of this
+       criterion hung `?probe=<run>-<app>` on the probe URL and looked for it in the
+       span's Url. It matched nothing, for a reason worth writing down: data-api's
+       AppRequests rows have Url EMPTY, always, and that is not a bug. Its span
+       attributes come from an allowlist (apps/data-api/src/telemetry/attributes.ts)
+       which deliberately excludes the raw path and query string as caller-controlled
+       free text, along with every header and any SQL. So the criterion was not merely
+       reading the wrong column - it was asking the application to record caller-supplied
+       text in telemetry to satisfy an audit, in a demo whose stated design is that it
+       never does. A check may not ask the system to weaken itself in order to pass.
+
+       W3C trace context is the carrier the application already implements: the request
+       middleware calls propagation.extract on the incoming headers, so a probe sending
+       `traceparent: 00-<traceId>-<spanId>-01` produces an AppRequests row whose
+       OperationId IS that trace id. One trace id per frontend gives exact per-app
+       attribution with no application change, and it strengthens the claim: V7.3 now
+       evidences end-to-end trace correlation - the feature the demo advertises - rather
+       than the bare existence of a span. #>
     param(
         [Parameter(Mandatory)][string]$ResourceGroupName,
         [Parameter(Mandatory)][string[]]$AppName,
         [Parameter(Mandatory)][string]$ProbePath,
         [AllowEmptyString()][string]$WorkspaceId,
-        [Parameter(Mandatory)][string]$ProbeId
+        # roleName -> W3C trace id. Minted once per run by the caller so that retries
+        # re-probe under the SAME ids and spans from every attempt accumulate against one
+        # query, instead of each attempt starting the evidence over.
+        [Parameter(Mandatory)][hashtable]$TraceIdByApp
     )
     if ([string]::IsNullOrWhiteSpace($WorkspaceId)) {
         return New-MlsCheckResult -Passed $false -Observed 'no Log Analytics workspace (customer) id available' -Final `
@@ -221,9 +258,16 @@ function Test-OtelSpan {
             $problem.Add("$roleName could not obtain a token for audience $clientId - the app registration needs a service principal and the Verifier needs its probe role (L3 applies both; see F89)")
             continue
         }
-        $marker = "$ProbeId-$roleName"
-        $response = Invoke-MlsHttp -Uri "https://$fqdn$ProbePath`?probe=$marker" -TimeoutSec 60 `
-            -Header @{ Authorization = "Bearer $token" }
+        $traceId = "$($TraceIdByApp[$roleName])"
+        if ([string]::IsNullOrWhiteSpace($traceId)) {
+            $problem.Add("$roleName was not issued a trace id, so its span could not be correlated")
+            continue
+        }
+        $response = Invoke-MlsHttp -Uri "https://$fqdn$ProbePath" -TimeoutSec 60 `
+            -Header @{
+            Authorization = "Bearer $token"
+            traceparent   = "00-$traceId-$(New-MlsHexToken -ByteCount 8)-01"
+        }
         $status = "$(Get-MlsProperty -InputObject $response -Name 'StatusCode')"
         $statusByApp[$roleName] = $status
         # 401 means Easy Auth REJECTED the token, and no span can follow. Any other status -
@@ -233,27 +277,34 @@ function Test-OtelSpan {
             $problem.Add("$roleName still 401 with a bearer token: Easy Auth rejected it, so the request never reached the application")
         }
     }
-    $query = "AppRequests | where Url has 'probe=$ProbeId' | project TimeGenerated, AppRoleName, Url, OperationId"
-    $rows = @(Invoke-MlsAz -AllowFailure -Argument @(
-            'monitor', 'log-analytics', 'query', '--workspace', $WorkspaceId,
-            '--analytics-query', $query, '--timespan', 'PT1H', '--output', 'json'
-        ))
+    $issued = @($TraceIdByApp.Values | Where-Object { -not [string]::IsNullOrWhiteSpace("$_") })
+    $rows = @()
+    if ($issued.Count -gt 0) {
+        $idList = ($issued | ForEach-Object { "'$_'" }) -join ', '
+        $query = "AppRequests | where OperationId in ($idList) | project TimeGenerated, AppRoleName, OperationId, ResultCode, Name"
+        $rows = @(Invoke-MlsAz -AllowFailure -Argument @(
+                'monitor', 'log-analytics', 'query', '--workspace', $WorkspaceId,
+                '--analytics-query', $query, '--timespan', 'PT1H', '--output', 'json'
+            ))
+    }
     foreach ($name in $AppName) {
         $roleName = ($name -replace '^mls-', '') -replace '-demo-ca$', ''
-        $marker = "$ProbeId-$roleName"
-        # Matched on the MARKER, not on AppRoleName: the span is emitted by whichever app
-        # in the chain runs instrumented code (data-api), while the marker identifies which
+        $traceId = "$($TraceIdByApp[$roleName])"
+        # Matched on the TRACE ID, not on AppRoleName: the span is emitted by whichever app
+        # in the chain runs instrumented code (data-api), while the trace id says which
         # front door the request came through.
-        $matched = @($rows | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'Url')" -like "*probe=$marker*" })
+        $matched = @($rows | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'OperationId')" -eq $traceId })
         $status = if ($statusByApp.ContainsKey($roleName)) { $statusByApp[$roleName] } else { 'not probed' }
-        $observed.Add("$roleName http=$status rows=$($matched.Count)")
-        if ($matched.Count -lt 1) { $problem.Add("no AppRequests row carrying probe=$marker") }
+        $emitter = @($matched | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'AppRoleName')" } |
+                Where-Object { $_ } | Sort-Object -Unique) -join '/'
+        $observed.Add("$roleName http=$status rows=$($matched.Count)$(if ($emitter) { " via $emitter" })")
+        if ($matched.Count -lt 1) { $problem.Add("no AppRequests row correlated to $roleName's trace id $traceId") }
     }
     if ($problem.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
     }
     return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
-        -Detail 'A non-401 status with zero rows is an emission problem (connection string or sampling). A 401 is an access problem - the probe never reached the app, so no span could exist (L07 failure mode 3).'
+        -Detail 'A 401 is an ACCESS problem - the probe never reached the app, so no span could exist (L07 failure mode 3). A non-401 status with zero rows is one of three things, in order of likelihood: App Insights ingestion lag (the retry window covers 15 minutes of it); the traceparent header not surviving the hop chain (nginx and the Easy Auth sidecar both forward it by default, so suspect a proxy_set_header that drops it); or a broken connection string. Tell them apart with: AppRequests | where AppRoleName == ''data-api'' | top 5 by TimeGenerated desc - rows there but none here is a correlation problem, no rows at all is an emission problem.'
 }
 
 function Test-CanaryPipeline {
@@ -417,10 +468,16 @@ function Invoke-Main {
         [string]$ResourceGroupName = 'mls-rg-apps',
         [string[]]$AppName = @(),
         # The path V7.3 probes THROUGH Easy Auth. It must reach application code, unlike
-        # $HealthPath, which nginx answers from its own config. Any /api/* path works:
-        # even a 404 from data-api is an emitted span, which is the claim being tested,
-        # so this does not go stale when routes change.
-        [string]$ProbePath = '/api/launches',
+        # $HealthPath, which nginx answers from its own config.
+        #
+        # Any /api/* path emits a span - even a 404 - so the criterion is satisfiable
+        # whatever this is set to. It names a REAL route anyway. nginx's trailing-slash
+        # proxy_pass strips the /api prefix, so this arrives at data-api as
+        # /tables/launches, one of the ten allowlisted tables. The previous default,
+        # /api/launches, arrived as /launches and 404'd on every probe of every run: the
+        # criterion was technically satisfiable while only ever exercising a route the
+        # product does not have, which is not a demonstration anyone wants to give.
+        [string]$ProbePath = '/api/tables/launches',
         [string]$DeployManifestPath,
         [string]$LogAnalyticsWorkspaceId,
         [string]$Repository,
@@ -447,7 +504,12 @@ function Invoke-Main {
     if ([string]::IsNullOrWhiteSpace($workspaceId)) { $workspaceId = [Environment]::GetEnvironmentVariable('MLS_LAW_CUSTOMER_ID') }
     $canary = $CanaryPrNumber
     if ([string]::IsNullOrWhiteSpace($canary)) { $canary = [Environment]::GetEnvironmentVariable('MLS_L7_CANARY_PR') }
-    $probeId = "verifier-$([datetime]::UtcNow.ToString('yyyyMMddHHmmss'))"
+    # One trace id per frontend, minted once for the whole run - see Test-OtelSpan on why
+    # the correlation key is W3C trace context rather than a marker in the URL.
+    $traceIdByApp = @{}
+    foreach ($frontend in $AppName) {
+        $traceIdByApp[(($frontend -replace '^mls-', '') -replace '-demo-ca$', '')] = New-MlsHexToken -ByteCount 16
+    }
 
     $context = New-MlsAuditContext -Layer 7 -Title 'Apps: spec-renderer, launch-ops, control tower, per-app CI' `
         -ScriptName 'verification/layer-07-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
@@ -457,7 +519,9 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Deploy manifest' -Value "$manifestPath" -Status $(if ($manifest) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'LAW customer id' -Value "$workspaceId" -Status $(if ($workspaceId) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Canary PR' -Value "$canary" -Status $(if ($canary) { 'OK' } else { 'ABSENT' })
-    Add-MlsPreflight -Context $context -Name 'Probe marker' -Value $probeId
+    Add-MlsPreflight -Context $context -Name 'Probe path' -Value $ProbePath
+    Add-MlsPreflight -Context $context -Name 'Probe trace ids' -Value (($traceIdByApp.GetEnumerator() | Sort-Object -Property Key |
+                ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', ')
     Add-MlsNote -Context $context -Message 'The control tower''s Ask tab ships dark at L7 and is deliberately not part of any L7 criterion, so a dark tab cannot fail this layer (L07.md Purpose).'
 
     # L07: Container Apps revision readiness
@@ -481,12 +545,12 @@ function Invoke-Main {
     # L07: App Insights ingestion latency is typically 2-10 min
     Invoke-MlsCriterion -Context $context -Id 'V7.3' -Control @('3.3.1') `
         -Description 'OTel spans from a synthetic request visible in App Insights via KQL' `
-        -Command "az account get-access-token --resource <easy-auth-client-id>`nGET https://<fqdn>$ProbePath`?probe=$probeId-<app>  -H 'Authorization: Bearer <token>'   # one per app`naz monitor log-analytics query --workspace <lawCustomerId> --analytics-query `"AppRequests | where Url has 'probe=$probeId' | project TimeGenerated, AppRoleName, Url, OperationId`" --timespan PT1H" `
-        -Expected '>= 1 AppRequests row per app carrying that app''s probe marker; the row''s AppRoleName is the instrumented app in the chain (data-api), not the static frontend' `
+        -Command "az account get-access-token --resource <easy-auth-client-id>`nGET https://<fqdn>$ProbePath  -H 'Authorization: Bearer <token>'  -H 'traceparent: 00-<traceId>-<spanId>-01'   # one per app`naz monitor log-analytics query --workspace <lawCustomerId> --analytics-query `"AppRequests | where OperationId in ('<traceId>', ...) | project TimeGenerated, AppRoleName, OperationId, ResultCode, Name`" --timespan PT1H" `
+        -Expected '>= 1 AppRequests row per app whose OperationId is that app''s probe trace id; the row''s AppRoleName is the instrumented app in the chain (data-api), not the static frontend' `
         -RetryWindowMinutes 15 `
         -Test {
         Test-OtelSpan -ResourceGroupName $ResourceGroupName -AppName $AppName -ProbePath $ProbePath `
-            -WorkspaceId $workspaceId -ProbeId $probeId
+            -WorkspaceId $workspaceId -TraceIdByApp $traceIdByApp
     } | Out-Null
 
     # -Control @(): validates CI/CD path-filter plumbing (the right app pipeline runs for
@@ -519,7 +583,7 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -ResourceGroupName $ResourceGroupName -AppName $AppName `
             -DeployManifestPath $DeployManifestPath -LogAnalyticsWorkspaceId $LogAnalyticsWorkspaceId `
-            -Repository $Repository -CanaryPrNumber $CanaryPrNumber -HealthPath $HealthPath `
+            -Repository $Repository -CanaryPrNumber $CanaryPrNumber -HealthPath $HealthPath -ProbePath $ProbePath `
             -LoadRequestCount $LoadRequestCount -ScaleInWaitMinutes $ScaleInWaitMinutes `
             -ScaleInDeadlineMinutes $ScaleInDeadlineMinutes -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion

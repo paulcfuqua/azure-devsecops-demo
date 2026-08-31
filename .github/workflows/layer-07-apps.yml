@@ -86,6 +86,16 @@ on:
         type: string
         required: false
         default: ''
+      only_criterion:
+        description: >-
+          Verify only these criteria, e.g. `V7.3` or `V7.1,V7.3`. Everything else reports
+          SKIP and the audit exits 3 - a DIAGNOSTIC, never a sign-off. A full L7 audit is
+          ~55 minutes because V7.5 waits out two real scale-in cycles, so re-testing one
+          criterion costs an hour of wall clock it does not need (P-10). Leave empty for a
+          verdict.
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -1206,6 +1216,8 @@ jobs:
             ${{ steps.law.outputs.customer-id }}
             ${{ (inputs.canary_pr || vars.MLS_L7_CANARY_PR) && '-CanaryPrNumber' || '' }}
             ${{ inputs.canary_pr || vars.MLS_L7_CANARY_PR }}
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
 
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
