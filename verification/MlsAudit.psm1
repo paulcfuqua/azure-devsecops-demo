@@ -727,13 +727,30 @@ function Invoke-MlsHttp {
     .SYNOPSIS
         Plain HTTPS GET against a public app endpoint (V7.1 health checks, V7.3 probes).
         Returns status code, body and headers; never throws on a non-2xx status.
+    .PARAMETER Header
+        Optional request headers. V7.3 sends an Authorization bearer so the probe can get
+        past Easy Auth and reach application code, which is the only way a span exists at
+        all (F89).
+
+        THE VALUE IS NEVER ECHOED. This function returns the response, never the request,
+        and no caller logs $Header - a token in an audit report committed to a public repo
+        would be a live credential in git history. The returned object deliberately carries
+        no copy of what was sent.
     #>
     param(
         [Parameter(Mandatory)][string]$Uri,
-        [int]$TimeoutSec = 60
+        [int]$TimeoutSec = 60,
+        [hashtable]$Header
     )
     try {
-        $response = Invoke-WebRequest -Uri $Uri -Method GET -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
+        $argument = @{
+            Uri                = $Uri
+            Method             = 'GET'
+            TimeoutSec         = $TimeoutSec
+            SkipHttpErrorCheck = $true
+        }
+        if ($Header -and $Header.Count -gt 0) { $argument['Headers'] = $Header }
+        $response = Invoke-WebRequest @argument
         return [pscustomobject]@{
             StatusCode = [int](Get-MlsProperty -InputObject $response -Name 'StatusCode')
             Content    = [string](Get-MlsProperty -InputObject $response -Name 'Content')

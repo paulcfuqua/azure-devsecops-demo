@@ -54,10 +54,24 @@ Describe 'layer-07-audit' {
         $script:HealthStatus = 200
         $script:ReplicaSequence = @{ 'mls-launch-ops-demo-ca' = @(0, 3, 0); 'mls-control-tower-demo-ca' = @(0, 2, 0) }
         $script:ReplicaCall = @{ 'mls-launch-ops-demo-ca' = 0; 'mls-control-tower-demo-ca' = 0 }
-        $script:SpanRows = @(
-            [pscustomobject]@{ AppRoleName = 'launch-ops'; OperationId = 'op1' }
-            [pscustomobject]@{ AppRoleName = 'control-tower'; OperationId = 'op2' }
-        )
+        # V7.3 matches on the PROBE MARKER in the row's Url, not on AppRoleName: the span
+        # is emitted by whichever app in the chain runs instrumented code (data-api), while
+        # the marker says which front door the request came through (F89). The probe id is
+        # a timestamp minted at run time, so the mock reads it back out of the KQL it was
+        # handed rather than pinning a literal the test would have to keep in step.
+        $script:SpanEmittingRole = 'data-api'
+        function Get-SpanRowsForQuery {
+            param([string]$Query)
+            if ($Query -notmatch "probe=([^']+)'") { return @() }
+            $probeId = $Matches[1]
+            return @('launch-ops', 'control-tower' | ForEach-Object {
+                    [pscustomobject]@{
+                        AppRoleName = $script:SpanEmittingRole
+                        Url         = "https://$_.mls.eastus.azurecontainerapps.io/api/launches?probe=$probeId-$_"
+                        OperationId = "op-$_"
+                    }
+                })
+        }
         $script:CheckRun = @(
             [pscustomobject]@{ name = 'app-launch-ops-ci / build'; conclusion = 'success' }
             [pscustomobject]@{ name = 'app-control-tower-ci / build'; conclusion = 'success' }
@@ -78,7 +92,15 @@ Describe 'layer-07-audit' {
                 $script:ReplicaCall[$name] = $phase + 1
                 return "$($script:ReplicaSequence[$name][[math]::Min($phase, 2)])"
             }
-            if ($joined -like 'monitor log-analytics query*') { return $script:SpanRows }
+            if ($joined -like 'containerapp auth show*') {
+                $index = [array]::IndexOf($Argument, '--name')
+                return "clientid-$($Argument[$index + 1])"
+            }
+            if ($joined -like 'account get-access-token*') { return 'fake-token' }
+            if ($joined -like 'monitor log-analytics query*') {
+                $index = [array]::IndexOf($Argument, '--analytics-query')
+                return Get-SpanRowsForQuery -Query "$($Argument[$index + 1])"
+            }
             throw "unexpected az call: $joined"
         }
 
@@ -188,10 +210,16 @@ Describe 'layer-07-audit' {
                     $script:ReplicaCall[$name] = $phase + 1
                     return "$($script:ReplicaSequence[$name][[math]::Min($phase, 2)])"
                 }
+                if ($joined -like 'containerapp auth show*') {
+                    $index = [array]::IndexOf($Argument, '--name')
+                    return "clientid-$($Argument[$index + 1])"
+                }
+                if ($joined -like 'account get-access-token*') { return 'fake-token' }
                 if ($joined -like 'monitor log-analytics query*') {
                     $script:Calls++
                     if ($script:Calls -lt 2) { return @() }
-                    return $script:SpanRows
+                    $index = [array]::IndexOf($Argument, '--analytics-query')
+                    return Get-SpanRowsForQuery -Query "$($Argument[$index + 1])"
                 }
                 throw "unexpected az call: $joined"
             }
@@ -226,6 +254,102 @@ Describe 'layer-07-audit' {
             $row.Attempt | Should -Be 1
             $row.Detail | Should -BeLike '*MLS_L7_MANIFEST*'
             $row.Detail | Should -BeLike '*Refusing to pass on liveness alone*'
+        }
+
+        It 'fails V7.3 distinguishably when no token can be obtained' {
+            # "Could not get in" and "got in and saw nothing" have completely different
+            # fixes - a missing service principal or probe role versus a broken connection
+            # string - and the old message conflated them into "no AppRequests row" (F89).
+            Mock Invoke-MlsAz {
+                $joined = $Argument -join ' '
+                if ($joined -like 'containerapp show*') {
+                    $index = [array]::IndexOf($Argument, '--name')
+                    return "$($Argument[$index + 1]).mls.eastus.azurecontainerapps.io"
+                }
+                if ($joined -like 'containerapp replica list*') {
+                    $index = [array]::IndexOf($Argument, '--name')
+                    $name = $Argument[$index + 1]
+                    $phase = $script:ReplicaCall[$name]
+                    $script:ReplicaCall[$name] = $phase + 1
+                    return "$($script:ReplicaSequence[$name][[math]::Min($phase, 2)])"
+                }
+                if ($joined -like 'containerapp auth show*') {
+                    $index = [array]::IndexOf($Argument, '--name')
+                    return "clientid-$($Argument[$index + 1])"
+                }
+                if ($joined -like 'account get-access-token*') { return '' }   # the mutation under test
+                if ($joined -like 'monitor log-analytics query*') { return @() }
+                throw "unexpected az call: $joined"
+            }
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V7.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'could not obtain a token'
+            $row.Observed | Should -Match 'service principal'
+        }
+
+        It 'fails V7.3 saying Easy Auth rejected the token when the probe still 401s' {
+            Mock Invoke-MlsHttp {
+                return [pscustomobject]@{ StatusCode = 401; Content = ''; Headers = @{}; Error = $null }
+            }
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V7.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'Easy Auth rejected it'
+        }
+
+        It 'passes V7.3 on a non-401 application status, because the span is the claim' {
+            # A 403 or 404 from the app is a PASS: the request traversed Easy Auth and
+            # reached application code, which is the entire assertion. The probe role
+            # deliberately grants no data access, so demanding a 200 would be demanding a
+            # privilege the Verifier is not supposed to have.
+            Mock Invoke-MlsHttp {
+                return [pscustomobject]@{ StatusCode = 403; Content = ''; Headers = @{}; Error = $null }
+            }
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V7.3'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -Match 'http=403'
+        }
+
+        It 'waits for a warm app to settle to zero instead of failing V7.5 on the spot' {
+            # V7.1 curls every endpoint before this criterion runs and leaves the apps
+            # warm, so "starts at 0" was falsified by an earlier criterion in the same
+            # audit. The sequence below starts at 1 and settles; the 0 -> N -> 0 cycle is
+            # then observable and must pass (F89).
+            $script:ReplicaSequence['mls-launch-ops-demo-ca'] = @(1, 0, 4, 0)
+            $script:ReplicaSequence['mls-control-tower-demo-ca'] = @(1, 0, 2, 0)
+            $script:ReplicaCall['mls-launch-ops-demo-ca'] = 0
+            $script:ReplicaCall['mls-control-tower-demo-ca'] = 0
+            Mock Invoke-MlsAz {
+                $joined = $Argument -join ' '
+                if ($joined -like 'containerapp show*') {
+                    $index = [array]::IndexOf($Argument, '--name')
+                    return "$($Argument[$index + 1]).mls.eastus.azurecontainerapps.io"
+                }
+                if ($joined -like 'containerapp replica list*') {
+                    $index = [array]::IndexOf($Argument, '--name')
+                    $name = $Argument[$index + 1]
+                    $phase = $script:ReplicaCall[$name]
+                    $script:ReplicaCall[$name] = $phase + 1
+                    $sequence = $script:ReplicaSequence[$name]
+                    return "$($sequence[[math]::Min($phase, $sequence.Count - 1)])"
+                }
+                if ($joined -like 'containerapp auth show*') {
+                    $index = [array]::IndexOf($Argument, '--name')
+                    return "clientid-$($Argument[$index + 1])"
+                }
+                if ($joined -like 'account get-access-token*') { return 'fake-token' }
+                if ($joined -like 'monitor log-analytics query*') {
+                    $index = [array]::IndexOf($Argument, '--analytics-query')
+                    return Get-SpanRowsForQuery -Query "$($Argument[$index + 1])"
+                }
+                throw "unexpected az call: $joined"
+            }
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V7.5'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -Match 'settled after'
         }
 
         It 'fails V7.4 with an actionable message when no canary PR number was posted' {
