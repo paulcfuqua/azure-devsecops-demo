@@ -259,7 +259,11 @@ Describe 'F36: L7 resolves its own Easy Auth client IDs rather than demanding th
         $script:RedirectReportStep = Get-StepBody -StepName 'Report a failed redirect-URI registration' -JobBody $script:F36DeployJob
 
         $script:EntraManifestPath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'entra', 'manifest.json'
-        $script:EntraManifest = Get-Content -LiteralPath $script:EntraManifestPath -Raw | ConvertFrom-Json
+        # Resolved, not raw: the manifest ships tokenised, and a fixture asserting on
+        # "${prefix}-launch-ops-${env}-app" would be testing a string the deploy never
+        # sees (F93).
+        $script:EntraManifest = (Get-Content -LiteralPath $script:EntraManifestPath -Raw).
+            Replace('${prefix}', 'mls').Replace('${env}', 'demo') | ConvertFrom-Json
 
         # The not-found branch on its own: from the line that records the state
         # to the end of the else block that owns it. "no registration exists" is
