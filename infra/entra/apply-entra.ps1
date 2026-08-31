@@ -56,7 +56,13 @@ param(
     [int]$PropagationTimeoutSeconds = 180,
 
     [ValidateRange(0, 60)]
-    [int]$PropagationIntervalSeconds = 5
+    [int]$PropagationIntervalSeconds = 5,
+
+    # The read-only Verifier's app registration, created by
+    # scripts/bootstrap/01-root-oidc.ps1 (which uses this same default). It is the
+    # principal the dashboards' probe role is assigned to, so V7.3 can obtain a token
+    # for an Easy Auth audience without any new credential.
+    [string]$VerifierAppName = 'mls-verifier'
 )
 
 Set-StrictMode -Version Latest
@@ -254,13 +260,77 @@ function Get-ResponseValue {
 
 # --- manifest --------------------------------------------------------------------------
 
+function Get-NamingDefault {
+    <# Read a default out of infra/bicep/naming.bicep, which CLAUDE.md names as the single
+       source of the estate's naming. Parsed rather than duplicated: a second copy of 'mls'
+       in this script is a second source of truth, and the one that drifts. #>
+    param(
+        [Parameter(Mandatory)][string]$VariableName,
+        [Parameter(Mandatory)][string]$Fallback
+    )
+    $namingFile = Join-Path $PSScriptRoot '..' 'bicep' 'naming.bicep'
+    if (-not (Test-Path -LiteralPath $namingFile)) { return $Fallback }
+    $match = Select-String -LiteralPath $namingFile -Pattern "^var $VariableName = '([^']*)'" |
+        Select-Object -First 1
+    if ($match -and $match.Matches[0].Groups[1].Value) { return $match.Matches[0].Groups[1].Value }
+    return $Fallback
+}
+
+function Resolve-ManifestToken {
+    <# Expand ${prefix} and ${env} in the manifest.
+
+       WHY THE MANIFEST IS TOKENISED. Every Entra name used to be hardcoded 'mls-...', while
+       every AZURE name derived from naming.bicep's companyPrefix. A cloner who set the
+       prefix therefore got acme-rg-platform resource groups next to mls-flight-operations
+       groups - half a rebrand, and the half that is hardest to spot because Entra objects
+       are not in the portal blade you are looking at (F90).
+
+       Expansion happens on the RAW TEXT before ConvertFrom-Json, so it reaches every string
+       in one pass - including the cross-references that must stay consistent, like the
+       dashboard CA policy naming the three app registrations it scopes to. Expanding after
+       parsing would mean walking the object graph and remembering every place a name can
+       appear, which is the same enumeration problem F70 was. #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][string]$CompanyPrefix,
+        [Parameter(Mandatory)][string]$EnvSegment
+    )
+    return $Text.Replace('${prefix}', $CompanyPrefix).Replace('${env}', $EnvSegment)
+}
+
 function Get-Manifest {
-    param([Parameter(Mandatory)][string]$Path)
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [AllowEmptyString()][string]$CompanyPrefix = '',
+        [AllowEmptyString()][string]$EnvSegment = ''
+    )
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Manifest not found at '$Path'."
     }
+    if ([string]::IsNullOrWhiteSpace($CompanyPrefix)) {
+        $CompanyPrefix = $env:MLS_COMPANY_PREFIX
+        if ([string]::IsNullOrWhiteSpace($CompanyPrefix)) {
+            $CompanyPrefix = Get-NamingDefault -VariableName 'defaultCompanyPrefix' -Fallback 'mls'
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($EnvSegment)) {
+        $EnvSegment = $env:MLS_ENV_SEGMENT
+        if ([string]::IsNullOrWhiteSpace($EnvSegment)) {
+            $EnvSegment = Get-NamingDefault -VariableName 'defaultEnv' -Fallback 'demo'
+        }
+    }
+    # Validated here as well as in the naming action, because this script is also run
+    # directly. An invalid prefix must fail with a sentence, not inside Graph.
+    if ($CompanyPrefix -notmatch '^[a-z][a-z0-9]{1,9}$') {
+        throw "MLS_COMPANY_PREFIX '$CompanyPrefix' must be 2-10 characters, lowercase letters and digits, starting with a letter."
+    }
+    if ($EnvSegment -notmatch '^[a-z0-9]{2,6}$') {
+        throw "MLS_ENV_SEGMENT '$EnvSegment' must be 2-6 characters, lowercase letters and digits."
+    }
     try {
-        return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $text = Resolve-ManifestToken -Text (Get-Content -LiteralPath $Path -Raw) `
+            -CompanyPrefix $CompanyPrefix -EnvSegment $EnvSegment
+        return $text | ConvertFrom-Json
     }
     catch {
         throw "Manifest at '$Path' is not valid JSON: $($_.Exception.Message)"
@@ -325,6 +395,12 @@ function Assert-ManifestSchema {
     foreach ($app in @(Get-Field -Object $Manifest -Name 'appRegistrations')) {
         if ([string]::IsNullOrWhiteSpace([string](Get-Field -Object $app -Name 'displayName'))) {
             $problems.Add("appRegistrations[$index] missing required field 'displayName'")
+        }
+        # An empty verifierProbeRole would declare an app role with no value, which Graph
+        # rejects halfway through the layer rather than here.
+        if ((Test-Field -Object $app -Name 'verifierProbeRole') -and
+            [string]::IsNullOrWhiteSpace([string](Get-Field -Object $app -Name 'verifierProbeRole'))) {
+            $problems.Add("appRegistrations[$index] has an empty 'verifierProbeRole'; omit the field or name a role")
         }
         $index++
     }
@@ -415,7 +491,7 @@ function Get-EntraGroup {
 function Get-EntraApplication {
     param([Parameter(Mandatory)][string]$DisplayName)
     $literal = ConvertTo-ODataLiteral -Value $DisplayName
-    $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName,signInAudience"
+    $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName,signInAudience,appRoles"
     $found = @(Get-ResponseValue -Response $response)
     if ($found.Count -ge 1) { return $found[0] }
     return $null
@@ -561,7 +637,7 @@ function Initialize-GroupMembership {
 }
 
 function Initialize-EntraApplication {
-    <# Create-if-absent / update-on-drift app registration. Returns @{ AppId; Outcome }.
+    <# Create-if-absent / update-on-drift app registration. Returns @{ AppId; ObjectId; AppRoles; Outcome }.
 
        AppId is the application (client) id, NOT the directory object id: it is what
        Conditional Access `includeApplications` addresses an application by, and carrying
@@ -574,13 +650,15 @@ function Initialize-EntraApplication {
     $existing = Get-EntraApplication -DisplayName $displayName
     if ($existing) {
         $appId = Get-Field -Object $existing -Name 'appId'
+        $objectId = Get-Field -Object $existing -Name 'id'
+        $roles = @(Get-FieldArray -Object $existing -Name 'appRoles')
         if ((Get-Field -Object $existing -Name 'signInAudience') -ne $audience) {
             Invoke-GraphMutation -Target $displayName -Action "Update signInAudience -> $audience" `
-                -Method PATCH -Path "applications/$(Get-Field -Object $existing -Name 'id')" `
+                -Method PATCH -Path "applications/$objectId" `
                 -Body @{ signInAudience = $audience } | Out-Null
-            return @{ AppId = $appId; Outcome = 'Updated' }
+            return @{ AppId = $appId; ObjectId = $objectId; AppRoles = $roles; Outcome = 'Updated' }
         }
-        return @{ AppId = $appId; Outcome = 'Unchanged' }
+        return @{ AppId = $appId; ObjectId = $objectId; AppRoles = $roles; Outcome = 'Unchanged' }
     }
     $body = [ordered]@{
         displayName    = $displayName
@@ -590,9 +668,151 @@ function Initialize-EntraApplication {
     if ($notes) { $body['notes'] = $notes }
     $created = Invoke-GraphMutation -Target $displayName -Action 'Create app registration' -Method POST -Path 'applications' -Body $body
     if ($created) {
-        return @{ AppId = (Get-Field -Object $created -Name 'appId'); Outcome = 'Created' }
+        # THE OBJECT ID IS CARRIED OUT, NOT RE-READ. Re-fetching an application one line
+        # after creating it is a read against a replica that may not have it yet - the
+        # exact shape F70 cost a run - and it would silently skip the probe role rather
+        # than fail, because "not found" and "no role needed" look identical downstream.
+        return @{
+            AppId    = (Get-Field -Object $created -Name 'appId')
+            ObjectId = (Get-Field -Object $created -Name 'id')
+            AppRoles = @()
+            Outcome  = 'Created'
+        }
     }
-    return @{ AppId = $null; Outcome = 'WhatIf' }
+    return @{ AppId = $null; ObjectId = $null; AppRoles = @(); Outcome = 'WhatIf' }
+}
+
+function Get-DeterministicGuid {
+    <# A stable GUID from a string, so re-running this script does not churn app role ids.
+
+       An app role's id is its identity: change it and every existing assignment dangles,
+       because an assignment references the role BY id. Generating a fresh GUID per run
+       would make each deploy revoke the last one's grant while reporting success. #>
+    param([Parameter(Mandatory)][string]$Text)
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    try {
+        $bytes = $md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Text))
+        return [guid]::new($bytes).Guid
+    } finally { $md5.Dispose() }
+}
+
+function Get-EntraServicePrincipal {
+    param([Parameter(Mandatory)][string]$AppId)
+    $literal = ConvertTo-ODataLiteral -Value $AppId
+    $response = Invoke-GraphApi -Method GET -Path "servicePrincipals?`$filter=appId eq '$literal'&`$select=id,appId,displayName"
+    $found = @(Get-ResponseValue -Response $response)
+    if ($found.Count -ge 1) { return $found[0] }
+    return $null
+}
+
+function Get-EntraServicePrincipalByName {
+    param([Parameter(Mandatory)][string]$DisplayName)
+    $literal = ConvertTo-ODataLiteral -Value $DisplayName
+    $response = Invoke-GraphApi -Method GET -Path "servicePrincipals?`$filter=displayName eq '$literal'&`$select=id,appId,displayName"
+    $found = @(Get-ResponseValue -Response $response)
+    if ($found.Count -ge 1) { return $found[0] }
+    return $null
+}
+
+function Initialize-EntraServicePrincipal {
+    <# Create-if-absent service principal for an app registration. Returns the SP object id.
+
+       THIS IS NOT OPTIONAL AND IS DELIBERATELY NOT A MANIFEST FLAG. An application object
+       is a definition; the SERVICE PRINCIPAL is the tenant-local identity that everything
+       else actually addresses - app role assignments, permission grants, enterprise-app
+       visibility and sign-in logs all hang off it. An estate that registers applications
+       and never creates their principals leaves four half-objects behind (F89).
+
+       A flag defaulting to true that nobody would ever set false is the F85 pattern: a
+       documented manual step reading as a design. So there is no flag.
+
+       What the missing principal actually broke: a client-credentials token cannot be
+       issued for an audience that has no principal in the tenant, which is why the
+       Verifier could not reach past Easy Auth to produce the span V7.3 waits on. Note it
+       did NOT break interactive sign-in - Entra creates the principal on first consent -
+       so nothing visibly failed, which is why it survived. #>
+    param(
+        [Parameter(Mandatory)][string]$AppId,
+        [Parameter(Mandatory)][string]$DisplayName
+    )
+    $existing = Get-EntraServicePrincipal -AppId $AppId
+    if ($existing) { return @{ Id = (Get-Field -Object $existing -Name 'id'); Outcome = 'Unchanged' } }
+    $created = Invoke-GraphMutation -Target $DisplayName -Action 'Create service principal' `
+        -Method POST -Path 'servicePrincipals' -Body @{ appId = $AppId }
+    if ($created) { return @{ Id = (Get-Field -Object $created -Name 'id'); Outcome = 'Created' } }
+    return @{ Id = $null; Outcome = 'WhatIf' }
+}
+
+function Initialize-VerifierProbeRole {
+    <# Declare the probe app role on the application, and assign it to the Verifier.
+
+       WHY A ROLE THAT GRANTS NOTHING. The Verifier needs to prove that a request reaching
+       the application produces an OTel span in App Insights (V7.3). Easy Auth validates
+       only that a bearer token's audience matches the app's client id, so the Verifier
+       needs A token for that audience - not permission to read anything. Entra will not
+       issue a client-credentials `.default` token unless the caller holds at least one app
+       role on the resource, so this role exists purely to make issuance possible.
+
+       The application is expected to grant it NO capability. A 403 from the app is a
+       perfectly good V7.3 result: the request traversed Easy Auth and the app, which is
+       the whole claim. That is what keeps CLAUDE.md's "Verifier is Reader, never the
+       deployer" true in spirit and not just in Azure RBAC - it gains a way in, not a way
+       to read the estate's data.
+
+       The Verifier does not create any of this. The deploy path does, and the Verifier
+       consumes what it finds - otherwise the probe would be provisioning its own access,
+       which is the self-certifying shape that produced six earlier findings. #>
+    param(
+        [Parameter(Mandatory)][string]$DisplayName,
+        [Parameter(Mandatory)][string]$RoleValue,
+        [Parameter(Mandatory)][string]$ApplicationObjectId,
+        [AllowEmptyCollection()][object[]]$ExistingRoles = @(),
+        [Parameter(Mandatory)][string]$ResourceSpId,
+        [Parameter(Mandatory)][string]$VerifierAppName
+    )
+    $applicationId = $ApplicationObjectId
+    $roleId = Get-DeterministicGuid -Text "$DisplayName/$RoleValue"
+
+    $existingRoles = @($ExistingRoles)
+    $hasRole = @($existingRoles | Where-Object { (Get-Field -Object $_ -Name 'value') -eq $RoleValue }).Count -ge 1
+    if (-not $hasRole) {
+        # PATCH replaces the whole collection, so carry the existing roles across.
+        $roles = [System.Collections.Generic.List[object]]::new()
+        foreach ($role in $existingRoles) { $roles.Add($role) }
+        $roles.Add([ordered]@{
+                id                 = $roleId
+                allowedMemberTypes = @('Application')
+                value              = $RoleValue
+                displayName        = 'Telemetry probe'
+                description        = 'Lets the read-only Verifier obtain a token for this application so it can prove a request reaches the app and emits a span (L7 V7.3). Grants no access to application data.'
+                isEnabled          = $true
+            })
+        Invoke-GraphMutation -Target $DisplayName -Action "Declare app role $RoleValue" `
+            -Method PATCH -Path "applications/$applicationId" -Body @{ appRoles = $roles.ToArray() } | Out-Null
+    }
+
+    $verifier = Get-EntraServicePrincipalByName -DisplayName $VerifierAppName
+    if (-not $verifier) {
+        # Not fatal to the layer, but V7.3 cannot pass, and saying so here beats a silent
+        # 401 forty minutes later inside the audit.
+        Write-Status "  $VerifierAppName has no service principal; skipping the probe role assignment. V7.3 will fail with a 401 until scripts/bootstrap/01-root-oidc.ps1 has run." -Color Yellow
+        return 'Blocked'
+    }
+    $verifierSpId = Get-Field -Object $verifier -Name 'id'
+
+    $assignments = @(Get-ResponseValue -Response (Invoke-GraphApi -Method GET `
+                -Path "servicePrincipals/$verifierSpId/appRoleAssignments"))
+    $already = @($assignments | Where-Object {
+            (Get-Field -Object $_ -Name 'resourceId') -eq $ResourceSpId -and
+            (Get-Field -Object $_ -Name 'appRoleId') -eq $roleId
+        }).Count -ge 1
+    if ($already) { return 'Unchanged' }
+
+    $assigned = Invoke-GraphMutation -Target $VerifierAppName -Action "Assign $RoleValue on $DisplayName" `
+        -Method POST -Path "servicePrincipals/$verifierSpId/appRoleAssignments" `
+        -Body @{ principalId = $verifierSpId; resourceId = $ResourceSpId; appRoleId = $roleId }
+    if ($assigned) { return 'Created' }
+    return 'WhatIf'
 }
 
 function Resolve-CaPolicyCondition {
@@ -933,12 +1153,15 @@ function Invoke-ManifestItem {
 }
 
 function Invoke-Main {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+        Justification = 'VerifierAppName is consumed inside the Invoke-ManifestItem scriptblock; PSSA cannot see through scriptblock closures.')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$ManifestPath,
         [AllowEmptyString()][string]$Domain = '',
         [int]$PropagationTimeoutSeconds = 180,
-        [int]$PropagationIntervalSeconds = 5
+        [int]$PropagationIntervalSeconds = 5,
+        [string]$VerifierAppName = 'mls-verifier'
     )
     # Publish the propagation budget to the Graph choke point, which every call routes
     # through. Without this the parameters above would configure the two Wait-EntraPropagation
@@ -970,6 +1193,8 @@ function Invoke-Main {
         UsersCreated = 0; UsersUpdated = 0; UsersUnchanged = 0
         GroupsCreated = 0; GroupsUnchanged = 0; MembershipsAdded = 0
         AppsCreated = 0; AppsUpdated = 0; AppsUnchanged = 0
+        ServicePrincipalsCreated = 0; ServicePrincipalsUnchanged = 0
+        ProbeRolesAssigned = 0; ProbeRolesUnchanged = 0; ProbeRolesBlocked = 0
         CaCreated = 0; CaUpdated = 0; CaUnchanged = 0; CaBlocked = 0
         LicensesAssigned = 0; LicensesUnchanged = 0
         SkippedInWhatIf = 0
@@ -1064,6 +1289,7 @@ function Invoke-Main {
     # with a message naming them rather than posted with an empty (= tenant-wide) scope.
     $appIdByDisplayName = @{}
     foreach ($app in @(Get-Field -Object $manifest -Name 'appRegistrations')) {
+        $appDisplayName = Get-Field -Object $app -Name 'displayName'
         $result = Initialize-EntraApplication -App $app
         switch ($result.Outcome) {
             'Created' { $summary.AppsCreated++ }
@@ -1071,7 +1297,36 @@ function Invoke-Main {
             'Unchanged' { $summary.AppsUnchanged++ }
             'WhatIf' { $summary.SkippedInWhatIf++ }
         }
-        if ($result.AppId) { $appIdByDisplayName[(Get-Field -Object $app -Name 'displayName')] = $result.AppId }
+        if ($result.AppId) { $appIdByDisplayName[$appDisplayName] = $result.AppId }
+
+        # EVERY registration gets its service principal. Wrapped per item like the CA loop
+        # so one failure reports and the rest still run (F72/F76).
+        if ($result.AppId) {
+            $spOutcome = Invoke-ManifestItem -Description "service principal for $appDisplayName" -Failures $failures -Action {
+                $sp = Initialize-EntraServicePrincipal -AppId $result.AppId -DisplayName $appDisplayName
+                switch ($sp.Outcome) {
+                    'Created' { $summary.ServicePrincipalsCreated++ }
+                    'Unchanged' { $summary.ServicePrincipalsUnchanged++ }
+                    'WhatIf' { $summary.SkippedInWhatIf++ }
+                }
+
+                # The probe role only goes on applications that sit behind Easy Auth and
+                # that V7.3 probes; the manifest names them.
+                $probeRole = Get-Field -Object $app -Name 'verifierProbeRole'
+                if ($probeRole -and $sp.Id -and $result.ObjectId) {
+                    $roleOutcome = Initialize-VerifierProbeRole -DisplayName $appDisplayName -RoleValue $probeRole `
+                        -ApplicationObjectId $result.ObjectId -ExistingRoles $result.AppRoles `
+                        -ResourceSpId $sp.Id -VerifierAppName $VerifierAppName
+                    switch ($roleOutcome) {
+                        'Created' { $summary.ProbeRolesAssigned++ }
+                        'Unchanged' { $summary.ProbeRolesUnchanged++ }
+                        'Blocked' { $summary.ProbeRolesBlocked++ }
+                    }
+                }
+                return 'ok'
+            }
+            if ($null -eq $spOutcome) { continue }
+        }
     }
 
     # ---- conditional access policies ----------------------------------------------
@@ -1118,5 +1373,6 @@ function Invoke-Main {
 
 if (-not $env:MLS_SKIP_MAIN) {
     Invoke-Main -ManifestPath $ManifestPath -Domain $Domain `
-        -PropagationTimeoutSeconds $PropagationTimeoutSeconds -PropagationIntervalSeconds $PropagationIntervalSeconds
+        -PropagationTimeoutSeconds $PropagationTimeoutSeconds -PropagationIntervalSeconds $PropagationIntervalSeconds `
+        -VerifierAppName $VerifierAppName
 }

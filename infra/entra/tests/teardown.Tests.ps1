@@ -10,7 +10,12 @@ BeforeAll {
     # that way, so the harness must not relax the language mode it is testing (F49).
 
     function Get-FreshManifest {
-        return Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+        # Get-Manifest, not raw JSON: the manifest is tokenised (${prefix}, ${env}) and
+        # teardown.ps1 resolves those before it looks for a single object. A test reading
+        # the raw file would assert on '${prefix}-break-glass' while the script searched
+        # for 'mls-break-glass' - the harness measuring a different string than the code
+        # uses, which is exactly the mirror this suite exists to prevent (F90).
+        return Get-Manifest -Path $script:ManifestPath
     }
 
     function Invoke-TeardownForTest {

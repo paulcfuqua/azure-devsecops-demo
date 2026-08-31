@@ -11,7 +11,10 @@ BeforeAll {
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l03-$([guid]::NewGuid().ToString('n'))"
     $script:Domain = 'meridianlaunch.onmicrosoft.com'
     $script:ManifestPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', 'infra', 'entra', 'manifest.json'
-    $script:Manifest = Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+    # Resolved, not raw: the manifest ships tokenised (${prefix}, ${env}) and the audit
+    # under test resolves it before comparing a single name. A fixture reading the raw
+    # file would assert on strings the code never sees (F90).
+    $script:Manifest = Get-MlsJsonFile -Path $script:ManifestPath -Purpose 'L3 manifest (test fixture)' -TokenReplacement @{ '${prefix}' = (Get-MlsEstateNaming).Prefix; '${env}' = (Get-MlsEstateNaming).Env }
     $script:SkuId = '99999999-9999-9999-9999-999999999999'
     # By FLAG, never by name - the audit finds it the same way, so a rename cannot quietly
     # leave the guard asserting nothing.
@@ -78,7 +81,7 @@ BeforeAll {
            true; everything else is flagged false. -Strip removes the property entirely,
            which is the pre-2026-08-26 manifest shape. #>
         param([string[]]$Licensed = @(), [switch]$Strip, [Parameter(Mandatory)][string]$Name)
-        $manifest = Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+        $manifest = Get-MlsJsonFile -Path $script:ManifestPath -Purpose 'L3 manifest (test fixture)' -TokenReplacement @{ '${prefix}' = (Get-MlsEstateNaming).Prefix; '${env}' = (Get-MlsEstateNaming).Env }
         foreach ($user in $manifest.users) {
             if ($Strip) { $user.PSObject.Properties.Remove('licensed'); continue }
             $user.licensed = [bool]($user.userPrincipalNamePrefix -in $Licensed)
@@ -415,7 +418,7 @@ Describe 'layer-03-audit' {
                 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
                     Justification = 'Test fixture: writes one temp file under the suite report root.')]
                 param([Parameter(Mandatory)][scriptblock]$Break, [Parameter(Mandatory)][string]$Name)
-                $manifest = Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+                $manifest = Get-MlsJsonFile -Path $script:ManifestPath -Purpose 'L3 manifest (test fixture)' -TokenReplacement @{ '${prefix}' = (Get-MlsEstateNaming).Prefix; '${env}' = (Get-MlsEstateNaming).Env }
                 $policy = @($manifest.conditionalAccessPolicies | Where-Object { $_.state -eq 'enabled' })[0]
                 & $Break $policy
                 if (-not (Test-Path -LiteralPath $script:ReportRoot)) {

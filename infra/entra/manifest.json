@@ -1,9 +1,9 @@
 {
   "$comment": "Meridian Launch Systems demo identity manifest (Layer L3). All people are FICTIONAL; no real PII - this file is committed to a PUBLIC repo, so real presenters are added in the portal only and never listed here (CLAUDE.md hard rule 4). UPNs are composed as <userPrincipalNamePrefix>@<domain>; the domain below is a placeholder overridden at apply time via apply-entra.ps1 -Domain (the tenant's real verified domain). Applied by apply-entra.ps1 - idempotent create-if-absent/update.",
   "$appRegistrationsComment": "appKey maps a registration to the app it belongs to, using the SAME key infra/bicep/naming.bicep's appKeys uses. It is metadata for callers, not Graph: apply-entra.ps1 reads displayName/signInAudience/notes and ignores everything else. .github/workflows/layer-07-apps.yml resolves each dashboard's Easy Auth client ID by looking the registration up under its appKey and then by its displayName, so the workflow never hardcodes the company prefix (CLAUDE.md) and a renamed registration cannot silently gate the wrong app.",
-  "$conditionalAccessComment": "THREE policies, and only ONE of them is enforced. mls-ca-require-mfa-dashboards is state=enabled: it requires MFA for ALL users signing in to the THREE human-facing dashboards (launch-ops, control-tower, compliance) and nothing else, which is the narrowest scope that still covers every place a human signs in to this estate. The other two target includeApplications:[All] - one every admin directory role, one every legacy client - and stay enabledForReportingButNotEnforced: an All/All grant enforced in someone else's tenant is a lockout, not a demo. The two *ByDisplayName keys are NOT Graph fields. Graph wants object ids (appId for applications, group id for groups) which do not exist until this manifest is applied, so apply-entra.ps1 resolves the names it created moments earlier and substitutes them - app registrations are created before CA policies for exactly that reason. An enabled policy MUST exclude a group flagged \"breakGlass\": true, and apply-entra.ps1 refuses to create or enable it until that group actually holds a cloud-only emergency-access account that is not one of the fictional personas above (docs/runbooks/g0-bootstrap.md item 13, docs/runbooks/layers/L03.md).",
+  "$conditionalAccessComment": "THREE policies, and only ONE of them is enforced. ${prefix}-ca-require-mfa-dashboards is state=enabled: it requires MFA for ALL users signing in to the THREE human-facing dashboards (launch-ops, control-tower, compliance) and nothing else, which is the narrowest scope that still covers every place a human signs in to this estate. The other two target includeApplications:[All] - one every admin directory role, one every legacy client - and stay enabledForReportingButNotEnforced: an All/All grant enforced in someone else's tenant is a lockout, not a demo. The two *ByDisplayName keys are NOT Graph fields. Graph wants object ids (appId for applications, group id for groups) which do not exist until this manifest is applied, so apply-entra.ps1 resolves the names it created moments earlier and substitutes them - app registrations are created before CA policies for exactly that reason. An enabled policy MUST exclude a group flagged \"breakGlass\": true, and apply-entra.ps1 refuses to create or enable it until that group actually holds a cloud-only emergency-access account that is not one of the fictional personas above (docs/runbooks/g0-bootstrap.md item 13, docs/runbooks/layers/L03.md).",
   "$licensingComment": "'licensed' controls which users V3.4 asserts an EMS E5 assignment for; it does NOT assign anything. apply-entra.ps1 assigns no licences at all - it only sets usageLocation, which is a prerequisite for licensing. Assignment itself is a human step in the M365 admin center (g0-bootstrap.md item C10). All five are true while the EMS E5 trial's free seats last; at trial expiry flip the ones you no longer sign in as to false and V3.4 narrows with no code change. A user with the flag absent is treated as licensed, so older manifests audit exactly as before.",
-  "domain": "mls.example",
+  "domain": "${prefix}.example",
   "users": [
     {
       "displayName": "Dana Reyes",
@@ -63,66 +63,87 @@
   ],
   "groups": [
     {
-      "displayName": "mls-flight-operations",
-      "mailNickname": "mls-flight-operations",
+      "displayName": "${prefix}-flight-operations",
+      "mailNickname": "${prefix}-flight-operations",
       "description": "Flight operations staff - launch-ops app users",
-      "members": ["dana.reyes", "priya.natarajan"]
+      "members": [
+        "dana.reyes",
+        "priya.natarajan"
+      ]
     },
     {
-      "displayName": "mls-security-team",
-      "mailNickname": "mls-security-team",
+      "displayName": "${prefix}-security-team",
+      "mailNickname": "${prefix}-security-team",
       "description": "Security analysts - control-tower security tab",
-      "members": ["miles.okafor"]
+      "members": [
+        "miles.okafor"
+      ]
     },
     {
-      "displayName": "mls-finance",
-      "mailNickname": "mls-finance",
+      "displayName": "${prefix}-finance",
+      "mailNickname": "${prefix}-finance",
       "description": "Finance - cost dashboards and budget alerts",
-      "members": ["sofia.lindqvist", "marcus.webb"]
+      "members": [
+        "sofia.lindqvist",
+        "marcus.webb"
+      ]
     },
     {
-      "displayName": "mls-executives",
-      "mailNickname": "mls-executives",
+      "displayName": "${prefix}-executives",
+      "mailNickname": "${prefix}-executives",
       "description": "Executive readout audience - control-tower consumers",
-      "members": ["marcus.webb", "dana.reyes"]
+      "members": [
+        "marcus.webb",
+        "dana.reyes"
+      ]
     },
     {
-      "displayName": "mls-break-glass",
-      "mailNickname": "mls-break-glass",
+      "displayName": "${prefix}-break-glass",
+      "mailNickname": "${prefix}-break-glass",
       "description": "Emergency access (break-glass) accounts. Excluded from the enforced dashboard MFA policy so a Conditional Access misconfiguration can never lock the tenant's owner out of their own tenant.",
       "members": [],
       "breakGlass": true
+    },
+    {
+      "displayName": "${prefix}-copilot-authors",
+      "mailNickname": "${prefix}-copilot-authors",
+      "description": "Licence-free Copilot Studio authoring rights. Assign this group to the \"Copilot Studio authors\" tenant setting in the Power Platform admin center (g0 item C5). Without it Copilot Studio offers only the licence-gated Teams fallback, and the standard-harness authoring the demo agent needs is unreachable.",
+      "members": [],
+      "notes": "Members are added by hand: the operator who authors the agent needs this, and which human that is cannot be known by the repo. The GROUP is created here so the tenant setting has something to point at (F90)."
     }
   ],
   "appRegistrations": [
     {
-      "displayName": "mls-launch-ops-demo-app",
+      "displayName": "${prefix}-launch-ops-${env}-app",
       "appKey": "launch-ops",
       "signInAudience": "AzureADMyOrg",
-      "notes": "Launch operations dashboard (apps/launch-ops)"
+      "notes": "Launch operations dashboard (apps/launch-ops)",
+      "verifierProbeRole": "Telemetry.Probe"
     },
     {
-      "displayName": "mls-control-tower-demo-app",
+      "displayName": "${prefix}-control-tower-${env}-app",
       "appKey": "control-tower",
       "signInAudience": "AzureADMyOrg",
-      "notes": "Executive control tower (apps/control-tower)"
+      "notes": "Executive control tower (apps/control-tower)",
+      "verifierProbeRole": "Telemetry.Probe"
     },
     {
-      "displayName": "mls-mcp-tools-demo-app",
+      "displayName": "${prefix}-mcp-tools-${env}-app",
       "appKey": "mcp",
       "signInAudience": "AzureADMyOrg",
       "notes": "MCP tool server the Copilot Studio agent attaches to (apps/mcp-tools)"
     },
     {
-      "displayName": "mls-compliance-demo-app",
+      "displayName": "${prefix}-compliance-${env}-app",
       "appKey": "compliance",
       "signInAudience": "AzureADMyOrg",
-      "notes": "Compliance board (apps/compliance). Added by F25: Container Apps Easy Auth on the three human-facing dashboards needs one app registration each, and this was the one the manifest never declared - g0-bootstrap.md's own box said so. Its application (client) id goes into the MLS_COMPLIANCE_CLIENT_ID variable; the launch-ops and control-tower registrations above now feed MLS_LAUNCH_OPS_CLIENT_ID and MLS_CONTROL_TOWER_CLIENT_ID the same way. Each app's Easy Auth redirect URI is https://<that app's ingress fqdn>/.auth/login/aad/callback, which only exists after L7 - see docs/runbooks/layers/L03.md."
+      "notes": "Compliance board (apps/compliance). Added by F25: Container Apps Easy Auth on the three human-facing dashboards needs one app registration each, and this was the one the manifest never declared - g0-bootstrap.md's own box said so. Its application (client) id goes into the MLS_COMPLIANCE_CLIENT_ID variable; the launch-ops and control-tower registrations above now feed MLS_LAUNCH_OPS_CLIENT_ID and MLS_CONTROL_TOWER_CLIENT_ID the same way. Each app's Easy Auth redirect URI is https://<that app's ingress fqdn>/.auth/login/aad/callback, which only exists after L7 - see docs/runbooks/layers/L03.md.",
+      "verifierProbeRole": "Telemetry.Probe"
     }
   ],
   "conditionalAccessPolicies": [
     {
-      "displayName": "mls-ca-require-mfa-admins",
+      "displayName": "${prefix}-ca-require-mfa-admins",
       "state": "enabledForReportingButNotEnforced",
       "conditions": {
         "users": {
@@ -140,52 +161,75 @@
           ]
         },
         "applications": {
-          "includeApplications": ["All"]
+          "includeApplications": [
+            "All"
+          ]
         },
-        "clientAppTypes": ["all"]
+        "clientAppTypes": [
+          "all"
+        ]
       },
       "grantControls": {
         "operator": "OR",
-        "builtInControls": ["mfa"]
+        "builtInControls": [
+          "mfa"
+        ]
       }
     },
     {
-      "displayName": "mls-ca-block-legacy-auth",
+      "displayName": "${prefix}-ca-block-legacy-auth",
       "state": "enabledForReportingButNotEnforced",
       "conditions": {
         "users": {
-          "includeUsers": ["All"]
+          "includeUsers": [
+            "All"
+          ]
         },
         "applications": {
-          "includeApplications": ["All"]
+          "includeApplications": [
+            "All"
+          ]
         },
-        "clientAppTypes": ["exchangeActiveSync", "other"]
+        "clientAppTypes": [
+          "exchangeActiveSync",
+          "other"
+        ]
       },
       "grantControls": {
         "operator": "OR",
-        "builtInControls": ["block"]
+        "builtInControls": [
+          "block"
+        ]
       }
     },
     {
-      "displayName": "mls-ca-require-mfa-dashboards",
+      "displayName": "${prefix}-ca-require-mfa-dashboards",
       "state": "enabled",
       "conditions": {
         "users": {
-          "includeUsers": ["All"],
-          "excludeGroupsByDisplayName": ["mls-break-glass"]
+          "includeUsers": [
+            "All"
+          ],
+          "excludeGroupsByDisplayName": [
+            "${prefix}-break-glass"
+          ]
         },
         "applications": {
           "includeApplicationsByDisplayName": [
-            "mls-launch-ops-demo-app",
-            "mls-control-tower-demo-app",
-            "mls-compliance-demo-app"
+            "${prefix}-launch-ops-${env}-app",
+            "${prefix}-control-tower-${env}-app",
+            "${prefix}-compliance-${env}-app"
           ]
         },
-        "clientAppTypes": ["all"]
+        "clientAppTypes": [
+          "all"
+        ]
       },
       "grantControls": {
         "operator": "OR",
-        "builtInControls": ["mfa"]
+        "builtInControls": [
+          "mfa"
+        ]
       }
     }
   ]
