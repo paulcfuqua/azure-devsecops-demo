@@ -263,8 +263,22 @@ Describe 'Task 15: layer-07-apps.yml deploy wiring picks up the compliance app' 
         $script:L7DeployJob | Should -Match 'resolve\s+"\$\{COMPLIANCE_IMAGE:-\}"\s+"\$\{CA_COMPLIANCE\}"\s+COMPLIANCE_IMAGE_DIGEST'
     }
 
-    It 'carries a COMPLIANCE_PORT env var, same P-1 pattern as the other frontends' {
-        $script:L7DeployJob | Should -Match "COMPLIANCE_PORT:\s*\`$\{\{\s*vars\.COMPLIANCE_PORT"
+    It 'derives a COMPLIANCE_PORT the same way as the other four apps, override still honoured' {
+        # WAS: pinned to a job-level `COMPLIANCE_PORT: ${{ vars.COMPLIANCE_PORT || '80' }}`.
+        # F88 removed that, and this test correctly caught the removal.
+        #
+        # The port is no longer chosen independently of the image. It is DERIVED by the same
+        # step that resolves the image, because the two are one decision: the real images
+        # listen on 8080 and the placeholder on 80, and defaulting them apart is what
+        # deployed five containerapps-helloworld containers that reported success while
+        # serving none of the demo.
+        #
+        # So this asserts the PROPERTY the original was reaching for - compliance is wired
+        # exactly like the other four, and a deliberate operator override still wins - rather
+        # than the mechanism that used to carry it. Pinning the mechanism is what made a
+        # correct fix look like a regression.
+        $script:L7DeployJob | Should -Match 'COMPLIANCE_PORT=\$\{COMPLIANCE_PORT_OVERRIDE:-\$\{port\}\}'
+        $script:L7DeployJob | Should -Match "COMPLIANCE_PORT_OVERRIDE:\s*\`$\{\{\s*vars\.COMPLIANCE_PORT\s*\}\}"
     }
 
     It 'passes MLS_COMPLIANCE_CLIENT_ID through as a non-secret environment variable' {
