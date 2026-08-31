@@ -191,3 +191,48 @@ Describe 'every job that runs is bounded' {
         $jobCount | Should -BeGreaterThan 20
     }
 }
+
+Describe 'every provider the estate uses is registered up front' {
+    # An unregistered provider fails the layer that first touches it, minutes into a deploy,
+    # in an error naming the provider rather than the layer. L6 deployed Key Vault and Azure
+    # SQL cleanly and then died wiring the cost export on Microsoft.CostManagementExports; a
+    # sweep found Microsoft.Security (L9) and Microsoft.PowerPlatform (L8) waiting to do the
+    # same thing one run at a time (F82).
+    #
+    # The registration list is the artefact that goes stale, so it is checked against what
+    # the templates actually reference.
+
+    BeforeAll {
+        $script:RepoRootP = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:InfraUp = Get-Content -LiteralPath (Join-Path $script:RepoRootP '.github/workflows/infra-up.yml') -Raw
+    }
+
+    It 'declares a registration list at all' {
+        $script:InfraUp | Should -Match 'az provider register'
+        ([regex]::Matches($script:InfraUp, '(?m)^\s+Microsoft\.[A-Za-z]+ \\?$')).Count |
+            Should -BeGreaterThan 8 -Because 'the list is what stops a provider being discovered a layer at a time'
+    }
+
+    It 'covers every provider the bicep templates reference' {
+        # Namespaces ARM always has: never worth registering explicitly.
+        $alwaysPresent = @('Microsoft.Resources', 'Microsoft.Authorization', 'Microsoft.Management')
+
+        $declared = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($m in [regex]::Matches($script:InfraUp, '(?m)^\s+(Microsoft\.[A-Za-z]+) \\?$')) {
+            $null = $declared.Add($m.Groups[1].Value)
+        }
+
+        $referenced = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($file in (Get-ChildItem -Path (Join-Path $script:RepoRootP 'infra/bicep') -Recurse -Filter '*.bicep' -File)) {
+            foreach ($m in [regex]::Matches((Get-Content -LiteralPath $file.FullName -Raw), "'(Microsoft\.[A-Za-z]+)/")) {
+                $ns = $m.Groups[1].Value
+                if ($ns -notin $alwaysPresent) { $null = $referenced.Add($ns) }
+            }
+        }
+
+        $referenced.Count | Should -BeGreaterThan 3 -Because 'a scan matching nothing would make this vacuous'
+        $missing = @($referenced | Where-Object { -not $declared.Contains($_) })
+        $missing -join ', ' | Should -BeNullOrEmpty `
+            -Because 'a provider the templates use but the list omits fails the layer that reaches it, not this test'
+    }
+}
