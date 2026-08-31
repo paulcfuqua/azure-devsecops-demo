@@ -286,3 +286,45 @@ Describe 'the SQL this estate ships is syntactically valid' {
         }
     }
 }
+
+Describe 'a reachability probe does not depend on data existing' {
+    # V6.2 asserts the Verifier can REACH the Log Analytics workspace. It proved that with
+    # `Heartbeat | take 1` - an agent table, filled by Azure Monitor Agent on virtual
+    # machines. This estate has none: Container Apps, Functions and SQL only. So the table
+    # returns [] forever, and the criterion failed against a workspace holding 5,424 rows
+    # across six tables it could read perfectly well (F86).
+    #
+    # Whether audit records EXIST is a different criterion with a different mapping. A probe
+    # that conflates the two fails for the wrong reason and passes for the wrong reason.
+
+    BeforeAll {
+        $script:AuditRoot = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..')).Path ''
+        # Tables that only exist when something outside this estate's architecture is running.
+        $script:AgentOnlyTables = @('Heartbeat', 'Perf', 'Syslog', 'Event', 'SecurityEvent',
+            'InsightsMetrics', 'ContainerLog', 'W3CIISLog')
+    }
+
+    It 'finds the audit scripts' {
+        @(Get-ChildItem -Path $script:AuditRoot -Filter 'layer-*-audit.ps1' -File).Count |
+            Should -BeGreaterThan 8
+    }
+
+    It 'no reachability probe queries an agent-only table' {
+        # An agent table in a KQL probe is the tell: this estate deploys no agents, so the
+        # query can only ever return empty, whatever the identity's permissions are.
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in (Get-ChildItem -Path $script:AuditRoot -Filter 'layer-*-audit.ps1' -File)) {
+            $lines = Get-Content -LiteralPath $file.FullName
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -notmatch "analytics-query'?\s*,") { continue }
+                foreach ($table in $script:AgentOnlyTables) {
+                    if ($lines[$i] -match "'\s*$table\s*\|") {
+                        $offender.Add("$($file.Name):$($i + 1) queries $table")
+                    }
+                }
+            }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'this estate runs no Azure Monitor Agent, so an agent table is empty regardless of whether the query succeeded'
+    }
+}

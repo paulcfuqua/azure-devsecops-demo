@@ -180,7 +180,20 @@ function Test-LogAnalyticsQuery {
     }
     $result = Invoke-MlsAz -AllowFailure -Argument @(
         'monitor', 'log-analytics', 'query', '--workspace', $WorkspaceId,
-        '--analytics-query', 'Heartbeat | take 1', '--timespan', 'P1D', '--output', 'json'
+        # `print 1`, NOT `Heartbeat | take 1`.
+        #
+        # This criterion asserts the Verifier can REACH the workspace - its own comment says
+        # it passes on "query succeeded as the verifier". Heartbeat is an agent table, filled
+        # by Azure Monitor Agent on virtual machines, and this estate has none: Container
+        # Apps, Functions and SQL only. The table returns [] forever, and V6.2 failed against
+        # a workspace holding 5,424 rows across six tables it could read perfectly well
+        # (F86).
+        #
+        # `print 1` needs no table, no ingestion and no agent. It succeeds exactly when the
+        # identity can execute a query and fails exactly when it cannot, which is the
+        # question being asked. Whether audit records EXIST is V7.3's job, and it uses a
+        # table this estate actually writes.
+        '--analytics-query', 'print 1', '--timespan', 'P1D', '--output', 'json'
     )
     if ($null -eq $result) {
         return New-MlsCheckResult -Passed $false `
@@ -351,8 +364,8 @@ function Invoke-Main {
     # L06: workspace RBAC propagation
     Invoke-MlsCriterion -Context $context -Id 'V6.2' -Control @() `
         -Description 'KQL query against LAW succeeds as verifier' `
-        -Command "az monitor log-analytics query --workspace <lawCustomerId> --analytics-query 'Heartbeat | take 1' --timespan P1D" `
-        -Expected 'a well-formed table result under the mls-verifier login (row content may be empty this early)' `
+        -Command "az monitor log-analytics query --workspace <lawCustomerId> --analytics-query 'print 1' --timespan P1D" `
+        -Expected 'a well-formed result under the mls-verifier login - this asserts query REACHABILITY, not that any table holds data' `
         -RetryWindowMinutes 15 `
         -Test { Test-LogAnalyticsQuery -WorkspaceId $workspaceId } | Out-Null
 

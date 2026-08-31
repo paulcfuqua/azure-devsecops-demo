@@ -188,8 +188,17 @@ Describe 'F26 siblings: every readEnvironmentVariable default a workflow feeds f
         # set-but-empty, keyVaultCreateMode resolves to '' rather than 'default',
         # and @allowed(['default','recover']) rejects it — BCP033 at bicepparam
         # compile time, for every adopter who has not set the variable.
+        #
+        # Asserted as a PROPERTY, not as one exact string. The expression legitimately grew a
+        # middle term - the kvmode step decides `recover` when it finds a soft-deleted vault
+        # (F85) - and a regex pinning the old text failed a change that preserved everything
+        # the test exists to protect. What matters is that the chain ENDS in a literal, so
+        # the @allowed list can never be handed "".
         $layer06 = Get-Content -LiteralPath (Join-Path -Path $script:RepoRoot -ChildPath '.github' -AdditionalChildPath 'workflows', 'layer-06-platform.yml') -Raw
-        $layer06 | Should -Match "KEY_VAULT_CREATE_MODE: \`$\{\{ vars\.KEY_VAULT_CREATE_MODE \|\| 'default' \}\}"
+        $layer06 | Should -Match "KEY_VAULT_CREATE_MODE: \`$\{\{[^}]*\|\| 'default' \}\}"
+        # And it must still be sourced from the repository variable first, so a deliberate
+        # operator override wins over anything computed.
+        $layer06 | Should -Match "KEY_VAULT_CREATE_MODE: \`$\{\{ vars\.KEY_VAULT_CREATE_MODE \|\|"
     }
 }
 
