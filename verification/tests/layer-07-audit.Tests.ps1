@@ -179,6 +179,39 @@ Describe 'layer-07-audit' {
             (Get-Row -Context $context -Id 'V7.4').Observed | Should -BeLike '*checks not green*'
         }
 
+        It 'passes V7.4 when deploy jobs are skipped, because skipped is not failed' {
+            # A canary touching only apps/shared/** is documentation-shaped: the per-app
+            # pipelines build and scan, and their deploy jobs SKIP because the F83 guard
+            # declines to roll an image onto an app nothing changed about. Counting that as
+            # "not green" failed V7.4 against a canary whose CI was entirely correct - five
+            # skips out of 28 (F96).
+            $script:CheckRun = @(
+                [pscustomobject]@{ name = 'app-launch-ops-ci / build'; conclusion = 'success' }
+                [pscustomobject]@{ name = 'app-control-tower-ci / build'; conclusion = 'success' }
+                [pscustomobject]@{ name = 'app-launch-ops-ci / deploy to Container Apps'; conclusion = 'skipped' }
+                [pscustomobject]@{ name = 'app-control-tower-ci / deploy to Container Apps'; conclusion = 'skipped' }
+            )
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V7.4'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -Match '2 skipped'
+        }
+
+        It 'still fails V7.4 on a real failure sitting beside the skips' {
+            # Accepting `skipped` must not accept anything else. Without this, the fix above
+            # is a loosened gate rather than a corrected one.
+            $script:CheckRun = @(
+                [pscustomobject]@{ name = 'app-launch-ops-ci / build'; conclusion = 'success' }
+                [pscustomobject]@{ name = 'app-control-tower-ci / build'; conclusion = 'success' }
+                [pscustomobject]@{ name = 'app-launch-ops-ci / deploy to Container Apps'; conclusion = 'skipped' }
+                [pscustomobject]@{ name = 'app-control-tower-ci / test'; conclusion = 'failure' }
+            )
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V7.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'test=failure'
+        }
+
         It 'fails V7.4 when the path filter fires the wrong pipeline' {
             $script:CanaryFile = @([pscustomobject]@{ path = 'apps/launch-ops/src/app.tsx' })
             $context = Invoke-AuditForTest -NoRetry

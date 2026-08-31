@@ -270,8 +270,24 @@ function Test-CanaryPipeline {
     $checkRuns = @(Get-MlsCollection -Response (Invoke-MlsGh -Argument @('api', "repos/$Repository/commits/$headSha/check-runs")))
     $conclusion = @($checkRuns | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'conclusion')" })
     $names = @($checkRuns | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'name')" })
-    $notSuccess = @($checkRuns | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'conclusion')" -ne 'success' } |
+    # SKIPPED IS NOT A FAILURE, AND THIS CRITERION USED TO SAY IT WAS.
+    #
+    # A canary that touches only apps/shared/** is a documentation-shaped change: the five
+    # per-app pipelines build and scan, and their `deploy to Container Apps` jobs SKIP,
+    # because the guard added for F83 declines to roll an image onto an app when nothing
+    # about that app changed. That is the guard working. Counting it as "not green" failed
+    # V7.4 on a canary whose CI was entirely correct - five skips out of 28 checks.
+    #
+    # The repo already knows this: `skipped` is not `failure` is written into the workflow
+    # comments that F58 came from. The criterion had not learned it.
+    #
+    # `neutral` joins it for the same reason: a check that declines to judge has not failed.
+    # Everything else - failure, cancelled, timed_out, action_required - still fails, and a
+    # check still RUNNING is caught by the null conclusion.
+    $acceptable = @('success', 'skipped', 'neutral')
+    $notSuccess = @($checkRuns | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'conclusion')" -notin $acceptable } |
             ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'name')=$(Get-MlsProperty -InputObject $_ -Name 'conclusion')" })
+    $skipped = @($checkRuns | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'conclusion')" -eq 'skipped' })
     if ($checkRuns.Count -eq 0) {
         return New-MlsCheckResult -Passed $false -Observed "no check runs on canary head $headSha yet"
     }
@@ -300,7 +316,7 @@ function Test-CanaryPipeline {
             -Detail 'Path-filter drift is exactly what turns "per-app CI" into "monolithic CI" silently (L07 failure mode 4).'
     }
     return New-MlsCheckResult -Passed $true `
-        -Observed "$($conclusion.Count) check run(s) on #$PullRequestNumber all success; paths touched: $($path -join ', ')"
+        -Observed "$($conclusion.Count) check run(s) on #$PullRequestNumber; $($skipped.Count) skipped (deploy jobs the F83 guard declined), rest success; paths touched: $($path -join ', ')"
 }
 
 function Test-ReplicaScaling {
