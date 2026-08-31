@@ -109,7 +109,16 @@
       "mailNickname": "${prefix}-copilot-authors",
       "description": "Licence-free Copilot Studio authoring rights. Assign this group to the \"Copilot Studio authors\" tenant setting in the Power Platform admin center (g0 item C5). Without it Copilot Studio offers only the licence-gated Teams fallback, and the standard-harness authoring the demo agent needs is unreachable.",
       "members": [],
-      "notes": "Members are added by hand: the operator who authors the agent needs this, and which human that is cannot be known by the repo. The GROUP is created here so the tenant setting has something to point at (F90)."
+      "notes": "Members are added by hand: the operator who authors the Copilot Studio agent needs this, and which human that is cannot be known by the repo. The GROUP is created here so the 'Copilot Studio authors' tenant setting has something to point at (g0 item C5).",
+      "membershipManagedExternally": true
+    },
+    {
+      "displayName": "${prefix}-sql-admins",
+      "mailNickname": "${prefix}-sql-admins",
+      "description": "Azure SQL Entra administrator. The SQL server takes a GROUP, not a user, as its Entra admin.",
+      "members": [],
+      "membershipManagedExternally": true,
+      "notes": "Holds the human operator AND the deploy service principal. A single-user admin breaks whichever side is left out: a human-only admin blocks the deployer that applies the schema, a deployer-only admin blocks a human ever querying the database (F84). Neither is a manifest persona, so membership is managed outside this file - the group existed in the tenant and in no manifest until 2026-08-31, which V3.1's drift sweep correctly reported (F92)."
     }
   ],
   "appRegistrations": [
