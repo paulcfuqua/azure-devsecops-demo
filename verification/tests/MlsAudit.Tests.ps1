@@ -830,3 +830,45 @@ Describe 'collection helpers are re-wrapped at every call site' {
         $offender -join ', ' | Should -BeNullOrEmpty -Because 'the helper unrolls to nothing when empty and to a bare scalar when it holds one item; the call site must wrap it in @()'
     }
 }
+
+Describe 'criterion selection is a diagnostic, never a sign-off' {
+    # A 55-minute audit answering one question in five is the point; manufacturing a green
+    # verdict by selecting only the criteria that pass is the hazard. Both are tested.
+
+    BeforeAll {
+        Import-Module (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'MlsAudit.psm1') -Force
+    }
+
+    It 'runs the selected criterion and skips the rest, naming why' {
+        $context = New-MlsAuditContext -Layer 7 -Title 'filter test' -ReportRoot $TestDrive -NoRetry -OnlyCriterion @('V7.2')
+        Invoke-MlsCriterion -Context $context -Id 'V7.1' -Description 'one' -Command 'c' -Expected 'e' -Test { throw 'V7.1 must not run' } | Out-Null
+        Invoke-MlsCriterion -Context $context -Id 'V7.2' -Description 'two' -Command 'c' -Expected 'e' -Test { New-MlsCheckResult -Passed $true -Observed 'ran' } | Out-Null
+
+        $skipped = $context.Criterion | Where-Object { $_.Id -eq 'V7.1' }
+        $skipped.Status | Should -Be 'SKIP'
+        $skipped.Observed | Should -Match 'not selected'
+        ($context.Criterion | Where-Object { $_.Id -eq 'V7.2' }).Status | Should -Be 'PASS'
+    }
+
+    It 'exits 3, not 0, when a selection was used and everything selected passed' {
+        # THE GUARD. SKIP does not fail a run, so without this a filtered audit would exit 0
+        # with four criteria skipped and read exactly like a full green run to any automation
+        # holding the exit code.
+        $context = New-MlsAuditContext -Layer 7 -Title 'filter test' -ReportRoot $TestDrive -NoRetry -OnlyCriterion @('V7.2')
+        Invoke-MlsCriterion -Context $context -Id 'V7.1' -Description 'one' -Command 'c' -Expected 'e' -Test { New-MlsCheckResult -Passed $true -Observed 'x' } | Out-Null
+        Invoke-MlsCriterion -Context $context -Id 'V7.2' -Description 'two' -Command 'c' -Expected 'e' -Test { New-MlsCheckResult -Passed $true -Observed 'ran' } | Out-Null
+        Get-MlsExitCode -Context $context | Should -Be 3
+    }
+
+    It 'still exits 1 when a selected criterion fails, because a failure outranks the filter' {
+        $context = New-MlsAuditContext -Layer 7 -Title 'filter test' -ReportRoot $TestDrive -NoRetry -OnlyCriterion @('V7.2')
+        Invoke-MlsCriterion -Context $context -Id 'V7.2' -Description 'two' -Command 'c' -Expected 'e' -Test { New-MlsCheckResult -Passed $false -Observed 'broke' -Final } | Out-Null
+        Get-MlsExitCode -Context $context | Should -Be 1
+    }
+
+    It 'exits 0 as before when no selection is used' {
+        $context = New-MlsAuditContext -Layer 7 -Title 'no filter' -ReportRoot $TestDrive -NoRetry
+        Invoke-MlsCriterion -Context $context -Id 'V7.1' -Description 'one' -Command 'c' -Expected 'e' -Test { New-MlsCheckResult -Passed $true -Observed 'x' } | Out-Null
+        Get-MlsExitCode -Context $context | Should -Be 0
+    }
+}

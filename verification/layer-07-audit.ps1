@@ -36,7 +36,16 @@ param(
     [double]$ScaleInWaitMinutes = 15,
     [double]$ScaleInDeadlineMinutes = 30,
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+
+    # Run only these criteria (e.g. -OnlyCriterion V7.3). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off.
+    #
+    # Why this exists: V7.5 waits up to 15 minutes per app for a real scale-in cycle, so a
+    # full audit is ~55 minutes. Four consecutive runs were spent testing one criterion
+    # with the other four along for the ride, which is the "a run is an expensive,
+    # rate-limited observation" rule pointing at its own audit.
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -421,7 +430,8 @@ function Invoke-Main {
         [double]$ScaleInWaitMinutes = 15,
         [double]$ScaleInDeadlineMinutes = 30,
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
@@ -440,7 +450,8 @@ function Invoke-Main {
     $probeId = "verifier-$([datetime]::UtcNow.ToString('yyyyMMddHHmmss'))"
 
     $context = New-MlsAuditContext -Layer 7 -Title 'Apps: spec-renderer, launch-ops, control tower, per-app CI' `
-        -ScriptName 'verification/layer-07-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-07-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Resource group' -Value $ResourceGroupName
     Add-MlsPreflight -Context $context -Name 'Apps' -Value ($AppName -join ', ')
     Add-MlsPreflight -Context $context -Name 'Deploy manifest' -Value "$manifestPath" -Status $(if ($manifest) { 'OK' } else { 'ABSENT' })
@@ -510,7 +521,8 @@ if (-not $env:MLS_SKIP_MAIN) {
             -DeployManifestPath $DeployManifestPath -LogAnalyticsWorkspaceId $LogAnalyticsWorkspaceId `
             -Repository $Repository -CanaryPrNumber $CanaryPrNumber -HealthPath $HealthPath `
             -LoadRequestCount $LoadRequestCount -ScaleInWaitMinutes $ScaleInWaitMinutes `
-            -ScaleInDeadlineMinutes $ScaleInDeadlineMinutes -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -ScaleInDeadlineMinutes $ScaleInDeadlineMinutes -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-07-audit could not start: $($_.Exception.Message)" -Color Red
