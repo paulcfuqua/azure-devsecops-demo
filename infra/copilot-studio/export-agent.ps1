@@ -34,7 +34,7 @@
     pulled into the solution first. Skipping this yields a green pipeline that deploys a
     silently incomplete agent. The script reprints this reminder on every run.
 
-    Authored only - this has never been run against a real environment.
+    First run against a real environment: 2026-08-31, mls-authoring. See README section 7.
 
 .EXAMPLE
     ./export-agent.ps1 -WhatIf
@@ -74,8 +74,9 @@ function Write-Status {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
         Justification = 'Interactive operations script; console output is the product.')]
     param(
-        [Parameter(Mandatory)][string]$Message,
-        [ConsoleColor]$Color = [ConsoleColor]::Gray
+        # AllowEmptyString: the banners print blank spacer lines via Write-Status '',
+        # which a bare Mandatory string parameter rejects.
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Message,        [ConsoleColor]$Color = [ConsoleColor]::Gray
     )
     Write-Host $Message -ForegroundColor $Color
 }

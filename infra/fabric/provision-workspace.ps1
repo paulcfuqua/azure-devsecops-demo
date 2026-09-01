@@ -1,4 +1,4 @@
-﻿#Requires -Version 7.0
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     L5 provisioning - Fabric workspace `mls-operations` + lakehouse, idempotently.
@@ -121,8 +121,9 @@ function Write-Status {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
         Justification = 'Interactive provisioning script; console output is the product.')]
     param(
-        [Parameter(Mandatory)][string]$Message,
-        [ConsoleColor]$Color = [ConsoleColor]::Gray
+        # AllowEmptyString: the banners print blank spacer lines via Write-Status '',
+        # which a bare Mandatory string parameter rejects.
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Message,        [ConsoleColor]$Color = [ConsoleColor]::Gray
     )
     Write-Host $Message -ForegroundColor $Color
 }

@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Connector xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <connectorid>80a15a23-00bc-4232-9ebf-5780fb7eff89</connectorid>
+  <description>Deployment health, security findings and cloud spend for the Meridian Launch Systems estate. Read-only.</description>
+  <displayname>Meridian Ops Tools</displayname>
+  <iconbrandcolor></iconbrandcolor>
+  <name>mls_5Fmeridian-20ops-20tools</name>
+  <connectortype>1</connectortype>
+  <openapidefinition>/Connector/mls_5Fmeridian-20ops-20tools_openapidefinition.json</openapidefinition>
+  <connectionparameters>/Connector/mls_5Fmeridian-20ops-20tools_connectionparameters.json</connectionparameters>
+  <policytemplateinstances>/Connector/mls_5Fmeridian-20ops-20tools_policytemplateinstances.json</policytemplateinstances>
+  <iconblob>/Connector/mls_5Fmeridian-20ops-20tools_iconblob.Png</iconblob>
+</Connector>

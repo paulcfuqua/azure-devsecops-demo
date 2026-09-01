@@ -77,6 +77,10 @@ function Test-GhasFeature {
     $problem = [System.Collections.Generic.List[string]]::new()
     $observed = [System.Collections.Generic.List[string]]::new()
     $blind = [System.Collections.Generic.List[string]]::new()
+    # Things this criterion deliberately does NOT claim. Reported, never silent, never a
+    # failure - a scope boundary stated out loud is honest; the same boundary left implicit
+    # is a criterion quietly over-claiming.
+    $outOfScope = [System.Collections.Generic.List[string]]::new()
 
     # NB: not $repository - PowerShell variable names are case-insensitive, so assigning to
     # it would overwrite the [string]$Repository parameter with a stringified response and
@@ -86,9 +90,20 @@ function Test-GhasFeature {
     if ($null -eq $analysis) {
         # The BLOCK is missing, not a field inside it. GitHub omits the whole object for a
         # non-admin caller; a genuinely disabled feature is present with status 'disabled'.
-        # That distinction is the entire finding, and it is readable straight off the API.
-        $blind.Add('security_and_analysis is absent from the repository response, so secret scanning and push protection could not be observed (the field is admin-only)')
-        $observed.Add('secret_scanning=<not visible> push_protection=<not visible>')
+        #
+        # THIS IS OUT OF SCOPE FOR THIS CRITERION, NOT AN UNMET ONE. `security_and_analysis`
+        # is admin-only, and the secret-scanning alerts API is admin-only AND documented to
+        # 404 on public repositories regardless - so NO read-only caller can observe secret
+        # scanning here, and making the Verifier an admin to see it would trade the one
+        # property that makes its sign-off worth anything.
+        #
+        # Secret scanning is also enabled by default on public repositories and is not
+        # something this estate configures, so V9.1 was claiming credit for a platform
+        # default it neither set nor could see. It is evidenced at G0, by a human who
+        # genuinely holds admin (docs/runbooks/g0-bootstrap.md), and named here so the gap
+        # is visible in the report rather than implied by a passing criterion.
+        $outOfScope.Add('secret scanning + push protection: admin-only on GitHub and unobservable to a read-only auditor; evidenced at G0, not here')
+        $observed.Add('secret_scanning=<admin-only, see G0> push_protection=<admin-only, see G0>')
     }
     else {
         $secretScanning = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $analysis -Name 'secret_scanning') -Name 'status')"
@@ -98,10 +113,22 @@ function Test-GhasFeature {
         if ($pushProtection -ne 'enabled') { $problem.Add("secret_scanning_push_protection.status='$pushProtection'") }
     }
 
+    # DEPENDABOT: TWO SOURCES, AUTHORITATIVE FIRST, BEHAVIOURAL SECOND.
+    #
+    # /vulnerability-alerts is the authoritative answer and is ADMIN-only: 204 = on,
+    # 404 = off (both documented), anything else = the caller may not ask.
+    #
+    # When it cannot be asked, the criterion does not give up - it asks a question a
+    # read-only token CAN answer. Listing Dependabot alerts needs `security_events`, or
+    # `public_repo` on a public repository, and NOT admin. A 200 from that endpoint is
+    # positive evidence the feature is on, because a repository with Dependabot alerts
+    # disabled cannot serve them; alerts are a thing only an enabled feature produces.
+    #
+    # That is CLAUDE.md's rule the right way round - assert the CAPABILITY, not the
+    # artefact that usually accompanies it - and it is stronger evidence than the status
+    # field it replaces, not weaker.
     $alerts = Invoke-MlsGh -Raw -AllowFailure -Argument @('api', "repos/$Repository/vulnerability-alerts", '-i')
     $status = if ("$alerts" -match '(?m)^HTTP/[\d.]+\s+(\d{3})') { $Matches[1] } else { '' }
-    # 204 = on. 404 = OFF, and GitHub documents that. 403 (and an empty response, which is
-    # what a refused call leaves behind) mean the caller may not ask - not that it is off.
     if ($status -eq '204') {
         $observed.Add('vulnerability-alerts=204')
     }
@@ -110,8 +137,17 @@ function Test-GhasFeature {
         $problem.Add('the vulnerability-alerts endpoint answered 404 - Dependabot alerts are off')
     }
     else {
-        $observed.Add("vulnerability-alerts=$(if ($status) { $status } else { '<no response>' })")
-        $blind.Add("the vulnerability-alerts endpoint answered $(if ($status) { $status } else { 'nothing' }) rather than 204 or 404, so Dependabot alert state could not be observed (the endpoint is admin-only)")
+        $listed = Invoke-MlsGh -Raw -AllowFailure -Argument @(
+            'api', "repos/$Repository/dependabot/alerts?state=open&per_page=1", '-i'
+        )
+        $listStatus = if ("$listed" -match '(?m)^HTTP/[\d.]+\s+(\d{3})') { $Matches[1] } else { '' }
+        if ($listStatus -eq '200') {
+            $observed.Add("vulnerability-alerts=$(if ($status) { $status } else { '<not visible>' }) but dependabot/alerts=200 (alerting is live)")
+        }
+        else {
+            $observed.Add("vulnerability-alerts=$(if ($status) { $status } else { '<no response>' }); dependabot/alerts=$(if ($listStatus) { $listStatus } else { '<no response>' })")
+            $blind.Add("neither /vulnerability-alerts (admin-only) nor /dependabot/alerts (needs security_events or public_repo) could be read, so Dependabot alert state could not be observed")
+        }
     }
 
     $analyses = @(Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/code-scanning/analyses"))
@@ -127,7 +163,8 @@ function Test-GhasFeature {
     }
 
     if ($problem.Count -eq 0 -and $blind.Count -eq 0) {
-        return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
+        $note = if ($outOfScope.Count -gt 0) { ' | NOT CLAIMED: ' + ($outOfScope -join ' | ') } else { '' }
+        return New-MlsCheckResult -Passed $true -Observed (($observed -join '; ') + $note)
     }
     # Unobservable does not pass, and it does not masquerade as disabled either. Both lists
     # are reported; the detail names whichever fix the run actually needs.
@@ -135,7 +172,8 @@ function Test-GhasFeature {
     if ($blind.Count -gt 0) {
         $detail = "V9.1 could not OBSERVE part of the GHAS state - this is not the same as the state being off, and the report must never let the two read alike (F103). security_and_analysis and /vulnerability-alerts are both ADMIN-only, and the Verifier's token is read-only by contract. Either grant MLS_VERIFIER_GH_TOKEN repository admin (it remains read-only in effect - both are GET) or record the gap in writing and stop claiming V9.1 covers it. Confirm the real state out of band with: gh api repos/$Repository -q .security_and_analysis. $detail"
     }
-    $reported = @($problem) + @($blind | ForEach-Object { "UNOBSERVABLE: $_" })
+    $reported = @($problem) + @($blind | ForEach-Object { "UNOBSERVABLE: $_" }) +
+        @($outOfScope | ForEach-Object { "NOT CLAIMED: $_" })
     return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($reported -join ' | ')) `
         -Detail $detail
 }
@@ -330,9 +368,9 @@ function Invoke-Main {
 
     # L09: the first CodeQL analysis has to finish
     Invoke-MlsCriterion -Context $context -Id 'V9.1' -Control @('3.11.2') `
-        -Description 'GitHub API shows all GHAS features enabled' `
-        -Command "gh api repos/$repositoryName --jq '.security_and_analysis'`ngh api repos/$repositoryName/vulnerability-alerts -i   # expect 204`ngh api repos/$repositoryName/code-scanning/analyses --jq '.[0].tool.name'" `
-        -Expected "secret scanning + push protection enabled; vulnerability-alerts 204; a completed CodeQL analysis for each of $($CodeQlLanguage -join ', ')" `
+        -Description 'GHAS features the Verifier can observe are enabled (CodeQL analyses; Dependabot alerting live)' `
+        -Command "gh api repos/$repositoryName --jq '.security_and_analysis'   # admin-only; absent for the Verifier`ngh api repos/$repositoryName/vulnerability-alerts -i   # admin-only; 204 = on, 404 = off`ngh api repos/$repositoryName/dependabot/alerts?state=open -i   # fallback: 200 proves alerting is live`ngh api repos/$repositoryName/code-scanning/analyses --jq '.[0].tool.name'" `
+        -Expected "Dependabot alerting live (204, or a 200 from dependabot/alerts); a completed CodeQL analysis for each of $($CodeQlLanguage -join ', '). Secret scanning and push protection are admin-only and NOT claimed here - they are evidenced at G0 (F103)." `
         -RetryWindowMinutes 20 `
         -Test { Test-GhasFeature -Repository $repositoryName -CodeQlLanguage $CodeQlLanguage } | Out-Null
 

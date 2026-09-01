@@ -3,9 +3,12 @@
 Showpiece #1, rebuilt per
 [`docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md`](../../docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md).
 
-Authored and **review-validated only**. Nothing in this tree has been run against a
-tenant: no `pac` command, no Power Platform API call, no Fabric or Azure write. Live
-deployment happens at L8 after G1b + G0, exactly like every other layer.
+**Executed against a tenant on 2026-08-31.** The agent exists in `mls-authoring`, the MCP
+tool server is bound and discovering its six tools, `export-agent.ps1` has run and its
+output is committed under `solution/`, and the Conversation Start card was authored
+through `pac copilot push`. Passages marked **[verified 2026-08-31]** were settled by
+doing it. What has *not* happened: no import into a demo environment (there isn't one
+yet), no publish, no channel, no Fabric write.
 
 > ### The shape of the agent during the trial phase
 >
@@ -84,13 +87,37 @@ pipeline — and answer lakehouse questions through the MCP tool server. Only
 
 ### What is not true, and we say so
 
-* **The repo cannot originate the agent.** There is no supported "apply this YAML and
-  materialise an agent" path. The first version of any component is created by a human in
-  the authoring portal; the repo captures it afterwards. This is capture-and-enforce, not
-  declare-and-apply, and the difference is real.
-* **The exported solution is not fully human-readable.** Unpacked agent XML is diffable
-  but not authorable. Nobody hand-edits it — which is why `agent-definition.md` exists as
-  the layer a human actually reads and argues with.
+* ~~**The repo cannot originate the agent.**~~ **[corrected 2026-08-31 — this was
+  wrong, and wrong in the repo's favour.]** It said there is no supported "apply this YAML
+  and materialise an agent" path, and that this is capture-and-enforce rather than
+  declare-and-apply. Both claims were written before anyone had run `pac`. The Power
+  Platform CLI ships `pac copilot clone | pull | push | publish`, plus `init` and `create`
+  from a template, and `pac copilot clone` produces a **fully authorable workspace**:
+
+  ```
+  agent.mcs.yml                 # display name, description, instructions, conversationStarters, model
+  settings.mcs.yml              # orchestration, useModelKnowledge, authenticationMode
+  connectionreferences.mcs.yml
+  topics/*.mcs.yml              # every topic as readable YAML
+  agents/*.mcs.yml              # the MCP tool binding
+  connectors/…/openapidefinition.json
+  ```
+
+  The Conversation Start card in `agent-definition.md` §5.1 was written in a text editor
+  and pushed to a live agent, then verified by re-cloning from the server. That is
+  declare-and-apply.
+
+* ~~**The exported solution is not fully human-readable.**~~ **[corrected 2026-08-31.]**
+  The *unpacked solution XML* still isn't — that part stands. But the `.mcs.yml` workspace
+  of the same agent is both diffable and authorable, so "nobody hand-edits it" is no longer
+  a property of the product, only of the format this tree currently commits.
+
+  **This raises an open architectural question, deliberately not answered here:** `solution/`
+  holds unpacked XML that no human can usefully author, when a `.mcs.yml` workspace of the
+  same agent is readable. Whether L8 should capture the workspace instead of — or alongside —
+  the solution export is a design decision for the sponsor. The solution export is still
+  required for *deployment* (`pac solution import` is what the pipeline runs); the question
+  is only what the repo holds for *review*.
 * **Several things do not travel in the solution at all.** Manual authentication
   settings, Direct Line / web channel security, deployed channels, sharing, App Insights
   settings, and knowledge are all documented as not solution-aware — and connections
@@ -117,6 +144,20 @@ Two Power Platform environments, both **Developer** type and therefore **free**:
 |---|---|---|---|
 | **Authoring** | `mls-authoring` | a human, in the Copilot Studio portal | `export-agent.ps1` / the export job |
 | **Demo target** | `mls-demo` | `layer-08-copilot-studio.yml` only | the demo |
+
+> **[verified 2026-08-31] Only `mls-authoring` exists.** Confirmed against the Power
+> Platform admin API — `GET api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`
+> returns exactly two: `mls-authoring` (SKU **Developer**, `https://org67cdd5cc.crm.dynamics.com/`)
+> and the tenant `Default Directory`, which has no Dataverse. **`mls-demo` has not been
+> created**, so nothing below §5 has been exercised end to end and the round trip is
+> currently a one-way street. Until it exists, principle #1 claim #3 is unfalsifiable
+> exactly as this section warns.
+>
+> That admin API call is also the **twelfth G0 check** that
+> [`g0-bootstrap.md`](../../docs/runbooks/g0-bootstrap.md) says is unshipped "for one
+> reason only: nobody has exercised it against a tenant". It works, under an ordinary
+> `az rest --resource https://service.powerapps.com/`. C5 is checkable in
+> `verify-g0.ps1` rather than "confirmed by eye".
 
 This is `copilot-alm-starter`'s dev → test/prod shape, collapsed to the one target this
 estate actually has. `mls-demo` is the Power Platform half of the `demo` GitHub
@@ -260,9 +301,20 @@ None of this travels in a solution. Verified, not guessed.
 3. **Paid-F2 path only:** re-create the Fabric connection and re-attach the data agent
    under **Agents** (a connected agent, not a knowledge source). Skip on the trial
    capacity — tools-only is the default there.
-4. **Create the MCP connection** and confirm the tool list populates from the server.
+4. **Create the MCP connection** and confirm the tool list populates from the server —
+   **six** tools (`agent-definition.md` §4.2); fewer with no error usually means a rejected
+   API key, because a 401 during discovery surfaces as an empty list rather than an auth
+   message. **[verified 2026-08-31]** `pac solution create-settings` emits a
+   `ConnectionReferences` entry with an empty `ConnectionId`, so this step is automatable
+   via `pac solution import --settings-file` rather than manual. Warm the container first:
+   `minReplicas: 0` measured a 26.9 s cold start and connector validation can time out
+   against it, indistinguishably from a bad URL.
 5. **Re-enable generative orchestration** (Settings → Orchestration). MCP requires it,
-   and so does the Fabric connected agent.
+   and so does the Fabric connected agent. **[verified 2026-08-31]** Re-set the other two
+   Generative AI switches in the same panel while you are there — **Allow ungrounded
+   responses = Off** and **Use information from the Web = Off** (`agent-definition.md`
+   §2.1). They are not solution-aware either, and an import that silently restores
+   ungrounded answers looks fine until the first question the tools cannot answer.
 6. **Configure the channel:** Custom website; Web channel security; capture the Token
    Endpoint into `COPILOT_TOKEN_ENDPOINT`. Channel details import empty.
 7. **Re-apply sharing** to the demo users. On the paid-F2 path also grant them read on
@@ -284,6 +336,27 @@ fails a pipeline instead of a demo.
 Both are pwsh 7, `#Requires -Version 7.0`, support `-WhatIf`, are idempotent, and
 **fail before doing anything** when their preconditions are not met — the one behaviour
 worth more than any other in a script that mutates a tenant.
+
+> **[verified 2026-08-31] `export-agent.ps1` has now run against a live environment, and
+> did not work the first time.** Both scripts printed blank spacer lines with
+> `Write-Status ''` against a `[Parameter(Mandatory)][string]$Message`, which PowerShell
+> rejects — so `export-agent.ps1` died on its own "Add required objects" banner before
+> contacting anything. The class was already paid for once: all three
+> `infra/{entra,policy,purview}/teardown.ps1` carry a comment explaining exactly this, and
+> `up.ps1`, `down.ps1` and `seed.ps1` all guard it. Three files missed it. Now fixed in
+> both scripts plus `infra/entra/apply-entra.ps1` (latent there), and encoded as a check in
+> `verification/tests/failure-classes.Tests.ps1` so it cannot come back.
+>
+> Two things the first real run settled. **"Add required objects" was already satisfied** —
+> creating the MCP tool from inside the agent's own solution pulled the connector and its
+> connection reference in automatically, so the export carried them without the manual
+> step. Do not read that as permission to skip it; it is one observation on one agent.
+> And **`pac solution unpack` writes `solution/<SolutionName>/`, not `solution/`** — which
+> is what README §4 always said, and what `verification/layer-08-audit.ps1` did not: V8.1's
+> default path was one level too shallow, so it returned SKIP ("still holds only its
+> .gitkeep placeholder") no matter how complete the export was. A SKIP invites nobody to
+> investigate. Every one of its 16 tests passes `-SolutionPath` explicitly, which is why a
+> green suite never touched the default.
 
 | Script | Does |
 |---|---|
