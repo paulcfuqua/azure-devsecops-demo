@@ -280,7 +280,9 @@ of them touches: a row of data, a rendered page, a working answer.
 > in the subscription. The operator needs **Key Vault Secrets Officer** on the vault.
 > I first recorded this as undocumented; that was wrong. `docs/runbooks/g0-bootstrap.md`
 > item C11 already carries the grant, for `mcp-auth-token`. What was actually missing is
-> that `mls-github-token` is a NEW secret with no runbook step of its own, so anyone
+> that `mls-github-token` (**renamed `mls-data-api-github-token` later the same day** -
+> three GitHub tokens now exist and the old name could not say which) is a NEW secret with
+> no runbook step of its own, so anyone
 > following the runbook provisions the vault without it and the GitHub feeds stay 503 with
 > nothing saying why. That step now exists.
 

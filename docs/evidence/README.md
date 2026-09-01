@@ -47,7 +47,8 @@ strength of a documented Fabric limitation that the running estate contradicts.
 
 ## `2026-09-01-control-tower-dev-github-feeds.png`
 
-Control Tower, **Dev** tab, taken 2026-09-01 immediately after `mls-github-token` was
+Control Tower, **Dev** tab, taken 2026-09-01 immediately after `mls-github-token` (since
+renamed `mls-data-api-github-token`) was
 provisioned and L7 redeployed (data-api revision `--0000003`).
 
 **Data path.** GitHub REST → `data-api`, authenticated with a fine-grained read-only PAT
