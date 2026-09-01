@@ -179,8 +179,30 @@ jobs:
       - name: Commit the artifact if it changed
         env:
           MLS_COMMIT: ${{ github.sha }}
-          # Needed only by the PR fallback below; gh reads it from the environment.
-          GH_TOKEN: ${{ github.token }}
+          # SELF_HEAL_TOKEN FIRST, AND F120 IS WHY.
+          #
+          # This step's fallback opens a pull request when a direct push is refused,
+          # and that fallback worked - PR #88 was opened and kept up to date exactly
+          # as designed. What nobody could see until someone tried to merge it is
+          # that the pull request CAN NEVER LAND: a branch pushed with GITHUB_TOKEN
+          # triggers no workflow runs, so no required check ever reports, and branch
+          # protection blocks it forever. The artifact was safe on a branch and the
+          # workflow was green, while the thing the workflow exists to do had
+          # silently stopped happening.
+          #
+          # SELF_HEAL_TOKEN exists for precisely this - CLAUDE.md hard rule 5 lists
+          # it as "a PAT with repo write, because a GITHUB_TOKEN push does not
+          # trigger workflows". Using it here makes the checks run, which is the
+          # only thing standing between this pull request and merging normally. It
+          # also lifts the "Actions cannot create pull requests" limitation the
+          # comments below describe, without turning on the setting that would also
+          # let a workflow APPROVE its own PR.
+          #
+          # The fallback to github.token is kept deliberately: a clone with no PAT
+          # still lands the artifact on a branch and still says where to click. It
+          # degrades to today's behaviour rather than failing.
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || github.token }}
+          MLS_PUSH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -235,7 +257,21 @@ jobs:
           # --force so a human editing that branch is never silently clobbered.
           branch='compliance-state'
           git switch -c "${branch}"
-          git push --force-with-lease --set-upstream origin "${branch}"
+          # PUSH AS THE PAT WHEN THERE IS ONE. The push is what triggers the
+          # pull_request checks, and a GITHUB_TOKEN push triggers none - which is
+          # what left #88 unmergeable. Rewriting the remote URL for this one push
+          # keeps the credential out of the committed config and out of the log:
+          # the token is masked by Actions, and the remote is restored immediately.
+          if [ -n "${MLS_PUSH_TOKEN:-}" ]; then
+            origin_url="$(git remote get-url origin)"
+            git remote set-url origin "https://x-access-token:${MLS_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push --force-with-lease --set-upstream origin "${branch}"
+            git remote set-url origin "${origin_url}"
+            echo 'Branch pushed with SELF_HEAL_TOKEN, so its pull-request checks will run.'
+          else
+            git push --force-with-lease --set-upstream origin "${branch}"
+            echo '::warning title=Pushed with GITHUB_TOKEN::No SELF_HEAL_TOKEN is set, so this push triggers no workflow runs. The pull request will have no checks and branch protection will refuse to merge it (F120). The artifact is safe on the branch either way.'
+          fi
           # The branch is pushed, so the artifact is safe either way. Opening the PR
           # is best-effort on purpose: creating one requires the repository setting
           # "Allow GitHub Actions to create and approve pull requests", and that single
