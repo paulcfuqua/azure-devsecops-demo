@@ -48,3 +48,21 @@ param keyVaultCreateMode = readEnvironmentVariable('KEY_VAULT_CREATE_MODE', 'def
 // scripts/bootstrap/03-budget.ps1's -Email, read from the environment so it is
 // never committed (CLAUDE.md hard rule 5). Empty keeps local builds green.
 param alertNotificationEmail = readEnvironmentVariable('MLS_ALERT_EMAIL', '')
+
+// Direct Line, for the control tower's Ask tab (F118).
+//
+// The NAME of a Key Vault secret, never the secret. The Function resolves it at
+// start-up through its own managed identity, so the value never enters this
+// file, ARM deployment history, or a what-if log - which matters more than usual
+// because this repository is public.
+//
+// Empty is a supported deployment and stays the default: the Copilot Studio
+// agent has not been published, so there is no Direct Line channel and no secret
+// to point at. The Function deploys anyway and answers with a typed error.
+param directlineSecretName = readEnvironmentVariable('MLS_DIRECTLINE_SECRET_NAME', '')
+
+// Origins the token endpoint will mint a token for. These become Direct Line's
+// `trustedOrigins` as well as the CORS allow-list, so a token minted for this
+// estate cannot be replayed from someone else's page. Empty means every origin
+// is refused, which is the right default for a public anonymous endpoint.
+param directlineAllowedOrigins = readEnvironmentVariable('MLS_DIRECTLINE_ALLOWED_ORIGINS', '')

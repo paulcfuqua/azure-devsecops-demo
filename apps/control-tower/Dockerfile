@@ -15,6 +15,21 @@ COPY apps/shared/spec-renderer/package.json apps/shared/spec-renderer/
 COPY apps/control-tower/package.json apps/control-tower/
 RUN npm ci --workspace apps/shared/spec-renderer --workspace apps/control-tower
 
+# THE ASK TAB'S ENDPOINT IS A BUILD-TIME INPUT, NOT A RUNTIME ONE (F118).
+#
+# Vite inlines every VITE_-prefixed variable into the bundle at build time, so a
+# value supplied to the running container arrives far too late: the JavaScript
+# that would have read it was generated without it. That is why the deployed Ask
+# tab reported "offline in local mode" while running in the deployed estate --
+# the image had been built without this, so its bundle was byte-identical to a
+# laptop one, and no amount of deploying could change that.
+#
+# EMPTY IS A SUPPORTED BUILD and is the default. The app renders its own
+# explanation when the value is absent, which is the honest state before the
+# Copilot Studio agent is published and a Direct Line channel exists.
+ARG VITE_DIRECTLINE_TOKEN_URL=""
+ENV VITE_DIRECTLINE_TOKEN_URL=$VITE_DIRECTLINE_TOKEN_URL
+
 # Sources, then build the workspace dep before the app.
 COPY apps/shared/spec-renderer apps/shared/spec-renderer
 COPY apps/control-tower apps/control-tower

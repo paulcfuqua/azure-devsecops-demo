@@ -60,6 +60,10 @@ var appKeys = {
   vulnLab: 'vuln-lab'
   compliance: 'compliance'
   costIngest: 'cost-ingest'
+  // 'directline', not 'directline-token': functionAppName appends '-<env>-func',
+  // and the longer key pushes the site name past what stays readable in the
+  // portal for no gain - the app has one job and the suffix already says which.
+  directlineToken: 'directline'
 }
 
 @export()
