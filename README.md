@@ -6,6 +6,30 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 
 *Meridian Launch Systems* is a fictional company. All data is synthetic.
 
+> ### Current state — read this before you spend an evening on it
+>
+> **[docs/DEMO-READINESS.md](docs/DEMO-READINESS.md) is the honest register** of what is
+> verified, what is broken, and what nobody has looked at. The short version, as of
+> 2026-09-01:
+>
+> - The estate **deploys** from a cold pipeline dispatch, layer by layer, with an
+>   independent Verifier signing off each one. That part is real and tested.
+> - **The rebuild half of the claim above is not yet true.** Tearing the estate down and
+>   building it back fails at L6: Log Analytics workspaces soft-delete for 14 days, a
+>   same-name recreate *recovers* the old one, and dependent alert rules then refuse to
+>   deploy against it (finding F107). Fix not yet chosen.
+> - **The applications do not serve data.** `data-api` cannot authenticate to the Fabric
+>   lakehouse, because its SQL endpoint accepts users and application objects and the app
+>   runs as a user-assigned managed identity (F101). Both dashboards render empty.
+> - **The Purview label taxonomy has never been applied**, and the Copilot agent has never
+>   been published.
+>
+> None of that is hidden by a red pipeline, which is the point worth understanding before
+> trusting any green check here: the layer criteria verify that the plumbing exists, and
+> until 2026-09-01 nothing asserted that water comes out of the tap. If you are evaluating
+> this repo as an example, the interesting reading is the failure classes in
+> `verification/tests/failure-classes.Tests.ps1` and the runbooks' findings, not the badges.
+
 ## Before you deploy this anywhere
 
 > ### Use a dedicated, empty Azure subscription.
