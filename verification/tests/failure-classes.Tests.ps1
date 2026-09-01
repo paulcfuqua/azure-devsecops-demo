@@ -764,3 +764,61 @@ Describe 'a filter added to one layer is added to all of them' {
             -Because '3 must stay non-zero, or a filtered run gates a layer as though it had passed'
     }
 }
+
+Describe 'a step that owns the verdict actually runs' {
+    # ZAP's baseline scan of the compliance app came back FAIL-NEW: 0 - zero High-risk
+    # alerts, 59 passes - and L9 recorded a failed security gate. The gate never ran (F102).
+    #
+    # zap.yml puts the verdict in a step of its own, "Gate on High-risk alerts", and sets
+    # `fail_action: false` on the scan action so findings do not fail the step. That was
+    # right, and not enough: the action still failed on its OWN post-processing (the
+    # workflow passed `-J report.json` in cmd_options, colliding with the action's built-in
+    # `-J report_json.json`, so the file it went looking for was never written). A failed
+    # step skips the ones after it, so the gate was skipped and the job reported a verdict
+    # nobody had reached.
+    #
+    # The rule: when a workflow delegates pass/fail to a named gate step, that step runs
+    # unconditionally. Anything less lets an unrelated failure masquerade as the verdict -
+    # and a security gate that reports failure without assessing anything is worse than no
+    # gate, because it trains people to dismiss it.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'runs every gate step even when an earlier step failed' {
+        $gates = [System.Collections.Generic.List[string]]::new()
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File) {
+            $line = Get-Content -LiteralPath $file.FullName
+            for ($i = 0; $i -lt $line.Count; $i++) {
+                if ($line[$i] -notmatch '^\s*- name:\s*Gate on ') { continue }
+                $gates.Add("$($file.Name): $($line[$i].Trim())")
+                # The condition must appear before the step's `run:`/`uses:` body.
+                $guarded = $false
+                for ($j = $i + 1; $j -lt [math]::Min($i + 6, $line.Count); $j++) {
+                    if ($line[$j] -match '^\s*(run|uses):') { break }
+                    if ($line[$j] -match '^\s*if:.*always\(\)') { $guarded = $true; break }
+                }
+                if (-not $guarded) { $offender.Add("$($file.Name): $($line[$i].Trim())") }
+            }
+        }
+        $gates.Count | Should -BeGreaterThan 0 `
+            -Because 'the sweep must actually find the gate steps; finding none means the pattern is broken, not that the repo is clean'
+        $offender -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a gate step that can be skipped by an earlier failure reports a verdict it never reached'
+    }
+
+    It 'never passes -J to the ZAP action, which already supplies its own' {
+        # The specific collision, kept as its own check because the general rule above
+        # would not have caught it - the gate was correct, the step before it was not.
+        $zap = Get-Content -LiteralPath (Join-Path $script:Root '.github/workflows/zap.yml') -Raw
+        if ($zap -match "cmd_options:\s*'([^']*)'") {
+            $Matches[1] | Should -Not -Match '(^|\s)-J(\s|$)' `
+                -Because 'zaproxy/action-baseline already passes -J report_json.json; a second -J silently redirects the output and the action then fails on a file it never wrote'
+        }
+        else {
+            throw 'cmd_options not found in zap.yml - this check no longer reads what it thinks it reads'
+        }
+    }
+}
