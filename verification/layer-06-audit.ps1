@@ -207,6 +207,95 @@ function Test-FunctionAppsHaveCode {
     return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
 }
 
+function Test-KeyVaultReferencesResolve {
+    <# V6.8 - A KEY VAULT REFERENCE THAT RESOLVES TO NOTHING LOOKS EXACTLY LIKE ONE
+       THAT WORKS (F122).
+
+       The directline Function's DIRECTLINE_SECRET was a correct, well-formed
+       reference to a real secret, the role assignment granting it was in place, the
+       identity existed, the deploy was green and V6.1-V6.7 all passed. The Function
+       received an empty string, because a `@Microsoft.KeyVault(...)` setting is
+       resolved with the site's SYSTEM-assigned identity unless the site sets
+       `keyVaultReferenceIdentity`, and this site has only a user-assigned one:
+
+           status: MSINotEnabled
+           details: Reference was not able to be resolved because site Managed
+                    Identity not enabled.
+
+       WHAT MADE IT INVISIBLE, and why this criterion reads a different endpoint than
+       a person would. `az functionapp config appsettings list` prints the reference
+       text back verbatim whether or not it resolves - the artefact is perfect in
+       every listing. Worse, the downstream symptom was a Function reporting "channel
+       not configured", which is a state this estate deliberately supports and ships
+       as the honest default before the agent is published. So the one visible
+       signal was indistinguishable from correct behaviour. Only
+       /config/configreferences/appsettings carries the resolution status. Assert the
+       CAPABILITY - the secret actually arrives - not the artefact, which was "the
+       setting is present and points somewhere real".
+
+       This endpoint returns names and statuses, never secret values, which is
+       precisely why a Reader-authenticated Verifier can and should be the one asking.
+
+       OBSERVABILITY BEFORE ABSENCE. An empty list means "this site has no Key Vault
+       references" to a caller who may look, and it is also what a caller who may not
+       look could receive. A non-success response is UNOBSERVABLE. An empty list is
+       reported as such rather than silently passing, because a reference that was
+       expected and is simply GONE would otherwise read as a clean pass. #>
+    param(
+        [Parameter(Mandatory)][string]$SubscriptionId,
+        [Parameter(Mandatory)][string]$ResourceGroupName,
+        [Parameter(Mandatory)][string[]]$FunctionAppName
+    )
+    $observed = [System.Collections.Generic.List[string]]::new()
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $unobservable = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($name in $FunctionAppName) {
+        $uri = "https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName" +
+               "/providers/Microsoft.Web/sites/$name/config/configreferences/appsettings?api-version=2022-09-01"
+        $raw = Invoke-MlsAz -AllowFailure -Raw -Argument @('rest', '--method', 'get', '--url', $uri)
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            $unobservable.Add("$name (the configreferences endpoint returned nothing - this reads the same whether the site has no Key Vault references or the caller may not look, so it is not reported as clean)")
+            continue
+        }
+        $parsed = $null
+        try { $parsed = $raw | ConvertFrom-Json } catch {
+            $unobservable.Add("$name (the configreferences endpoint did not return JSON)")
+            continue
+        }
+        $references = @()
+        if ($null -ne $parsed -and $null -ne $parsed.value) { $references = @($parsed.value) }
+        if ($references.Count -eq 0) {
+            $observed.Add("$name has no Key Vault references")
+            continue
+        }
+        foreach ($reference in $references) {
+            $status = ''
+            if ($null -ne $reference.properties -and $null -ne $reference.properties.status) {
+                $status = [string]$reference.properties.status
+            }
+            $observed.Add("$name/$($reference.name)=$status")
+            if ($status -ne 'Resolved') {
+                $details = ''
+                if ($null -ne $reference.properties -and $null -ne $reference.properties.details) {
+                    $details = [string]$reference.properties.details
+                }
+                $problem.Add("$name/$($reference.name) is $status - $details")
+            }
+        }
+    }
+
+    if ($unobservable.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Observed (($observed + $unobservable) -join '; ') `
+            -Detail 'UNOBSERVABLE, not clean: the configreferences endpoint answers the same way to a caller who may not read it as to a site with no Key Vault references. Establish that mls-verifier can read Microsoft.Web/sites/config before treating an empty list as evidence.'
+    }
+    if ($problem.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
+            -Detail 'An unresolved Key Vault reference delivers an EMPTY value to the app, which usually surfaces as a feature quietly reporting itself unconfigured rather than as an error. MSINotEnabled means the site has no system-assigned identity and never named a user-assigned one: set keyVaultAccessIdentityResourceId on the site (F122). Forbidden/NotFound mean the reference resolves to a secret the identity cannot read or that does not exist.'
+    }
+    return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
+}
+
 function Test-ArmStateMatchesManifest {
     <# V6.1 - any mismatch is a FAIL, including a "better" SKU: that is an un-gated spend
        increase (L06.md V6.1). #>
@@ -555,6 +644,25 @@ function Invoke-Main {
         -RetryWindowMinutes 2 `
         -Test {
             Test-FunctionAppsHaveCode -SubscriptionId $SubscriptionId `
+                -ResourceGroupName $functionResourceGroupName `
+                -FunctionAppName $FunctionAppNames
+        } | Out-Null
+
+    # V6.8 - F122. SHORT window, and the reason is worth stating because it is not
+    # the obvious one: Key Vault references are resolved at site start-up and the
+    # status endpoint reflects the LAST resolution attempt, so a site that has not
+    # restarted since the setting changed reports the old answer for a while. Two
+    # minutes covers the restart the deploy itself triggers. It deliberately does not
+    # cover secret-permission propagation - if a fresh role assignment is the reason
+    # this fails, that is a real finding about deploy ordering, not something to wait
+    # out.
+    Invoke-MlsCriterion -Context $context -Id 'V6.8' -Control @() `
+        -Description 'Every Key Vault reference in every Function App actually resolves - the secret arrives, rather than the setting merely being present' `
+        -Command "az rest --method get --url https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Web/sites/<app>/config/configreferences/appsettings?api-version=2022-09-01" `
+        -Expected 'every reference reports status == Resolved' `
+        -RetryWindowMinutes 2 `
+        -Test {
+            Test-KeyVaultReferencesResolve -SubscriptionId $SubscriptionId `
                 -ResourceGroupName $functionResourceGroupName `
                 -FunctionAppName $FunctionAppNames
         } | Out-Null

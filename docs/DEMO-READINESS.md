@@ -75,15 +75,61 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 
 **BLOCKER-1 and BLOCKER-2 are both CLOSED as of 2026-09-01.** What is left:
 
-- **BLOCKER-3** (the Direct Line secret) is now the top of the chain for showpiece 1, and it
-  is finally *reachable* - the agent is deployed, so a Direct Line channel can be created
-  and its secret put in Key Vault. The token Function and the build-time URL are already in
-  place and waiting.
+- **BLOCKER-3** (the Direct Line secret) is **wired and one deploy from closed.** The agent
+  is published, the secret is in Key Vault as `mls-directline-secret`, the environment
+  variables hold the *name* (not the value), and the token Function is deployed with the
+  reference. What stood between that and a working Ask tab was **F122** - the reference
+  resolved to nothing while every view of it looked correct. Fixed in the template; needs
+  an L6 re-run to take effect, then L7 so the control-tower image carries the token URL.
+  **Do not mark this closed from a green workflow: open the Ask tab.** F122 is precisely
+  the case where all six L6 criteria passed over a Function holding an empty secret.
 - **BLOCKER-4** (self-healing has nothing to heal) still needs live alerts.
 - **BLOCKER-5** (L12 has no audit script) remains the one an agent can attack today with no
   credential and no human.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F122 — the Direct Line secret never reached the Function, and *nothing* said so *(fixed 2026-09-01)*
+
+Everything about this one was correct except the part no tool showed. The agent was
+published, the Direct Line secret was in Key Vault under the right name, the app setting on
+`mls-directline-demo-func` was present and well-formed, the identity existed, the
+`Key Vault Secrets User` grant was in place, the deploy was green, and **L6 signed off
+green on all six criteria.** The Function received an empty string.
+
+    az rest --url .../config/configreferences/appsettings
+    status:  MSINotEnabled
+    details: Reference was not able to be resolved because site Managed Identity not enabled.
+
+A `@Microsoft.KeyVault(...)` app setting is resolved by the platform using the site's
+**system**-assigned identity unless the site sets `keyVaultReferenceIdentity`
+(`keyVaultAccessIdentityResourceId` on the AVM site module). This site has **only** a
+user-assigned identity — because Flex Consumption needs an identity *resource id* at
+site-creation time, which a system-assigned identity does not have until the site exists.
+The two requirements are in direct tension and **satisfying the first silently breaks the
+second**.
+
+**Why it was invisible, which is the part worth keeping.** `az functionapp config
+appsettings list` prints the reference back verbatim whether or not it resolves — the
+artefact is perfect from every angle a person would check. And the downstream symptom was
+the Ask tab reporting *"the channel is not configured"*, which is a state this estate
+**deliberately supports and ships as the honest default** before an agent is published. So
+the single visible signal was indistinguishable from correct behaviour. There was no error
+anywhere, at any layer, at any time.
+
+**Fixed** by naming the identity in `infra/bicep/platform/main.bicep`. Two checks now cover
+the class, deliberately at different costs:
+
+- **V6.8** (`verification/layer-06-audit.ps1`) asserts every Key Vault reference in every
+  Function App reports `status == Resolved` — the capability (*the secret arrives*), not the
+  artefact (*the setting is present and points somewhere real*). It reads
+  `/config/configreferences/appsettings`, which returns names and statuses but never values
+  — which is exactly why a Reader-authenticated Verifier can be the one asking. Unresolvable
+  responses are `UNOBSERVABLE`, never "no references".
+- **`verification/tests/failure-classes.Tests.ps1`** catches the class statically, in a
+  second, with no estate: any Bicep site block containing `@Microsoft.KeyVault(` must name
+  an identity. This is the one that matters going forward — the next Function App to want a
+  secret will be copied from the one that has one.
 
 ### F121 — the label policy was published to recipients that cannot exist *(fixed 2026-09-01)*
 
