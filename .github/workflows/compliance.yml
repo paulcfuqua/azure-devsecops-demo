@@ -58,6 +58,16 @@ on:
     # GitHub's scheduler is most contended and a run is most likely to be delayed.
     - cron: '17 2 * * *'
   workflow_dispatch:
+    inputs:
+      only_criterion:
+        description: >-
+          Verify only these criteria, e.g. `V12.4` or `V12.1,V12.6`. Everything else
+          reports SKIP and the audit exits 3 - a DIAGNOSTIC, never a sign-off. Re-testing
+          one criterion should not cost a whole audit's wall clock (P-10). Leave empty for
+          a verdict.
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -365,6 +375,9 @@ jobs:
             ${{ steps.names.outputs.rg-apps }}
             -ComplianceAppName
             ${{ steps.names.outputs.ca-compliance }}
+
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
 
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
