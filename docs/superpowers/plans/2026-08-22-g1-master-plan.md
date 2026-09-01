@@ -1,5 +1,11 @@
 # G1 Master Plan — Meridian Launch Systems Demo
 
+> **Before trusting anything below: [docs/DEMO-READINESS.md](../../DEMO-READINESS.md) is the register of what
+> is actually verified, what is broken, and what nobody has looked at.** A layer signing off
+> means its own criteria passed, not that the product works - and as of 2026-09-01 the apps
+> serve no data (F101), the label taxonomy has never been applied, and the rebuild fails at
+> L6 (F107). None of that shows as a red pipeline.
+
 > **For agentic workers:** This is the program-level plan the human approves once at G1.
 > Each layer below is decomposed into a full task-level implementation plan (superpowers
 > writing-plans format, TDD granularity) by its workstream lead **when the layer
