@@ -59,7 +59,7 @@ conversationStarters:
     text: Which day of the week has the most launches, and which day of the year has the most scrubs?
 
   - title: Scrub Metrics
-    text: Which day of the week has the most launches, and which day of the year has the most scrubs?
+    text: What are the top five scrub causes this year, and how has each trended by quarter?
 
   - title: Supplier Metrics
     text: Which supplier has the worst part lead-time variance, and what does it hold up?

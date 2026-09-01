@@ -10,3 +10,50 @@ beginDialog:
           - Hello, I'm {System.Bot.Name}. How can I help?
         speak:
           - Hello and thank you for calling {System.Bot.Name}, powered by generative AI. How may I help you today?
+
+    - kind: SendActivity
+      id: sendStarterCard
+      activity:
+        attachments:
+          - kind: AdaptiveCardTemplate
+            cardContent: |-
+              {
+                "type": "AdaptiveCard",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.6",
+                "body": [
+                  {
+                    "type": "TextBlock",
+                    "text": "Ask about flight operations, or about the platform that runs them. All data is synthetic.",
+                    "wrap": true,
+                    "isSubtle": true
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.Submit",
+                    "title": "Launch & scrub cadence",
+                    "data": { "cardId": "starters.v1", "actionId": "s1", "text": "Which day of the week has the most launches, and which day of the year has the most scrubs?" }
+                  },
+                  {
+                    "type": "Action.Submit",
+                    "title": "Scrub causes by quarter",
+                    "data": { "cardId": "starters.v1", "actionId": "s2", "text": "What are the top five scrub causes this year, and how has each trended by quarter?" }
+                  },
+                  {
+                    "type": "Action.Submit",
+                    "title": "Supplier lead-time variance",
+                    "data": { "cardId": "starters.v1", "actionId": "s3", "text": "Which supplier has the worst part lead-time variance, and what does it hold up?" }
+                  },
+                  {
+                    "type": "Action.Submit",
+                    "title": "Deployment health & findings",
+                    "data": { "cardId": "starters.v1", "actionId": "s4", "text": "Show me deployment health and any open security findings across the estate." }
+                  },
+                  {
+                    "type": "Action.Submit",
+                    "title": "Last week's spend",
+                    "data": { "cardId": "starters.v1", "actionId": "s5", "text": "What did we spend last week, by resource group, and what changed?" }
+                  }
+                ]
+              }
