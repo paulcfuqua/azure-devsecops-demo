@@ -309,6 +309,35 @@ it is still about sign-in risk and auto-labeling, nothing else.
    Confirm Global Administrator on the tenant. After toolchain install, run `az login`
    when prompted by the bootstrap script.
 
+   **Rename the subscription and the directory — two defaults the naming convention does
+   not reach [verified 2026-08-31].** A personal-account signup produces a subscription
+   called `Azure subscription 1` and a directory called `Default Directory`, and neither is
+   covered by `mls-<app|role>-<env>-<type>`, so F90's "rebranding leaves names behind" has
+   two more places to hide. Neither is load-bearing — the L2 audit matches subscriptions on
+   `id` and only prints `displayName` in its evidence line — but both are demo-visible: the
+   subscription name appears in every cost view, and the directory name on the sign-in page
+   the demo personas hit.
+
+   **The subscription is automatable; the directory is not.** That asymmetry is the part
+   worth knowing:
+
+   ```bash
+   az rest --method post \
+     --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.Subscription/rename?api-version=2021-10-01" \
+     --body '{"subscriptionName":"mls-demo-subscription"}'
+   az account list --refresh    # the local cache keeps the old name until you do this
+   ```
+
+   The directory name is **read-only through Microsoft Graph on both `v1.0` and `beta`** —
+   `Property 'displayName' is read-only and cannot be set.` / `Update to the 'displayName'
+   property is not allowed.` It is a portal-only edit: **entra.microsoft.com → Overview →
+   Properties → Name → Save**. Do not spend time looking for the API; there isn't one.
+
+   Renaming the directory does **not** change `<tenant>.onmicrosoft.com`, which is fixed at
+   creation, so UPNs still read `dana.reyes@<original>.onmicrosoft.com`. If the sign-in page
+   itself matters for the demo, **Entra Company Branding** (logo, banner, background) does
+   far more than the directory name, and a custom domain is the only real fix.
+
    **⚠ If you sign up with a personal Microsoft account — the default path from that
    page — you have three more steps before anything else works (finding F46).** Signing
    up with an `@outlook.com`/`@hotmail.com`/`@gmail.com` account gives you a "Default
