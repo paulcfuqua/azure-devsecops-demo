@@ -822,3 +822,65 @@ Describe 'a step that owns the verdict actually runs' {
         }
     }
 }
+
+Describe 'a console helper can print the blank line its own banner needs' {
+
+    # L8, 2026-08-31. export-agent.ps1 had never been run. Its first real invocation died
+    # on its own "Add required objects" reminder, before contacting anything, because
+    # Write-Status '' against [Parameter(Mandatory)][string]$Message is rejected:
+    # Mandatory implies a non-empty check for strings unless AllowEmptyString says
+    # otherwise. import-agent.ps1 carried the same helper and the same calls.
+    #
+    # This class was already paid for once. infra/entra/teardown.ps1,
+    # infra/policy/teardown.ps1 and infra/purview/teardown.ps1 each carry a comment
+    # explaining exactly this, and up.ps1, down.ps1 and seed.ps1 all guard it. Three files
+    # still missed it - which is the entire argument for a check over a fix.
+    #
+    # Asserted on the CAPABILITY - the parameter can accept an empty string - rather than
+    # on the artefact that usually accompanies it - this file happens to call it with ''.
+    # A helper that gains a blank-line call tomorrow is already covered.
+
+    BeforeAll {
+        $script:ScriptFile = @(
+            Get-ChildItem -Path $script:RepoRoot -Filter '*.ps1' -Recurse -File |
+                Where-Object {
+                    $_.FullName -notmatch '[\/](node_modules|\.git|bin|obj)[\/]' -and
+                    $_.Name -notlike '*.Tests.ps1'
+                }
+        )
+
+        # Parameters that carry human-facing console text, and so eventually get asked to
+        # print a spacer line.
+        $script:MessageParamPattern = '\[string\]\$(Message|Text|Line|Banner)\b'
+
+        # Scoped to Write-* functions on purpose. The first draft of this check keyed on the
+        # parameter name alone and flagged infra/entra/apply-entra.ps1's Get-DeterministicGuid,
+        # whose [Parameter(Mandatory)][string]$Text derives an app-role GUID from a string --
+        # a parameter that SHOULD reject an empty value, because an empty one would silently
+        # mint a GUID for nothing. A console helper is identified by being one, not by the
+        # spelling of its parameter.
+        $script:ConsoleFunctionPattern = '^\s*function\s+(Write-[A-Za-z]+)'
+    }
+
+    It 'finds PowerShell scripts to check, so the assertions are not vacuous' {
+        $script:ScriptFile.Count | Should -BeGreaterThan 10
+    }
+
+    It 'every Mandatory console-text parameter accepts an empty string' {
+        $offender = foreach ($file in $script:ScriptFile) {
+            $relative = $file.FullName.Substring($script:RepoRoot.Length).TrimStart('\', '/')
+            $currentFunction = ''
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                if ($line -match $script:ConsoleFunctionPattern) { $currentFunction = $Matches[1] }
+                elseif ($line -match '^\s*function\s') { $currentFunction = '' }
+                if ($currentFunction -and
+                    $line -match '\[Parameter\(Mandatory\)\]' -and
+                    $line -match $script:MessageParamPattern -and
+                    $line -notmatch 'AllowEmptyString') {
+                    "${relative}: $currentFunction -> $($line.Trim())"
+                }
+            }
+        }
+        $offender | Should -BeNullOrEmpty -Because 'a Mandatory [string] rejects an empty string, so a banner printing a blank spacer line throws before the script does anything - add [AllowEmptyString()]'
+    }
+}
