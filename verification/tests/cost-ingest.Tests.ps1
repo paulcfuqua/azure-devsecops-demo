@@ -112,8 +112,20 @@ Describe 'F19: cost-ingest is provisioned as a real Function App' {
         # userAssignedResourceIds carrying THIS identity is the assertion; a
         # systemAssigned:true would leave the container-scoped grant below
         # attached to a principal the app does not use.
-        $script:Stripped['platform'] | Should -Match 'userAssignedResourceIds:\s*\[costIngestIdentity\.outputs\.resourceId\]'
-        $script:Stripped['platform'] | Should -Not -Match 'systemAssigned:\s*true'
+        #
+        # SCOPED TO THE FUNCTION APP MODULE, NOT THE WHOLE TEMPLATE. The second assertion
+        # used to search the entire file, which made it a claim about every resource in
+        # L6 rather than about cost-ingest. It broke the moment the SQL server was given
+        # a system-assigned identity - which it NEEDS, because CREATE USER ... FROM
+        # EXTERNAL PROVIDER resolves principals through the server's own identity (F112).
+        # A correct change to one resource must not fail a test about another.
+        $functionApp = [regex]::Match(
+            $script:Stripped['platform'],
+            "(?s)module costIngestFunctionApp\s+'br/public:avm/res/web/site:.*?
+\}")
+        $functionApp.Success | Should -BeTrue -Because 'the sweep must find the Function App module it claims to describe'
+        $functionApp.Value | Should -Match 'userAssignedResourceIds:\s*\[costIngestIdentity\.outputs\.resourceId\]'
+        $functionApp.Value | Should -Not -Match 'systemAssigned:\s*true'
     }
 
     It 'runs on Flex Consumption (FC1) — the plan that is $0 idle AND supports managed-identity host storage' {
