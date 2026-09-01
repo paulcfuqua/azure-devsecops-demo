@@ -1,4 +1,4 @@
-# Pester tests for verification/MlsAudit.psm1 - the criterion runner, retry policy,
+﻿# Pester tests for verification/MlsAudit.psm1 - the criterion runner, retry policy,
 # read-only guards and report writer. Every transport is mocked; zero cloud calls.
 
 BeforeAll {
@@ -914,5 +914,90 @@ Describe 'an expired federated assertion is raised, never swallowed' {
         $message | Should -BeLike '*NOT a permissions problem*'
         $message | Should -BeLike '*five minutes*' -Because 'the lifetime is the whole explanation and nobody guesses it'
         $message | Should -BeLike '*already cached*' -Because 'why the run got this far is the confusing part'
+    }
+}
+
+Describe 'an expired federated assertion is RECOVERED before it is raised' {
+    # The second half of F104. Detecting the expiry was right and not enough: L7's V7.5,
+    # V7.6 and V7.7 failed on it on EVERY run since they were written, which is how the
+    # scorecard could say "L7 verified 5/5" while three of its seven criteria had never once
+    # been evaluated. The old message named the remedy - "re-authenticate before it" - and
+    # left a script that cannot know when the clock ran out to do it by hand.
+    #
+    # The identity, its roles and the subscription are all still correct when this happens;
+    # only the assertion is stale. A fresh GitHub OIDC token restores exactly the same
+    # session, so the honest thing is to recover and carry on - and to keep raising the
+    # error, loudly, whenever recovery does not work.
+
+    BeforeEach {
+        Mock Assert-MlsCommand {} -ModuleName 'MlsAudit'
+        InModuleScope 'MlsAudit' { $script:LastAzRelogin = $null }
+    }
+
+    It 'retries the command after a successful re-login and returns its result' {
+        InModuleScope 'MlsAudit' {
+            $script:Calls = 0
+            Mock Restore-MlsAzLogin { return $true }
+            Mock Invoke-MlsBoundedNativeCommand {
+                $script:Calls++
+                if ($script:Calls -eq 1) {
+                    return [pscustomobject]@{ TimedOut = $false; ExitCode = 1; StdOut = ''
+                        StdErr = 'ERROR: AADSTS700024: Client assertion is not within its valid time range.' }
+                }
+                return [pscustomobject]@{ TimedOut = $false; ExitCode = 0; StdOut = '"centralus"'; StdErr = '' }
+            }
+            # The whole point: the caller gets its ANSWER, not an error, because nothing was
+            # ever wrong with the identity - only with the age of its assertion.
+            Invoke-MlsAz -Argument @('group', 'show', '-n', 'mls-rg-apps', '--query', 'location') | Should -Be 'centralus'
+            $script:Calls | Should -Be 2 -Because 'the command must actually be re-issued, not assumed to have succeeded'
+        }
+    }
+
+    It 'still throws when re-authentication does not recover it' {
+        InModuleScope 'MlsAudit' {
+            Mock Restore-MlsAzLogin { return $false }
+            Mock Invoke-MlsBoundedNativeCommand {
+                return [pscustomobject]@{ TimedOut = $false; ExitCode = 1; StdOut = ''
+                    StdErr = 'ERROR: AADSTS700024: Client assertion is not within its valid time range.' }
+            }
+            # A revoked federation, a dead token endpoint, or a real permissions error
+            # arriving in this shape must all still be raised - never returned as $null,
+            # even to a caller that passed -AllowFailure.
+            { Invoke-MlsAz -AllowFailure -Argument @('group', 'show', '-n', 'mls-rg-apps') } |
+                Should -Throw -ExpectedMessage '*AADSTS700024*'
+        }
+    }
+
+    It 'does not re-attempt within the rate limit, so a broken federation cannot spin' {
+        InModuleScope 'MlsAudit' {
+            $script:LastAzRelogin = [DateTime]::UtcNow
+            $script:Attempts = 0
+            Mock Restore-MlsAzLogin { $script:Attempts++; return $true }
+            Mock Invoke-MlsBoundedNativeCommand {
+                return [pscustomobject]@{ TimedOut = $false; ExitCode = 1; StdOut = ''
+                    StdErr = 'ERROR: AADSTS700024: Client assertion is not within its valid time range.' }
+            }
+            { Invoke-MlsAz -Argument @('group', 'show', '-n', 'mls-rg-apps') } | Should -Throw
+            $script:Attempts | Should -Be 0 -Because 'a re-login seconds old cannot have expired again; retrying would spin'
+        }
+    }
+
+    It 'refuses to re-login outside GitHub Actions, where there is no token to mint' {
+        InModuleScope 'MlsAudit' {
+            $saved = @{}
+            foreach ($name in @('ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN')) {
+                $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+                [Environment]::SetEnvironmentVariable($name, $null)
+            }
+            try {
+                # A developer running an audit locally has an ordinary az login whose
+                # credential does not expire this way; there is nothing to recover from and
+                # no endpoint to recover with, so it must decline rather than guess.
+                Restore-MlsAzLogin | Should -BeFalse
+            }
+            finally {
+                foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+            }
+        }
     }
 }
