@@ -41,7 +41,10 @@ param(
     [string[]]$RequiredServicePlan = @('AAD_PREMIUM', 'MFA_PREMIUM'),
     [string]$NamingPrefix = 'mls',
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V3.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -499,7 +502,8 @@ function Invoke-Main {
         [string[]]$RequiredServicePlan = @('AAD_PREMIUM', 'MFA_PREMIUM'),
         [string]$NamingPrefix = 'mls',
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     $manifestFile = Resolve-MlsInput -Name 'ManifestPath' -Value $ManifestPath -EnvironmentVariable @('MLS_ENTRA_MANIFEST') `
@@ -525,7 +529,8 @@ function Invoke-Main {
         -Hint "The tenant's verified domain. UPNs are composed as <prefix>@<domain>; the manifest ships the placeholder 'mls.example', which apply-entra.ps1 overrides at apply time, so the audit cannot guess it."
 
     $context = New-MlsAuditContext -Layer 3 -Title 'Entra layer: users, groups, CA, app registrations' `
-        -ScriptName 'verification/layer-03-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-03-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Manifest' -Value $manifestFile
     Add-MlsPreflight -Context $context -Name 'Tenant domain' -Value $tenantDomain
     Add-MlsPreflight -Context $context -Name 'Manifest shape' `
@@ -609,7 +614,8 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -ManifestPath $ManifestPath -Domain $Domain `
             -LicenseSkuPartNumber $LicenseSkuPartNumber -RequiredServicePlan $RequiredServicePlan `
-            -NamingPrefix $NamingPrefix -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -NamingPrefix $NamingPrefix -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-03-audit could not start: $($_.Exception.Message)" -Color Red

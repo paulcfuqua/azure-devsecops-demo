@@ -43,7 +43,10 @@ param(
     [int[]]$ChildAuditLayer = @(1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
     [switch]$SkipChildAudit,
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V11.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -264,7 +267,8 @@ function Invoke-Main {
         [int[]]$ChildAuditLayer = @(),
         [switch]$SkipChildAudit,
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $subscription = Resolve-MlsInput -Name 'SubscriptionId' -Value $SubscriptionId -EnvironmentVariable @('AZURE_SUBSCRIPTION_ID') `
         -Hint 'The demo subscription whose resource groups, capacity, SQL and consumption this proof reads.'
@@ -280,7 +284,8 @@ function Invoke-Main {
     if ([string]::IsNullOrWhiteSpace($databaseId)) { $databaseId = [Environment]::GetEnvironmentVariable('MLS_SQL_DB_ID') }
 
     $context = New-MlsAuditContext -Layer 11 -Title "Kill/reinstantiate proof (phase: $Phase)" `
-        -ScriptName 'verification/layer-11-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-11-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Phase' -Value $Phase
     Add-MlsPreflight -Context $context -Name 'SubscriptionId' -Value $subscription
     Add-MlsPreflight -Context $context -Name 'up.ps1 start (UTC)' -Value "$startUtc" -Status $(if ($startUtc) { 'OK' } else { 'ABSENT' })
@@ -383,7 +388,8 @@ if (-not $env:MLS_SKIP_MAIN) {
             -UpStartUtc $UpStartUtc -UpCompletedUtc $UpCompletedUtc -WallClockBudgetMinutes $WallClockBudgetMinutes `
             -Repository $Repository -FabricCapacityId $FabricCapacityId -SqlDatabaseId $SqlDatabaseId `
             -IdleDailyCostBudget $IdleDailyCostBudget -ChildAuditLayer $ChildAuditLayer `
-            -SkipChildAudit:$SkipChildAudit -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -SkipChildAudit:$SkipChildAudit -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-11-audit could not start: $($_.Exception.Message)" -Color Red

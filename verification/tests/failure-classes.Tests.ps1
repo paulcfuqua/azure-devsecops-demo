@@ -694,3 +694,73 @@ Describe 'a criterion correlates on a field the system actually emits' {
             -Because 'the low-cardinality route template is what the allowlist emits INSTEAD of the raw path'
     }
 }
+
+
+Describe 'a filter added to one layer is added to all of them' {
+    # -OnlyCriterion was built for L7, because L7 is where the hour-long re-verify loop
+    # was discovered: five audits at ~55 minutes to answer one question about V7.3 (P-10).
+    #
+    # The loop is not L7's. L6 waits out SQL auto-pause, L11 waits out a full teardown and
+    # rebuild, L5 waits on Fabric. Shipping the filter on the one layer that happened to
+    # hurt would leave every other layer paying the old price - and would be the F90 shape
+    # exactly: a mechanism introduced in one place, with the consumers never swept.
+    #
+    # So this is a TOTAL rule with no allowlist. Every layer audit accepts the parameter,
+    # and every workflow that runs one exposes it and passes it through. A new layer that
+    # forgets is a failing test, not a discovery six weeks later.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'gives every layer audit script the -OnlyCriterion parameter' {
+        $audits = @(Get-ChildItem -Path (Join-Path $script:Root 'verification') -Filter 'layer-*-audit.ps1' -File)
+        $audits.Count | Should -BeGreaterThan 5 `
+            -Because 'the sweep must actually find the audit scripts; finding almost none means the glob is broken, not that the repo is clean'
+        # BOTH the declaration and the plumbing. Matching the parameter name alone passed
+        # a mutation that renamed the script-level parameter and left the inner one intact
+        # - a script whose -OnlyCriterion is unbindable from the command line, which is the
+        # only place CI can set it. A declared knob that reaches nothing is not a filter.
+        $offender = @($audits | Where-Object {
+                $content = Get-Content -LiteralPath $_.FullName -Raw
+                $declares = $content -match '(?m)^    \[string\[\]\]\$OnlyCriterion = @\(\)'
+                $plumbs = $content -match '-OnlyCriterion \$OnlyCriterion'
+                -not ($declares -and $plumbs)
+            } | ForEach-Object { $_.Name })
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'a layer without the filter can only be re-verified in full, which is the hour-long loop P-10 exists to end'
+    }
+
+    It 'passes -OnlyCriterion through from every workflow that runs a layer audit' {
+        $workflows = @(Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File |
+                Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'actions/layer-audit' })
+        $workflows.Count | Should -BeGreaterThan 5 `
+            -Because 'the sweep must actually find the callers of the layer-audit action'
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($workflow in $workflows) {
+            $content = Get-Content -LiteralPath $workflow.FullName -Raw
+            # BOTH halves, because either alone is a dead knob: an input nothing reads is
+            # a lie in the dispatch form, and a passthrough with no input can never fire.
+            $declares = $content -match '(?m)^\s{6}only_criterion:'
+            $passes = $content -match "inputs\.only_criterion && '-OnlyCriterion'"
+            if (-not ($declares -and $passes)) { $offender.Add($workflow.Name) }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'a workflow that runs an audit but cannot filter it forces a full run to re-test one criterion'
+    }
+
+    It 'keeps exit code 3 meaning DIAGNOSTIC everywhere it is interpreted' {
+        # The guard that makes the filter safe: SKIP does not fail a run, so without a
+        # third code a filtered run would exit 0 and be indistinguishable from a full
+        # green audit - a filter that could manufacture a sign-off by selecting only the
+        # criteria that pass.
+        $module = Get-Content -LiteralPath (Join-Path $script:Root 'verification/MlsAudit.psm1') -Raw
+        $module | Should -Match 'if \(@\(\$Context\.OnlyCriterion\)\.Count -gt 0\) \{ return 3 \}' `
+            -Because 'Get-MlsExitCode is where a filtered run stops being able to read as a pass'
+        $action = Get-Content -LiteralPath (Join-Path $script:Root '.github/actions/layer-audit/action.yml') -Raw
+        $action | Should -Match '3\) verdict="DIAGNOSTIC' `
+            -Because 'reporting a filtered run as FAIL trains people to ignore the one code that means "no verdict"'
+        $action | Should -Match 'exit 3' `
+            -Because '3 must stay non-zero, or a filtered run gates a layer as though it had passed'
+    }
+}

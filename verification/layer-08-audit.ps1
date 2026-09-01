@@ -63,7 +63,10 @@ param(
     [string]$SqlAccessToken,
     [string]$LakehouseName = 'mls_operations',
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V8.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -372,7 +375,8 @@ function Invoke-Main {
         [string]$SqlAccessToken,
         [string]$LakehouseName = 'mls_operations',
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     $solutionFile = $SolutionPath
@@ -413,7 +417,8 @@ function Invoke-Main {
     if ([string]::IsNullOrWhiteSpace($sqlToken)) { $sqlToken = [Environment]::GetEnvironmentVariable('MLS_SQL_ACCESS_TOKEN') }
 
     $context = New-MlsAuditContext -Layer 8 -Title 'Copilot: custom Copilot Studio agent' `
-        -ScriptName 'verification/layer-08-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-08-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Committed solution' -Value $solutionFile -Status $(if ($committed) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Power Platform environment' -Value "$environment" -Status $(if ($environment) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Eval artifact' -Value "$evalPath" -Status $(if ($artifact) { 'OK' } else { 'ABSENT' })
@@ -469,7 +474,8 @@ if (-not $env:MLS_SKIP_MAIN) {
             -SolutionPath $SolutionPath -EvalResultPath $EvalResultPath -McpServerUrl $McpServerUrl `
             -AllowedTool $AllowedTool -AdaptiveCardVersion $AdaptiveCardVersion `
             -LatencyBudgetSeconds $LatencyBudgetSeconds -EvalPassBar $EvalPassBar -SqlEndpoint $SqlEndpoint `
-            -SqlAccessToken $SqlAccessToken -LakehouseName $LakehouseName -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -SqlAccessToken $SqlAccessToken -LakehouseName $LakehouseName -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-08-audit could not start: $($_.Exception.Message)" -Color Red

@@ -58,6 +58,15 @@ on:
         type: boolean
         default: false
 
+      only_criterion:
+        description: >-
+          Verify only these criteria, e.g. `V11.2` or `V11.1,V11.3`. Everything else
+          reports SKIP and the audit exits 3 - a DIAGNOSTIC, never a sign-off. Re-testing
+          one criterion should not cost a whole audit's wall clock (P-10). Leave empty for
+          a verdict.
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 
@@ -416,6 +425,8 @@ jobs:
             ${{ github.repository }}
             ${{ needs.preflight.outputs.tenant-audits == 'true' && '' || '-SkipChildAudit' }}
 
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
       - name: Upload the down-state audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v7

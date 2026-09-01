@@ -36,7 +36,10 @@ param(
     [string]$RepoRoot,
     [string]$GuidAllowlistPath,
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V1.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -248,7 +251,8 @@ function Invoke-Main {
         [string]$RepoRoot,
         [string]$GuidAllowlistPath,
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
         -Hint 'The public monorepo the L1 control plane lives in.'
@@ -258,7 +262,8 @@ function Invoke-Main {
         -DefaultValue (Split-Path -Path $PSScriptRoot -Parent) -Hint 'Working tree the V1.3 grep audit runs against.'
 
     $context = New-MlsAuditContext -Layer 1 -Title 'Repo skeleton, OIDC wiring, up/down pipelines' `
-        -ScriptName 'verification/layer-01-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-01-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Repository' -Value $repositoryName
     Add-MlsPreflight -Context $context -Name 'GitHub token' -Value "present ($($githubToken.Length) chars, value never logged)"
     Add-MlsPreflight -Context $context -Name 'Working tree' -Value $root
@@ -318,7 +323,8 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -Repository $Repository -WorkflowFile $WorkflowFile -OidcJobName $OidcJobName `
             -DeployerAppName $DeployerAppName -EnvironmentName $EnvironmentName -RepoRoot $RepoRoot `
-            -GuidAllowlistPath $GuidAllowlistPath -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -GuidAllowlistPath $GuidAllowlistPath -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-01-audit could not start: $($_.Exception.Message)" -Color Red

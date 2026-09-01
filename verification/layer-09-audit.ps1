@@ -34,7 +34,10 @@ param(
     [string]$ActivityLogOffset = '6h',
     [string]$DownloadRoot,
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V9.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -246,7 +249,8 @@ function Invoke-Main {
         [string]$ActivityLogOffset = '6h',
         [string]$DownloadRoot,
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
         -Hint 'The repo whose GHAS state and CI artifacts this audit reads.'
@@ -265,7 +269,8 @@ function Invoke-Main {
     if ([string]::IsNullOrWhiteSpace($zapRun)) { $zapRun = [Environment]::GetEnvironmentVariable('MLS_L9_ZAP_RUN_ID') }
 
     $context = New-MlsAuditContext -Layer 9 -Title 'DevSecOps chain' `
-        -ScriptName 'verification/layer-09-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-09-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Repository' -Value $repositoryName
     Add-MlsPreflight -Context $context -Name 'SubscriptionId' -Value $subscription
     Add-MlsPreflight -Context $context -Name 'layer-09 run id' -Value "$runId" -Status $(if ($runId) { 'OK' } else { 'ABSENT' })
@@ -317,7 +322,8 @@ if (-not $env:MLS_SKIP_MAIN) {
         $auditContext = Invoke-Main -Repository $Repository -SubscriptionId $SubscriptionId -LayerRunId $LayerRunId `
             -ReleaseTag $ReleaseTag -ZapRunId $ZapRunId -ZapArtifactName $ZapArtifactName `
             -CodeQlLanguage $CodeQlLanguage -DefenderPlanName $DefenderPlanName `
-            -ActivityLogOffset $ActivityLogOffset -DownloadRoot $DownloadRoot -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -ActivityLogOffset $ActivityLogOffset -DownloadRoot $DownloadRoot -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-09-audit could not start: $($_.Exception.Message)" -Color Red

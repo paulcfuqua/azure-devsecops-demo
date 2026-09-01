@@ -32,7 +32,10 @@ param(
     [string]$ActivityLogOffset = '2h',
     [string]$NistAssignmentPattern = 'nist',
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V2.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -222,14 +225,16 @@ function Invoke-Main {
         [string]$ActivityLogOffset = '2h',
         [string]$NistAssignmentPattern = 'nist',
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $subscription = Resolve-MlsInput -Name 'SubscriptionId' -Value $SubscriptionId `
         -EnvironmentVariable @('AZURE_SUBSCRIPTION_ID') `
         -Hint 'The demo subscription the landing zone governs; the audit reads it as mls-verifier (Reader).'
 
     $context = New-MlsAuditContext -Layer 2 -Title 'Landing zone: management groups, policies, NIST' `
-        -ScriptName 'verification/layer-02-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-02-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'SubscriptionId' -Value $subscription
     Add-MlsPreflight -Context $context -Name 'Management group' -Value $ManagementGroupName
     Add-MlsPreflight -Context $context -Name 'Canary resource group' -Value "$CanaryResourceGroupName (written by the deploy workflow, never by this audit)"
@@ -267,7 +272,8 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -SubscriptionId $SubscriptionId -ManagementGroupName $ManagementGroupName `
             -CanaryResourceGroupName $CanaryResourceGroupName -ActivityLogOffset $ActivityLogOffset `
-            -NistAssignmentPattern $NistAssignmentPattern -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -NistAssignmentPattern $NistAssignmentPattern -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-02-audit could not start: $($_.Exception.Message)" -Color Red

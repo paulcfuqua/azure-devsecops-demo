@@ -47,7 +47,10 @@ param(
     [switch]$NoRetry,
     # Empty resolves to '<prefix>-demo-label-policy'.
     [string]$ExpectedLabelPolicy = '',
-    [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
+    [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives'),
+    # Run only these criteria (e.g. -OnlyCriterion V4.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -227,7 +230,8 @@ function Invoke-Main {
         [switch]$NoRetry,
         [switch]$SkipConnect,
         [string]$ExpectedLabelPolicy = '',
-        [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
+        [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives'),
+        [string[]]$OnlyCriterion = @()
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     # Resolved here rather than as a parameter default so naming.bicep is read once,
@@ -250,7 +254,8 @@ function Invoke-Main {
         -Hint 'Recorded label GUID baseline.'
 
     $context = New-MlsAuditContext -Layer 4 -Title 'Purview sensitivity labels' `
-        -ScriptName 'verification/layer-04-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-04-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Organization' -Value $organizationName
     Add-MlsPreflight -Context $context -Name 'Checkpoint' -Value $Checkpoint
     Add-MlsPreflight -Context $context -Name 'Baseline file' -Value $baselinePath `
@@ -291,6 +296,7 @@ if (-not $env:MLS_SKIP_MAIN) {
         $auditContext = Invoke-Main -Organization $Organization -VerifierAppId $VerifierAppId `
             -CertificateThumbprint $CertificateThumbprint -ExpectedLabel $ExpectedLabel `
             -LabelGuidPath $LabelGuidPath -Checkpoint $Checkpoint -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion `
             -ExpectedLabelPolicy $ExpectedLabelPolicy -ExpectedLabelPolicyScope $ExpectedLabelPolicyScope
     }
     catch {

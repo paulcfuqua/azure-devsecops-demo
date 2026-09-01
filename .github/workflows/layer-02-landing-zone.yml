@@ -57,6 +57,15 @@ on:
         required: false
         default: false
 
+      only_criterion:
+        description: >-
+          Verify only these criteria, e.g. `V2.2` or `V2.1,V2.3`. Everything else
+          reports SKIP and the audit exits 3 - a DIAGNOSTIC, never a sign-off. Re-testing
+          one criterion should not cost a whole audit's wall clock (P-10). Leave empty for
+          a verdict.
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 
@@ -473,6 +482,8 @@ jobs:
             -CanaryResourceGroupName
             ${{ steps.names.outputs.prefix }}-rg-canary-untagged
 
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v7

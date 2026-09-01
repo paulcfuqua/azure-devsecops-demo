@@ -86,6 +86,16 @@ on:
         type: string
         required: false
         default: ''
+      allow_local_backend:
+        description: >-
+          Deploy the app tier even when the lakehouse SQL analytics endpoint cannot be
+          resolved. data-api then runs in LOCAL mode and every /api/tables route answers
+          503, so the dashboards render empty (F98). Legitimate before L5 exists; never
+          the default, because an estate that provisions cleanly and serves none of the
+          demo must be something somebody asked for.
+        type: boolean
+        required: false
+        default: false
       only_criterion:
         description: >-
           Verify only these criteria, e.g. `V7.3` or `V7.1,V7.3`. Everything else reports
@@ -163,12 +173,19 @@ jobs:
       #
       # mcp-tools ingress is external unconditionally (Copilot Studio connects
       # server-to-server from Microsoft's cloud), so there is no ingress toggle.
-      # data-api cloud mode. Without the Fabric SQL analytics endpoint the app
-      # provisions in LOCAL mode, which answers 503 on every table route because
-      # data/generated is not baked into the image — the template says so in its
-      # dataApiBackendModeResolved output rather than crash-looping the revision.
-      # MLS_SQL_ENDPOINT is the same demo variable L5 and L8 read.
-      MLS_FABRIC_SQL_ENDPOINT: ${{ vars.MLS_SQL_ENDPOINT }}
+      # MLS_FABRIC_SQL_ENDPOINT is deliberately NOT set here, for the same reason
+      # the Easy Auth client IDs below are not: it is RESOLVED FROM FABRIC by the
+      # "Resolve the lakehouse SQL analytics endpoint" step and written to GITHUB_ENV
+      # under the name demo.bicepparam reads. Declaring it at job level too would put a
+      # job-level `env:` and a GITHUB_ENV write of the same name in the same job, and
+      # nothing should depend on which wins (the F36 rule).
+      #
+      # Why it moved (F98): without the endpoint data-api provisions in LOCAL mode,
+      # which answers 503 on every table route because data/generated is gitignored and
+      # not baked into the image. L7 ran that way for two days - green audits over an
+      # estate serving no data - because the endpoint had to be TYPED INTO a demo
+      # variable by hand, and nobody had. Its real source is the L5 lakehouse metadata,
+      # which this job's identity can read.
       MLS_FABRIC_DATABASE: ${{ vars.MLS_LAKEHOUSE_NAME || 'mls_operations' }}
       MLS_GITHUB_REPO: ${{ github.repository }}
       # The three human-facing apps' Easy Auth client IDs (MLS_LAUNCH_OPS_CLIENT_ID,
@@ -435,6 +452,112 @@ jobs:
           }
 
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      # ---------------------------------------------------------------------
+      # F98 - THE ENDPOINT IS RESOLVED, NOT TYPED IN.
+      #
+      # data-api reads the lakehouse over its SQL analytics endpoint. That endpoint is a
+      # property of the L5 lakehouse; it is not a fact about this workflow, and a human
+      # copying it into a demo variable is a step that will be skipped. It was: L7
+      # deployed five times with MLS_SQL_ENDPOINT unset, data-api came up in LOCAL mode,
+      # and every /api/tables route answered 503 while V7.1-V7.5 stayed green - because
+      # none of the five criteria reads data.
+      #
+      # This is CLAUDE.md's "every value has one source" and "a constant that names
+      # something in another system is verified against that system, not written from
+      # memory", applied to a value that had been left to a person's memory.
+      #
+      # Order of precedence, and it matters:
+      #   1. vars.MLS_SQL_ENDPOINT - an explicit override always wins, so a broken
+      #      resolver can never override a human who knows better.
+      #   2. the Fabric REST API, read with THIS JOB'S identity - the same
+      #      GET /v1/workspaces -> /lakehouses -> properties.sqlEndpointProperties
+      #      .connectionString walk that verification/layer-05-audit.ps1 performs.
+      #   3. nothing, and then the run FAILS unless allow_local_backend says otherwise.
+      #
+      # (3) is the F88 shape: a placeholder that provisions cleanly and serves none of
+      # the demo must be an explicit choice, never a default. L7-before-L5 is a real
+      # state, so it stays reachable - by asking for it.
+      # ---------------------------------------------------------------------
+      - name: Resolve the lakehouse SQL analytics endpoint (F98)
+        id: lakehouse
+        shell: pwsh
+        env:
+          SQL_ENDPOINT_OVERRIDE: ${{ vars.MLS_SQL_ENDPOINT }}
+          WORKSPACE_NAME: ${{ steps.names.outputs.prefix }}-operations
+          LAKEHOUSE_NAME: ${{ vars.MLS_LAKEHOUSE_NAME || 'mls_operations' }}
+          ALLOW_LOCAL: ${{ inputs.allow_local_backend }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Write-Resolved {
+              param([string]$Endpoint, [string]$Source)
+              "MLS_FABRIC_SQL_ENDPOINT=$Endpoint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+              "endpoint=$Endpoint" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              "source=$Source" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($env:SQL_ENDPOINT_OVERRIDE)) {
+              Write-Host "MLS_SQL_ENDPOINT is set on the demo environment; using it verbatim."
+              Write-Resolved -Endpoint $env:SQL_ENDPOINT_OVERRIDE -Source 'demo variable MLS_SQL_ENDPOINT'
+              exit 0
+          }
+
+          # AllowFailure by hand: a tenant with no Fabric at all must reach the decision
+          # below rather than die here with a raw CLI error.
+          $token = (az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv 2>$null)
+          $endpoint = ''
+          $reason = ''
+          if ([string]::IsNullOrWhiteSpace($token)) {
+              $reason = "could not obtain a Fabric token as this job's identity"
+          }
+          else {
+              $header = @{ Authorization = "Bearer $token" }
+              try {
+                  $workspaces = (Invoke-RestMethod -Uri 'https://api.fabric.microsoft.com/v1/workspaces' -Headers $header).value
+                  $workspace = @($workspaces | Where-Object { $_.displayName -eq $env:WORKSPACE_NAME })[0]
+                  if ($null -eq $workspace) {
+                      $seen = (@($workspaces | ForEach-Object { $_.displayName }) -join ', ')
+                      $reason = "workspace '$($env:WORKSPACE_NAME)' is not visible to this identity (saw: $seen)"
+                  }
+                  else {
+                      $lakehouses = (Invoke-RestMethod -Uri "https://api.fabric.microsoft.com/v1/workspaces/$($workspace.id)/lakehouses" -Headers $header).value
+                      $lakehouse = @($lakehouses | Where-Object { $_.displayName -eq $env:LAKEHOUSE_NAME })[0]
+                      if ($null -eq $lakehouse) {
+                          $reason = "lakehouse '$($env:LAKEHOUSE_NAME)' not found in workspace '$($env:WORKSPACE_NAME)'"
+                      }
+                      else {
+                          # The endpoint syncs a few minutes behind lakehouse creation, so
+                          # 'lakehouse exists but carries no endpoint yet' is its own state
+                          # and gets its own message - it is a WAIT, not a misconfiguration.
+                          $endpoint = "$($lakehouse.properties.sqlEndpointProperties.connectionString)"
+                          if ([string]::IsNullOrWhiteSpace($endpoint)) {
+                              $reason = "lakehouse '$($env:LAKEHOUSE_NAME)' carries no sqlEndpointProperties.connectionString yet (it syncs a few minutes behind lakehouse creation - re-run shortly)"
+                          }
+                      }
+                  }
+              }
+              catch {
+                  $reason = "Fabric REST call failed: $($_.Exception.Message)"
+              }
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($endpoint)) {
+              Write-Host "Resolved the lakehouse SQL analytics endpoint from Fabric: $endpoint"
+              Write-Resolved -Endpoint $endpoint -Source "Fabric REST ($($env:WORKSPACE_NAME)/$($env:LAKEHOUSE_NAME))"
+              exit 0
+          }
+
+          $advice = "data-api would deploy in LOCAL mode, which reads data/generated - gitignored, and empty in the image - so every /api/tables route answers 503 and both dashboards render empty (F98). Deploy L5 first (gh workflow run layer-05-fabric.yml), or set MLS_SQL_ENDPOINT on the demo environment. To deploy the app tier anyway without data, re-run with allow_local_backend=true."
+
+          if ($env:ALLOW_LOCAL -eq 'true') {
+              Write-Host "::warning title=data-api deploying in LOCAL mode by request::allow_local_backend=true, so this run proceeds with no data backend. Reason the endpoint could not be resolved: $reason. $advice"
+              Write-Resolved -Endpoint '' -Source "unresolved ($reason); allowed by allow_local_backend"
+              exit 0
+          }
+
+          Write-Host "::error title=Lakehouse SQL endpoint could not be resolved::$reason. $advice"
+          exit 1
 
       # ---------------------------------------------------------------------
       # V7.1's content-hash marker. The criterion binds "endpoint is up" to
