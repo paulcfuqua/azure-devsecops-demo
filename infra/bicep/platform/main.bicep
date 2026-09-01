@@ -605,6 +605,53 @@ module functionRuntimeStorage 'br/public:avm/res/storage/storage-account:0.33.0'
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false // no connection string exists for anything to leak
     minimumTlsVersion: 'TLS1_2'
+    // THE FIREWALL THIS ACCOUNT ALWAYS HAD, AND THE HOLE IT ALWAYS NEEDED (F119).
+    //
+    // `networkAcls` was never declared here, so the AVM module applied its own
+    // secure default - defaultAction: Deny, bypass: AzureServices - and nothing
+    // said so. That default is right and is kept. What was missing is that
+    // Flex Consumption's package upload is performed by the platform's own
+    // deployment service against the blob endpoint, and `AzureServices` bypass
+    // does NOT cover it. Every zip publish to both Functions therefore failed:
+    //
+    //   InaccessibleStorageException: Failed to access storage account for
+    //   deployment: BlobUploadFailedException: ... 403
+    //
+    // It was invisible because both publish steps carried continue-on-error, so
+    // L6 reported success while neither Function had ever received code. The
+    // cost-ingest FinOps leg has never run for this reason, independently of its
+    // export never having fired.
+    //
+    // RESOURCE INSTANCE RULES, NOT AN OPEN FIREWALL. Naming the two sites keeps
+    // defaultAction: Deny for everything else - including this repository's own
+    // operators, who are correctly refused - while letting exactly the two
+    // resources that must write here do so. The site ids are computed from
+    // naming.bicep rather than taken as module outputs, so this account does not
+    // have to be deployed after the apps that reference it.
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+      resourceAccessRules: [
+        {
+          tenantId: subscription().tenantId
+          resourceId: resourceId(
+            subscription().subscriptionId,
+            rgOpsName,
+            'Microsoft.Web/sites',
+            costIngestFunctionAppName
+          )
+        }
+        {
+          tenantId: subscription().tenantId
+          resourceId: resourceId(
+            subscription().subscriptionId,
+            rgOpsName,
+            'Microsoft.Web/sites',
+            directlineFunctionAppName
+          )
+        }
+      ]
+    }
     diagnosticSettings: [
       {
         workspaceResourceId: logAnalytics.outputs.resourceId

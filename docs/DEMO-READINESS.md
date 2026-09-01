@@ -192,6 +192,44 @@ The label taxonomy is a load-bearing part of the compliance story. L4's audit is
 blocked (`MLS_VERIFIER_CERT_BASE64`), and it says so honestly rather than passing:
 *"Nothing was verified and nothing was faked."*
 
+### B0. NO FUNCTION APP HAS EVER RECEIVED CODE (F119)
+
+Found 2026-09-01 while deploying the Direct Line Function. Every zip publish to
+every Function App in this estate has failed, and L6 has reported **success** each
+time.
+
+    InaccessibleStorageException: Failed to access storage account for deployment:
+    BlobUploadFailedException: ... 403 (This request is not authorized to perform
+    this operation.)
+
+`mlsfuncdemost` never declared `networkAcls`, so the AVM storage module applied
+its own secure default - `defaultAction: Deny`, `bypass: AzureServices`. That
+default is correct and is kept. What nobody noticed is that Flex Consumption's
+package upload is performed by the platform's deployment service against the blob
+endpoint, and the `AzureServices` bypass **does not cover it**. The fix is a
+resource instance rule naming each site, which keeps the firewall shut for
+everything else.
+
+**It was invisible because both publish steps carried `continue-on-error: true`.**
+That is this repository's own recurring defect turned on its own pipeline: a step
+that reports success while the work it names did not happen. L6 has signed off
+green while `mls-cost-ingest-demo-func` held no functions at all.
+
+**Consequence, and it is larger than the Ask tab.** The cost-ingest FinOps leg has
+never run - not because of the Cost Management export that has never fired
+(recorded separately), but because *the Function that would consume it was never
+deployed*. Two independent failures pointing at the same dead pipeline, each of
+which fully explains the symptom, which is precisely why neither was investigated.
+
+**My first diagnosis was wrong and is recorded here rather than quietly
+replaced.** I attributed the 403 to RBAC propagation - the storage grant had been
+created seconds earlier in the same deployment - and shipped a bounded retry for
+it. The retry is defensible on its own terms and is kept. But the second run, 27
+minutes later with the grants demonstrably present, failed identically, and
+cost-ingest failed with it. I had asserted a cause from a single sample that a
+second sample disproved: the same mistake as F107, made the same day I wrote the
+note about F107.
+
 ### B3. The Ask tab has never been lit - and two links of the chain have no infrastructure (F118)
 
 The Copilot Studio agent is **exported into the repo** but has never been imported,
