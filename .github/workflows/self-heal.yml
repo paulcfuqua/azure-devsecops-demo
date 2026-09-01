@@ -226,6 +226,14 @@ jobs:
       found: ${{ steps.pick.outputs.found }}
       kind: ${{ steps.pick.outputs.kind }}
       number: ${{ steps.pick.outputs.number }}
+      # SEPARATE FROM `found`, AND F123 IS WHY. A 403 on the alert endpoint and a
+      # repository with no open alerts both used to produce `found=false`, so the
+      # chain skipped every lane and reported success either way. That is the
+      # absence-vs-denial class this repository keeps paying for, occurring inside
+      # the self-healing showpiece itself: BLOCKER-4 was recorded as "nothing to
+      # heal" for days while four alerts sat open and unreadable. `readable` is what
+      # makes the two distinguishable to everything downstream.
+      readable: ${{ steps.pick.outputs.readable }}
     steps:
       - name: Resolve the alert
         id: pick
@@ -281,10 +289,17 @@ jobs:
           fi
 
           if ! gh api "${endpoint}" > alerts.json 2>alerts.err; then
-            echo "::notice title=Could not read alerts::$(head -c 400 alerts.err). Set the SELF_HEAL_TOKEN secret (a token with security_events read) if this is a permissions problem."
+            # A WARNING, not a notice, and `readable=false`, not just `found=false`.
+            # The run still succeeds - a self-healing chain must not be able to break
+            # the repository it is healing - but the state is now carried where V10.3
+            # can see it, so "could not look" can never again be filed as "nothing to
+            # heal" (F123).
+            echo "::warning title=Alert surface UNREADABLE::$(head -c 400 alerts.err). This is NOT 'no alerts' - the chain could not look. SELF_HEAL_TOKEN must be a REPOSITORY secret (per the rotation table in gitleaks.yml); an environment secret is invisible to this job, which declares no environment."
             echo "found=false" >> "${GITHUB_OUTPUT}"
+            echo "readable=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
+          echo "readable=true" >> "${GITHUB_OUTPUT}"
 
           # Skip alerts that already have an open self-heal branch -- scoped
           # to THIS repository's own refs, never a fork's. (F14: `gh pr list`
@@ -764,9 +779,15 @@ jobs:
   verify:
     name: verify L10 (mls-verifier)
     needs: [select, autofix, dependency]
+    # RUNS WHEN THE CHAIN COULD NOT LOOK, NOT ONLY WHEN IT FOUND SOMETHING (F123).
+    # Gating solely on `found == 'true'` meant the one state that most needed an
+    # auditor - the alert surface being unreadable - was the state that skipped the
+    # auditor. The chain then reported success with every lane skipped, and was
+    # recorded as "nothing to heal" while four alerts sat open. V10.3 is the
+    # criterion that now says otherwise, and this is what lets it run.
     if: >-
       ${{ always()
-          && needs.select.outputs.found == 'true'
+          && (needs.select.outputs.found == 'true' || needs.select.outputs.readable == 'false')
           && vars.AZURE_VERIFIER_CLIENT_ID != ''
           && !contains(fromJSON('["cancelled"]'), needs.autofix.result)
           && !contains(fromJSON('["cancelled"]'), needs.dependency.result) }}
@@ -829,6 +850,8 @@ jobs:
             ${{ needs.autofix.outputs.pr }}
             ${{ vars.MLS_L10_RESEED_MERGED_AT && '-ReseedMergedUtc' || '' }}
             ${{ vars.MLS_L10_RESEED_MERGED_AT }}
+            ${{ needs.select.outputs.readable && '-AlertSurfaceReadable' || '' }}
+            ${{ needs.select.outputs.readable }}
 
             ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
             ${{ inputs.only_criterion }}

@@ -59,6 +59,11 @@ Describe 'layer-06-audit' {
         # opposite - both apps empty because every publish 403'd - and L6
         # reported success anyway, which is why V6.7 exists.
         $script:FunctionsPayload = '{"value":[{"properties":{"name":"cost-ingest"}},{"properties":{"name":"directline-token"}}]}'
+        # V6.8's subject. The healthy state: the reference resolves, so the secret
+        # actually reaches the app. F122 was `MSINotEnabled` here while every other
+        # view of the same setting - the app settings list, the role assignment, the
+        # deploy, V6.1-V6.7 - looked correct.
+        $script:ConfigReferencesPayload = '{"value":[{"name":"DIRECTLINE_SECRET","properties":{"status":"Resolved"}}]}'
 
         Mock Invoke-MlsAz {
             $joined = $Argument -join ' '
@@ -88,14 +93,15 @@ Describe 'layer-06-audit' {
                 # returning a live object would hide exactly that distinction.
                 return $script:FunctionsPayload
             }
+            if ($joined -like '*configreferences*') { return $script:ConfigReferencesPayload }
             throw "unexpected az call: $joined"
         }
     }
 
     Context 'all criteria pass' {
-        It 'records V6.1-V6.7 as PASS and exits 0' {
+        It 'records V6.1-V6.8 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V6.1', 'V6.2', 'V6.3', 'V6.4', 'V6.5', 'V6.7')
+            @($context.Criterion).Id | Should -Be @('V6.1', 'V6.2', 'V6.3', 'V6.4', 'V6.5', 'V6.7', 'V6.8')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -242,6 +248,7 @@ Describe 'layer-06-audit' {
                 # returning a live object would hide exactly that distinction.
                 return $script:FunctionsPayload
             }
+            if ($joined -like '*configreferences*') { return $script:ConfigReferencesPayload }
             throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
@@ -263,6 +270,7 @@ Describe 'layer-06-audit' {
                 # returning a live object would hide exactly that distinction.
                 return $script:FunctionsPayload
             }
+            if ($joined -like '*configreferences*') { return $script:ConfigReferencesPayload }
             throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
@@ -307,6 +315,7 @@ Describe 'layer-06-audit' {
                 # returning a live object would hide exactly that distinction.
                 return $script:FunctionsPayload
             }
+            if ($joined -like '*configreferences*') { return $script:ConfigReferencesPayload }
             throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest
@@ -350,13 +359,14 @@ Describe 'layer-06-audit' {
                 # returning a live object would hide exactly that distinction.
                 return $script:FunctionsPayload
             }
+            if ($joined -like '*configreferences*') { return $script:ConfigReferencesPayload }
             throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
-            # Six since V6.7 joined the layer. The number is asserted rather than
+            # Seven since V6.8 joined the layer. The number is asserted rather than
             # the ids because this test is about a THROWING check not aborting the
             # run - every criterion after V6.1 must still be evaluated.
-            @($context.Criterion).Count | Should -Be 6
+            @($context.Criterion).Count | Should -Be 7
             (Get-Row -Context $context -Id 'V6.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V6.1').Observed | Should -BeLike '*exit code 3*'
             (Get-Row -Context $context -Id 'V6.2').Status | Should -Be 'PASS'
@@ -381,6 +391,7 @@ Describe 'layer-06-audit' {
                 # returning a live object would hide exactly that distinction.
                 return $script:FunctionsPayload
             }
+            if ($joined -like '*configreferences*') { return $script:ConfigReferencesPayload }
             throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
@@ -430,6 +441,48 @@ Describe 'layer-06-audit' {
             $script:FunctionsPayload = '{"value":[{"properties":{"name":"cost-ingest"}}]}'
             $context = Invoke-AuditForTest -NoRetry
             (Get-Row -Context $context -Id 'V6.7').Status | Should -Be 'PASS'
+        }
+    }
+
+    Context 'V6.8: a Key Vault reference that resolves to nothing (F122)' {
+        It 'FAILS on the exact status the estate actually reported' {
+            # Not a synthetic value. This is verbatim what
+            # /config/configreferences/appsettings returned for the directline
+            # Function while L6 signed off green: the site had only a user-assigned
+            # identity, so the platform looked for a system-assigned one to resolve
+            # the reference with, found none, and handed the app an empty string.
+            $script:ConfigReferencesPayload = '{"value":[{"name":"DIRECTLINE_SECRET","properties":{"status":"MSINotEnabled","details":"Reference was not able to be resolved because site Managed Identity not enabled."}}]}'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.8'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'MSINotEnabled'
+            # The remedy is one template property with a name nobody guesses, so the
+            # criterion carries it rather than leaving a reader to search for it.
+            $row.Detail | Should -Match 'keyVaultAccessIdentityResourceId'
+        }
+
+        It 'FAILS when the identity cannot read the secret, which is a different cause' {
+            $script:ConfigReferencesPayload = '{"value":[{"name":"DIRECTLINE_SECRET","properties":{"status":"Forbidden","details":"Access denied to the key vault."}}]}'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.8'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'Forbidden'
+        }
+
+        It 'reports UNOBSERVABLE, not "no references", when the endpoint says nothing' {
+            # Same distinction V6.7 keeps, for the same reason. An empty body from a
+            # caller who may not read this endpoint must never be recorded as "this
+            # site has no Key Vault references and is therefore fine".
+            $script:ConfigReferencesPayload = ''
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.8'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'may not look'
+        }
+
+        It 'PASSES when every reference resolves, so the guard is not a blanket fail' {
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V6.8').Status | Should -Be 'PASS'
         }
     }
 

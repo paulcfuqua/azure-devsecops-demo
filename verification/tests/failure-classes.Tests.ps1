@@ -1149,3 +1149,84 @@ Describe 'a PowerShell file with non-ASCII content carries its BOM' {
             -Because 'PSScriptAnalyzer fails the build on this, and Windows PowerShell 5.1 reads a BOM-less file as ANSI - turning every non-ASCII character into mojibake'
     }
 }
+
+Describe 'a site that references Key Vault names the identity that will resolve it' {
+    # F122. The directline Function's DIRECTLINE_SECRET was a well-formed reference to a
+    # real secret, held by an identity that existed and had been granted the role. It
+    # resolved to an empty string on every start-up since the site was created:
+    #
+    #   status:  MSINotEnabled
+    #   details: Reference was not able to be resolved because site Managed Identity
+    #            not enabled.
+    #
+    # A `@Microsoft.KeyVault(...)` app setting is resolved by the platform with the site's
+    # SYSTEM-assigned identity unless the site sets `keyVaultReferenceIdentity`
+    # (`keyVaultAccessIdentityResourceId` on the AVM site module). This site has only a
+    # user-assigned identity, because Flex Consumption needs an identity RESOURCE ID at
+    # site-creation time - so the two requirements are in direct tension, and satisfying
+    # the first silently breaks the second.
+    #
+    # WHY A STATIC TEST AND NOT ONLY V6.8. The runtime criterion needs a deployed estate
+    # and forty minutes; this needs a checkout and a second. More to the point, the two
+    # answer different questions: V6.8 asks whether THIS estate's references resolve, and
+    # this asks whether the class can be reintroduced anywhere in the repository - which
+    # is the thing that actually recurs, since the next Function App to want a secret will
+    # be copied from the one that has one.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+
+        function Get-BicepBlock {
+            <# The `module x '...' = { ... }` or `resource x '...' = { ... }` declarations
+               in a file, by brace depth. Returns the text of each. Crude, and adequate:
+               it needs to attribute an app setting to the declaration that owns it, not
+               to understand Bicep. #>
+            param([Parameter(Mandatory)][string]$Path)
+            $lines = Get-Content -LiteralPath $Path
+            $blocks = [System.Collections.Generic.List[object]]::new()
+            $current = $null
+            $depth = 0
+            foreach ($line in $lines) {
+                if ($null -eq $current -and $line -match '^\s*(module|resource)\s+(\w+)\s') {
+                    $current = [pscustomobject]@{ Name = $Matches[2]; Text = [System.Text.StringBuilder]::new() }
+                    $depth = 0
+                }
+                if ($null -ne $current) {
+                    [void]$current.Text.AppendLine($line)
+                    $depth += ([regex]::Matches($line, '\{')).Count
+                    $depth -= ([regex]::Matches($line, '\}')).Count
+                    if ($depth -le 0 -and $current.Text.Length -gt 0 -and $line -match '\}') {
+                        $blocks.Add([pscustomobject]@{ Name = $current.Name; Text = $current.Text.ToString() })
+                        $current = $null
+                    }
+                }
+            }
+            return $blocks
+        }
+    }
+
+    It 'sets keyVaultAccessIdentityResourceId on every site declaring a Key Vault reference' {
+        $templates = @(Get-ChildItem -Path (Join-Path $script:Root 'infra') -Filter '*.bicep' -Recurse -File)
+        $withReference = [System.Collections.Generic.List[string]]::new()
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($template in $templates) {
+            foreach ($block in (Get-BicepBlock -Path $template.FullName)) {
+                if ($block.Text -notmatch '@Microsoft\.KeyVault\(') { continue }
+                $relative = $template.FullName.Substring($script:Root.Length + 1)
+                $withReference.Add("$relative/$($block.Name)")
+                # Either identity can resolve a reference. What is fatal is naming
+                # NEITHER while relying on a user-assigned one, which is the default
+                # a copied Flex Consumption block lands you in.
+                $namesIdentity = $block.Text -match 'keyVaultAccessIdentityResourceId\s*:' -or
+                                 $block.Text -match 'systemAssigned\s*:\s*true'
+                if (-not $namesIdentity) { $offender.Add("$relative/$($block.Name)") }
+            }
+        }
+
+        $withReference.Count | Should -BeGreaterThan 0 `
+            -Because 'if no template declares a Key Vault reference, this test asserts nothing and would pass over the very defect it exists to catch'
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'a Key Vault reference on a site with only a user-assigned identity resolves to an EMPTY VALUE and reports success everywhere a reader would look (F122)'
+    }
+}

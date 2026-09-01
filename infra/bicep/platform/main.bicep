@@ -992,6 +992,23 @@ module directlineFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
     managedIdentities: {
       userAssignedResourceIds: [directlineIdentity.outputs.resourceId]
     }
+    // WITHOUT THIS LINE THE KEY VAULT REFERENCE BELOW RESOLVES TO NOTHING, AND
+    // NOTHING ANYWHERE SAYS SO (F122). A `@Microsoft.KeyVault(...)` app setting is
+    // resolved by the platform using the site's SYSTEM-assigned identity unless the
+    // site names another one here. This site has only a user-assigned identity - for
+    // the Flex Consumption reason directly above - so the platform looked for a
+    // system-assigned identity, found none, and left the setting unresolved with
+    // `status: MSINotEnabled`.
+    //
+    // The failure is invisible from every angle a reader would normally check. The
+    // app setting is present, spelled correctly, and points at a real secret; the
+    // role assignment exists; the identity exists; the deploy is green and so is the
+    // whole layer. The Function simply receives an empty DIRECTLINE_SECRET and
+    // reports the channel as not configured - which is indistinguishable from the
+    // honest "agent not published yet" state this template deliberately supports.
+    // Only /config/configreferences/appsettings tells the truth, which is why V6.8
+    // reads it: assert that the reference RESOLVES, not that the setting is present.
+    keyVaultAccessIdentityResourceId: directlineIdentity.outputs.resourceId
     siteConfig: {
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'

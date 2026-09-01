@@ -1,4 +1,4 @@
-# Pester tests for verification/layer-10-audit.ps1 - every gh and az call mocked;
+﻿# Pester tests for verification/layer-10-audit.ps1 - every gh and az call mocked;
 # zero cloud calls.
 
 BeforeAll {
@@ -26,12 +26,18 @@ BeforeAll {
             [string]$CodeQlAlertNumber = '7',
             [string]$AutofixPrNumber = '31',
             [string[]]$DependabotAlertNumber = @('3', '4', '5'),
-            [string]$ReseedMergedUtc = ''
+            [string]$ReseedMergedUtc = '',
+            # The healthy PRECONDITION for the rest of the suite: the select job
+            # could read the alert surface. This is an input the chain reports, in
+            # the same way $script:Trail is an input - not V10.3's answer, which is
+            # exercised explicitly in both directions in its own Context below.
+            [string]$AlertSurfaceReadable = 'true'
         )
         Invoke-Main -Repository $script:Repository -CodeQlAlertNumber $CodeQlAlertNumber -AutofixPrNumber $AutofixPrNumber `
             -DependabotAlertNumber $DependabotAlertNumber -VulnLabAppName 'mls-vuln-lab-demo-ca' `
             -ResourceGroupName 'mls-rg-apps' -AutomationLogin $script:Automation -ReseedMergedUtc $ReseedMergedUtc `
-            -ChainWindowHours 24 -DependencyPassBar 2 -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
+            -ChainWindowHours 24 -DependencyPassBar 2 -AlertSurfaceReadable $AlertSurfaceReadable `
+            -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
 }
 
@@ -122,9 +128,9 @@ Describe 'layer-10-audit' {
     }
 
     Context 'all criteria pass' {
-        It 'records V10.1 and V10.2 as PASS and exits 0' {
+        It 'records V10.1-V10.3 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V10.1', 'V10.2')
+            @($context.Criterion).Id | Should -Be @('V10.1', 'V10.2', 'V10.3')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -254,16 +260,45 @@ Describe 'layer-10-audit' {
 
         It 'never sleeps in-process for a 24 h window' {
             $context = Invoke-AuditForTest -ReseedMergedUtc ([datetime]::UtcNow.AddHours(-1).ToString('o'))
-            @($context.Criterion | ForEach-Object { $_.SleptSeconds }) | Should -Be @(0, 0)
+            @($context.Criterion | ForEach-Object { $_.SleptSeconds }) | Should -Be @(0, 0, 0)
             Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Exactly -Times 0
         }
     }
 
+    Context 'V10.3: the chain could not look, and called it "nothing to heal" (F123)' {
+        It 'FAILS when the select job reports the alert surface was unreadable' {
+            $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable 'false'
+            $row = Get-Row -Context $context -Id 'V10.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'could NOT read'
+            # A denial and an empty alert list are different facts, and the whole
+            # point of this criterion is that the report says which one happened.
+            $row.Detail | Should -Match 'DENIAL, not an empty alert list'
+            # The remedy is a credential SCOPE, not a permission grant, which is the
+            # part that cost days - so the criterion carries it.
+            $row.Detail | Should -Match 'REPOSITORY secret'
+        }
+
+        It 'FAILS as UNOBSERVABLE when the chain reported nothing at all' {
+            # Never "healthy by default". An audit invoked without the input cannot
+            # say the chain can see its own work, and must not imply that it can.
+            $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable ''
+            $row = Get-Row -Context $context -Id 'V10.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -Match 'UNOBSERVABLE, not healthy'
+        }
+
+        It 'PASSES when the surface was readable, so the guard is not a blanket fail' {
+            $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable 'true'
+            (Get-Row -Context $context -Id 'V10.3').Status | Should -Be 'PASS'
+        }
+    }
+
     Context 'a check that throws' {
-        It 'records V10.1 as FAIL and still evaluates V10.2' {
+        It 'records V10.1 as FAIL and still evaluates V10.2 and V10.3' {
             Mock Invoke-MlsAz { throw 'az containerapp revision list failed: ResourceGroupNotFound.' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 2
+            @($context.Criterion).Count | Should -Be 3
             (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*ResourceGroupNotFound*'
         }

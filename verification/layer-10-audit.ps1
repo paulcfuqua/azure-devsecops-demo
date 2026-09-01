@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     L10 Verifier audit - the self-healing pipeline on GitHub Copilot Autofix. READ-ONLY.
@@ -49,6 +49,10 @@ param(
     [string]$ReseedMergedUtc,
     [double]$ChainWindowHours = 24,
     [int]$DependencyPassBar = 2,
+    # V10.3's subject. 'true' / 'false' as reported by the self-heal select job; an
+    # empty value means the chain did not say, which is itself unobservable and is
+    # NOT treated as healthy. See F123.
+    [string]$AlertSurfaceReadable = '',
     [string]$ReportRoot,
     [switch]$NoRetry,
     # Run only these criteria (e.g. -OnlyCriterion V10.2). Everything else reports SKIP
@@ -389,6 +393,7 @@ function Invoke-Main {
         [string]$ReseedMergedUtc,
         [double]$ChainWindowHours = 24,
         [int]$DependencyPassBar = 2,
+        [string]$AlertSurfaceReadable = '',
         [string]$ReportRoot,
         [switch]$NoRetry,
         [string[]]$OnlyCriterion = @()
@@ -461,6 +466,42 @@ function Invoke-Main {
             -ResourceGroupName $ResourceGroupName -AppName $VulnLabAppName -AutomationLogin $AutomationLogin -PassBar $DependencyPassBar
     } | Out-Null
 
+    # V10.3 - F123. THE CHAIN COULD NOT LOOK, AND SAID "NOTHING TO HEAL".
+    #
+    # The select job's alert read returned HTTP 403 on every run since the workflow
+    # was written, and set `found=false` - the same output it sets when the
+    # repository genuinely has no open alerts. Every lane skipped, the run reported
+    # success, and BLOCKER-4 was recorded as "self-healing has nothing to heal"
+    # while four Dependabot alerts sat open, one of them critical.
+    #
+    # The cause was a credential scope, not a permission grant: SELF_HEAL_TOKEN was
+    # created as a `demo` ENVIRONMENT secret, and every job that consumes it -
+    # here, in compliance.yml, in gitleaks.yml, in layer-09 - declares no
+    # environment, so `secrets.SELF_HEAL_TOKEN` was empty and the `|| GITHUB_TOKEN`
+    # fallback took over. GITHUB_TOKEN cannot read /dependabot/alerts. The rotation
+    # table in gitleaks.yml, which CLAUDE.md designates as the source of truth,
+    # says plainly that this one is a REPOSITORY secret.
+    #
+    # NO RETRY WINDOW. A 403 is settled the instant it is returned; there is no
+    # propagation to wait on, and waiting would only make a permissions answer
+    # arrive slower.
+    Invoke-MlsCriterion -Context $context -Id 'V10.3' -Control @('3.4.3', '3.14.1') `
+        -Description 'The self-heal chain could actually READ the alert surface - a denial is never recorded as "no alerts to heal"' `
+        -Command "gh api repos/$repositoryName/dependabot/alerts?state=open (in the self-heal select job; its readable output is passed here)" `
+        -Expected 'the select job reported readable=true' `
+        -RetryWindowMinutes 0 `
+        -Test {
+            if ($AlertSurfaceReadable -eq 'true') {
+                return New-MlsCheckResult -Passed $true -Observed 'the self-heal select job read the alert surface successfully'
+            }
+            if ($AlertSurfaceReadable -eq 'false') {
+                return New-MlsCheckResult -Passed $false -Observed 'the self-heal select job could NOT read the alert surface (readable=false)' `
+                    -Detail 'This is a DENIAL, not an empty alert list, and the chain must never report it as "nothing to heal" (F123). SELF_HEAL_TOKEN is a REPOSITORY secret per the rotation table in gitleaks.yml; if it was created as an environment secret it is invisible to every job that uses it, because none of them declares an environment, and the GITHUB_TOKEN fallback cannot read /dependabot/alerts.'
+            }
+            return New-MlsCheckResult -Passed $false -Observed "the self-heal chain did not report whether the alert surface was readable (value: '$AlertSurfaceReadable')" `
+                -Detail 'UNOBSERVABLE, not healthy. The select job emits a readable output for exactly this criterion; an absent value means the audit was invoked without it, so nothing here can say whether the chain can see its own work.'
+        } | Out-Null
+
     return $context
 }
 
@@ -470,7 +511,8 @@ if (-not $env:MLS_SKIP_MAIN) {
             -AutofixPrNumber $AutofixPrNumber -DependabotAlertNumber $DependabotAlertNumber `
             -VulnLabAppName $VulnLabAppName -ResourceGroupName $ResourceGroupName -AutomationLogin $AutomationLogin `
             -ReseedMergedUtc $ReseedMergedUtc -ChainWindowHours $ChainWindowHours `
-            -DependencyPassBar $DependencyPassBar -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -DependencyPassBar $DependencyPassBar -AlertSurfaceReadable $AlertSurfaceReadable `
+            -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion
     }
     catch {
