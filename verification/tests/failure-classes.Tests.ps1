@@ -1150,6 +1150,67 @@ Describe 'a PowerShell file with non-ASCII content carries its BOM' {
     }
 }
 
+Describe 'a job-level condition never gates on a value it cannot see' {
+    # F125, and the FOURTH instance of one shape in a single session - this one introduced
+    # by the very commit that closed BLOCKER-5, which is the point: the class is easy to
+    # write and impossible to see.
+    #
+    # A job-level `if:` is evaluated BEFORE the job's environment is resolved. So
+    #
+    #     verify:
+    #       environment: verify
+    #       if: ${{ vars.AZURE_VERIFIER_CLIENT_ID != '' }}
+    #
+    # reads the EMPTY STRING even though the variable is set on `verify` - and the guard,
+    # written to mean "skip when no verifier is configured", actually means "skip ALWAYS".
+    # A step-level `if:` inside the same job resolves it correctly, which is why
+    # layer-05-fabric.yml's identical-looking guard has always worked and these did not.
+    #
+    # WHAT MAKES IT UNCONDITIONAL HERE. This repository has ZERO repository-level GitHub
+    # variables - every one lives in the `demo` or `verify` environment (CLAUDE.md: "Every
+    # value has one source. Estate-wide settings live in the `demo` GitHub environment").
+    # So ANY `vars.` reference in a job-level `if:` is empty, always, with no configuration
+    # in which it does what it looks like it does.
+    #
+    # It cost self-heal.yml's `verify` job the ability to run AT ALL, which compounded
+    # BLOCKER-4 precisely: even with a readable alert surface and a healed alert, the audit
+    # that judges the chain would still have skipped. Nobody noticed, because a skipped job
+    # is green.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'uses no vars.* reference in any job-level if: condition' {
+        $workflows = @(Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File)
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($workflow in $workflows) {
+            $lines = Get-Content -LiteralPath $workflow.FullName
+            $job = ''
+            $inJobIf = $false
+            foreach ($line in $lines) {
+                if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') { $job = $Matches[1]; $inJobIf = $false; continue }
+                if ([string]::IsNullOrWhiteSpace($job)) { continue }
+                # A JOB-level key sits at exactly four spaces; a step's `if:` is deeper and
+                # is evaluated after the environment resolves, so it is fine.
+                if ($line -match '^    if:') { $inJobIf = $true; $scanned++ }
+                elseif ($line -match '^    [A-Za-z_-]+:') { $inJobIf = $false }
+                elseif ($line -match '^  \S') { $inJobIf = $false }
+                if ($inJobIf -and $line -match 'vars\.([A-Za-z0-9_]+)') {
+                    $offender.Add("$($workflow.Name)::$job gates on vars.$($Matches[1])")
+                }
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 5 `
+            -Because 'if the sweep finds almost no job-level if: conditions, its indentation rule is wrong and it is asserting nothing'
+        $offender -join ' | ' | Should -BeNullOrEmpty `
+            -Because 'a job-level if: is evaluated before the environment resolves, and every variable in this repo is environment-scoped - so the condition reads the empty string and the guard fires ALWAYS rather than never (F125)'
+    }
+}
+
 Describe 'a job that reads an estate setting declares the environment holding it' {
     # F124, and it is the THIRD instance of one shape in a single session.
     #

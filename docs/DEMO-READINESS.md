@@ -92,13 +92,54 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   "nothing to heal" - four Dependabot alerts are open, one critical, and the chain has been
   getting **HTTP 403** on every run because `SELF_HEAL_TOKEN` is an *environment* secret
   that no consuming job can see (**F123**). Re-create it as a **repository** secret and the
-  chain has both a subject and a token.
+  chain has both a subject and a token. Its *second* recorded problem - "it would stall
+  anyway" - turned out to have a second cause too: **F125**, the verify job could never run
+  at all. Both are now fixed in code; only the token's scope needs a human.
 - **BLOCKER-5 is CLOSED** (2026-09-01). `verification/layer-12-audit.ps1` exists, runs as
   `mls-verifier`, and is wired into `compliance.yml`. Four criteria are checked
   independently and two are explicit SKIPs naming where they *are* checked - V12.3 would
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F125 — a job-level `if:` cannot see environment variables, so two verify jobs never ran *(fixed 2026-09-01)*
+
+Found by dispatching `compliance.yml` to prove L12's new audit runs in CI rather than only
+locally. It did not run: `verify L12 (mls-verifier) = skipped`. **The guard I had just
+written was the cause**, which is the point — this class is easy to write and impossible to
+see.
+
+    verify:
+      environment: verify
+      if: ${{ ... && vars.AZURE_VERIFIER_CLIENT_ID != '' && ... }}
+
+**A job-level `if:` is evaluated BEFORE the job's environment is resolved.** So `vars.` is
+the empty string there even though the job declares `environment: verify` and the variable
+is set on it. This repository has **zero repository-level variables** — every one lives in
+`demo` or `verify` — so any `vars.` in a job-level `if:` is unconditionally empty, and a
+guard meaning *"skip when no verifier is configured"* actually means **"skip always"**.
+
+`layer-05-fabric.yml` has an identical-looking guard that has always worked, because it is
+**step-level**, where the environment has resolved. Same expression, different line,
+opposite behaviour.
+
+**What it cost:** `self-heal.yml`'s `verify` job **has never been able to run.** That
+compounds BLOCKER-4 exactly — even with a readable alert surface and a healed alert, the
+audit that judges the chain would still have skipped. Nobody noticed, because **a skipped
+job is green**.
+
+**Fixed** by moving the guard to a step inside each job, where `vars.` resolves. The
+behaviour it was written for is preserved and now actually works: a stranger cloning this
+repo without an `mls-verifier` identity gets a clear `::notice` saying the layer is
+*unverified, which is not the same as broken*, rather than a red run.
+
+`verification/tests/failure-classes.Tests.ps1` now fails any `vars.*` reference in a
+job-level `if:` — mutation-tested: with the defect reintroduced it names
+`compliance.yml::verify gates on vars.AZURE_VERIFIER_CLIENT_ID`.
+
+**This is the fourth instance of one shape in a single session** (F122, F123, F124, F125):
+*a value that exists, is spelled correctly, and is invisible to the thing that reads it* —
+failing silently and green every time.
 
 ### F124 — the Ask tab's endpoint never reached the bundle, and the image was newer than the variable *(fixed 2026-09-01)*
 
