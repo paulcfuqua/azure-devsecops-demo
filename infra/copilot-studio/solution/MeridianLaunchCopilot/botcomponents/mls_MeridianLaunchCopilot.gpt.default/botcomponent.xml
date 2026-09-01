@@ -1,0 +1,11 @@
+<botcomponent schemaname="mls_MeridianLaunchCopilot.gpt.default">
+  <componenttype>15</componenttype>
+  <description>Answers questions about Meridian Launch Systems flight operations — launch cadence, scrub causes, vehicle and pad utilisation, supplier lead times — and reports on the platform itself: deployment health, open security findings, and cloud spend. Reads the mls_operations lakehouse and the estate's live operational APIs. All data is synthetic.</description>
+  <iscustomizable>0</iscustomizable>
+  <name>Meridian Launch Copilot</name>
+  <parentbotid>
+    <schemaname>mls_MeridianLaunchCopilot</schemaname>
+  </parentbotid>
+  <statecode>0</statecode>
+  <statuscode>1</statuscode>
+</botcomponent>

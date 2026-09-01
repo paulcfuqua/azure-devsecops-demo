@@ -1,0 +1,16 @@
+{
+  "EnvironmentVariables": [],
+  "ConnectionReferences": [
+    {
+      "LogicalName": "mls_MeridianLaunchCopilot.shared_mls-5fmeridian-20ops-20tools-5fa5da83b50654451e.4e31c01eeef94cd983fdae563909d611",
+      "ConnectionId": "",
+      "ConnectorId": "/providers/Microsoft.PowerApps/apis/shared_mls-5fmeridian-20ops-20tools-5fa5da83b50654451e"
+    }
+  ],
+  "CopilotAgents": [
+    {
+      "AadGroupId": "00000000-0000-0000-0000-000000000000",
+      "Name": "mls_MeridianLaunchCopilot"
+    }
+  ]
+}
