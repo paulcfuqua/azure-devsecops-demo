@@ -263,6 +263,12 @@ jobs:
         id: manifest
         if: ${{ !inputs.dry_run }}
         env:
+          # F118: the NAME of the Direct Line secret and the origins the token
+          # endpoint will mint for. Both are repository VARIABLES, not secrets - a
+          # secret's name and an origin list are not sensitive. Unset means the Ask
+          # tab stays dark with a typed error, which is a supported deployment.
+          MLS_DIRECTLINE_SECRET_NAME: ${{ vars.MLS_DIRECTLINE_SECRET_NAME }}
+          MLS_DIRECTLINE_ALLOWED_ORIGINS: ${{ vars.MLS_DIRECTLINE_ALLOWED_ORIGINS }}
           # A deliberately-set repository variable still wins; otherwise take what the
           # kvmode step decided by inspecting the tenant.
           KEY_VAULT_CREATE_MODE: ${{ vars.KEY_VAULT_CREATE_MODE || steps.kvmode.outputs.mode || 'default' }}
@@ -641,6 +647,39 @@ jobs:
             --src cost-ingest.zip \
             --output none
           echo "Published apps/cost-ingest to ${func_app}."
+
+      - name: Publish the directline-token Function package (F118)
+        id: directline_publish
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          func_app="$(jq -r '.directlineFunctionAppName.value // empty' l6-manifest.json)"
+          func_rg="$(jq -r '.costIngestResourceGroupName.value // empty' l6-manifest.json)"
+          if [ -z "${func_app}" ] || [ -z "${func_rg}" ]; then
+            echo "::error title=directline-token not in the manifest::directlineFunctionAppName was not in the L6 deployment outputs, so there is no Function App to publish to."
+            exit 1
+          fi
+
+          # NO BUILD STEP: apps/directline-token is plain ESM (.mjs, "type":
+          # "module") with one runtime dependency. There is nothing to compile,
+          # so the package is the source plus a production install - which is
+          # also why its whole surface stays auditable in one sitting, the
+          # property its README argues the split exists to preserve.
+          rm -rf directline-pkg
+          mkdir -p directline-pkg
+          cp -R apps/directline-token/src directline-pkg/src
+          cp apps/directline-token/host.json apps/directline-token/package.json directline-pkg/
+          ( cd directline-pkg && npm install --omit=dev --no-audit --no-fund --ignore-scripts )
+          ( cd directline-pkg && zip -qr ../directline-token.zip . )
+
+          az functionapp deployment source config-zip \
+            --resource-group "${func_rg}" \
+            --name "${func_app}" \
+            --src directline-token.zip \
+            --output none
+          echo "Published apps/directline-token to ${func_app}."
 
       - name: Subscribe the cost-ingest Function to blob-created events (F19)
         id: cost_ingest_events

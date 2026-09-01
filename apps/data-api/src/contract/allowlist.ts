@@ -244,7 +244,7 @@ export const TABLE_ORDER_BY: Record<TableName, string> = {
 /* feeds                                                               */
 /* ------------------------------------------------------------------ */
 
-/** The six feeds the control tower's ApiProvider fetches, in tab order. */
+/** The feeds the control tower's ApiProvider fetches, in tab order. */
 export const FEED_NAMES = [
   "workflow-runs",
   "app-requests",
@@ -252,6 +252,7 @@ export const FEED_NAMES = [
   "dependabot-alerts",
   "secure-score",
   "secure-score-controls",
+  "azure-cost",
 ] as const;
 
 export type FeedName = (typeof FEED_NAMES)[number];
@@ -263,7 +264,7 @@ export function isAllowedFeed(name: string): name is FeedName {
 }
 
 /** Which upstream each feed proxies — reported on /healthz, used for spans. */
-export type FeedUpstream = "github" | "defender" | "log-analytics";
+export type FeedUpstream = "github" | "defender" | "log-analytics" | "cost-management";
 
 export const FEED_UPSTREAM: Record<FeedName, FeedUpstream> = {
   "workflow-runs": "github",
@@ -272,6 +273,7 @@ export const FEED_UPSTREAM: Record<FeedName, FeedUpstream> = {
   "secure-score": "defender",
   "secure-score-controls": "defender",
   "app-requests": "log-analytics",
+  "azure-cost": "cost-management",
 };
 
 /** Committed local fixture backing each feed in LOCAL mode. */
@@ -282,6 +284,7 @@ export const FEED_FIXTURE: Record<FeedName, string> = {
   "secure-score": "defender-secure-score.json",
   "secure-score-controls": "defender-secure-score-controls.json",
   "app-requests": "log-analytics-app-requests.json",
+  "azure-cost": "cost-management-azure-cost.json",
 };
 
 /** Feeds whose payload is a bare JSON array (the rest are objects). */
@@ -292,4 +295,5 @@ export const FEED_IS_ARRAY: Record<FeedName, boolean> = {
   "secure-score": false,
   "secure-score-controls": false,
   "app-requests": false,
+  "azure-cost": false,
 };

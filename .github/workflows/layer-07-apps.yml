@@ -626,6 +626,13 @@ jobs:
         env:
           RG_APPS: ${{ steps.names.outputs.rg-apps }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # F116: the NAME of the Key Vault secret holding data-api's GitHub
+          # read-only token, never the token. A repository VARIABLE, not a
+          # secret, because a secret name is not sensitive and hard rule 5 keeps
+          # estate-wide settings in the demo environment. Unset means the three
+          # GitHub feeds fail closed with a typed 503, which is a supported
+          # deployment - see infra/bicep/apps/demo.bicepparam.
+          MLS_GITHUB_TOKEN_SECRET: ${{ vars.MLS_GITHUB_TOKEN_SECRET }}
         run: |
           set -euo pipefail
           # In a plan run L6 only what-ifs, so the resource group L7 what-ifs AGAINST does
@@ -653,6 +660,13 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          # F116: the NAME of the Key Vault secret holding data-api's GitHub
+          # read-only token, never the token. A repository VARIABLE, not a
+          # secret, because a secret name is not sensitive and hard rule 5 keeps
+          # estate-wide settings in the demo environment. Unset means the three
+          # GitHub feeds fail closed with a typed 503, which is a supported
+          # deployment - see infra/bicep/apps/demo.bicepparam.
+          MLS_GITHUB_TOKEN_SECRET: ${{ vars.MLS_GITHUB_TOKEN_SECRET }}
         run: |
           set -euo pipefail
           az deployment group create \

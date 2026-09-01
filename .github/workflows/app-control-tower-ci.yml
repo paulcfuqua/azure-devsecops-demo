@@ -178,6 +178,11 @@ jobs:
           load: true
           push: false
           tags: ${{ steps.tag.outputs.image }}
+          # F118: Vite inlines VITE_ variables at BUILD time, so the Ask tab's
+          # endpoint has to arrive here or the bundle ships dark whatever is
+          # deployed. A repository variable, not a secret - it is a public URL.
+          build-args: |
+            VITE_DIRECTLINE_TOKEN_URL=${{ vars.MLS_DIRECTLINE_TOKEN_URL }}
           cache-from: type=gha,scope=control-tower
           cache-to: type=gha,mode=max,scope=control-tower
 
@@ -301,6 +306,11 @@ jobs:
           tags: |
             ${{ steps.tag.outputs.image }}
             ${{ steps.tag.outputs.registry }}:latest
+          # F118: Vite inlines VITE_ variables at BUILD time, so the Ask tab's
+          # endpoint has to arrive here or the bundle ships dark whatever is
+          # deployed. A repository variable, not a secret - it is a public URL.
+          build-args: |
+            VITE_DIRECTLINE_TOKEN_URL=${{ vars.MLS_DIRECTLINE_TOKEN_URL }}
           cache-from: type=gha,scope=control-tower
           cache-to: type=gha,mode=max,scope=control-tower
 

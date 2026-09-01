@@ -225,6 +225,9 @@ param dataApiImageDigest string = 'unset'
 @allowed(['', 'local', 'cloud'])
 param dataApiBackendMode string = ''
 
+@description('Name of the Key Vault secret holding a GitHub read-only token for the three GitHub feeds data-api serves. EMPTY IS A SUPPORTED DEPLOYMENT: the feeds then fail closed with a typed 503 naming what is missing, which is the correct default for a clone that has no token. Supplying a name wires the secret by REFERENCE (keyVaultUrl + identity) — the value never enters this template, demo.bicepparam, ARM deployment history or a what-if log. The secret must already exist in the vault; this template never writes a secret value (hard rule 5).')
+param githubTokenSecretName string = ''
+
 @description('Fabric lakehouse SQL analytics endpoint FQDN (the L5 lakehouse metadata\'s sqlEndpointProperties.connectionString). Not derivable from ARM: Fabric is not an ARM resource here, so this arrives from the L5 outputs at deploy time.')
 param fabricSqlEndpoint string = ''
 
@@ -368,6 +371,11 @@ var dataApiCloudEnv = dataApiMode != 'cloud'
       { name: 'MLS_LOG_ANALYTICS_WORKSPACE_ID', value: logAnalytics.properties.customerId }
       { name: 'MLS_LOG_ANALYTICS_TIMESPAN', value: logAnalyticsTimespan }
       { name: 'MLS_MANAGED_IDENTITY_CLIENT_ID', value: dataApiIdentity.outputs.clientId }
+      // Billing scope for the azure-cost feed. Set explicitly rather than left to
+      // default to the Defender subscription: they are the same value today and
+      // are not the same CONCEPT, and an estate that later bills across two
+      // subscriptions should not discover the coupling then.
+      { name: 'MLS_COST_SUBSCRIPTION_ID', value: subscription().subscriptionId }
     ]
 
 // Scale-to-zero settings shared by all three apps.
@@ -458,6 +466,31 @@ module mcpCostManagementReaderGrant 'modules/workload-role-assignments.bicep' = 
   params: {
     principalId: mcpToolsIdentity.outputs.principalId
     // 'Cost Management Reader' — view cost data and configuration (exports, budgets); no write access (built-in role, stable GUID; verified against learn.microsoft.com/azure/role-based-access-control/built-in-roles/management-and-governance).
+    roleDefinitionId: '72fafb9e-0641-4937-9268-a91bfd8191a3'
+  }
+}
+
+// Grants data-api 'Cost Management Reader' at SUBSCRIPTION scope, for the
+// azure-cost feed (F117).
+//
+// The Ops tab is meant to answer "what does this landscape cost to run", and it
+// was answering "what does the fictional launch programme spend" - the lakehouse
+// cost_daily table is the generator's synthetic budget, and cost-ingest maps even
+// REAL Cost Management rows onto a `costCenter` tag whose demo values are
+// Propulsion, Avionics and Range Operations. Real Azure money arrived wearing a
+// costume. data-api now asks Cost Management directly and groups by service and
+// resource group instead.
+//
+// Subscription scope because cost has no narrower resource to bind to - the same
+// reasoning, and the same role GUID, as mcpCostManagementReaderGrant above.
+// Read-only: the role views cost data, exports and budgets and can write none of
+// them.
+module dataApiCostManagementReaderGrant 'modules/workload-role-assignments.bicep' = {
+  name: 'l7-data-api-cost-mgmt-reader-grant'
+  scope: subscription()
+  params: {
+    principalId: dataApiIdentity.outputs.principalId
+    // 'Cost Management Reader' - view cost data and configuration (exports, budgets); no write access (built-in role, stable GUID; the same constant mcp-tools is granted twenty lines above, which is where it was verified).
     roleDefinitionId: '72fafb9e-0641-4937-9268-a91bfd8191a3'
   }
 }
@@ -655,9 +688,64 @@ var easyAuthExcludedPaths = ['/healthz']
 
 // data-api first: both frontends take DATA_API_ORIGIN from its FQDN, so Bicep
 // orders it ahead of them on that reference alone.
+// GitHub feeds for data-api (F116). Control Tower's Dev and Sec tabs read three
+// GitHub APIs through data-api; without a token the three routes answer 503
+// `backend_not_configured` and both tabs render nothing.
+//
+// WIRED BY REFERENCE, NEVER BY VALUE, for exactly the reasons set out in the
+// "MCP INBOUND AUTH TOKEN" header block above: a token passed as a parameter
+// lands in ARM deployment history readable by anything holding Reader (which
+// mls-verifier does), and `what-if` renders parameter values into the log of a
+// PUBLIC repository where GitHub cannot mask a value that was never a GitHub
+// secret. Container Apps resolves it from the vault at runtime with data-api's
+// own UAMI instead.
+//
+// EMPTY REMAINS A SUPPORTED DEPLOYMENT, and is still the default. This is the
+// same fail-closed posture this file has always documented - a clone with no
+// token gets a typed 503 that names what is missing, not a half-wired secret
+// path - it is now a DECISION the deployment states rather than an omission
+// nothing could express.
+var dataApiSecrets = empty(githubTokenSecretName)
+  ? []
+  : [
+      {
+        name: githubTokenSecretName
+        keyVaultUrl: '${platformKv.properties.vaultUri}secrets/${githubTokenSecretName}'
+        identity: dataApiIdentity.outputs.resourceId
+      }
+    ]
+
+var dataApiGitHubEnv = empty(githubTokenSecretName)
+  ? []
+  : [
+      {
+        name: 'MLS_GITHUB_TOKEN'
+        secretRef: githubTokenSecretName
+      }
+    ]
+
+// Key Vault Secrets User for data-api's identity, on the same platform vault
+// and through the same module mcp-tools uses. Only deployed when a secret is
+// actually wired: a grant for a secret nobody reads is standing access with no
+// purpose, and this template is read as an example of how to do this.
+module dataApiKvGrant 'modules/key-vault-secrets-user-role.bicep' = if (!empty(githubTokenSecretName)) {
+  name: 'l7-data-api-kv-grant'
+  scope: az.resourceGroup(platformRgName)
+  params: {
+    keyVaultName: platformKv.name
+    principalId: dataApiIdentity.outputs.principalId
+  }
+}
+
 module dataApiApp 'br/public:avm/res/app/container-app:0.23.0' = {
   name: 'l7-ca-data-api'
+  // Same ordering requirement as mcpToolsApp: Container Apps resolves a
+  // keyVaultUrl secret using the identity's role at the moment it needs the
+  // value, and nothing in params references this grant's output, so Bicep
+  // would not otherwise sequence the grant ahead of the app.
+  dependsOn: empty(githubTokenSecretName) ? [] : [dataApiKvGrant]
   params: {
+    secrets: dataApiSecrets
     name: dataApiName
     location: location
     tags: tagsDataApi
@@ -699,7 +787,8 @@ module dataApiApp 'br/public:avm/res/app/container-app:0.23.0' = {
               value: dataApiImageDigest
             }
           ],
-          dataApiCloudEnv
+          dataApiCloudEnv,
+          dataApiGitHubEnv
         )
       }
     ]

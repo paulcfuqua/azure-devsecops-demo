@@ -105,3 +105,88 @@ Describe 'every tracked lockfile matches its package.json' {
         }
     }
 }
+
+# A LOCKFILE INSIDE A ROOT WORKSPACE MEMBER CANNOT BE MAINTAINED, BY ANYONE.
+#
+# The check above says a lockfile must agree with its manifest. This one says
+# which directories are allowed to have a lockfile at all, and it exists because
+# the agreement above is not something the tooling can keep for these two.
+#
+# npm resolves a workspace member's install against the ROOT lockfile - that is
+# what a workspace is - so `npm install` in the member updates the root lockfile
+# and leaves the member's own file untouched. Dependabot does exactly the same
+# thing, being npm. So a bump to a workspace member's package.json ships with a
+# stale sibling lockfile every single time, and no amount of care prevents it:
+#
+#   PR #102 bumped @testing-library/react to ^16.3.3 in four package.json files
+#   and regenerated exactly one lockfile - the root. spec-renderer's standalone
+#   lockfile stayed on ^16.3.0, the check above failed, and lint-ci went red.
+#   That was the nineteenth such failure.
+#
+# The fix for spec-renderer was deletion, not regeneration: nothing read it.
+# There is no Dockerfile in that directory, no workflow installs from it, and
+# the package is built through the root workspace like every other member. It
+# could only ever drift and never be consulted - a file whose sole observable
+# behaviour was turning dependency bumps red.
+#
+# apps/mcp-tools is the real exception and stays. Its Dockerfile does
+#
+#     COPY apps/mcp-tools/package.json apps/mcp-tools/package-lock.json ./
+#     RUN npm ci
+#
+# installing in isolation with no repo root in the build context, so it needs a
+# lockfile of its own. It pays for that with the drift the check above catches -
+# loudly and in two places, since the image build fails too - and regenerating
+# it needs the `--no-workspaces` documented at the top of this file.
+#
+# So the rule is not "no lockfiles in workspace members", it is "each one is
+# declared here with the reason it must exist". A new undeclared one is almost
+# certainly the accident this test was written about.
+Describe 'no unowned lockfile inside a root workspace member' {
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+
+        # Directories that legitimately carry their own lockfile despite being
+        # workspace members. Keep the reason with the entry - an allowlist whose
+        # entries carry no justification becomes a place to silence this test.
+        $script:Allowed = @{
+            'apps/mcp-tools' = 'its Dockerfile installs in isolation (COPY package.json package-lock.json; npm ci) with no repo root in the build context'
+        }
+    }
+
+    It 'every tracked lockfile is either outside the workspaces or explicitly allowed' {
+        Push-Location $script:Root
+        try {
+            $tracked = @(& git ls-files '*package-lock.json')
+            $rootPkg = Get-Content -LiteralPath (Join-Path $script:Root 'package.json') -Raw | ConvertFrom-Json -AsHashtable
+            $patterns = @($rootPkg['workspaces'])
+        } finally {
+            Pop-Location
+        }
+
+        $patterns.Count | Should -BeGreaterThan 0 -Because 'the root manifest must declare workspaces, or this test checks nothing'
+
+        $offenders = foreach ($rel in $tracked) {
+            # .Replace, not -replace: the argument is a literal separator, not a
+            # regex, and a lone backslash is not a valid pattern. git ls-files emits
+            # forward slashes; Split-Path hands back backslashes on Windows.
+            $dir = (Split-Path -Parent $rel).Replace([char]92, [char]47)
+            if ([string]::IsNullOrEmpty($dir)) { continue }  # the root lockfile itself
+            if ($script:Allowed.ContainsKey($dir)) { continue }
+
+            # `apps/shared/*` must match apps/shared/spec-renderer, so the
+            # workspace globs are compared as globs rather than as literals.
+            $isMember = $false
+            foreach ($pattern in $patterns) {
+                if ($dir -like $pattern) { $isMember = $true; break }
+            }
+            if ($isMember) { $dir }
+        }
+
+        @($offenders) -join '; ' | Should -BeNullOrEmpty -Because (
+            'a lockfile in a root workspace member is updated by nothing - npm and Dependabot both ' +
+            'resolve the member against the ROOT lockfile - so it can only drift and turn every ' +
+            'dependency bump red. Delete it if nothing reads it, or add it to $script:Allowed with ' +
+            'the reason it must exist (as apps/mcp-tools does).')
+    }
+}

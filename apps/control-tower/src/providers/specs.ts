@@ -1,12 +1,11 @@
 import type { ComponentSpec, Spec } from "@mls/spec-renderer";
 import type {
+  AzureCostFeed,
   CodeScanningAlert,
-  CostDailyRow,
   DependabotAlert,
   LogAnalyticsResult,
   SecureScoreControlsResponse,
   SecureScoreResponse,
-  TelemetrySummaryRow,
   WorkflowRunsFeed,
 } from "./types";
 
@@ -37,13 +36,54 @@ function minutesBetween(startIso: string, endIso: string): number | null {
   return (end - start) / 60_000;
 }
 
+/**
+ * A feed that did not answer, carried alongside the data that did.
+ *
+ * WHY THIS TYPE EXISTS (F116). Every tab used to fetch its feeds with
+ * `Promise.all`, so one rejection discarded the panels that had already
+ * resolved. With three GitHub feeds answering 503 for want of a token, the Dev
+ * tab threw away the `app-requests` data it was holding and rendered a single
+ * "Data unavailable" line - five of Control Tower's eight routes were serving
+ * real data and the default view showed none of it.
+ *
+ * The builders therefore take NULLABLE feeds plus the list of what failed, and
+ * render everything they can. A missing feed costs you its panels and says so;
+ * it no longer costs you the whole tab.
+ */
+export interface FeedOutage {
+  readonly feed: string;
+  readonly reason: string;
+}
+
+/**
+ * The notice for feeds that did not answer.
+ *
+ * It names the feed AND repeats the reason the server gave, because the reason
+ * is the actionable half - "MLS_GITHUB_TOKEN is empty on this instance" tells a
+ * reader what to do, where "unavailable" starts an investigation.
+ */
+function outageNotice(outages: readonly FeedOutage[]): ComponentSpec | null {
+  if (outages.length === 0) return null;
+  const lines = outages.map((o) => `- \`${o.feed}\` — ${o.reason}`).join("\n");
+  return {
+    type: "markdownBlock",
+    title: outages.length === 1 ? "One feed is unavailable" : `${outages.length} feeds are unavailable`,
+    markdown:
+      "The panels below are rendered from the feeds that answered. These did not, " +
+      "so anything derived from them is absent rather than zero:\n\n" +
+      lines,
+  };
+}
+
 /* ---------------------------------------------------------------- Dev tab */
 
 export function buildDevSpec(
-  runs: WorkflowRunsFeed,
-  appRequests: LogAnalyticsResult,
+  runs: WorkflowRunsFeed | null,
+  appRequests: LogAnalyticsResult | null,
+  outages: readonly FeedOutage[] = [],
 ): Spec {
-  const completed = runs.workflow_runs.filter(
+  const allRuns = runs?.workflow_runs ?? [];
+  const completed = allRuns.filter(
     (r) => r.status === "completed" && r.conclusion !== null,
   );
   const successes = completed.filter((r) => r.conclusion === "success").length;
@@ -56,7 +96,7 @@ export function buildDevSpec(
   const medianDuration = round(median(durations), 1);
 
   const byWorkflow = new Map<string, number>();
-  for (const r of runs.workflow_runs) {
+  for (const r of allRuns) {
     byWorkflow.set(r.name, (byWorkflow.get(r.name) ?? 0) + 1);
   }
   const workflowData = [...byWorkflow.entries()]
@@ -65,7 +105,7 @@ export function buildDevSpec(
     .map(([name, count]) => ({ x: name, y: count }));
 
   // Log Analytics result -> daily request success rate (all app roles pooled).
-  const primary = appRequests.tables.find((t) => t.name === "PrimaryResult");
+  const primary = appRequests?.tables.find((t) => t.name === "PrimaryResult");
   const successSeries: Array<{ x: string; y: number }> = [];
   if (primary) {
     const col = (name: string): number =>
@@ -101,7 +141,7 @@ export function buildDevSpec(
     }
   }
 
-  const recentRuns = [...runs.workflow_runs]
+  const recentRuns = [...allRuns]
     .sort((a, b) => b.run_started_at.localeCompare(a.run_started_at))
     .slice(0, 10)
     .map((r) => ({
@@ -116,8 +156,14 @@ export function buildDevSpec(
       })(),
     }));
 
-  const components: ComponentSpec[] = [
-    {
+  const components: ComponentSpec[] = [];
+  const notice = outageNotice(outages);
+  if (notice) components.push(notice);
+  // The KPI row is skipped entirely rather than shown with zeros: a "CI success
+  // rate: 0%" for a feed that never answered is a confident wrong number, and
+  // the schema requires at least one item anyway.
+  if (runs) {
+    components.push({
       type: "kpiRow",
       title: "Delivery health",
       description:
@@ -128,8 +174,8 @@ export function buildDevSpec(
         { label: "Median run duration", value: medianDuration, unit: "min", decimals: 1 },
         { label: "Active workflows", value: byWorkflow.size },
       ],
-    },
-  ];
+    });
+  }
   if (workflowData.length > 0) {
     components.push({
       type: "barChart",
@@ -182,13 +228,14 @@ function severityLabel(value: string): string {
 }
 
 export function buildSecSpec(
-  codeAlerts: CodeScanningAlert[],
-  depAlerts: DependabotAlert[],
-  secureScore: SecureScoreResponse,
-  controls: SecureScoreControlsResponse,
+  codeAlerts: CodeScanningAlert[] | null,
+  depAlerts: DependabotAlert[] | null,
+  secureScore: SecureScoreResponse | null,
+  controls: SecureScoreControlsResponse | null,
+  outages: readonly FeedOutage[] = [],
 ): Spec {
-  const openCode = codeAlerts.filter((a) => a.state === "open");
-  const openDep = depAlerts.filter((a) => a.state === "open");
+  const openCode = (codeAlerts ?? []).filter((a) => a.state === "open");
+  const openDep = (depAlerts ?? []).filter((a) => a.state === "open");
 
   const severityCounts = new Map<string, number>(SEVERITY_ORDER.map((s) => [s, 0]));
   for (const a of openCode) {
@@ -201,8 +248,22 @@ export function buildSecSpec(
   }
   const criticalOpen = severityCounts.get("critical") ?? 0;
 
-  const score = secureScore.value[0]?.properties.score;
-  const scorePct = score ? round(score.percentage * 100, 1) : 0;
+  // AN UNREPORTED SECURE SCORE IS NOT A SCORE OF ZERO.
+  //
+  // This read `score ? round(...) : 0`, so a Defender response carrying no score
+  // rendered "Defender secure score: 0.0%" - the most alarming number the panel
+  // can show, produced by having no number at all. The live estate answers this
+  // feed `200 {"value":[]}`, so that is what the dashboard was displaying.
+  //
+  // Worse, an empty list is exactly what Defender's ARM API returns to a caller
+  // who cannot read it, so "0%" was standing in for two different states, one of
+  // which is "you are not allowed to know". That is the absence-vs-denial class
+  // this repository has now paid for five times (F102, F103, F104, F105, F106).
+  // The identity does currently hold Security Reader, which makes a genuine
+  // empty the likelier of the two - but the panel cannot tell them apart, so it
+  // must not assert either.
+  const score = secureScore?.value[0]?.properties.score;
+  const scorePct = score ? round(score.percentage * 100, 1) : null;
 
   const severityRank = (s: string): number => {
     const i = SEVERITY_ORDER.indexOf(s as (typeof SEVERITY_ORDER)[number]);
@@ -230,21 +291,37 @@ export function buildSecSpec(
     .slice(0, 15)
     .map((r) => ({ ...r, severity: severityLabel(r.severity) }));
 
-  const components: ComponentSpec[] = [
+  const components: ComponentSpec[] = [];
+  const notice = outageNotice(outages);
+  if (notice) components.push(notice);
+  components.push(
     {
       type: "kpiRow",
       title: "Security posture",
       description:
         "Well-Architected: Security — GitHub Advanced Security findings and Defender for Cloud secure score.",
       items: [
-        { label: "Open code scanning alerts", value: openCode.length },
-        { label: "Open dependency alerts", value: openDep.length },
-        {
-          label: "Critical (open)",
-          value: criticalOpen,
-          trend: criticalOpen > 0 ? "up" : "flat",
-        },
-        { label: "Defender secure score", value: scorePct, unit: "%", decimals: 1 },
+        // Same rule as the secure score below: a feed that did not answer yields
+        // "not reported", never 0. "Open code scanning alerts: 0" is the single
+        // most reassuring thing this dashboard can say, and saying it because
+        // the endpoint returned 503 is the exact failure the working agreement
+        // on absence-vs-denial exists to stop.
+        codeAlerts === null
+          ? { label: "Open code scanning alerts", value: "not reported" }
+          : { label: "Open code scanning alerts", value: openCode.length },
+        depAlerts === null
+          ? { label: "Open dependency alerts", value: "not reported" }
+          : { label: "Open dependency alerts", value: openDep.length },
+        codeAlerts === null || depAlerts === null
+          ? { label: "Critical (open)", value: "not reported" }
+          : {
+              label: "Critical (open)",
+              value: criticalOpen,
+              trend: criticalOpen > 0 ? "up" : "flat",
+            },
+        scorePct === null
+          ? { label: "Defender secure score", value: "not reported" }
+          : { label: "Defender secure score", value: scorePct, unit: "%", decimals: 1 },
       ],
     },
     {
@@ -256,8 +333,8 @@ export function buildSecSpec(
         y: severityCounts.get(s) ?? 0,
       })),
     },
-  ];
-  const controlData = controls.value
+  );
+  const controlData = (controls?.value ?? [])
     .slice(0, 100)
     .map((c) => ({
       x: c.properties.displayName,
@@ -293,118 +370,105 @@ export function buildSecSpec(
 /* ---------------------------------------------------------------- Ops tab */
 
 export function buildOpsSpec(
-  costRows: CostDailyRow[],
-  telemetry: TelemetrySummaryRow[],
+  cost: AzureCostFeed | null,
+  outages: readonly FeedOutage[] = [],
 ): Spec {
-  const byMonth = new Map<string, { amount: number; budget: number }>();
-  const byCenter = new Map<string, number>();
-  let totalAmount = 0;
-  let totalBudget = 0;
-  for (const row of costRows) {
-    if (typeof row.amount_usd !== "number" || !row.date) continue;
-    const month = row.date.slice(0, 7);
-    const agg = byMonth.get(month) ?? { amount: 0, budget: 0 };
-    agg.amount += row.amount_usd;
-    agg.budget += typeof row.budget_usd === "number" ? row.budget_usd : 0;
-    byMonth.set(month, agg);
-    totalAmount += row.amount_usd;
-    totalBudget += typeof row.budget_usd === "number" ? row.budget_usd : 0;
-    if (row.cost_center) {
-      byCenter.set(row.cost_center, (byCenter.get(row.cost_center) ?? 0) + row.amount_usd);
-    }
-  }
-  const monthly = [...byMonth.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    // Noon-UTC anchor, same reason as the Dev series above.
-    .map(([month, agg]) => ({
-      x: `${month}-01T12:00:00Z`,
-      y: round(agg.amount / 1000, 1),
-    }));
-  const centerData = [...byCenter.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 24)
-    .map(([center, amount]) => ({ label: center, value: round(amount / 1000, 0) }));
+  const components: ComponentSpec[] = [];
+  const notice = outageNotice(outages);
+  if (notice) components.push(notice);
 
-  const budgetVariance =
-    totalBudget > 0 ? round(((totalAmount - totalBudget) / totalBudget) * 100, 1) : 0;
-
-  const coverage = telemetry
-    .map((t) => t.telemetry_coverage_pct)
-    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
-  const avgCoverage =
-    coverage.length > 0
-      ? round(coverage.reduce((a, b) => a + b, 0) / coverage.length, 2)
-      : 0;
-  const totalAnomalies = telemetry.reduce((sum, t) => sum + (t.anomaly_count ?? 0), 0);
-  const flightsWithAnomalies = telemetry.filter((t) => (t.anomaly_count ?? 0) > 0).length;
-  const dropouts = telemetry
-    .map((t) => t.data_dropout_s)
-    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
-  const avgDropout =
-    dropouts.length > 0
-      ? round(dropouts.reduce((a, b) => a + b, 0) / dropouts.length, 1)
-      : 0;
-
-  const components: ComponentSpec[] = [
-    {
+  if (!cost) {
+    // Nothing to be partial about. The KPI row still renders so the tab has a
+    // shape, and every figure says what it is: absent, not zero.
+    components.push({
       type: "kpiRow",
-      title: "Cost & reliability",
-      description:
-        "Well-Architected: Cost Optimization + Reliability — cost exports and flight telemetry from the lakehouse.",
+      title: "Platform run cost",
+      description: "Azure Cost Management - what this estate costs to operate.",
       items: [
-        {
-          label: "Program spend (all time)",
-          value: round(totalAmount / 1000, 0),
-          unit: "k$",
-        },
-        {
-          label: "Budget variance",
-          value: budgetVariance,
-          unit: "%",
-          decimals: 1,
-          trend: budgetVariance > 0 ? "up" : budgetVariance < 0 ? "down" : "flat",
-        },
-        { label: "Avg telemetry coverage", value: avgCoverage, unit: "%", decimals: 2 },
-        { label: "Flight anomalies", value: totalAnomalies },
+        { label: "Total run cost", value: "not reported" },
+        { label: "Services billing", value: "not reported" },
+        { label: "Largest line item", value: "not reported" },
       ],
-    },
-  ];
-  if (monthly.length >= 2) {
+    });
+    return { version: "1", layout: "stack", components };
+  }
+
+  const money = (n: number): number => Math.round(n * 100) / 100;
+  const top = cost.byService[0];
+
+  // The window and the freshness belong ON the tab, not in a tooltip. "$14.81"
+  // means nothing without "month to date", and a retained figure presented as a
+  // current one is the same defect as an empty list presented as a zero.
+  const asOfLabel = cost.asOf.slice(0, 16).replace("T", " ");
+  components.push({
+    type: "kpiRow",
+    title: "Platform run cost",
+    description:
+      `Azure Cost Management, ${cost.timeframe} actual cost in ${cost.currency}. ` +
+      `Read ${asOfLabel} UTC${cost.stale ? " - RETAINED, the upstream refused a fresh query" : ""}.`,
+    items: [
+      { label: "Total run cost", value: money(cost.total), unit: cost.currency, decimals: 2 },
+      { label: "Services billing", value: cost.byService.length },
+      top
+        ? { label: `Largest: ${top.name}`, value: money(top.cost), unit: cost.currency, decimals: 2 }
+        : { label: "Largest line item", value: "nothing billed yet" },
+      {
+        label: "Resource groups billing",
+        value: cost.byResourceGroup.length,
+      },
+    ],
+  });
+
+  if (cost.daily.length >= 2) {
     components.push({
       type: "lineChart",
-      title: "Monthly program spend",
-      description: "Cost Management daily export aggregated by month, all cost centers.",
-      data: monthly,
-      unit: "k$",
-      decimals: 1,
+      title: "Daily run cost",
+      description: `Actual cost per day across every service, in ${cost.currency}.`,
+      // Noon UTC for the same reason the Dev tab's series uses it: the renderer
+      // coerces to Date and charts in the viewer's zone, so midnight slides the
+      // label back a day west of Greenwich.
+      data: cost.daily.map((d) => ({ x: `${d.date}T12:00:00Z`, y: money(d.cost) })),
+      unit: cost.currency,
+      decimals: 2,
     });
   }
-  if (centerData.length > 0) {
+
+  if (cost.byService.length > 0) {
     components.push({
       type: "donutChart",
-      title: "Spend by cost center",
-      data: centerData,
-      unit: "k$",
+      title: "Cost by Azure service",
+      description:
+        "Where the money actually goes: container apps, the SQL database, the lakehouse and Log Analytics.",
+      data: cost.byService
+        .slice(0, 8)
+        .map((sv) => ({ label: sv.name, value: money(sv.cost) })),
+      unit: cost.currency,
     });
   }
-  components.push(
-    {
-      type: "statCard",
-      title: "Launches with anomalies",
-      description:
-        telemetry.length > 0
-          ? `${flightsWithAnomalies} of ${telemetry.length} flights recorded at least one anomaly.`
-          : "No telemetry rows loaded.",
-      value: flightsWithAnomalies,
-    },
-    {
-      type: "statCard",
-      title: "Avg data dropout",
-      description: "Mean telemetry dropout per flight.",
-      value: avgDropout,
-      unit: "s",
-      decimals: 1,
-    },
-  );
+
+  if (cost.byResourceGroup.length > 0) {
+    components.push({
+      type: "barChart",
+      title: "Cost by resource group",
+      description: "Platform, apps, data and ops - the four groups teardown deletes.",
+      data: cost.byResourceGroup.map((rg) => ({ x: rg.name, y: money(rg.cost) })),
+      unit: cost.currency,
+      decimals: 2,
+    });
+  }
+
+  if (cost.byService.length > 0) {
+    components.push({
+      type: "dataTable",
+      title: "Run cost by service",
+      description: `Actual cost, ${cost.timeframe}, highest first.`,
+      columns: [
+        { key: "service", label: "Azure service" },
+        { key: "cost", label: `Cost (${cost.currency})`, align: "right" },
+      ],
+      rows: cost.byService.map((sv) => ({ service: sv.name, cost: money(sv.cost) })),
+    });
+  }
+
   return { version: "1", layout: "stack", components };
 }

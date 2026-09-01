@@ -64,6 +64,109 @@ of them touches: a row of data, a rendered page, a working answer.
 > The original text is kept below because a register that quietly rewrites itself is not a
 > register.
 
+> ---
+>
+> **UPDATE 2026-09-01, later the same day — the apps were opened and every route probed.**
+>
+> **F101 is closed outright, not merely narrowed.** The claim that Fabric's TDS endpoint
+> rejects user-assigned managed identities was established from documentation and is
+> contradicted by the running estate: through `data-api`'s own managed identity, over the
+> same proxy a browser uses, `cost_daily` returned **4,515 rows** and `telemetry_summary`
+> returned **1,200**. No federated identity credential was ever created. The fix listed
+> below as "understood and unstarted" was not needed and must not be built.
+>
+> Launch Ops renders **20 real launches** from Azure SQL. Control Tower's **Ops tab renders
+> fully** — KPIs, a 30-point monthly spend line, a cost-centre donut, anomaly counts — all
+> from the lakehouse. **Phase 2 of the Direction is met for those surfaces.**
+>
+> **All eight Control Tower routes, probed from the authenticated browser:**
+>
+> | Route | Status | Reality |
+> |---|---|---|
+> | `feeds/workflow-runs` | 503 | `MLS_GITHUB_TOKEN` unprovisioned **by design** |
+> | `feeds/code-scanning-alerts` | 503 | same |
+> | `feeds/dependabot-alerts` | 503 | same |
+> | `feeds/secure-score` | 200 | `{"value":[]}` — **empty, and nothing asserts why** |
+> | `feeds/secure-score-controls` | 200 | **empty, same caveat** |
+> | `feeds/app-requests` | 200 | real rows |
+> | `tables/cost_daily` | 200 | **4,515 rows** |
+> | `tables/telemetry_summary` | 200 | **1,200 rows** |
+>
+> **F116 — one dead feed blanks a whole tab.** Each tab fetches its feeds with
+> `Promise.all`, so a single rejection discards the panels that did resolve. The Dev tab
+> has `app-requests` in hand and renders nothing. Five of eight routes carry data and the
+> default view shows none of it. Per-panel degradation is the fix.
+>
+> **The two Defender feeds are an absence-vs-denial case and are NOT yet resolved.** They
+> answer `200 {"value":[]}`. The identity does hold **Security Reader** at subscription
+> scope, so this is probably a genuine empty rather than a silent denial — but "probably"
+> is exactly what the working agreement forbids. Nothing establishes that the caller
+> *could* have observed a score before reporting there is none, and the dashboard will
+> render "0" either way. Until something distinguishes the two, treat these panels as
+> **UNOBSERVABLE, not zero**.
+>
+> **The GitHub 503s are a deliberate default, not a defect.** `infra/bicep/apps/main.bicep`
+> says so in terms: the token is "deliberately NOT set here … a better default than a
+> half-wired secret path". Sponsor decision the same day: wire it. The plumbing now exists
+> (`githubTokenSecretName`, resolved by reference from Key Vault via data-api's own UAMI,
+> empty still supported); only the secret value is outstanding. Note the repo is **public**,
+> so `actions/runs` reads **200 anonymously** — `code-scanning` and `dependabot` are the two
+> that genuinely require the credential.
+>
+> **Operational trap, and a correction.** `mls-sec-demo-kv` is **RBAC-mode**: Owner and
+> Global Admin grant *no* data-plane access, so `az keyvault secret set` fails
+> `ForbiddenByRbac / Assignment: (not found)` for an account that can otherwise do anything
+> in the subscription. The operator needs **Key Vault Secrets Officer** on the vault.
+> I first recorded this as undocumented; that was wrong. `docs/runbooks/g0-bootstrap.md`
+> item C11 already carries the grant, for `mcp-auth-token`. What was actually missing is
+> that `mls-github-token` is a NEW secret with no runbook step of its own, so anyone
+> following the runbook provisions the vault without it and the GitHub feeds stay 503 with
+> nothing saying why. That step now exists.
+
+> ---
+>
+> **UPDATE 2026-09-01, third pass - the token landed, and the Ops tab was measuring the
+> wrong thing entirely.**
+>
+> With `mls-github-token` provisioned and L7 redeployed, **all eight Control Tower routes
+> answer 200**: 2,587 workflow runs, **76 open code-scanning alerts**, 4 Dependabot alerts,
+> real CVEs from CodeQL, Dependabot and Trivy. The Dev and Sec tabs render.
+>
+> **F116's second half was found in a PIXEL, not an audit line.** The live Sec tab displayed
+> `Defender secure score 0.0%` - the most alarming figure that panel can show, produced by
+> `{"value":[]}` and the expression `score ? round(...) : 0`. An empty list is also what
+> Defender's ARM API returns to a caller who may not read it, so 0.0% stood in for two
+> states, one of them "you are not allowed to know". Absent inputs now render
+> `"not reported"`. This is the sixth instance of the absence-vs-denial class and the first
+> in a rendered UI, where a reader has no verification report to check against.
+>
+> **The Defender emptiness is real, and this time that was established rather than assumed.**
+> Sibling endpoints under the same provider were probed: `assessments` -> 0,
+> `secureScoreControls` -> 0, `Microsoft.Security` **Registered**, FoundationalCspm on
+> (paid CloudPosture off, so no spend), 25 resources present. Everything under the provider
+> is empty, which is the initial-computation delay, not a denial and not a missing grant.
+>
+> **F117 - the Ops tab was showing the FICTIONAL company's money.** Sponsor caught it: the
+> tab is meant to answer "what does this landscape cost to run" and was rendering
+> `cost_daily`, the generator's synthetic launch-programme budget split across Propulsion,
+> Avionics and Range Operations. Worse, fixing the data source alone would not have fixed
+> the tab: `cost-ingest/normalise.ts` aggregates even genuine Cost Management rows onto a
+> `costCenter` **tag** whose demo values are those same fictional units, so real Azure money
+> arrives wearing a costume.
+>
+> Three facts settled the design. The Cost Management **export** exists and is Active Daily
+> but has **never run** (0 runs; its recurrence window opened today, recreated by the
+> rebuild). The **query** API is throttled hard - 429 on four consecutive calls. And the
+> flight-telemetry half of the tab was fictional too. So: a new `azure-cost` feed queries
+> Cost Management directly with data-api's managed identity, **cached an hour** because the
+> figures settle daily and the API will not tolerate more, grouped by **Azure service and
+> resource group** - what actually incurs the charge. The flight telemetry is gone from Ops.
+> `stale` is in the contract: a retained figure presented as a current one is the same
+> defect as an empty list presented as a zero.
+>
+> Still open: the Ops tab's real numbers are unverified against the live tenant, because the
+> throttle blocked a direct read while this was written. First deploy will show it.
+
 ### B1. The API serves no data (F101) — the biggest hole *(RESOLVED 2026-09-01, see above)*
 
 `data-api` returns **502** on every `/api/tables/*` route. Fabric's SQL endpoint accepts
@@ -89,11 +192,42 @@ The label taxonomy is a load-bearing part of the compliance story. L4's audit is
 blocked (`MLS_VERIFIER_CERT_BASE64`), and it says so honestly rather than passing:
 *"Nothing was verified and nothing was faked."*
 
-### B3. The Ask tab has never been lit
+### B3. The Ask tab has never been lit - and two links of the chain have no infrastructure (F118)
 
 The Copilot Studio agent is **exported into the repo** but has never been imported,
 published, or given a Direct Line secret in Key Vault. It ships dark by design at L7; it
 has never been anything else.
+
+**CORRECTED 2026-09-01 after opening the tab in the deployed estate.** The paragraph above
+was true and incomplete, in the way that matters: it described the agent as unpublished and
+left the impression that publishing it would light the tab. It would not. The chain has
+five links and **two of them do not exist as infrastructure at all**:
+
+| Link | State |
+|---|---|
+| Agent imported + published in Copilot Studio | never done (above) |
+| Direct Line channel + secret in Key Vault | never created (above) |
+| **`apps/directline-token` deployed** | **no Bicep, no CI workflow - it cannot deploy** |
+| **`VITE_DIRECTLINE_TOKEN_URL` in the control-tower build** | **set by no workflow, so every image is built dark** |
+| Entra registrations for agent user-auth | blocked, F106/B4 below |
+
+`apps/directline-token` is an Azure Function - `host.json`, no Dockerfile - with a README, a
+package, source and tests. It is a member of the root npm workspace and has its own
+Dependabot entry, so it is maintained like a deployable component. `grep -r directline
+infra/` returns exactly one hit, in a Copilot Studio markdown file. **Nothing declares it,
+no workflow builds or deploys it, and no environment points at it.**
+
+The tab's own message is misleading about this, and in the familiar direction: it says
+*"Ask is offline in local mode"* and *"this tab needs the deployed environment"* while
+running IN the deployed environment. The cause is not local mode - it is that
+`VITE_DIRECTLINE_TOKEN_URL` is a BUILD-time Vite variable that no pipeline sets, so the
+deployed bundle is identical to a laptop one. A reader is told to deploy something that is
+already deployed.
+
+The last link (F106) is needed for the agent to authenticate USERS. It is not on the
+critical path for the tab merely rendering a conversation: the Direct Line secret flow -
+exchanged server-side by the token function, never reaching a browser - stands on its own.
+So the Ask tab can be lit without solving F106, and should not wait for it.
 
 ### B4. The agent's authentication is blocked permanently, and no gate will ever say so (F106)
 

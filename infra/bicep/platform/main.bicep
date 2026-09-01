@@ -110,6 +110,12 @@ param costExportContainerName string = 'cost-exports'
 @description('[derived] Blob container in the FUNCTION RUNTIME storage account that Flex Consumption stores the deployment package in. Its own container in its own account, never shared with the export data — see the cost-ingest block below for why the two accounts are separate.')
 param functionDeploymentContainerName string = 'deployment-package'
 
+@description('Name of the Key Vault secret holding the Copilot Studio DIRECT LINE SECRET, which the directline-token Function exchanges server-side for a short-lived conversation token. EMPTY IS A SUPPORTED DEPLOYMENT and is the default: the Function still deploys and still answers, with a typed error saying the channel is not configured, which is the honest state before the agent is published. The value never enters this template - it is resolved from Key Vault at runtime by the Function\'s own managed identity.')
+param directlineSecretName string = ''
+
+@description('Origins the directline-token Function will mint a token for, comma-separated. These become the Direct Line `trustedOrigins` and the CORS allow-list, so a token minted for this estate cannot be replayed from someone else\'s page. Empty means the Function refuses every origin, which is the correct default for an endpoint that is public and anonymous by design.')
+param directlineAllowedOrigins string = ''
+
 @description('[derived] Node runtime major version for the cost-ingest Function (Flex Consumption `functionAppConfig.runtime`). 22 matches apps/cost-ingest/package.json\'s `engines.node: >=22`. Not a free choice: Flex Consumption accepts only the runtime versions it publishes, and one it does not offer fails the deployment rather than degrading.')
 param costIngestNodeVersion string = '22'
 
@@ -154,6 +160,9 @@ var sqlFailedLoginAlertName = naming.resourceName(companyPrefix, 'sql-auth', env
 var costIngestIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.costIngest, env)
 var costIngestFunctionAppName = naming.functionAppName(companyPrefix, naming.appKeys.costIngest, env)
 var costIngestPlanName = naming.appServicePlanName(companyPrefix, naming.appKeys.costIngest, env)
+var directlineIdentityName = naming.userAssignedIdentityName(companyPrefix, naming.appKeys.directlineToken, env)
+var directlineFunctionAppName = naming.functionAppName(companyPrefix, naming.appKeys.directlineToken, env)
+var directlinePlanName = naming.appServicePlanName(companyPrefix, naming.appKeys.directlineToken, env)
 var functionRuntimeStorageName = naming.storageAccountName(companyPrefix, 'func', env)
 var costExportSystemTopicName = naming.resourceName(companyPrefix, 'cost', env, 'evgt')
 
@@ -172,6 +181,7 @@ var tagsSqlServer = naming.requiredTags(env, 'ops', costCenter, owner, dataClass
 var tagsSqlDb = naming.requiredTags(env, naming.appKeys.launchOps, costCenter, owner, dataClassification)
 var tagsCostStorage = naming.requiredTags(env, 'cost', costCenter, owner, dataClassification)
 var tagsCostIngest = naming.requiredTags(env, naming.appKeys.costIngest, costCenter, owner, dataClassification)
+var tagsDirectline = naming.requiredTags(env, naming.appKeys.directlineToken, costCenter, owner, dataClassification)
 
 // ------------------------------------------------------------------ resource groups (all four — single owner of RG creation)
 
@@ -830,6 +840,181 @@ module costIngestRuntimeStorageGrant 'modules/storage-account-role.bicep' = [
   }
 ]
 
+// =============================================================================
+// DIRECT LINE TOKEN FUNCTION (F118)
+// =============================================================================
+//
+// The Ask tab's missing link, and it was missing in the most complete sense:
+// `apps/directline-token` has a README, a package, source, tests, a workspace
+// membership and its own Dependabot entry, and `grep -r directline infra/`
+// returned exactly one hit - in a Copilot Studio markdown file. Nothing declared
+// it, no workflow built or deployed it, and no environment pointed at it. The
+// tab could never have worked, and said so in a message blaming "local mode"
+// while running in the deployed estate.
+//
+// WHAT IT IS. One anonymous HTTP endpoint (`POST /api/directline/token`) that
+// exchanges the Copilot Studio Direct Line SECRET for a short-lived,
+// conversation-scoped TOKEN. The browser receives the token and never the
+// secret. That exchange has to happen server-side or the secret ships to every
+// visitor, which is the entire reason this component exists.
+//
+// WHY ITS OWN FUNCTION rather than a route on mcp-tools: apps/directline-token's
+// README argues it at length and the argument holds - folding it in would force
+// the tools server public, and the Direct Line secret would then share a blast
+// radius with the lakehouse read credentials. Its own site also redeploys when
+// the channel rotates without touching the tool layer.
+//
+// COST: Flex Consumption with no `alwaysReady` block, exactly like cost-ingest.
+// Always-ready instances are the only thing on this tier that bills while idle,
+// so omitting the block is what keeps idle cost at $0 - and adding one would be
+// an ungated spend increase (G2), not a tuning change.
+//
+// EMPTY SECRET IS A SUPPORTED DEPLOYMENT, and is the default. The agent has not
+// been published yet, so there is no Direct Line channel and no secret to point
+// at. The Function deploys anyway and answers with a typed error: an endpoint
+// that exists and says "not configured" is honest, where a half-wired secret
+// reference would fail the whole site at start-up and take the estate with it.
+// Same posture, same reasoning, as MLS_GITHUB_TOKEN in the apps layer (F116).
+module directlineIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0' = {
+  name: 'l6-directline-uami'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    name: directlineIdentityName
+    location: location
+    tags: tagsDirectline
+  }
+  dependsOn: [rgOps]
+}
+
+module directlinePlan 'br/public:avm/res/web/serverfarm:0.7.0' = {
+  name: 'l6-directline-plan'
+  scope: resourceGroup(rgOpsName)
+  params: {
+    name: directlinePlanName
+    location: location
+    tags: tagsDirectline
+    // FC1, and its own plan rather than sharing cost-ingest's: Flex Consumption
+    // bills per app on its own scaling profile, so a second plan costs nothing
+    // extra while keeping a browser-facing endpoint off the same scaling
+    // envelope as a nightly blob-triggered ingest.
+    skuName: 'FC1'
+    kind: 'functionapp'
+    reserved: true // Flex Consumption is Linux-only
+    zoneRedundant: false
+  }
+  dependsOn: [rgOps]
+}
+
+// Key Vault Secrets User for the Function's identity, so it can resolve the
+// Direct Line secret at runtime. Only deployed when a secret is actually named:
+// a standing grant for a secret nobody reads is access with no purpose.
+module directlineKvGrant '../apps/modules/key-vault-secrets-user-role.bicep' = if (!empty(directlineSecretName)) {
+  name: 'l6-directline-kv-grant'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    keyVaultName: keyVault.outputs.name
+    principalId: directlineIdentity.outputs.principalId
+  }
+}
+
+module directlineRuntimeStorageGrant 'modules/storage-account-role.bicep' = [
+  for grant in costIngestRuntimeStorageGrants: {
+    name: 'l6-directline-rt-${grant.label}'
+    scope: resourceGroup(rgOpsName)
+    params: {
+      storageAccountName: functionRuntimeStorage.outputs.name
+      principalId: directlineIdentity.outputs.principalId
+      roleDefinitionId: grant.roleDefinitionId
+    }
+  }
+]
+
+module directlineFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
+  name: 'l6-directline-func'
+  scope: resourceGroup(rgOpsName)
+  dependsOn: [rgOps, directlineRuntimeStorageGrant]
+  params: {
+    name: directlineFunctionAppName
+    location: location
+    tags: tagsDirectline
+    kind: 'functionapp,linux'
+    serverFarmResourceId: directlinePlan.outputs.resourceId
+    httpsOnly: true
+    clientAffinityEnabled: false
+    // User-assigned for the same reason cost-ingest's is: Flex Consumption needs
+    // an identity RESOURCE ID at site-creation time to authenticate deployment
+    // storage, which a system-assigned identity does not have until the site
+    // exists.
+    managedIdentities: {
+      userAssignedResourceIds: [directlineIdentity.outputs.resourceId]
+    }
+    siteConfig: {
+      minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
+      // CORS is enforced in the function itself against
+      // DIRECTLINE_ALLOWED_ORIGINS, which is also what it sends Direct Line as
+      // `trustedOrigins`. Configuring the platform CORS list as well would give
+      // two places to be wrong and one of them silent.
+    }
+    // PUBLIC BY NECESSITY, not by oversight: the caller is a browser on the
+    // public internet. It is anonymous by design too - the endpoint mints a
+    // conversation-scoped token and holds nothing a caller could steal beyond
+    // one conversation, which is why the secret never leaves this process.
+    publicNetworkAccess: 'Enabled'
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: '${functionRuntimeStorage.outputs.primaryBlobEndpoint}${functionDeploymentContainerName}'
+          authentication: {
+            type: 'UserAssignedIdentity'
+            userAssignedIdentityResourceId: directlineIdentity.outputs.resourceId
+          }
+        }
+      }
+      scaleAndConcurrency: {
+        // NO alwaysReady block. See the header: that is the $0 idle guarantee.
+        instanceMemoryMB: 512
+        maximumInstanceCount: 40
+      }
+      runtime: {
+        name: 'node'
+        version: costIngestNodeVersion
+      }
+    }
+    configs: [
+      {
+        name: 'appsettings'
+        storageAccountResourceId: functionRuntimeStorage.outputs.resourceId
+        storageAccountUseIdentityAuthentication: true
+        retainCurrentAppSettings: false
+        properties: union(
+          {
+            AzureWebJobsStorage__credential: 'managedidentity'
+            AzureWebJobsStorage__clientId: directlineIdentity.outputs.clientId
+            AZURE_CLIENT_ID: directlineIdentity.outputs.clientId
+            DIRECTLINE_ALLOWED_ORIGINS: directlineAllowedOrigins
+          },
+          // A Key Vault REFERENCE, not a value: the secret is resolved by the
+          // platform at start-up using this app's identity, so it never becomes
+          // a template parameter, a deployment-history entry, or a what-if log
+          // line in what is a public repository.
+          empty(directlineSecretName)
+            ? {}
+            : {
+                DIRECTLINE_SECRET: '@Microsoft.KeyVault(SecretUri=${keyVault.outputs.uri}secrets/${directlineSecretName})'
+              }
+        )
+      }
+    ]
+    diagnosticSettings: [
+      {
+        workspaceResourceId: logAnalytics.outputs.resourceId
+      }
+    ]
+  }
+}
+
 // ---- Event Grid system topic on the cost-export account ---------------------
 // The declarative half of the Event Grid-based blob trigger. The SUBSCRIPTION
 // that points at the Function's webhook is created by layer-06-platform.yml,
@@ -1052,6 +1237,12 @@ output sqlServerFqdn string = sqlServer.outputs.fullyQualifiedDomainName
 
 @description('Name of the serverless SQL database (V6.1 / V6.4 target).')
 output sqlDatabaseName string = sqlDbName
+
+@description('The Ask tab\'s token endpoint. DERIVED from the site name rather than read from the deployed resource, so the control-tower image can be built with it before this Function exists - the build needs the URL at bundle time (VITE_ variables are compile-time), and a value that only appears after deployment could never reach it. Same "derive from naming, do not pass" rule the apps layer uses for platform resource ids.')
+output directlineTokenUrl string = 'https://${directlineFunctionAppName}.azurewebsites.net/api/directline/token'
+
+@description('Resource id of the directline-token Function, for the layer-06 workflow to push code to.')
+output directlineFunctionAppName string = directlineFunctionAppName
 
 @description('Resource ID of the cost-export storage account.')
 output costExportStorageResourceId string = costExportStorage.outputs.resourceId
