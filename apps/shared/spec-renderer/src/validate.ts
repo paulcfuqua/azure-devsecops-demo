@@ -1,4 +1,5 @@
-import Ajv2020 from "ajv/dist/2020.js";
+// @ts-expect-error - generated at build time by scripts/build-validator.mjs
+import generatedValidate from "./validate.generated.js";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import rawSchema from "../spec.schema.json";
 import type { Spec } from "./types";
@@ -20,16 +21,25 @@ export interface SpecValidationResult {
 /** The compiled JSON Schema (draft 2020-12) — also shipped as spec.schema.json. */
 export const specSchema: Record<string, unknown> = rawSchema as Record<string, unknown>;
 
+// PRECOMPILED, NOT COMPILED AT RUNTIME (F111).
+//
+// ajv.compile() generates JavaScript source and evaluates it - `new Function`
+// underneath. The dashboards ship a strict Content Security Policy
+// (`script-src 'self'`, no 'unsafe-eval'), so the browser refuses and every
+// spec is reported as "validation failed unexpectedly" no matter how valid it
+// is. That surfaced the first time real data reached the renderer in a browser
+// with the CSP applied; no test had ever exercised both at once.
+//
+// scripts/build-validator.mjs compiles the schema at BUILD time into
+// validate.generated.js using Ajv's standalone mode, which emits ordinary
+// JavaScript. Weakening the CSP was the other option and it is the wrong one:
+// a security demo does not relax the control it is demonstrating to satisfy a
+// validation library.
 let compiled: ValidateFunction | undefined;
 
 function getValidator(): ValidateFunction {
   if (!compiled) {
-    const ajv = new Ajv2020({
-      allErrors: true,
-      discriminator: true,
-      strict: false,
-    });
-    compiled = ajv.compile(specSchema);
+    compiled = generatedValidate as unknown as ValidateFunction;
   }
   return compiled;
 }

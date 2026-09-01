@@ -27,11 +27,12 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsup",
+    "build": "node scripts/build-validator.mjs && tsc -p tsconfig.json && tsup",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "validate:golden": "node scripts/validate-golden.mjs"
+    "validate:golden": "node scripts/validate-golden.mjs",
+    "build:validator": "node scripts/build-validator.mjs"
   },
   "peerDependencies": {
     "react": "^19.2.8",
