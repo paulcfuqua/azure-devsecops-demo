@@ -90,6 +90,20 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   the layer still does not proceed - but applying it to DIAGNOSIS makes the discovery rate
   equal to the deploy rate, which is how three consecutive forty-minute runs each returned
   exactly one fact.
+- **An audit that cannot see a thing says so; it never reports the thing as absent.** Three
+  findings in one night, in three unrelated subsystems, were the same defect: a ZAP gate
+  reported a security failure it had never assessed, because the step that owned the verdict
+  had been skipped (F102); V9.1 announced that secret scanning, push protection and
+  Dependabot alerts were OFF when all three were enabled, because their endpoints are
+  admin-only and the check read the absent field as a disabled control (F103); and V5.2
+  called a lakehouse empty while its SQL endpoint returned 1,200 rows, because Fabric
+  answers `/tables` with `[]` rather than 403 to a caller without OneLake read (F105).
+  Each produced a confident, specific, WRONG answer that a reader would have acted on, and
+  none of them looked like anything other than an ordinary red criterion. Where an API
+  returns emptiness on denial, absence is unprovable: establish that you could observe
+  before reporting what you saw, and when you could not, fail as UNOBSERVABLE - never pass,
+  and never claim the control is missing. The symmetric error is worse: an auditor that
+  cannot see a control must not be able to report it as PRESENT either.
 - **A class paid for once becomes a check, not just a finding.** When a defect is understood,
   ask where else its shape occurs and encode that as a test over the whole repository. The
   first sweep written this way found two more instances in a second, having cost a deploy to

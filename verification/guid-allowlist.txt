@@ -87,3 +87,11 @@ f9d5432e-6b1a-4f02-9c47-8a3d21e6b7c4  # apps/control-tower/src/fixtures/defender
 55555555-5555-5555-5555-555555555555  # verification/tests/layer-04-audit.Tests.ps1
 66666666-7777-8888-9999-000000000000  # apps/data-api/tests/cloud-backends.test.ts
 99999999-9999-9999-9999-999999999999  # infra/purview/tests/teardown.Tests.ps1
+
+# --- Copilot Studio solution export (L8) -------------------------------------
+# Power Platform mints these when the agent is exported; they are component ids
+# inside the solution, not tenant object ids, and they are meaningless outside it.
+# They are committed because the export IS the artifact under review - a solution
+# whose ids are stripped cannot be imported. Reviewed 2026-09-01.
+41d42054-d4cb-4e90-b922-2b16b37fe379  # infra/copilot-studio/solution - bot component id
+80a15a23-00bc-4232-9ebf-5780fb7eff89  # infra/copilot-studio/solution - MCP connector RootComponent id
