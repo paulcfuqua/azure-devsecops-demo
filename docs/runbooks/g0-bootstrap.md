@@ -67,7 +67,8 @@ green. Items marked ⚠ are **missing/unverified** and block the layer noted.
 | PSScriptAnalyzer | ✅ 1.22.0 | installed 2026-08-26 |
 | Microsoft.Graph.Authentication | ✅ 2.15.0 | installed 2026-08-26. The repo only uses `Connect-MgGraph` + `Invoke-MgGraphRequest`, so the full `Microsoft.Graph` meta-module is **not** needed |
 | ExchangeOnlineManagement | ✅ 3.9.2 | installed 2026-08-26; provides `Connect-IPPSSession` for L4 labels |
-| SqlServer | ✅ 22.4.5.1 | installed 2026-08-26; `Invoke-Sqlcmd` with `-AccessToken` needs v22+ (`data/seed/sql/sql-seed.psm1`) |
+| SqlServer | ⚠ 22.4.5.1 | installed 2026-08-26; `Invoke-Sqlcmd` with `-AccessToken` needs v22+ (`data/seed/sql/sql-seed.psm1`). **Needs a manual fix on this ARM64 box — see the note below** |
+| Power Platform CLI (`pac`) | ✅ 2.11.2 | installed 2026-08-31 via `dotnet tool install --global Microsoft.PowerApps.CLI.Tool`; lands in `~\.dotnet\tools`. Required by `infra/copilot-studio/{export,import}-agent.ps1` and by `pac copilot clone/push` |
 | pytest | ✅ 9.1.1 | installed 2026-08-26 for `data/generators` (`requirements.txt` asks for `pytest>=8`) |
 | Az PowerShell (`Az.*`) | — not needed | everything Azure-facing shells out to the `az` CLI; no `Az.*` cmdlet appears in the repo |
 | Agent Teams env (`.claude/settings.json`) | ✅ set, session restarted 2026-08-26 | |
@@ -78,6 +79,37 @@ green. Items marked ⚠ are **missing/unverified** and block the layer noted.
 > invocation was replayed locally on 6.1.0 and returned **1,352 passed / 0 failed**, with
 > PSScriptAnalyzer clean at Error/Warning/**Information**. If a future Pester release does
 > break the suites, pin `-MaximumVersion` in `lint-ci.yml` rather than editing tests.
+
+> **⚠ ARM64 note (2026-08-31): every lakehouse query fails locally until you fix the
+> SqlServer module by hand.** This machine is **Windows on ARM** — `pwsh` is
+> `…Microsoft.PowerShell_7.6.5.0_arm64…`, `ProcessArchitecture: Arm64`. SqlServer 22.4.5.1
+> ships its native SNI library only for x64 and x86, and under a mangled name:
+> `coreclr/runtimes/win/lib/net6.0/win-x64/Microsoft.Data.SqlClient.SNI.dll` **.dll** —
+> a double extension, and no `win-arm64` runtime folder at all. There *is* a correctly
+> built `Microsoft.Data.SqlClient.SNI.arm64.dll` at the module root; nothing looks for it.
+>
+> The result is that `Invoke-Sqlcmd -AccessToken` throws
+> `DllNotFoundException: Unable to load DLL 'Microsoft.Data.SqlClient.SNI.dll'`, which
+> means **`Invoke-MlsSqlQuery` cannot run — so V5.3 and V8.2 cannot be run locally at
+> all.** Naively copying the x64 file next to it gets you `0x8007000B` (*"an attempt was
+> made to load a program with an incorrect format"*), which is the same failure wearing a
+> different hat.
+>
+> Fix — copy the arm64 binary into the places the loader actually searches:
+>
+> ```powershell
+> $b = "$HOME\OneDrive\Documents\PowerShell\Modules\SqlServer\22.4.5.1"
+> foreach ($d in @("$b\coreclr\runtimes\win\lib\net6.0",
+>                  "$b\coreclr\runtimes\win\lib\net6.0\win-arm64",
+>                  "$b\coreclr\runtimes\win-arm64\native")) {
+>   New-Item -ItemType Directory -Force -Path $d | Out-Null
+>   Copy-Item "$b\Microsoft.Data.SqlClient.SNI.arm64.dll" "$d\Microsoft.Data.SqlClient.SNI.dll" -Force
+> }
+> ```
+>
+> **CI is unaffected** — `ubuntu-latest` uses the managed SNI path — which is precisely why
+> this is worth writing down: it is a local-only trap, it presents as "the audit is broken",
+> and a green CI run offers no clue. Re-apply after any `Update-Module SqlServer`.
 >
 > Local gate replay on this machine, 2026-08-29: Pester 1,352/1,352 · PSScriptAnalyzer 0 ·
 > `npm test` exit 0 (8 workspaces, 960 tests) · pytest 30/30. Still zero cloud writes.
