@@ -77,7 +77,14 @@ BeforeAll {
     $script:ExpectedNames = @((Get-LabelTaxonomy -Prefix $script:Prefix).Name)
     # The demo groups L04.md:53 says the policy scopes the labels to - same four groups
     # infra/entra/manifest.json's groups[].displayName defines.
-    $script:ExpectedGroups = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
+    # 'All', NOT FOUR GROUP NAMES (F121). The policy was published to four demo groups
+    # and never could be: `-ExchangeLocation` takes a RECIPIENT, and L3 creates pure
+    # SECURITY groups - mailEnabled=False, no mail address - which Security & Compliance
+    # cannot resolve however correct the name is. The first real L4 run failed with
+    # `The specified recipient "mls-flight-operations" couldn't be found`, and these
+    # tests pinned the scope that could never be achieved, so they would have failed
+    # their own fix. See Get-LabelPolicyScope for why All was chosen over changing L3.
+    $script:ExpectedGroups = @('All')
     $script:ExpectedPolicyName = Get-LabelPolicyName -Prefix $script:Prefix
 
     function Get-MatchingLabelGetMock {
@@ -161,7 +168,7 @@ Describe 'labels' {
     }
 
     Context 'label policy scope definition' {
-        It 'names the policy and scopes it to exactly the four demo groups L04.md names' {
+        It 'names the policy and scopes it to All, the only recipient L3 makes addressable' {
             Get-LabelPolicyName -Prefix $script:Prefix | Should -Be $script:ExpectedPolicyName
             # -Prefix, because the scope now derives it: a hand-kept list of fully
             # qualified names published the policy to groups that exist in no renamed
@@ -294,7 +301,7 @@ Describe 'labels' {
             Mock Get-LabelPolicy { throw "The label policy $Identity doesn't exist" }
         }
 
-        It 'publishes one policy, naming all four labels, scoped to exactly the four demo groups' {
+        It 'publishes one policy, naming all four labels, scoped to All' {
             $result = Invoke-Main -Confirm:$false
             Should -Invoke New-LabelPolicy -Exactly -Times 1 -ParameterFilter {
                 $Name -eq $script:ExpectedPolicyName -and
@@ -326,24 +333,24 @@ Describe 'labels' {
         }
     }
 
-    Context 'label policy: scope has drifted (published policy is missing a demo group)' {
+    Context 'label policy: scope has drifted (published policy is scoped to nobody)' {
         BeforeEach {
             Mock Get-Label (Get-MatchingLabelGetMock)
             Mock Get-LabelPolicy {
                 return [pscustomobject]@{
                     Identity         = $Identity
                     Labels           = $script:ExpectedNames
-                    ExchangeLocation = @('mls-flight-operations', 'mls-security-team', 'mls-finance')
+                    ExchangeLocation = @()
                 }
             }
         }
 
-        It 'adds only the missing group to the existing policy, in place - never recreates it' {
+        It 'adds the missing scope to the existing policy, in place - never recreates it' {
             $result = Invoke-Main -Confirm:$false
             Should -Invoke New-LabelPolicy -Exactly -Times 0
             Should -Invoke Set-LabelPolicy -Exactly -Times 1 -ParameterFilter {
                 $Identity -eq $script:ExpectedPolicyName -and
-                $AddExchangeLocation -contains 'mls-executives' -and
+                $AddExchangeLocation -contains 'All' -and
                 $AddExchangeLocation.Count -eq 1 -and
                 $null -eq $RemoveExchangeLocation -and
                 $null -eq $AddLabel -and
