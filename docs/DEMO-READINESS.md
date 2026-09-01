@@ -71,11 +71,53 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 
 ## THE BLOCKER TREE — what actually stands between here and 4/4
 
-*Ordered by how much each unblocks. Everything not-done above traces to one of these five.
-If you are picking this up cold, start at the top: BLOCKER-1 is four portal tasks and it
-moves three separate items.*
+*Ordered by how much each unblocks. Everything not-done above traces to one of these five.*
 
-### BLOCKER-1 — No GitHub secrets exist. Not one. *(P-12, confirmed 2026-09-01)*
+**BLOCKER-1 is CLOSED as of 2026-09-01.** The highest open blocker is now **BLOCKER-2**
+(the Copilot Studio environment), and the one an agent can attack today with no credential
+and no human is **BLOCKER-5** (L12 has no audit script).
+
+### ~~BLOCKER-1 — No GitHub secrets exist. Not one.~~ **CLOSED 2026-09-01**
+
+**All six of CLAUDE.md's permitted long-lived credentials now exist**, in the environments
+the design calls for:
+
+| `demo` | `verify` |
+|---|---|
+| `PURVIEW_CERT_BASE64` | `MLS_VERIFIER_CERT_BASE64` |
+| `PURVIEW_CERT_PASSWORD` | `MLS_VERIFIER_CERT_PASSWORD` |
+| `SELF_HEAL_TOKEN` | `MLS_VERIFIER_GH_TOKEN` |
+
+The `mls-purview` app registration (`838332d8-16f9-4a83-82af-80a97502b6e6`) was created for
+the Security & Compliance app-only identity, holds a certificate valid to 2027-09-01, has
+**Exchange.ManageAsApp** granted and is a member of **Compliance Administrator**. Both
+grants were verified by READING THEM BACK, which mattered — see the two notes below.
+
+**Two things went wrong provisioning this, and both are the estate's own recurring class.**
+
+1. **A silent failure.** The setup script's `az ad app permission admin-consent` exited 0
+   and granted nothing: the permission was correctly *requested* on the app and no
+   `appRoleAssignment` was ever created. It was caught only because the grant was read back
+   rather than assumed from the exit code, and fixed with a direct Graph POST. A script
+   that reports success while its work did not happen is the same shape as F119 and F120,
+   committed while writing the fix for them.
+2. **A false alarm, from a blind read.** The same script's Compliance Administrator
+   assignment DID work, and was briefly reported as failed because
+   `GET /v1.0/directoryRoles/{id}/members` **does not enumerate service principal
+   members** — it returns `[]`. `GET /beta/directoryRoles/{id}/members` and
+   `GET /servicePrincipals/{id}/memberOf` both show it. An empty list read as absence,
+   which is the absence-vs-denial class, committed inside the verification of a fix for it.
+   **Use `memberOf` to check a service principal's directory roles.**
+
+What this unblocks, now actionable: L4 can apply the label taxonomy for the first time;
+V11.2 and L4's audit can be signed off; L10's Dependabot lane can author and auto-merge;
+F120's compliance fix is live rather than inert; and V9.1 can read `security_and_analysis`
+if the verifier PAT carries **Administration: Read**.
+
+*Original entry follows, kept because a register that quietly edits itself is not a
+register.*
+
+### BLOCKER-1 (original) — No GitHub secrets exist. Not one. *(P-12, confirmed 2026-09-01)*
 
 ```
 gh api repos/paulcfuqua/azure-devsecops-demo/actions/secrets      -> {"total_count":0,"secrets":[]}
