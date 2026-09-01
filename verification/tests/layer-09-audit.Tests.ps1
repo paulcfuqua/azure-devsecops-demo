@@ -55,6 +55,7 @@ Describe 'layer-09-audit' {
         $script:SecretScanning = 'enabled'
         $script:PushProtection = 'enabled'
         $script:AlertsHeader = "HTTP/2.0 204 No Content`nx-github-request-id: abc"
+        $script:AnalysisVisible = $true
         $script:Analyses = @(
             [pscustomobject]@{ tool = [pscustomobject]@{ name = 'CodeQL' }; category = '/language:javascript-typescript'; environment = '' }
             [pscustomobject]@{ tool = [pscustomobject]@{ name = 'CodeQL' }; category = '/language:python'; environment = '' }
@@ -78,6 +79,11 @@ Describe 'layer-09-audit' {
             if ($joined -like '*code-scanning/analyses*') { return $script:Analyses }
             if ($joined -like '*actions/runs/*/jobs*') { return [pscustomobject]@{ jobs = $script:TrivyJobs } }
             if ($joined -like "api repos/$($script:Repository)") {
+                # GitHub OMITS security_and_analysis entirely for a non-admin caller; it
+                # does not return the block with empty statuses. $script:AnalysisVisible
+                # models that, because "absent" and "disabled" are the two states V9.1 has
+                # to tell apart (F103).
+                if (-not $script:AnalysisVisible) { return [pscustomobject]@{ name = 'repo' } }
                 return [pscustomobject]@{
                     security_and_analysis = [pscustomobject]@{
                         secret_scanning                 = [pscustomobject]@{ status = $script:SecretScanning }
@@ -182,6 +188,36 @@ Describe 'layer-09-audit' {
             $script:AlertsHeader = "HTTP/2.0 404 Not Found"
             $context = Invoke-AuditForTest -NoRetry
             (Get-Row -Context $context -Id 'V9.1').Observed | Should -BeLike '*Dependabot alerts are off*'
+        }
+
+        It 'reports GHAS state as UNOBSERVABLE, not disabled, when the token cannot see it' {
+            # V9.1 read an absent security_and_analysis block as "secret_scanning=''" and
+            # announced that secret scanning and push protection were off - on a repository
+            # where both were verifiably enabled. A security audit reporting a control as
+            # missing when it merely lacked permission to look is the worst answer this
+            # repo can produce (F103).
+            $script:AnalysisVisible = $false
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V9.1'
+            # Still FAILS - "nobody could check" is not a sign-off either.
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+            $row.Observed | Should -BeLike '*not visible*'
+            $row.Observed | Should -Not -BeLike "*secret_scanning.status=''*" `
+                -Because 'an absent field must never be reported as a disabled control'
+            $row.Detail | Should -BeLike '*admin*'
+        }
+
+        It 'reports a 403 from vulnerability-alerts as UNOBSERVABLE, not as alerts being off' {
+            # 404 genuinely means off and is documented as such; 403 means the caller may
+            # not ask. The old check treated everything that was not 204 as "off".
+            $script:AlertsHeader = "HTTP/2.0 403 Forbidden"
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V9.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+            $row.Observed | Should -Not -BeLike '*Dependabot alerts are off*' `
+                -Because 'a refused request is not evidence that the control is off'
         }
 
         It 'fails V9.3 when an SBOM has an empty package list' {
