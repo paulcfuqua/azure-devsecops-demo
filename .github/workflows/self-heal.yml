@@ -785,10 +785,16 @@ jobs:
     # auditor. The chain then reported success with every lane skipped, and was
     # recorded as "nothing to heal" while four alerts sat open. V10.3 is the
     # criterion that now says otherwise, and this is what lets it run.
+    # NO `vars.` HERE, AND F125 IS WHY. A job-level `if:` is evaluated BEFORE the job's
+    # environment is resolved, so `vars.AZURE_VERIFIER_CLIENT_ID` was the empty string in
+    # this expression even though the job declares `environment: verify` and the variable is
+    # set there. This repository has ZERO repository-level variables, so the clause was
+    # unconditionally false and THIS JOB HAS NEVER BEEN ABLE TO RUN - which compounds
+    # BLOCKER-4 exactly: even with a readable alert surface and a healed alert, the audit
+    # that judges the chain would still have skipped. The guard moved to a step below.
     if: >-
       ${{ always()
           && (needs.select.outputs.found == 'true' || needs.select.outputs.readable == 'false')
-          && vars.AZURE_VERIFIER_CLIENT_ID != ''
           && !contains(fromJSON('["cancelled"]'), needs.autofix.result)
           && !contains(fromJSON('["cancelled"]'), needs.dependency.result) }}
     runs-on: ubuntu-latest
@@ -816,7 +822,24 @@ jobs:
       - id: names
         uses: ./.github/actions/naming
 
+      # THE GUARD, at step level where `vars.` actually resolves. Unverified is not the
+      # same as broken: a stranger who has cloned this repo without an mls-verifier identity
+      # should get a clear notice, not a red run.
+      - name: Check that a verifier identity is configured
+        id: verifier
+        env:
+          VERIFIER_CLIENT_ID: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERIFIER_CLIENT_ID}" ]; then
+            echo "::notice title=L10 not verified::No AZURE_VERIFIER_CLIENT_ID is configured on the verify environment, so the layer-10 audit cannot run as mls-verifier. The healing chain still ran; it is simply UNVERIFIED, which is not the same as broken."
+            echo 'configured=false' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'configured=true' >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Azure login (OIDC, mls-verifier — Reader only)
+        if: ${{ steps.verifier.outputs.configured == 'true' }}
         uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
@@ -831,6 +854,7 @@ jobs:
 
       - name: Run verification/layer-10-audit.ps1
         id: audit
+        if: ${{ steps.verifier.outputs.configured == 'true' }}
         uses: ./.github/actions/layer-audit
         with:
           layer: '10'
