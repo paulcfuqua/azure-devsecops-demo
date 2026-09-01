@@ -185,6 +185,41 @@ do not guess, check:
 3. the URL is right but the org is in a different tenant/region than `pac` is authenticated
    against.
 
+**NARROWED 2026-09-01 to a single question.** The three candidate causes above are
+resolved: the environment **exists and is healthy**. It is `mls-authoring` — Developer
+type, State Ready, **Dataverse: Yes**, region United States — and L8's configured URL
+points at it. (The tenant's other environment, `Default Directory`, is in Canada and has
+**Dataverse: No**, so it was never a candidate. Region is not the cause either: L8 passes
+the environment URL explicitly rather than inferring it.)
+
+What remains is that L8 authenticates as the SERVICE PRINCIPAL — `pac auth create
+--managedIdentity`, i.e. `mls-github-deployer` over OIDC — and `pac` reports
+`No Dataverse organization was found matching the specified criteria`. That message is what
+`pac` returns when the authenticated principal cannot ENUMERATE the org, not necessarily
+when the org is absent. A service principal gets no Dataverse access from Entra alone; it
+must be registered as an **application user** inside the environment and given a role.
+
+**THE ONE TEST THAT SETTLES IT:** `mls-authoring` → Settings → Users + permissions →
+Application users → **+ New app user** → `mls-github-deployer` → **System Administrator**.
+
+- If it is accepted, L8 is unblocked with no environment change and no spend.
+- If the portal refuses, the **Developer environment type is the wall** — those are
+  provisioned for one individual developer — and the fork is worth naming rather than
+  grinding at:
+  - a **Sandbox** environment would work but needs capacity, which is **paid**, a **G2
+    gate**, and contradicts the recorded "$0 Developer Plan" decision for C5;
+  - or accept **"a human publishes the agent once"** as a documented limitation.
+
+The second is the better trade. The showpiece is *the agent answering from the lakehouse*,
+not the mechanism that imported it, and buying capacity to automate a one-time import
+spends real money on the least interesting part of the story. **But it must be written
+down as a deliberate limitation, not left looking like something that never worked.**
+
+Note also: `fabric@` owns the Fabric trial, and switching CI to authenticate as it was
+considered and rejected — it needs a stored password, which breaks hard rule 5 and would
+fail against MFA, and it turns an operator account into a shared automation credential.
+The owner's job here is to GRANT access to the service principal, not to be it.
+
 **Unblocks:** L8 → the Direct Line channel → the Direct Line secret → the Ask tab →
 **showpiece 1**. Also the only path to giving showpiece 3 something to heal that is not a
 dependency alert.
