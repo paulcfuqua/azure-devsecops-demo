@@ -641,11 +641,30 @@ jobs:
           # user-assigned identity (functionAppConfig.deployment in the template),
           # so this push needs no storage key and the runtime storage account keeps
           # allowSharedKeyAccess:false.
-          az functionapp deployment source config-zip \
-            --resource-group "${func_rg}" \
-            --name "${func_app}" \
-            --src cost-ingest.zip \
-            --output none
+          # Same bounded wait as directline-token's publish, for the same reason:
+          # on a rebuilt estate this identity and its storage grant are created
+          # minutes before this line runs. See that step for the full rationale.
+          publish_zip() {
+            local rg="$1" app="$2" src="$3" attempt=1
+            while true; do
+              if az functionapp deployment source config-zip \
+                   --resource-group "${rg}" \
+                   --name "${app}" \
+                   --src "${src}" \
+                   --output none 2>zip-err.txt; then
+                return 0
+              fi
+              if ! grep -qiE "InaccessibleStorage|not authorized|403" zip-err.txt || [ "${attempt}" -ge 8 ]; then
+                cat zip-err.txt
+                return 1
+              fi
+              echo "::notice title=Waiting on RBAC propagation::Attempt ${attempt} of 8 could not write the deployment package as the app identity. Retrying in 30s."
+              attempt=$((attempt + 1))
+              sleep 30
+            done
+          }
+
+          publish_zip "${func_rg}" "${func_app}" cost-ingest.zip
           echo "Published apps/cost-ingest to ${func_app}."
 
       - name: Publish the directline-token Function package (F118)
@@ -674,11 +693,53 @@ jobs:
           ( cd directline-pkg && npm install --omit=dev --no-audit --no-fund --ignore-scripts )
           ( cd directline-pkg && zip -qr ../directline-token.zip . )
 
-          az functionapp deployment source config-zip \
-            --resource-group "${func_rg}" \
-            --name "${func_app}" \
-            --src directline-token.zip \
-            --output none
+          # A ZIP DEPLOY IMMEDIATELY AFTER A FRESH ROLE ASSIGNMENT RACES RBAC
+          # PROPAGATION, and loses. Flex Consumption uploads the package to the
+          # deployment container as the app's OWN user-assigned identity, so the
+          # push needs the Storage Blob Data Owner grant this same template just
+          # created to be visible to the storage DATA plane - which lags the
+          # control plane by minutes, not milliseconds. On the first-ever deploy
+          # of directline-token the two were seconds apart and it failed with
+          #
+          #   InaccessibleStorageException: Failed to access storage account for
+          #   deployment: BlobUploadFailedException: ... 403 (This request is not
+          #   authorized to perform this operation.)
+          #
+          # while the assignment was demonstrably present moments later. Nothing
+          # was misconfigured; the deploy was simply early.
+          #
+          # FOUR MINUTES, AND THE NUMBER IS CHOSEN. Azure documents RBAC changes
+          # as taking up to five minutes to propagate, and role assignments in
+          # this estate have been observed visible well inside two. Eight tries
+          # thirty seconds apart spans the documented window without turning a
+          # genuine misconfiguration - a missing grant, a wrong scope - into a
+          # job that hangs for a quarter of an hour before saying so.
+          #
+          # cost-ingest carries the same wait for the same reason: its grants
+          # have existed for days, so the race has never fired there, but the
+          # step has always had this shape and a rebuilt estate creates both
+          # identities from nothing.
+          publish_zip() {
+            local rg="$1" app="$2" src="$3" attempt=1
+            while true; do
+              if az functionapp deployment source config-zip \
+                   --resource-group "${rg}" \
+                   --name "${app}" \
+                   --src "${src}" \
+                   --output none 2>zip-err.txt; then
+                return 0
+              fi
+              if ! grep -qiE "InaccessibleStorage|not authorized|403" zip-err.txt || [ "${attempt}" -ge 8 ]; then
+                cat zip-err.txt
+                return 1
+              fi
+              echo "::notice title=Waiting on RBAC propagation::Attempt ${attempt} of 8 could not write the deployment package as the app identity. Retrying in 30s."
+              attempt=$((attempt + 1))
+              sleep 30
+            done
+          }
+
+          publish_zip "${func_rg}" "${func_app}" directline-token.zip
           echo "Published apps/directline-token to ${func_app}."
 
       - name: Subscribe the cost-ingest Function to blob-created events (F19)
