@@ -7,8 +7,8 @@
 >
 > | Segment | What happens today |
 > |---|---|
-> | Cold-start rebuild | **Fails at L6.** Log Analytics soft-deletes for 14 days; a same-name recreate recovers the old workspace and dependent alert rules refuse to deploy (F107) |
-> | Any dashboard showing data | **Renders empty.** `data-api` cannot authenticate to the lakehouse (F101) |
+> | Cold-start rebuild | **Fixed 2026-09-01 (F107).** The teardown now purges the Log Analytics workspace, so a rebuild creates a new one instead of recovering a soft-deleted one. The full cycle has not been re-run since |
+> | Any dashboard showing data | **Fixed 2026-09-01.** Sign-in works (F110), the SQL grant applies (F109/F112) and the renderer validates under the CSP (F111). Dashboards fetch and render real rows |
 > | Showpiece #1, the Ask tab | **Dark.** The agent is built and exported but never published; no Direct Line channel, no Key Vault secret; its two auth registrations are undeclared (F106) |
 > | Purview labels segment | **Nothing to show.** The taxonomy has never been applied - no certificate (P-12) |
 > | Showpiece #3, self-healing | **Never run.** Both tracks are armed but L10 has not executed |

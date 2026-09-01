@@ -34,7 +34,37 @@ of them touches: a row of data, a rendered page, a working answer.
 
 ## B. Known broken
 
-### B1. The API serves no data (F101) — the biggest hole
+> ## Update, 2026-09-01 — the data path is FIXED, and B1/B4 below are history
+>
+> The dashboards now sign in, fetch real rows and render them. Four separate defects sat
+> between the estate and a working page, and **every one was found by opening the product**,
+> not by a check:
+>
+> | | |
+> |---|---|
+> | **F110** | `enableIdTokenIssuance` defaults to false and nothing set it, so Easy Auth's login could never complete. **Nobody could sign in - ever** |
+> | **F109** | The SQL grant searched the wrong resource group and skipped with a plausible wrong reason |
+> | **F112** | The SQL server had no managed identity, so no automation could create the database user |
+> | **F111** | `ajv.compile()` needs `'unsafe-eval'`; the CSP forbids it, so every spec was reported invalid |
+>
+> **F101 was a misdiagnosis on my part and narrows sharply.** Seven of the ten tables are
+> Azure SQL (`TABLE_STORE` in `apps/data-api/src/contract/allowlist.ts`); only
+> `telemetry_summary`, `cost_daily` and `findings_history` are lakehouse. `launches` never
+> touched Fabric. I observed a SQL failure and explained it with a Fabric limitation I had
+> established only from documentation. Fabric's TDS endpoint genuinely does reject
+> user-assigned managed identities - it is just not why the dashboards were empty.
+>
+> **Section D still stands, and is now evidenced rather than argued.** Every fix above was
+> invisible to the criteria: V7.1 checks `/healthz`, which nginx answers without touching
+> application code; V7.3 authenticates with a bearer token and never touches the interactive
+> login; `frontend-auth.Tests.ps1` checks configuration, not behaviour. **V7.6** now asserts
+> that the API answers with rows, and the F20 step queries the database instead of reporting
+> that a script ran - but nothing yet opens a page.
+>
+> The original text is kept below because a register that quietly rewrites itself is not a
+> register.
+
+### B1. The API serves no data (F101) — the biggest hole *(RESOLVED 2026-09-01, see above)*
 
 `data-api` returns **502** on every `/api/tables/*` route. Fabric's SQL endpoint accepts
 Entra users and *application objects*; `data-api` authenticates as a user-assigned managed
