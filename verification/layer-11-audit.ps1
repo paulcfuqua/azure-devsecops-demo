@@ -40,7 +40,12 @@ param(
     [string]$FabricCapacityId,
     [string]$SqlDatabaseId,
     [double]$IdleDailyCostBudget = 0.17,
-    [int[]]$ChildAuditLayer = @(1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+    # [string[]] not [int[]], and split below. `pwsh -File` cannot bind an array from
+    # separate argv tokens, so CI hands this ONE token - and [int[]] silently coerced
+    # "2,3,6" into the single layer 2346, which the audit then looked for as
+    # layer-2346-audit.ps1 (F108). Exactly the defect -OnlyCriterion was given a comma
+    # split for; it was fixed there and not here, which is the F90 shape in miniature.
+    [string[]]$ChildAuditLayer = @('1', '2', '3', '4', '5', '6', '7', '8', '9', '10'),
     [switch]$SkipChildAudit,
     [string]$ReportRoot,
     [switch]$NoRetry,
@@ -264,12 +269,17 @@ function Invoke-Main {
         [string]$FabricCapacityId,
         [string]$SqlDatabaseId,
         [double]$IdleDailyCostBudget = 0.17,
-        [int[]]$ChildAuditLayer = @(),
+        [string[]]$ChildAuditLayer = @(),
         [switch]$SkipChildAudit,
         [string]$ReportRoot,
         [switch]$NoRetry,
         [string[]]$OnlyCriterion = @()
     )
+    # ONE TOKEN IN, A LIST OUT. See the parameter's own comment: CI can only hand a
+    # single argv token, so "2,3,6" arrives as one element and must be split here or the
+    # audit hunts for layer-2346-audit.ps1 (F108).
+    $ChildAuditLayer = @($ChildAuditLayer | ForEach-Object { "$_" -split ',' } |
+            ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $subscription = Resolve-MlsInput -Name 'SubscriptionId' -Value $SubscriptionId -EnvironmentVariable @('AZURE_SUBSCRIPTION_ID') `
         -Hint 'The demo subscription whose resource groups, capacity, SQL and consumption this proof reads.'
     $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `

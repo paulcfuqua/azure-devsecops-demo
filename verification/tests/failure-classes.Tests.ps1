@@ -999,3 +999,61 @@ Describe 'a teardown leaves nothing a rebuild will recover' {
             -Because 'the next rebuild inherits this, so the teardown is where it has to be said'
     }
 }
+
+Describe 'an array parameter a workflow passes is split, or not passed at all' {
+    # `pwsh -File` cannot bind an array from separate argv tokens - a comma-joined value
+    # arrives as ONE element and a space-separated one silently drops its tail. So a
+    # workflow can only ever hand one token, and an array parameter that does not split it
+    # receives something nobody wrote.
+    #
+    # [int[]]$ChildAuditLayer coerced "2,3,6" into the single layer 2346, and the L11 audit
+    # went looking for verification/layer-2346-audit.ps1 (F108). -OnlyCriterion had been
+    # given a comma split for exactly this reason; the same fix was not applied here, which
+    # is the F90 shape in miniature - a class fixed only at the instance it was found.
+    #
+    # THREE EARLIER VERSIONS OF THIS SWEEP COULD NOT SEE THE PARAMETER IT EXISTS FOR. The
+    # first matched only flags written literally on their own line; the second only flags in
+    # single quotes; and the flag in question is produced by an expression and written in
+    # double quotes. Matching the bare NAME cannot be defeated by punctuation - but it then
+    # matches prose, so comment lines are stripped first. layer-07-apps.yml mentions
+    # -AppName only to explain why it deliberately does NOT pass it, and a sweep that reads
+    # that as "passed" is reading documentation, which is the same mistake in a third dress.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'splits every array parameter that a workflow actually hands it' {
+        $workflowText = ''
+        foreach ($file in Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File) {
+            $raw = Get-Content -LiteralPath $file.FullName
+            if (($raw -join "`n") -notmatch 'actions/layer-audit') { continue }
+            # Comments are prose about the workflow, not the workflow.
+            $workflowText += (($raw | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+        }
+        $workflowText | Should -Not -BeNullOrEmpty -Because 'the sweep must find the workflows that run audits'
+
+        # A split done once in the shared module counts, and is better than per-script.
+        $module = Get-Content -LiteralPath (Join-Path $script:Root 'verification/MlsAudit.psm1') -Raw
+
+        $checked = [System.Collections.Generic.List[string]]::new()
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($audit in Get-ChildItem -Path (Join-Path $script:Root 'verification') -Filter 'layer-*-audit.ps1' -File) {
+            $content = Get-Content -LiteralPath $audit.FullName -Raw
+            foreach ($match in [regex]::Matches($content, '(?m)^\s{4}(?:\[[^\]]+\])*\[[a-z]+\[\]\]\$([A-Za-z]+)')) {
+                $name = $match.Groups[1].Value
+                if ($workflowText -notmatch "-$name\b") { continue }   # never handed over: safe
+                $checked.Add("$($audit.Name):-$name")
+                $pattern = '\$' + $name + '\s*=\s*@\(\$' + $name + '\s*\|'
+                if (-not (($content -match $pattern) -or ($module -match $pattern))) {
+                    $offender.Add("$($audit.Name): -$name")
+                }
+            }
+        }
+
+        $checked.Count | Should -BeGreaterThan 0 `
+            -Because 'a sweep that examines no parameter proves nothing - it must at least find -OnlyCriterion, which every audit declares and every workflow hands over'
+        $offender -join '; ' | Should -BeNullOrEmpty `
+            -Because 'CI hands an array parameter ONE token, so a script that does not split it receives something nobody wrote - "2,3,6" became layer 2346 (F108)'
+    }
+}
