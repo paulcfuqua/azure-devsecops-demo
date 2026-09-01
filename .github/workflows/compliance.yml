@@ -304,3 +304,73 @@ jobs:
             echo
             echo "This is not a failure. Direct pushes to \`main\` are refused by branch protection, which is working as intended, and this workflow will not enable the Actions setting that would let it open the PR itself, because the same setting also lets a workflow approve one."
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  # ------------------------------------------------------------------------------------
+  # L12's THIRD LEG. Until this job existed, L12 was the only layer of twelve with no
+  # independent audit: its runbook said so plainly rather than implying otherwise - "five
+  # of the six are checked by LOCAL GATES IN CI, not by an independent read-only identity
+  # against deployed state". A gate in the `collect` job above says the code that BUILT the
+  # artifact passed its own checks. This says the artifact that actually SHIPPED is what it
+  # claims to be, and that the board carrying it refuses anonymous callers. They are
+  # different claims and only the second is a sign-off.
+  #
+  # It runs after `commit` and `always()`, because the two most interesting states are the
+  # ones where commit did not do its job: an artifact that failed to reach main is exactly
+  # when someone needs to know what the committed one still says.
+  verify:
+    name: verify L12 (mls-verifier)
+    needs: [collect, commit]
+    if: >-
+      ${{ always()
+          && github.ref == 'refs/heads/main'
+          && vars.AZURE_VERIFIER_CLIENT_ID != ''
+          && !contains(fromJSON('["cancelled"]'), needs.commit.result) }}
+    runs-on: ubuntu-latest
+    environment: verify
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # V12.6 reads `git log --diff-filter=A` over compliance/state/ to establish that
+          # each snapshot was introduced by the emitter. A shallow clone has no such
+          # history, and the criterion would report UNOBSERVABLE - correctly, and
+          # uselessly, on every run.
+          fetch-depth: 0
+
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-verifier - Reader only)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run verification/layer-12-audit.ps1
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '12'
+          run-budget-minutes: '20'
+          args: |
+            -SubscriptionId
+            ${{ vars.AZURE_SUBSCRIPTION_ID }}
+            -Repository
+            ${{ github.repository }}
+            -ResourceGroupName
+            ${{ steps.names.outputs.rg-apps }}
+            -ComplianceAppName
+            ${{ steps.names.outputs.ca-compliance }}
+
+      - name: Upload audit report
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: layer-12-audit-report
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30

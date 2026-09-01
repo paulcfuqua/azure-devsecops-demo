@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     Shared engine for the Verifier's per-layer audit scripts (verification/layer-NN-audit.ps1).
@@ -824,7 +824,13 @@ function Invoke-MlsHttp {
     param(
         [Parameter(Mandatory)][string]$Uri,
         [int]$TimeoutSec = 60,
-        [hashtable]$Header
+        [hashtable]$Header,
+        # -1 means "leave the default alone" (follow redirects, as V7.1/V7.3 want).
+        # 0 means REPORT THE FIRST RESPONSE, which is what an auth check needs: a client
+        # that chases a 302 to a login page receives 200 from the LOGIN PAGE, and a check
+        # reading only the final status would call a working Easy Auth broken. L12's V12.4
+        # passes 0 for exactly that reason.
+        [int]$MaximumRedirection = -1
     )
     try {
         $argument = @{
@@ -833,12 +839,39 @@ function Invoke-MlsHttp {
             TimeoutSec         = $TimeoutSec
             SkipHttpErrorCheck = $true
         }
+        if ($MaximumRedirection -ge 0) {
+            $argument['MaximumRedirection'] = $MaximumRedirection
+            # AND -ErrorAction SilentlyContinue WITH IT, WHICH IS NOT OPTIONAL. With a
+            # redirection cap, Invoke-WebRequest RETURNS the response and ALSO writes a
+            # non-terminating "maximum redirection count has been exceeded" error. Every
+            # audit script runs under $ErrorActionPreference = 'Stop', which promotes that
+            # to terminating - so the caller lands in the catch below and a perfectly good
+            # 302 observation is reported as StatusCode 0 with a transport error. The
+            # response is still checked for $null immediately after, so a genuine failure
+            # is not swallowed; only the redirect notice is.
+            $argument['ErrorAction'] = 'SilentlyContinue'
+        }
         if ($Header -and $Header.Count -gt 0) { $argument['Headers'] = $Header }
         $response = Invoke-WebRequest @argument
+        if ($null -eq $response) {
+            return [pscustomobject]@{ StatusCode = 0; Content = ''; Headers = @{}; Error = 'the request returned no response' }
+        }
+        # STATUS FIRST, AND BODY DEFENSIVELY. A 302 read with -MaximumRedirection 0 has no
+        # content stream, and touching .Content on one throws "Operation is not valid due to
+        # the current state of the object" - which the catch below would then report as a
+        # TRANSPORT ERROR with StatusCode 0. That is a redirect, an entirely successful
+        # observation, being reported as "the request never happened": could-not-tell
+        # standing in for a fact we actually have. The status is captured before anything
+        # that can throw, and the body is optional.
+        $statusCode = [int](Get-MlsProperty -InputObject $response -Name 'StatusCode')
+        $content = ''
+        try { $content = [string](Get-MlsProperty -InputObject $response -Name 'Content') } catch { $content = '' }
+        $headers = @{}
+        try { $headers = (Get-MlsProperty -InputObject $response -Name 'Headers') } catch { $headers = @{} }
         return [pscustomobject]@{
-            StatusCode = [int](Get-MlsProperty -InputObject $response -Name 'StatusCode')
-            Content    = [string](Get-MlsProperty -InputObject $response -Name 'Content')
-            Headers    = (Get-MlsProperty -InputObject $response -Name 'Headers')
+            StatusCode = $statusCode
+            Content    = $content
+            Headers    = $headers
             Error      = $null
         }
     }
@@ -1119,7 +1152,11 @@ function New-MlsAuditContext {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
         Justification = 'Creates an in-memory context object; no system state is changed.')]
     param(
-        [Parameter(Mandatory)][ValidateRange(1, 11)][int]$Layer,
+        # 12, not 11. The brief has twelve layers and the range stopped at eleven for as
+        # long as L12 was the one layer with no audit script - so the shared module could
+        # not represent the layer even if someone wrote one. Widened when
+        # verification/layer-12-audit.ps1 was added.
+        [Parameter(Mandatory)][ValidateRange(1, 12)][int]$Layer,
         [Parameter(Mandatory)][string]$Title,
         [string]$ScriptName = '',
         [string]$ReportRoot = '',
