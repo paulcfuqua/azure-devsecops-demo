@@ -111,6 +111,7 @@ Describe 'layer-07-audit' {
                 $index = [array]::IndexOf($Argument, '--name')
                 return "clientid-$($Argument[$index + 1])"
             }
+            if ($joined -like 'ad app show*enableIdTokenIssuance*') { return $script:IdTokenIssuance }
             if ($joined -like 'account get-access-token*') { return 'fake-token' }
             if ($joined -like 'monitor log-analytics query*') {
                 $index = [array]::IndexOf($Argument, '--analytics-query')
@@ -124,8 +125,19 @@ Describe 'layer-07-audit' {
         # by an empty array - the two failures V7.6 exists to tell apart.
         $script:ApiStatus = 200
         $script:ApiRows = @(@('2026-01-01', 'Falcon-9', 'success'))
+        # V7.7 asks Easy Auth itself, not the app: a 401 carrying the middleware's own
+        # request id is the PASS, because it proves Easy Auth owns /.auth rather than the
+        # SPA fallback answering it (F110).
+        $script:IdTokenIssuance = 'true'
+        $script:AuthStatus = 401
+        $script:AuthMiddlewareId = 'abc-123'
         Mock Invoke-MlsHttp {
             Register-ProbeTrace -Header $Header
+            if ("$Uri" -like '*/.auth/me') {
+                $h = @{}
+                if ($script:AuthMiddlewareId) { $h['x-ms-middleware-request-id'] = $script:AuthMiddlewareId }
+                return [pscustomobject]@{ StatusCode = $script:AuthStatus; Content = ''; Headers = $h; Error = $null }
+            }
             if ("$Uri" -like '*/api/tables/*') {
                 return [pscustomobject]@{
                     StatusCode = $script:ApiStatus
@@ -163,7 +175,7 @@ Describe 'layer-07-audit' {
     Context 'all criteria pass' {
         It 'records V7.1-V7.5 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V7.1', 'V7.2', 'V7.3', 'V7.4', 'V7.5', 'V7.6')
+            @($context.Criterion).Id | Should -Be @('V7.1', 'V7.2', 'V7.3', 'V7.4', 'V7.5', 'V7.6', 'V7.7')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -279,7 +291,8 @@ Describe 'layer-07-audit' {
                     $index = [array]::IndexOf($Argument, '--name')
                     return "clientid-$($Argument[$index + 1])"
                 }
-                if ($joined -like 'account get-access-token*') { return 'fake-token' }
+                if ($joined -like 'ad app show*enableIdTokenIssuance*') { return $script:IdTokenIssuance }
+            if ($joined -like 'account get-access-token*') { return 'fake-token' }
                 if ($joined -like 'monitor log-analytics query*') {
                     $script:Calls++
                     if ($script:Calls -lt 2) { return @() }
@@ -304,7 +317,7 @@ Describe 'layer-07-audit' {
         It 'records V7.2 as FAIL when npm is unavailable, and still evaluates the rest' {
             Mock Invoke-MlsLocalCommand { throw "'npm' is not available on this machine." }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 6
+            @($context.Criterion).Count | Should -Be 7
             (Get-Row -Context $context -Id 'V7.2').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V7.2').Observed | Should -BeLike '*not available*'
             (Get-Row -Context $context -Id 'V7.1').Status | Should -Be 'PASS'
@@ -443,6 +456,31 @@ Describe 'layer-07-audit' {
             $row.Detail | Should -Match 'seeding'
         }
 
+        It 'fails V7.7 when the registration will not issue an id token' {
+            # The exact state that made every dashboard unusable and that no criterion
+            # could see: the redirect to Entra is perfect, the sign-in page renders, and
+            # the flow dies at the callback with an error the browser saves as a file.
+            $script:IdTokenIssuance = 'false'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V7.7'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'idToken=false'
+            $row.Observed | Should -Match 'F110'
+            $row.Detail | Should -Match 'enable-id-token-issuance'
+        }
+
+        It 'fails V7.7 when the SPA fallback answers /.auth instead of Easy Auth' {
+            # nginx serving index.html for /.auth means the callback has nowhere to land,
+            # however well Entra behaves. The middleware's own request id is what tells
+            # the two apart.
+            $script:AuthStatus = 200
+            $script:AuthMiddlewareId = ''
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V7.7'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'Easy Auth is not handling'
+        }
+
         It 'waits for a warm app to settle to zero instead of failing V7.5 on the spot' {
             # V7.1 curls every endpoint before this criterion runs and leaves the apps
             # warm, so "starts at 0" was falsified by an earlier criterion in the same
@@ -470,7 +508,8 @@ Describe 'layer-07-audit' {
                     $index = [array]::IndexOf($Argument, '--name')
                     return "clientid-$($Argument[$index + 1])"
                 }
-                if ($joined -like 'account get-access-token*') { return 'fake-token' }
+                if ($joined -like 'ad app show*enableIdTokenIssuance*') { return $script:IdTokenIssuance }
+            if ($joined -like 'account get-access-token*') { return 'fake-token' }
                 if ($joined -like 'monitor log-analytics query*') {
                     $index = [array]::IndexOf($Argument, '--analytics-query')
                     return Get-SpanRowsForQuery -Query "$($Argument[$index + 1])"

@@ -1101,3 +1101,43 @@ Describe 'a resource is looked up in the group that actually holds it' {
             -Because 'this test asserts where the server lives, so it must fail if that stops being true'
     }
 }
+
+Describe 'a PowerShell file with non-ASCII content carries its BOM' {
+    # provision-workspace.ps1 lost its byte-order mark in an edit and failed CI with
+    # PSUseBOMForUnicodeEncodedFile. The file's em-dashes were pre-existing and harmless;
+    # what changed was the BOM, silently, because almost no editor shows one.
+    #
+    # It matters beyond the linter: Windows PowerShell 5.1 reads a BOM-less file as ANSI,
+    # so every non-ASCII character in it becomes mojibake - in a repository whose comments
+    # carry most of its reasoning. CLAUDE.md targets pwsh 7, but this repo is cloned by
+    # strangers onto machines nobody here controls.
+    #
+    # Cheap to check, invisible to review, and it has now happened twice.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'writes a BOM on every .ps1/.psm1 that contains non-ASCII characters' {
+        $checked = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+        $files = @(Get-ChildItem -Path $script:Root -Include '*.ps1', '*.psm1' -Recurse -File |
+                Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' })
+
+        foreach ($file in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+            if ($bytes.Length -lt 1) { continue }
+            $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+            if ($hasBom) { continue }
+            # Only files that actually need one: pure ASCII is fine without.
+            if (-not ($bytes | Where-Object { $_ -gt 127 })) { continue }
+            $checked++
+            $offender.Add($file.FullName.Substring($script:Root.Length + 1))
+        }
+
+        $files.Count | Should -BeGreaterThan 20 `
+            -Because 'the sweep must actually find the PowerShell in this repo; finding almost none means the glob is broken'
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'PSScriptAnalyzer fails the build on this, and Windows PowerShell 5.1 reads a BOM-less file as ANSI - turning every non-ASCII character into mojibake'
+    }
+}
