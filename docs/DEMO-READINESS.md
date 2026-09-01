@@ -92,10 +92,14 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the
   Dependabot lane runs instead of skipping. Both recorded problems are closed: the chain can
   see its subject (**F123**), and its verify job can actually run (**F125** - it never could).
-  **What remains is not a bug:** the three seeded security PRs were closed unmerged on
-  2026-08-29, and Dependabot does not reopen those (**F126**). Run
-  `apps/vuln-lab/reseed.ps1`, merge the PR, and the advisories are raised afresh - which is
-  the chain's designed re-arm path and the last step before the showpiece runs end to end.
+  **What remains is an OPEN QUESTION, not a known fix.** Dependabot opens no security PR for
+  the three seeded CVEs, so the lane has nothing to adopt. A full heal-and-re-arm cycle
+  (#148, #149) did not change that - GitHub reopened the same alerts rather than raising new
+  ones (**F126**). Ruled out: the repo setting, patched-version availability, ignore
+  conditions, lingering branches. Leading candidate: `open-pull-requests-limit: 0` on
+  `/apps/vuln-lab`, whose exemption for security updates is asserted in a comment and has
+  never been verified. **Do not edit that limit casually** - raising it also enables
+  version-update PRs that would disarm the seed.
 - **BLOCKER-5 is CLOSED** (2026-09-01). `verification/layer-12-audit.ps1` exists, runs as
   `mls-verifier`, and is wired into `compliance.yml`. Four criteria are checked
   independently and two are explicit SKIPs naming where they *are* checked - V12.3 would
@@ -130,11 +134,26 @@ remedy: it sends the reader to change something already correct and stops them l
 condition when it happens** — so the alert stays open forever with no PR and nothing
 anywhere explains why. `@dependabot reopen` does not bring it back either.
 
-The way out is to **re-trigger the advisory by changing the manifest**, which is exactly
-what `apps/vuln-lab/reseed.ps1` exists to do: it rewrites the pins and regenerates the
-lockfile, raising the advisories afresh. Reseed is normally described as "re-arm the lab
-after a heal"; its *other* job — the one that matters here — is to make Dependabot look
-again.
+**A full heal-and-re-arm cycle was run, and it did NOT fix it.** PR #148 bumped the three
+pins to their patched versions (all three alerts went to `fixed`); PR #149 ran
+`apps/vuln-lab/reseed.ps1` to restore the vulnerable pins. The advisories came back — but
+**GitHub REOPENED alerts #2, #3 and #4, with their original `created_at` of
+2026-08-28T23:52, rather than creating new ones.** The premise the cycle rested on ("a newly
+raised alert carries no association with a closed pull request") therefore never applied:
+they are the same alerts. Ten minutes after the re-arm, still no Dependabot security PR.
+
+**So the cause is still not established, and this entry does not pretend otherwise.** What
+is now ruled out: the repo setting, missing patched versions, ignore conditions, lingering
+branches, and a stale alert state. The leading remaining candidate is
+`open-pull-requests-limit: 0` on the `/apps/vuln-lab` directory in `dependabot.yml`. That
+file asserts in a comment that *"GitHub documents that security update pull requests are
+not subject to this limit"* — **an assertion nobody has verified against the system**, which
+is exactly the shape this repository keeps paying for. Testing it is not free: raising the
+limit also enables version-update PRs for the lab, which would bump the pins and disarm the
+seed, so it needs a deliberate decision rather than a quiet edit.
+
+The cycle was not wasted: it proved the lab's heal/re-arm machinery works end to end, and
+`reseed.ps1` verified its own output (3 advisories present, 2 code flaws restored).
 
 **Fixed** by replacing the single asserted remedy with three candidate causes in order,
 each with the command that tests it, and an explicit note that the first one being already
