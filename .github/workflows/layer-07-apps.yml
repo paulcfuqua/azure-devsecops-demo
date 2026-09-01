@@ -800,7 +800,14 @@ jobs:
         continue-on-error: true
         shell: pwsh
         env:
-          RG_PLATFORM: ${{ steps.names.outputs.rg-platform }}
+          # RG_DATA, not RG_PLATFORM. L6 creates the Azure SQL logical server in the DATA
+          # resource group; this step spent every run since it was written looking in the
+          # platform one, finding nothing, and skipping with "L6 has probably not deployed
+          # yet" (F109). So the contained-database user was NEVER created, data-api's
+          # managed identity had no SQL login, and every /api/tables route on a
+          # SQL-backed table answered 502 "Login failed for user '<token-identified
+          # principal>'".
+          RG_DATA: ${{ steps.names.outputs.rg-data }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -814,14 +821,14 @@ jobs:
             }
           }
 
-          $serverName = az sql server list --resource-group $env:RG_PLATFORM --query '[0].name' -o tsv
+          $serverName = az sql server list --resource-group $env:RG_DATA --query '[0].name' -o tsv
           Assert-AzSucceeded -What 'az sql server list'
           if (-not $serverName) {
-            Write-Host "::warning title=No Azure SQL server found::Could not find an Azure SQL logical server in $env:RG_PLATFORM. Skipping the F20 post-L7 grant pass (data/seed/sql/900-contained-users.sql) - L6 has probably not deployed yet on a standalone L7 run. A standard infra-up.yml pass runs L6 first and will not hit this."
+            Write-Host "::warning title=No Azure SQL server found::Could not find an Azure SQL logical server in $env:RG_DATA. Skipping the F20 post-L7 grant pass (data/seed/sql/900-contained-users.sql). This step SEARCHED THE WRONG RESOURCE GROUP until 2026-09-01 - it looked in the platform RG while L6 creates the server in the data RG - and reported 'L6 has probably not deployed yet', which is plausible, wrong, and why nobody chased it for days (F109). If you see this now, check which RG actually holds the server before believing the message."
             exit 0
           }
 
-          $sqlFqdn = az sql server show --resource-group $env:RG_PLATFORM --name $serverName --query fullyQualifiedDomainName -o tsv
+          $sqlFqdn = az sql server show --resource-group $env:RG_DATA --name $serverName --query fullyQualifiedDomainName -o tsv
           Assert-AzSucceeded -What 'az sql server show'
 
           # Every non-master database, not "| [0]". Picking the first would land
@@ -834,13 +841,13 @@ jobs:
           # a one-letter database name on every ordinary run.
           $dbNames = @(
             @(
-              az sql db list --resource-group $env:RG_PLATFORM --server $serverName --query "[?name!='master'].name" -o tsv
+              az sql db list --resource-group $env:RG_DATA --server $serverName --query "[?name!='master'].name" -o tsv
             ) | Where-Object { $_ -and $_.Trim() }
           )
           Assert-AzSucceeded -What 'az sql db list'
 
           if ($dbNames.Count -eq 0 -or -not $sqlFqdn) {
-            Write-Host "::warning title=Azure SQL database not found::Found server $serverName in $env:RG_PLATFORM but no non-master database. Skipping the F20 post-L7 grant pass."
+            Write-Host "::warning title=Azure SQL database not found::Found server $serverName in $env:RG_DATA but no non-master database. Skipping the F20 post-L7 grant pass."
             exit 0
           }
           if ($dbNames.Count -gt 1) {

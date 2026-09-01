@@ -1057,3 +1057,47 @@ Describe 'an array parameter a workflow passes is split, or not passed at all' {
             -Because 'CI hands an array parameter ONE token, so a script that does not split it receives something nobody wrote - "2,3,6" became layer 2346 (F108)'
     }
 }
+
+Describe 'a resource is looked up in the group that actually holds it' {
+    # The F20 grant pass searched for the Azure SQL logical server in the PLATFORM resource
+    # group. L6 creates it in the DATA resource group. So on every run since it was written
+    # the step found nothing and skipped - and the message it printed was
+    #
+    #   "Could not find an Azure SQL logical server ... L6 has probably not deployed yet"
+    #
+    # which is plausible, wrong, and the reason nobody chased it for days (F109). The
+    # contained-database user was therefore never created, data-api's managed identity had
+    # no SQL login, and every /api/tables route on a SQL-backed table answered 502
+    # "Login failed for user '<token-identified principal>'" - a failure that was then
+    # attributed to a Fabric limitation the SQL tables never touch.
+    #
+    # The estate's own naming action already knows where everything lives. A workflow that
+    # hardcodes a resource group for a lookup is asserting a layout it does not own; a
+    # workflow that reads the wrong OUTPUT is doing the same thing more quietly.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'looks for the Azure SQL server in the data resource group, where L6 puts it' {
+        $l7 = Get-Content -LiteralPath (Join-Path $script:Root '.github/workflows/layer-07-apps.yml') -Raw
+        # The lookup and every call chained off it must use the same group.
+        $l7 | Should -Match 'az sql server list --resource-group \$env:RG_DATA' `
+            -Because 'L6 creates the logical server in the data resource group; searching the platform group finds nothing and skips silently'
+        $l7 | Should -Not -Match 'az sql (server|db) (list|show) --resource-group \$env:RG_PLATFORM' `
+            -Because 'a SQL lookup against the platform group cannot succeed, and its "not deployed yet" message is convincing enough to stop anyone looking further'
+    }
+
+    It 'confirms the template really does put the SQL server in the data resource group' {
+        # The premise. If it ever moves, the check above becomes the wrong assertion, and
+        # this one says so rather than the two drifting apart silently.
+        #
+        # Note where this reads: the TEMPLATE, not the workflow. The first version of this
+        # test grepped layer-06-platform.yml, which never names the group - the same
+        # mistake as the finding itself, made while writing the check for it. The Bicep
+        # template is what actually decides.
+        $template = Get-Content -LiteralPath (Join-Path $script:Root 'infra/bicep/platform/main.bicep') -Raw
+        $template | Should -Match '(?i)mls-rg-data\s*:\s*Azure SQL logical server' `
+            -Because 'this test asserts where the server lives, so it must fail if that stops being true'
+    }
+}
