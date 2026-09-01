@@ -71,8 +71,13 @@ const ROW_COPIES: ReadonlyArray<[name: string, from: "launch-ops" | "control-tow
   ["ScrubRow", "launch-ops", "scrubs"],
   ["VehicleRow", "launch-ops", "vehicles"],
   ["PadRow", "launch-ops", "pads"],
-  ["CostDailyRow", "control-tower", "cost_daily"],
-  ["TelemetrySummaryRow", "control-tower", "telemetry_summary"],
+  // CostDailyRow and TelemetrySummaryRow left this list at F117. data-api still
+  // SERVES both tables - the lakehouse holds them and they are legitimately
+  // queryable - but control-tower no longer declares either, because its Ops tab
+  // now reports what the estate costs to RUN (Cost Management, via the
+  // azure-cost feed) instead of the fictional launch programme's budget and
+  // flight telemetry. There is no second copy left to drift from, so there is
+  // nothing here to compare; if a consumer declares one again, add it back.
 ];
 
 const FEED_COPIES: readonly string[] = [
@@ -83,6 +88,9 @@ const FEED_COPIES: readonly string[] = [
   "SecureScoreResponse",
   "SecureScoreControlsResponse",
   "LogAnalyticsResult",
+  // The Ops tab's whole input since F117, and the one most worth pinning: two
+  // copies of a shape that carries money.
+  "AzureCostFeed",
 ];
 
 let server: TestServer;
@@ -124,16 +132,20 @@ describe("route parity — every path either ApiProvider fetches is served", () 
 
   it("derives the control-tower paths from its ApiProvider source", () => {
     const paths = extractControlTowerPaths(controlTowerApi);
-    expect(paths.length).toBeGreaterThanOrEqual(8);
+    // SEVEN, NOT EIGHT, SINCE F117. The Ops tab stopped reading two lakehouse
+    // tables and started reading one Cost Management feed: it reports what the
+    // ESTATE costs to run rather than the fictional launch programme's budget
+    // and flight telemetry. data-api still serves both tables; nothing in
+    // control-tower asks for them.
+    expect(paths.length).toBeGreaterThanOrEqual(7);
     expect([...new Set(paths.map((p) => p.path))].sort()).toEqual([
       "feeds/app-requests",
+      "feeds/azure-cost",
       "feeds/code-scanning-alerts",
       "feeds/dependabot-alerts",
       "feeds/secure-score",
       "feeds/secure-score-controls",
       "feeds/workflow-runs",
-      "tables/cost_daily",
-      "tables/telemetry_summary",
     ]);
   });
 
@@ -174,7 +186,7 @@ describe("route parity — every path either ApiProvider fetches is served", () 
     const feedsAsked = extractControlTowerPaths(controlTowerApi)
       .filter((p) => p.path.startsWith("feeds/"))
       .map((p) => p.path.replace("feeds/", ""));
-    expect(feedsAsked.length).toBe(6);
+    expect(feedsAsked.length).toBe(7);
     for (const feed of feedsAsked) {
       expect(FEED_NAMES as readonly string[]).toContain(feed);
     }

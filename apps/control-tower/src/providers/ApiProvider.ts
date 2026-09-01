@@ -1,14 +1,13 @@
 import type { Spec } from "@mls/spec-renderer";
 import { buildDevSpec, buildOpsSpec, buildSecSpec, type FeedOutage } from "./specs";
 import type {
+  AzureCostFeed,
   CodeScanningAlert,
-  CostDailyRow,
   DataProvider,
   DependabotAlert,
   LogAnalyticsResult,
   SecureScoreControlsResponse,
   SecureScoreResponse,
-  TelemetrySummaryRow,
   WorkflowRunsFeed,
 } from "./types";
 
@@ -141,11 +140,15 @@ export class ApiProvider implements DataProvider {
   }
 
   async getOpsSpec(): Promise<Spec> {
-    const [cost, telemetry] = await Promise.all([
-      this.settle("tables/cost_daily", this.get<CostDailyRow[]>("tables/cost_daily")),
-      this.settle("tables/telemetry_summary", this.get<TelemetrySummaryRow[]>("tables/telemetry_summary")),
+    // ONE FEED, AND IT IS NOT THE LAKEHOUSE (F117). This read tables/cost_daily
+    // and tables/telemetry_summary - the generator's synthetic launch-programme
+    // budget and its flight telemetry. Both are fictional, and rendering them on
+    // a tab called Ops invited the reader to think they were seeing what the
+    // platform costs and how it behaves.
+    const [cost] = await Promise.all([
+      this.settle("feeds/azure-cost", this.get<AzureCostFeed>("feeds/azure-cost")),
     ]);
-    const outages = ApiProvider.resolve([cost, telemetry]);
-    return buildOpsSpec(cost.value, telemetry.value, outages);
+    const outages = ApiProvider.resolve([cost]);
+    return buildOpsSpec(cost.value, outages);
   }
 }

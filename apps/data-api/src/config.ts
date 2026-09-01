@@ -45,6 +45,20 @@ export interface CloudConfig {
   readonly githubToken: string | undefined;
   /** Subscription the Defender secure score is read for. */
   readonly defenderSubscriptionId: string;
+  /**
+   * Billing scope for the azure-cost feed. Separate from the Defender
+   * subscription rather than reusing it: Defender posture is always read at a
+   * subscription, but cost is legitimately read at a billing account or
+   * management group, and an estate that later bills across two subscriptions
+   * should not have to redefine what "the Defender subscription" means to move
+   * its cost query. Defaults to the Defender subscription so nothing has to be
+   * set twice today.
+   */
+  readonly costSubscriptionId: string;
+  /** Window the cost query asks for, a Cost Management timeframe name. */
+  readonly costTimeframe: string;
+  /** How long an answered cost query is retained before re-asking. */
+  readonly costCacheSeconds: number;
   readonly armBase: string;
   /** Log Analytics workspace *customer id* (GUID), not the ARM resource id. */
   readonly logAnalyticsWorkspaceId: string;
@@ -235,6 +249,10 @@ function loadCloud(env: NodeJS.ProcessEnv): CloudConfig {
   if (!GUID.test(subscriptionId)) {
     throw new Error("MLS_DEFENDER_SUBSCRIPTION_ID must be a GUID.");
   }
+  const costSubscriptionId = str(env, "MLS_COST_SUBSCRIPTION_ID") ?? subscriptionId;
+  if (!GUID.test(costSubscriptionId)) {
+    throw new Error("MLS_COST_SUBSCRIPTION_ID must be a GUID.");
+  }
   const workspaceId = required.MLS_LOG_ANALYTICS_WORKSPACE_ID as string;
   if (!GUID.test(workspaceId)) {
     throw new Error(
@@ -256,6 +274,13 @@ function loadCloud(env: NodeJS.ProcessEnv): CloudConfig {
     githubApiBase: str(env, "MLS_GITHUB_API_BASE") ?? "https://api.github.com",
     githubToken: str(env, "MLS_GITHUB_TOKEN"),
     defenderSubscriptionId: subscriptionId,
+    costSubscriptionId: costSubscriptionId,
+    costTimeframe: str(env, "MLS_COST_TIMEFRAME") ?? "MonthToDate",
+    // AN HOUR, AND THE NUMBER IS THE POINT. Cost Management's query API is
+    // aggressively throttled - four consecutive calls while this was written
+    // returned 429 - and cost figures move once a day, so asking more often
+    // buys nothing and risks the whole feed. See CloudFeedsBackend.azureCost.
+    costCacheSeconds: int(env, "MLS_COST_CACHE_SECONDS", 3600, 60, 86_400),
     armBase: str(env, "MLS_ARM_BASE") ?? "https://management.azure.com",
     logAnalyticsWorkspaceId: workspaceId,
     logAnalyticsBase: str(env, "MLS_LOG_ANALYTICS_BASE") ?? "https://api.loganalytics.io",

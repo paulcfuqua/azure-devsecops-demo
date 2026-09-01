@@ -1,12 +1,6 @@
 import type { Spec } from "@mls/spec-renderer";
 import { buildDevSpec, buildOpsSpec, buildSecSpec } from "./specs";
-import type {
-  CostDailyRow,
-  DataProvider,
-  FeedBundle,
-  JsonLoader,
-  TelemetrySummaryRow,
-} from "./types";
+import type { DataProvider, FeedBundle, JsonLoader } from "./types";
 
 // ---------------------------------------------------------------------------
 // LOCAL FIXTURES (Phase P). These committed JSON files are hand-authored
@@ -25,6 +19,7 @@ import workflowRunsFixture from "../fixtures/github-workflow-runs.fixture.json";
 import secureScoreControlsFixture from "../fixtures/defender-secure-score-controls.fixture.json";
 import secureScoreFixture from "../fixtures/defender-secure-score.fixture.json";
 import appRequestsFixture from "../fixtures/log-analytics-app-requests.fixture.json";
+import azureCostFixture from "../fixtures/cost-management-azure-cost.fixture.json";
 
 /** The committed local fixture bundle for Dev + Sec tabs. */
 export const localFixtures: FeedBundle = {
@@ -34,13 +29,22 @@ export const localFixtures: FeedBundle = {
   dependabotAlerts: dependabotAlertsFixture,
   secureScore: secureScoreFixture,
   secureScoreControls: secureScoreControlsFixture,
+  azureCost: azureCostFixture,
 };
 
 /**
- * Local mode provider (Phase P default in dev). Dev + Sec tabs render from
- * the committed fixtures above; the Ops tab reads the deterministic Track A
- * generator output (`data/generated/cost_daily.json` +
- * `telemetry_summary.json`) served by the vite middleware under /local-data.
+ * Local mode provider (Phase P default in dev). All three tabs now render from
+ * the committed fixtures above.
+ *
+ * The Ops tab used to read the Track A generator output
+ * (`data/generated/cost_daily.json` + `telemetry_summary.json`) through the
+ * loader below. It no longer does: since F117 that tab reports what the ESTATE
+ * COSTS TO RUN, from Cost Management via data-api, rather than the fictional
+ * launch company's programme budget and flight telemetry.
+ *
+ * The loader and the /local-data vite middleware are kept - they are the
+ * facility for rendering a generated table locally, and `fetchLocalJson` is
+ * exported API - but no tab currently uses one.
  */
 export class LocalProvider implements DataProvider {
   readonly source =
@@ -83,11 +87,9 @@ export class LocalProvider implements DataProvider {
   }
 
   async getOpsSpec(): Promise<Spec> {
-    const [cost, telemetry] = await Promise.all([
-      this.table<CostDailyRow>("cost_daily"),
-      this.table<TelemetrySummaryRow>("telemetry_summary"),
-    ]);
-    return buildOpsSpec(cost, telemetry);
+    // Fixture-backed like Dev and Sec since F117: the Ops tab reads Cost
+    // Management, not the generator's synthetic cost_daily table.
+    return buildOpsSpec(this.fixtures.azureCost);
   }
 }
 

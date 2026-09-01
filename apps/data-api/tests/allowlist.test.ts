@@ -53,8 +53,10 @@ describe("allowlist predicates", () => {
     for (const name of TABLE_NAMES) expect(isAllowedTable(name)).toBe(true);
   });
 
-  it("accepts exactly the six feeds", () => {
-    expect(FEED_NAMES).toHaveLength(6);
+  it("accepts exactly the seven feeds", () => {
+    // Seven since F117 added azure-cost, the Ops tab's replacement for the
+    // lakehouse cost table.
+    expect(FEED_NAMES).toHaveLength(7);
     for (const name of FEED_NAMES) expect(isAllowedFeed(name)).toBe(true);
   });
 

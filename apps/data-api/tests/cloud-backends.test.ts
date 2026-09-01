@@ -18,6 +18,7 @@ import {
   CloudFeedsBackend,
   CloudTablesBackend,
   MAX_FEED_ITEMS,
+  projectAzureCost,
   projectCodeScanningAlerts,
   projectDependabotAlerts,
   projectLogAnalytics,
@@ -920,5 +921,176 @@ describe("backend selection", () => {
 
   it("made no live network call anywhere in this file", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * F117 - the Ops tab reports what the ESTATE costs to run, not what the
+ * fictional launch company spends. These pin the two things most likely to be
+ * quietly wrong: which column is which, and whether a retained figure is
+ * labelled as one.
+ */
+describe("CloudFeedsBackend: azure-cost", () => {
+  // Column ORDER here is deliberately not the order the code reads them in.
+  // Cost Management returns `properties.columns` describing `properties.rows`,
+  // and the order depends on the grouping requested and has changed between
+  // api-versions; indexing positionally works right up until it silently reads
+  // the resource group as the service name.
+  const armPayload = {
+    properties: {
+      columns: [
+        { name: "ResourceGroupName", type: "String" },
+        { name: "Cost", type: "Number" },
+        { name: "Currency", type: "String" },
+        { name: "UsageDate", type: "Number" },
+        { name: "ServiceName", type: "String" },
+      ],
+      rows: [
+        ["mls-rg-apps", 2, "USD", 20260830, "Azure Container Apps"],
+        ["mls-rg-apps", 4, "USD", 20260831, "Azure Container Apps"],
+        ["mls-rg-data", 3, "USD", 20260831, "Azure SQL Database"],
+        ["mls-rg-platform", 1, "USD", 20260830, "Log Analytics"],
+      ],
+    },
+  };
+
+  it("resolves columns by NAME, so a reordered payload still reads correctly", () => {
+    const feed = projectAzureCost(armPayload, "MonthToDate");
+    expect(feed.total).toBe(10);
+    expect(feed.currency).toBe("USD");
+    expect(feed.byService).toEqual([
+      { name: "Azure Container Apps", cost: 6 },
+      { name: "Azure SQL Database", cost: 3 },
+      { name: "Log Analytics", cost: 1 },
+    ]);
+    expect(feed.byResourceGroup).toEqual([
+      { name: "mls-rg-apps", cost: 6 },
+      { name: "mls-rg-data", cost: 3 },
+      { name: "mls-rg-platform", cost: 1 },
+    ]);
+  });
+
+  it("formats UsageDate, which arrives as the NUMBER 20260831, not a string", () => {
+    // Date.parse(20260831) would read it as a year. The digits have to be split.
+    const feed = projectAzureCost(armPayload, "MonthToDate");
+    expect(feed.daily).toEqual([
+      { date: "2026-08-30", cost: 3 },
+      { date: "2026-08-31", cost: 7 },
+    ]);
+  });
+
+  it("survives a payload with no rows without inventing a total", () => {
+    const feed = projectAzureCost({ properties: { columns: [], rows: [] } }, "MonthToDate");
+    expect(feed.total).toBe(0);
+    expect(feed.byService).toEqual([]);
+    expect(feed.daily).toEqual([]);
+  });
+
+  it("posts the grouped daily query to Cost Management with an ARM token", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const impl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, body: JSON.parse(String(init.body)) });
+      return new Response(JSON.stringify(armPayload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as FetchLike;
+
+    const backend = new CloudFeedsBackend({
+      config: cloudConfig(),
+      tokens: stubTokens,
+      fetchImpl: impl,
+    });
+    const feed = (await backend.getFeed("azure-cost")) as { total: number; stale: boolean };
+    expect(feed.total).toBe(10);
+    expect(feed.stale).toBe(false);
+    expect(calls[0]?.url).toContain("/providers/Microsoft.CostManagement/query?api-version=");
+    // ONE query, grouped two ways at daily grain: summing it by service, by
+    // resource group or by date answers all three panels. Three separate
+    // queries would be three times the throttle risk for the same numbers.
+    const body = calls[0]?.body as Record<string, never>;
+    expect(body).toMatchObject({
+      type: "ActualCost",
+      timeframe: "MonthToDate",
+      dataset: { granularity: "Daily" },
+    });
+  });
+
+  it("serves a CACHED answer rather than re-asking a throttled API", async () => {
+    let hits = 0;
+    const impl = (async () => {
+      hits += 1;
+      return new Response(JSON.stringify(armPayload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as FetchLike;
+
+    const backend = new CloudFeedsBackend({
+      config: cloudConfig(),
+      tokens: stubTokens,
+      fetchImpl: impl,
+    });
+    await backend.getFeed("azure-cost");
+    await backend.getFeed("azure-cost");
+    await backend.getFeed("azure-cost");
+    expect(hits).toBe(1);
+  });
+
+  it("marks a retained answer STALE when the upstream then refuses", async () => {
+    // This is the whole reason `stale` is in the contract. Cost Management
+    // returned 429 on four consecutive calls while this feed was being written,
+    // and a retained figure presented as a current one is the same defect as an
+    // empty list presented as a zero: the reader cannot tell which they have.
+    let hits = 0;
+    const impl = (async () => {
+      hits += 1;
+      if (hits === 1) {
+        return new Response(JSON.stringify(armPayload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: { code: "429" } }), { status: 429 });
+    }) as unknown as FetchLike;
+
+    const backend = new CloudFeedsBackend({
+      config: cloudConfig({ MLS_COST_CACHE_SECONDS: "60" }),
+      tokens: stubTokens,
+      fetchImpl: impl,
+    });
+    const fresh = (await backend.getFeed("azure-cost")) as { stale: boolean; total: number };
+    expect(fresh.stale).toBe(false);
+    expect(hits).toBe(1);
+
+    // Force the cache to look expired so the next call really re-asks.
+    // shouldAdvanceTime keeps the awaited fetches resolving under fake timers.
+    let retained: { stale: boolean; total: number };
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.setSystemTime(new Date(Date.now() + 120_000));
+      retained = (await backend.getFeed("azure-cost")) as { stale: boolean; total: number };
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // More than one, not exactly two: fetchJson retries a 429 internally, so the
+    // count is the retry policy's business. What matters here is that the cache
+    // really did expire and the upstream really was re-asked.
+    expect(hits).toBeGreaterThan(1);
+    expect(retained.stale).toBe(true);
+    expect(retained.total).toBe(10);
+  });
+
+  it("propagates the failure when there is NO cached answer to fall back on", async () => {
+    // With nothing retained this feed never invents a total.
+    const impl = (async () =>
+      new Response(JSON.stringify({ error: { code: "429" } }), { status: 429 })) as unknown as FetchLike;
+    const backend = new CloudFeedsBackend({
+      config: cloudConfig(),
+      tokens: stubTokens,
+      fetchImpl: impl,
+    });
+    await expect(backend.getFeed("azure-cost")).rejects.toThrow();
   });
 });

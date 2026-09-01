@@ -4,7 +4,7 @@ import { resolveDataMode } from "../src/providers";
 import { ApiProvider } from "../src/providers/ApiProvider";
 import { localFixtures, LocalProvider } from "../src/providers/LocalProvider";
 import { buildDevSpec, buildOpsSpec, buildSecSpec } from "../src/providers/specs";
-import { sampleCostRows, sampleTelemetryRows, stubLoader } from "./sampleData";
+import { sampleAzureCost, stubLoader } from "./sampleData";
 
 describe("buildDevSpec (Dev pillar)", () => {
   const spec = buildDevSpec(localFixtures.workflowRuns, localFixtures.appRequests);
@@ -103,8 +103,8 @@ describe("buildSecSpec (Sec pillar)", () => {
   });
 });
 
-describe("buildOpsSpec (Ops pillar)", () => {
-  const spec = buildOpsSpec(sampleCostRows, sampleTelemetryRows);
+describe("buildOpsSpec (Ops pillar) - what the ESTATE costs to run", () => {
+  const spec = buildOpsSpec(sampleAzureCost);
 
   it("produces a valid renderer spec", () => {
     const result = validateSpec(spec);
@@ -112,38 +112,70 @@ describe("buildOpsSpec (Ops pillar)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("aggregates cost by month and by cost center", () => {
-    const line = spec.components.find((c) => c.type === "lineChart");
-    if (line?.type !== "lineChart") throw new Error("no lineChart");
-    expect(line.data).toEqual([
-      { x: "2025-01-01T12:00:00Z", y: 15 },
-      { x: "2025-02-01T12:00:00Z", y: 15 },
-    ]);
+  it("reports the real total, its currency and its window", () => {
+    const kpi = spec.components.find((c) => c.type === "kpiRow");
+    if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
+    const total = kpi.items.find((i) => i.label === "Total run cost");
+    expect(total?.value).toBe(10); // 6 + 3 + 1
+    expect(total?.unit).toBe("USD");
+    // The window belongs on the tab: "$10" means nothing without "month to date".
+    expect(kpi.description).toContain("MonthToDate");
+  });
 
+  it("names the largest line item rather than making the reader find it", () => {
+    const kpi = spec.components.find((c) => c.type === "kpiRow");
+    if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
+    const largest = kpi.items.find((i) => i.label.startsWith("Largest"));
+    expect(largest?.label).toContain("Azure Container Apps");
+    expect(largest?.value).toBe(6);
+  });
+
+  it("splits spend by Azure service, highest first - not by fictional cost centre", () => {
     const donut = spec.components.find((c) => c.type === "donutChart");
     if (donut?.type !== "donutChart") throw new Error("no donutChart");
     expect(donut.data).toEqual([
-      { label: "Propulsion", value: 20 },
-      { label: "Avionics", value: 6 },
-      { label: "Cloud & IT", value: 4 },
+      { label: "Azure Container Apps", value: 6 },
+      { label: "Azure SQL Database", value: 3 },
+      { label: "Log Analytics", value: 1 },
+    ]);
+    // The whole point of F117: no launch-programme cost centre may appear here.
+    const labels = donut.data.map((d) => d.label).join(" ");
+    expect(labels).not.toMatch(/Propulsion|Avionics|Range Operations/);
+  });
+
+  it("splits spend by resource group, which is what teardown deletes", () => {
+    const bar = spec.components.find(
+      (c) => c.type === "barChart" && c.title === "Cost by resource group",
+    );
+    if (bar?.type !== "barChart") throw new Error("no resource-group barChart");
+    expect(bar.data).toEqual([
+      { x: "mls-rg-apps", y: 6 },
+      { x: "mls-rg-data", y: 3 },
+      { x: "mls-rg-platform", y: 1 },
     ]);
   });
 
-  it("computes budget variance and telemetry stats, ignoring null metrics", () => {
-    const kpi = spec.components.find((c) => c.type === "kpiRow");
-    if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
-    // 30,000 spent against 28,000 budgeted -> +7.1%.
-    expect(kpi.items.find((i) => i.label === "Budget variance")?.value).toBe(7.1);
-    expect(kpi.items.find((i) => i.label === "Budget variance")?.trend).toBe("up");
-    // Coverage averages the two non-null rows: (100 + 96) / 2.
-    expect(kpi.items.find((i) => i.label === "Avg telemetry coverage")?.value).toBe(98);
-    expect(kpi.items.find((i) => i.label === "Flight anomalies")?.value).toBe(3);
+  it("charts daily cost anchored at noon UTC so the label does not slide a day", () => {
+    const line = spec.components.find((c) => c.type === "lineChart");
+    if (line?.type !== "lineChart") throw new Error("no lineChart");
+    expect(line.data).toEqual([
+      { x: "2026-08-30T12:00:00Z", y: 4 },
+      { x: "2026-08-31T12:00:00Z", y: 6 },
+    ]);
+  });
 
-    const anomalies = spec.components.find(
-      (c) => c.type === "statCard" && c.title === "Launches with anomalies",
-    );
-    if (anomalies?.type !== "statCard") throw new Error("no anomaly statCard");
-    expect(anomalies.value).toBe(2);
+  it("says so when the figures are RETAINED rather than current", () => {
+    // data-api caches because Cost Management throttles hard, and may serve a
+    // cached answer when the upstream refuses. A retained figure presented as a
+    // current one is the same defect as an empty list presented as a zero.
+    const stale = buildOpsSpec({ ...sampleAzureCost, stale: true });
+    const kpi = stale.components.find((c) => c.type === "kpiRow");
+    if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
+    expect(kpi.description).toContain("RETAINED");
+    // ...and does NOT say so when they are fresh.
+    const fresh = spec.components.find((c) => c.type === "kpiRow");
+    if (fresh?.type !== "kpiRow") throw new Error("no kpiRow");
+    expect(fresh.description).not.toContain("RETAINED");
   });
 });
 
@@ -166,17 +198,12 @@ describe("LocalProvider (local mode)", () => {
     await provider.getDevSpec();
     await provider.getSecSpec();
     expect(loader).not.toHaveBeenCalled();
+    // Ops is fixture-backed too since F117: it reads the azure-cost feed, not
+    // the generator's cost_daily / telemetry_summary tables.
     await provider.getOpsSpec();
-    expect(loader.mock.calls.map(([t]) => t).sort()).toEqual([
-      "cost_daily",
-      "telemetry_summary",
-    ]);
+    expect(loader).not.toHaveBeenCalled();
   });
 
-  it("rejects non-array generated payloads with a clear error", async () => {
-    const provider = new LocalProvider(() => Promise.resolve({ not: "rows" }));
-    await expect(provider.getOpsSpec()).rejects.toThrow(/array of rows/);
-  });
 });
 
 describe("ApiProvider (L7/L9 wiring contract)", () => {
@@ -192,8 +219,7 @@ describe("ApiProvider (L7/L9 wiring contract)", () => {
       "feeds/dependabot-alerts": localFixtures.dependabotAlerts,
       "feeds/secure-score": localFixtures.secureScore,
       "feeds/secure-score-controls": localFixtures.secureScoreControls,
-      "tables/cost_daily": sampleCostRows,
-      "tables/telemetry_summary": sampleTelemetryRows,
+      "feeds/azure-cost": sampleAzureCost,
     };
     const fetchMock = vi.fn(async (url: string) => {
       const path = url.replace(/^\/api\//, "");
@@ -207,13 +233,12 @@ describe("ApiProvider (L7/L9 wiring contract)", () => {
     expect(validateSpec(await provider.getOpsSpec()).ok).toBe(true);
     expect(fetchMock.mock.calls.map(([u]) => u).sort()).toEqual([
       "/api/feeds/app-requests",
+      "/api/feeds/azure-cost",
       "/api/feeds/code-scanning-alerts",
       "/api/feeds/dependabot-alerts",
       "/api/feeds/secure-score",
       "/api/feeds/secure-score-controls",
       "/api/feeds/workflow-runs",
-      "/api/tables/cost_daily",
-      "/api/tables/telemetry_summary",
     ]);
   });
 
@@ -353,19 +378,19 @@ describe("F116: partial data renders, absence is never zero", () => {
   });
 
   it("emits no notice at all when every feed answered", () => {
-    const spec = buildOpsSpec(sampleCostRows, sampleTelemetryRows);
+    const spec = buildOpsSpec(sampleAzureCost);
     expect(spec.components.find((c) => c.type === "markdownBlock")).toBeUndefined();
   });
 
-  it("renders absent lakehouse tables as 'not reported' rather than 0 spend", () => {
-    const spec = buildOpsSpec(null, null, [
-      { feed: "tables/cost_daily", reason: "responded 502." },
-      { feed: "tables/telemetry_summary", reason: "responded 502." },
+  it("renders an absent cost feed as 'not reported' rather than a run cost of 0", () => {
+    // "Total run cost: $0" is a claim a reader would act on. It must never be
+    // produced by having no figure at all.
+    const spec = buildOpsSpec(null, [
+      { feed: "feeds/azure-cost", reason: "responded 502." },
     ]);
     const kpi = spec.components.find((c) => c.type === "kpiRow");
     if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
-    expect(kpi.items.find((i) => i.label === "Program spend (all time)")?.value).toBe("not reported");
-    expect(kpi.items.find((i) => i.label === "Flight anomalies")?.value).toBe("not reported");
+    expect(kpi.items.find((i) => i.label === "Total run cost")?.value).toBe("not reported");
     expect(validateSpec(spec).ok).toBe(true);
   });
 });
@@ -373,34 +398,42 @@ describe("F116: partial data renders, absence is never zero", () => {
 describe("F116: ApiProvider degrades per feed", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("renders the Ops tab when only one of the two tables fails", async () => {
+  it("renders the Dev tab when only one of its two feeds fails", async () => {
+    // The Ops tab reads a single feed since F117, so the multi-feed degradation
+    // case lives on Dev, which fetches workflow-runs AND app-requests. This is
+    // the exact live shape: the GitHub feed 503s and app-requests answers.
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) =>
-        url.includes("telemetry_summary")
-          ? new Response(JSON.stringify({ error: { code: "upstream_unavailable", message: "the lakehouse refused" } }), {
-              status: 502,
-              headers: { "content-type": "application/json" },
-            })
-          : new Response(JSON.stringify(sampleCostRows), {
+        url.includes("workflow-runs")
+          ? new Response(
+              JSON.stringify({
+                error: {
+                  code: "backend_not_configured",
+                  message: "MLS_GITHUB_TOKEN is empty on this instance",
+                },
+              }),
+              { status: 503, headers: { "content-type": "application/json" } },
+            )
+          : new Response(JSON.stringify(localFixtures.appRequests), {
               status: 200,
               headers: { "content-type": "application/json" },
             }),
       ),
     );
-    const spec = await new ApiProvider().getOpsSpec();
+    const spec = await new ApiProvider().getDevSpec();
     const notice = spec.components.find((c) => c.type === "markdownBlock");
     if (notice?.type !== "markdownBlock") throw new Error("expected an outage notice");
-    expect(notice.markdown).toContain("tables/telemetry_summary");
-    expect(notice.markdown).toContain("the lakehouse refused");
-    // The cost data survived and is rendered, which is the whole point.
-    expect(spec.components.some((c) => c.type === "donutChart" || c.type === "lineChart")).toBe(true);
+    expect(notice.markdown).toContain("feeds/workflow-runs");
+    expect(notice.markdown).toContain("MLS_GITHUB_TOKEN is empty on this instance");
+    // The app-requests data survived and is rendered, which is the whole point.
+    expect(spec.components.some((c) => c.type === "lineChart")).toBe(true);
   });
 
   it("throws when EVERY feed fails, rather than showing a page of 'not reported'", async () => {
     // A tab holding no data has nothing to be partial about; the app's error
     // panel is a better answer than a grid of empty tiles.
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 502 })));
-    await expect(new ApiProvider().getOpsSpec()).rejects.toThrow(/responded 502/);
+    await expect(new ApiProvider().getDevSpec()).rejects.toThrow(/responded 502/);
   });
 });

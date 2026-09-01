@@ -371,6 +371,11 @@ var dataApiCloudEnv = dataApiMode != 'cloud'
       { name: 'MLS_LOG_ANALYTICS_WORKSPACE_ID', value: logAnalytics.properties.customerId }
       { name: 'MLS_LOG_ANALYTICS_TIMESPAN', value: logAnalyticsTimespan }
       { name: 'MLS_MANAGED_IDENTITY_CLIENT_ID', value: dataApiIdentity.outputs.clientId }
+      // Billing scope for the azure-cost feed. Set explicitly rather than left to
+      // default to the Defender subscription: they are the same value today and
+      // are not the same CONCEPT, and an estate that later bills across two
+      // subscriptions should not discover the coupling then.
+      { name: 'MLS_COST_SUBSCRIPTION_ID', value: subscription().subscriptionId }
     ]
 
 // Scale-to-zero settings shared by all three apps.
@@ -461,6 +466,31 @@ module mcpCostManagementReaderGrant 'modules/workload-role-assignments.bicep' = 
   params: {
     principalId: mcpToolsIdentity.outputs.principalId
     // 'Cost Management Reader' — view cost data and configuration (exports, budgets); no write access (built-in role, stable GUID; verified against learn.microsoft.com/azure/role-based-access-control/built-in-roles/management-and-governance).
+    roleDefinitionId: '72fafb9e-0641-4937-9268-a91bfd8191a3'
+  }
+}
+
+// Grants data-api 'Cost Management Reader' at SUBSCRIPTION scope, for the
+// azure-cost feed (F117).
+//
+// The Ops tab is meant to answer "what does this landscape cost to run", and it
+// was answering "what does the fictional launch programme spend" - the lakehouse
+// cost_daily table is the generator's synthetic budget, and cost-ingest maps even
+// REAL Cost Management rows onto a `costCenter` tag whose demo values are
+// Propulsion, Avionics and Range Operations. Real Azure money arrived wearing a
+// costume. data-api now asks Cost Management directly and groups by service and
+// resource group instead.
+//
+// Subscription scope because cost has no narrower resource to bind to - the same
+// reasoning, and the same role GUID, as mcpCostManagementReaderGrant above.
+// Read-only: the role views cost data, exports and budgets and can write none of
+// them.
+module dataApiCostManagementReaderGrant 'modules/workload-role-assignments.bicep' = {
+  name: 'l7-data-api-cost-mgmt-reader-grant'
+  scope: subscription()
+  params: {
+    principalId: dataApiIdentity.outputs.principalId
+    // 'Cost Management Reader' - view cost data and configuration (exports, budgets); no write access (built-in role, stable GUID; the same constant mcp-tools is granted twenty lines above, which is where it was verified).
     roleDefinitionId: '72fafb9e-0641-4937-9268-a91bfd8191a3'
   }
 }
