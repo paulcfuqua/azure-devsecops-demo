@@ -543,7 +543,56 @@ it is still about sign-in risk and auto-labeling, nothing else.
    environment — bookmark the environment-scoped URL
    (`.../environments/<environment-id>/home`) or it drops you into the tenant Default,
    which has no Dataverse and reports "Dataverse isn't set up in this environment".
-6. ⚠ **Fabric data agent enablement** (blocks L8's knowledge source only — L8 has a
+6. ⚠ **Directory Readers for the Azure SQL server identity** (blocks EVERY dashboard).
+   One assignment, once per tenant, and **nothing in the demo shows data without it**.
+
+   `CREATE USER [<app identity>] FROM EXTERNAL PROVIDER` makes the SQL engine resolve the
+   principal in Microsoft Graph. When a **user** runs it, Azure SQL impersonates that user
+   with delegated permissions - which is why running it by hand always works and proves
+   nothing. **An application cannot impersonate another application**, so when CI runs it
+   as a service principal the engine falls back to *the SQL server's own managed identity*.
+   Microsoft is explicit: *"The server identity must exist and have the Microsoft Graph
+   query permissions or the operations fail."*
+   ([docs](https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-service-principal))
+
+   L6's template creates the server identity (`managedIdentities.systemAssigned`). Granting
+   it directory read needs **Privileged Role Administrator**, which is why it is here and
+   not in a pipeline - and deliberately so: an agent that can grant itself directory roles
+   is demonstrating something nobody wants to buy.
+
+   **Portal:** Entra ID -> Roles and administrators -> **Directory Readers** -> Add
+   assignments -> search for the SQL server's name (the identity carries it).
+
+   **CLI**, noting the single quotes - in PowerShell a double-quoted `$ref` is eaten by the
+   parser:
+
+   ```powershell
+   $sid = az sql server show -g <data rg> -n <server> --query identity.principalId -o tsv
+   $role = az rest --method GET --url "https://graph.microsoft.com/v1.0/directoryRoles?`$filter=displayName eq 'Directory Readers'" --query 'value[0].id' -o tsv
+   # Activate the role first if $role is empty - it is not present in a tenant until used:
+   #   az rest --method POST --url https://graph.microsoft.com/v1.0/directoryRoles --body '{\"roleTemplateId\":\"88d8e3e3-8f55-4a1e-953a-9b9898b8876b\"}'
+   '{"@odata.id":"https://graph.microsoft.com/v1.0/directoryObjects/' + $sid + '"}' | Set-Content body.json
+   az rest --method POST --url "https://graph.microsoft.com/v1.0/directoryRoles/$role/members/`$ref" --body '@body.json'
+   ```
+
+   **Verify with the unified API, not the legacy one.** `GET /directoryRoles/<id>/members`
+   can return `[]` for an assignment that exists and works; this is the reliable check:
+
+   ```bash
+   az rest --method GET --url "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?\$filter=principalId eq '<server identity>'"
+   ```
+
+   > **Two traps worth naming.** `az sql server update --identity-type SystemAssigned`
+   > **exits 0 and does nothing** - assign the identity with an ARM REST `PATCH` and re-read
+   > it to confirm. And Azure SQL caches directory permissions, so allow a few minutes
+   > after the assignment before the first `CREATE USER` succeeds.
+
+   L7's F20 step now *verifies* the contained user exists rather than reporting that a
+   script ran, so a missing assignment fails the layer loudly with this explanation instead
+   of leaving every `/api/tables` route answering 502 while the pipeline reports success
+   (F112).
+
+7. ⚠ **Fabric data agent enablement** (blocks L8's knowledge source only — L8 has a
    documented fallback, see § B and `docs/runbooks/layers/L08.md`). In the Fabric admin
    portal, enable the **cross-geo processing for AI** and **cross-geo storing for AI**
    tenant settings, which the data agent requires. Then confirm your capacity is a
@@ -552,7 +601,7 @@ it is still about sign-in risk and auto-labeling, nothing else.
    compliance point Microsoft states plainly: with this integration, "responses returned
    by Fabric data agents may be sent outside of Fabric's compliance boundary or geographic
    region" — fine for synthetic launch data, worth saying out loud on stage.
-7. ⚠ **Direct Line channel for the embedded surface** (blocks L8's Ask tab). After the
+8. ⚠ **Direct Line channel for the embedded surface** (blocks L8's Ask tab). After the
    L8 pipeline first publishes the agent, in Copilot Studio open **Settings → Security →
    Web channel security**, turn **Require secured access** on, and copy one of the two
    Direct Line secrets. Store it in the L6 Key Vault as `directline-secret`:
@@ -568,12 +617,12 @@ it is still about sign-in risk and auto-labeling, nothing else.
    not schedule this against a demo start time. This is the system's only stored runtime
    secret and it never goes near CI or the repo: GitHub Actions still authenticates by
    federation with no stored secret at all.
-8. ⚠ **Budget guard:** run `scripts/bootstrap/03-budget.ps1` — $75/month budget with
+9. ⚠ **Budget guard:** run `scripts/bootstrap/03-budget.ps1` — $75/month budget with
    **actual** alerts at 50/80/100% and **forecast** alerts at 50/80%, to your email. The
    forecast pair is the half that warns you before the money is gone rather than after;
    this line used to name only the actual alerts (finding F43). Backstop behind gate G4's cost-anomaly trigger.
    Copilot Studio's meter bills to this same subscription, so it sits inside this budget.
-9. ⚠ **Populate the `demo` GitHub environment** with the variables (and the two
+10. ⚠ **Populate the `demo` GitHub environment** with the variables (and the two
    certificate secrets) in the tables below. `scripts/up.ps1` refuses to dispatch a
    rebuild until the first four exist, precisely because the pre-G0 guard would
    otherwise skip every layer and report success.
