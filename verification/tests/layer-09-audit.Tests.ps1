@@ -56,6 +56,7 @@ Describe 'layer-09-audit' {
         $script:PushProtection = 'enabled'
         $script:AlertsHeader = "HTTP/2.0 204 No Content`nx-github-request-id: abc"
         $script:AnalysisVisible = $true
+        $script:DependabotListHeader = "HTTP/2.0 200 OK`n`n[]"
         $script:Analyses = @(
             [pscustomobject]@{ tool = [pscustomobject]@{ name = 'CodeQL' }; category = '/language:javascript-typescript'; environment = '' }
             [pscustomobject]@{ tool = [pscustomobject]@{ name = 'CodeQL' }; category = '/language:python'; environment = '' }
@@ -76,6 +77,7 @@ Describe 'layer-09-audit' {
         Mock Invoke-MlsGh {
             $joined = $Argument -join ' '
             if ($joined -like "*vulnerability-alerts*") { return $script:AlertsHeader }
+            if ($joined -like '*dependabot/alerts*') { return $script:DependabotListHeader }
             if ($joined -like '*code-scanning/analyses*') { return $script:Analyses }
             if ($joined -like '*actions/runs/*/jobs*') { return [pscustomobject]@{ jobs = $script:TrivyJobs } }
             if ($joined -like "api repos/$($script:Repository)") {
@@ -190,7 +192,7 @@ Describe 'layer-09-audit' {
             (Get-Row -Context $context -Id 'V9.1').Observed | Should -BeLike '*Dependabot alerts are off*'
         }
 
-        It 'reports GHAS state as UNOBSERVABLE, not disabled, when the token cannot see it' {
+        It 'never reports an unreadable control as a disabled one' {
             # V9.1 read an absent security_and_analysis block as "secret_scanning=''" and
             # announced that secret scanning and push protection were off - on a repository
             # where both were verifiably enabled. A security audit reporting a control as
@@ -199,19 +201,31 @@ Describe 'layer-09-audit' {
             $script:AnalysisVisible = $false
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V9.1'
-            # Still FAILS - "nobody could check" is not a sign-off either.
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
-            $row.Observed | Should -BeLike '*not visible*'
             $row.Observed | Should -Not -BeLike "*secret_scanning.status=''*" `
                 -Because 'an absent field must never be reported as a disabled control'
-            $row.Detail | Should -BeLike '*admin*'
+            $row.Observed | Should -BeLike '*admin-only*'
         }
 
-        It 'reports a 403 from vulnerability-alerts as UNOBSERVABLE, not as alerts being off' {
-            # 404 genuinely means off and is documented as such; 403 means the caller may
-            # not ask. The old check treated everything that was not 204 as "off".
+        It 'passes on capability evidence when the admin-only endpoint cannot be read' {
+            # The point of the reshape: /vulnerability-alerts is admin-only, but LISTING
+            # Dependabot alerts is not, and a 200 there proves the feature is on - a
+            # repository with alerts disabled cannot serve them. Capability, not artefact.
+            $script:AnalysisVisible = $false
             $script:AlertsHeader = "HTTP/2.0 403 Forbidden"
+            $script:DependabotListHeader = "HTTP/2.0 200 OK`n`n[]"
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V9.1'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*alerting is live*'
+            # The scope boundary is stated in the report, never left implicit.
+            $row.Observed | Should -BeLike '*NOT CLAIMED*'
+            $row.Observed | Should -BeLike '*G0*'
+        }
+
+        It 'fails when neither Dependabot endpoint can be read' {
+            # Both blind is genuinely unobservable, and unobservable is not a sign-off.
+            $script:AlertsHeader = "HTTP/2.0 403 Forbidden"
+            $script:DependabotListHeader = "HTTP/2.0 403 Forbidden"
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V9.1'
             $row.Status | Should -Be 'FAIL'
