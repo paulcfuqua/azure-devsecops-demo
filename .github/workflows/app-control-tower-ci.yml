@@ -128,6 +128,32 @@ jobs:
           npm run test --workspace apps/shared/spec-renderer
           npm run test --workspace "${WORKSPACE}"
 
+      # THE CHECK NOBODY HAD WRITTEN: does a browser actually render this app?
+      #
+      # docs/DEMO-READINESS.md section D named this gap and 2026-09-01 evidenced
+      # it five times - F110, F111, F116, F117 and a "Defender secure score 0.0%"
+      # rendered from an empty API response. EVERY ONE was found by a human
+      # opening the page, and none was catchable by anything in CI, because the
+      # suites above run in Node: no browser, and no Content-Security-Policy for
+      # a browser to enforce.
+      #
+      # This serves the production bundle under the production CSP, drives real
+      # Chromium at it, and asserts each tab puts content in the DOM. It runs in
+      # LOCAL_DATA mode against committed fixtures, so it needs no tenant, no
+      # credential and no network - which is what makes it a pull-request check
+      # rather than a post-deployment one.
+      - name: Install Chromium for the render check
+        run: npx playwright install --with-deps chromium
+
+      - name: Render the app in a real browser under the production CSP
+        run: |
+          set -euo pipefail
+          # LOCAL_DATA=1 forces the committed fixtures into a PRODUCTION build,
+          # which is the only way to exercise the shipped bundle without a
+          # tenant. vite maps it to VITE_LOCAL_DATA (see vite.config.ts).
+          LOCAL_DATA=1 npm run build --workspace "${WORKSPACE}"
+          npm run test:browser --workspace "${WORKSPACE}"
+
   image:
     # Named per app, not just "container build, scan and push": all five
     # app-*-ci.yml workflows run this job on every pull request now, and a

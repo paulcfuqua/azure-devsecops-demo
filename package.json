@@ -26,5 +26,8 @@
     "dev:launch-ops": "npm run dev --workspace apps/launch-ops",
     "dev:control-tower": "npm run dev --workspace apps/control-tower",
     "dev:mcp-tools": "npm run dev --workspace apps/mcp-tools"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
   }
 }
