@@ -42,3 +42,26 @@ evidence for the lakehouse data path and for nothing else.
 **Why it matters.** It is the first render of real estate data in a browser in this
 project, and it closes F101 — which the register had recorded as the largest hole, on the
 strength of a documented Fabric limitation that the running estate contradicts.
+
+---
+
+## `2026-09-01-control-tower-dev-github-feeds.png`
+
+Control Tower, **Dev** tab, taken 2026-09-01 immediately after `mls-github-token` was
+provisioned and L7 redeployed (data-api revision `--0000003`).
+
+**Data path.** GitHub REST → `data-api`, authenticated with a fine-grained read-only PAT
+resolved from Key Vault by the container app's managed identity at runtime — the token is
+never a deploy parameter, a build arg, or an env value in the repo. Served through the
+app's `/api` proxy behind Easy Auth.
+
+**Independently checked.** The same two routes were probed directly from the authenticated
+browser in the same session: `feeds/workflow-runs` → 200 with `total_count: 2587`, and
+`feeds/app-requests` → 200 with a `PrimaryResult` table. Before the token landed both had
+answered `503 backend_not_configured`, which is what makes this image a before/after rather
+than a claim.
+
+**What it does NOT show.** The Ops tab at this moment was still rendering the *fictional*
+launch-programme budget — that is F117, fixed separately. And the Sec tab was displaying
+"Defender secure score 0.0%" from an empty API response, which is F116's second half.
+Neither is visible here, and neither is evidenced by this image.

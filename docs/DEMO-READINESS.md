@@ -123,6 +123,50 @@ of them touches: a row of data, a rendered page, a working answer.
 > following the runbook provisions the vault without it and the GitHub feeds stay 503 with
 > nothing saying why. That step now exists.
 
+> ---
+>
+> **UPDATE 2026-09-01, third pass - the token landed, and the Ops tab was measuring the
+> wrong thing entirely.**
+>
+> With `mls-github-token` provisioned and L7 redeployed, **all eight Control Tower routes
+> answer 200**: 2,587 workflow runs, **76 open code-scanning alerts**, 4 Dependabot alerts,
+> real CVEs from CodeQL, Dependabot and Trivy. The Dev and Sec tabs render.
+>
+> **F116's second half was found in a PIXEL, not an audit line.** The live Sec tab displayed
+> `Defender secure score 0.0%` - the most alarming figure that panel can show, produced by
+> `{"value":[]}` and the expression `score ? round(...) : 0`. An empty list is also what
+> Defender's ARM API returns to a caller who may not read it, so 0.0% stood in for two
+> states, one of them "you are not allowed to know". Absent inputs now render
+> `"not reported"`. This is the sixth instance of the absence-vs-denial class and the first
+> in a rendered UI, where a reader has no verification report to check against.
+>
+> **The Defender emptiness is real, and this time that was established rather than assumed.**
+> Sibling endpoints under the same provider were probed: `assessments` -> 0,
+> `secureScoreControls` -> 0, `Microsoft.Security` **Registered**, FoundationalCspm on
+> (paid CloudPosture off, so no spend), 25 resources present. Everything under the provider
+> is empty, which is the initial-computation delay, not a denial and not a missing grant.
+>
+> **F117 - the Ops tab was showing the FICTIONAL company's money.** Sponsor caught it: the
+> tab is meant to answer "what does this landscape cost to run" and was rendering
+> `cost_daily`, the generator's synthetic launch-programme budget split across Propulsion,
+> Avionics and Range Operations. Worse, fixing the data source alone would not have fixed
+> the tab: `cost-ingest/normalise.ts` aggregates even genuine Cost Management rows onto a
+> `costCenter` **tag** whose demo values are those same fictional units, so real Azure money
+> arrives wearing a costume.
+>
+> Three facts settled the design. The Cost Management **export** exists and is Active Daily
+> but has **never run** (0 runs; its recurrence window opened today, recreated by the
+> rebuild). The **query** API is throttled hard - 429 on four consecutive calls. And the
+> flight-telemetry half of the tab was fictional too. So: a new `azure-cost` feed queries
+> Cost Management directly with data-api's managed identity, **cached an hour** because the
+> figures settle daily and the API will not tolerate more, grouped by **Azure service and
+> resource group** - what actually incurs the charge. The flight telemetry is gone from Ops.
+> `stale` is in the contract: a retained figure presented as a current one is the same
+> defect as an empty list presented as a zero.
+>
+> Still open: the Ops tab's real numbers are unverified against the live tenant, because the
+> throttle blocked a direct read while this was written. First deploy will show it.
+
 ### B1. The API serves no data (F101) — the biggest hole *(RESOLVED 2026-09-01, see above)*
 
 `data-api` returns **502** on every `/api/tables/*` route. Fabric's SQL endpoint accepts

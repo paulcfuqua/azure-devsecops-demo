@@ -1,0 +1,32 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "stale": false,
+  "currency": "USD",
+  "timeframe": "MonthToDate",
+  "total": 14.8123,
+  "byService": [
+    { "name": "Azure Container Apps", "cost": 5.9312 },
+    { "name": "Azure SQL Database", "cost": 3.4188 },
+    { "name": "Log Analytics", "cost": 2.2077 },
+    { "name": "Storage", "cost": 1.5041 },
+    { "name": "Azure Functions", "cost": 0.9214 },
+    { "name": "Key Vault", "cost": 0.4903 },
+    { "name": "Bandwidth", "cost": 0.2188 },
+    { "name": "Container Registry", "cost": 0.12 }
+  ],
+  "byResourceGroup": [
+    { "name": "mls-rg-apps", "cost": 6.0512 },
+    { "name": "mls-rg-data", "cost": 3.5388 },
+    { "name": "mls-rg-platform", "cost": 3.3011 },
+    { "name": "mls-rg-ops", "cost": 1.9212 }
+  ],
+  "daily": [
+    { "date": "2026-08-25", "cost": 1.8412 },
+    { "date": "2026-08-26", "cost": 2.0173 },
+    { "date": "2026-08-27", "cost": 1.9944 },
+    { "date": "2026-08-28", "cost": 2.1038 },
+    { "date": "2026-08-29", "cost": 2.2761 },
+    { "date": "2026-08-30", "cost": 2.2015 },
+    { "date": "2026-08-31", "cost": 2.378 }
+  ]
+}

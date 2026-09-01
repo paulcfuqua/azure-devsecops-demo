@@ -121,27 +121,35 @@ export interface LogAnalyticsResult {
 }
 
 /** Cost Management export landed in the lakehouse (Track A generator shape). */
-export interface CostDailyRow {
-  cost_id: string;
-  date: string;
-  cost_center: string;
-  amount_usd: number;
-  budget_usd: number;
+/**
+ * WHAT THE ESTATE COSTS TO RUN - the Ops tab's subject (F117).
+ *
+ * This replaced `CostDailyRow` and `TelemetrySummaryRow`, and the replacement is
+ * the point rather than a refactor. Those two described the FICTIONAL launch
+ * company: a synthetic programme budget split across Propulsion, Avionics and
+ * Range Operations, and flight telemetry with max-Q and MECO times. Rendering
+ * them on a tab titled Ops invited a reader to think they were looking at what
+ * the platform costs and how it behaves. They were looking at set dressing.
+ *
+ * Cost Management answers the real question, grouped by what actually incurs the
+ * charge - the Azure service and the resource group. Note that fixing the lakehouse
+ * table instead would not have been enough: cost-ingest aggregates even genuine
+ * Cost Management rows onto a `costCenter` TAG whose demo values are those same
+ * fictional business units, so real Azure money still arrives wearing a costume.
+ *
+ * `asOf` and `stale` are load-bearing, not decoration: the query API is throttled
+ * and data-api caches, so a reader must be able to tell a current figure from a
+ * retained one.
+ */
+export interface AzureCostFeed {
+  asOf: string;
+  stale: boolean;
   currency: string;
-}
-
-/** Flight telemetry rollup from the lakehouse (Track A generator shape). */
-export interface TelemetrySummaryRow {
-  telemetry_id: string;
-  launch_id: string;
-  max_q_kpa: number | null;
-  max_accel_g: number | null;
-  meco_time_s: number | null;
-  peak_thrust_kn: number | null;
-  max_altitude_km: number | null;
-  anomaly_count: number;
-  telemetry_coverage_pct: number | null;
-  data_dropout_s: number | null;
+  total: number;
+  timeframe: string;
+  byService: Array<{ name: string; cost: number }>;
+  byResourceGroup: Array<{ name: string; cost: number }>;
+  daily: Array<{ date: string; cost: number }>;
 }
 
 /** Everything the Dev + Sec tabs consume — fixture-backed in local mode. */
@@ -152,4 +160,5 @@ export interface FeedBundle {
   dependabotAlerts: DependabotAlert[];
   secureScore: SecureScoreResponse;
   secureScoreControls: SecureScoreControlsResponse;
+  azureCost: AzureCostFeed;
 }

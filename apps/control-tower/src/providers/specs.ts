@@ -1,12 +1,11 @@
 import type { ComponentSpec, Spec } from "@mls/spec-renderer";
 import type {
+  AzureCostFeed,
   CodeScanningAlert,
-  CostDailyRow,
   DependabotAlert,
   LogAnalyticsResult,
   SecureScoreControlsResponse,
   SecureScoreResponse,
-  TelemetrySummaryRow,
   WorkflowRunsFeed,
 } from "./types";
 
@@ -371,132 +370,105 @@ export function buildSecSpec(
 /* ---------------------------------------------------------------- Ops tab */
 
 export function buildOpsSpec(
-  costRows: CostDailyRow[] | null,
-  telemetry: TelemetrySummaryRow[] | null,
+  cost: AzureCostFeed | null,
   outages: readonly FeedOutage[] = [],
 ): Spec {
-  const byMonth = new Map<string, { amount: number; budget: number }>();
-  const byCenter = new Map<string, number>();
-  let totalAmount = 0;
-  let totalBudget = 0;
-  for (const row of costRows ?? []) {
-    if (typeof row.amount_usd !== "number" || !row.date) continue;
-    const month = row.date.slice(0, 7);
-    const agg = byMonth.get(month) ?? { amount: 0, budget: 0 };
-    agg.amount += row.amount_usd;
-    agg.budget += typeof row.budget_usd === "number" ? row.budget_usd : 0;
-    byMonth.set(month, agg);
-    totalAmount += row.amount_usd;
-    totalBudget += typeof row.budget_usd === "number" ? row.budget_usd : 0;
-    if (row.cost_center) {
-      byCenter.set(row.cost_center, (byCenter.get(row.cost_center) ?? 0) + row.amount_usd);
-    }
-  }
-  const monthly = [...byMonth.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    // Noon-UTC anchor, same reason as the Dev series above.
-    .map(([month, agg]) => ({
-      x: `${month}-01T12:00:00Z`,
-      y: round(agg.amount / 1000, 1),
-    }));
-  const centerData = [...byCenter.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 24)
-    .map(([center, amount]) => ({ label: center, value: round(amount / 1000, 0) }));
-
-  const budgetVariance =
-    totalBudget > 0 ? round(((totalAmount - totalBudget) / totalBudget) * 100, 1) : 0;
-
-  const tele = telemetry ?? [];
-  const coverage = tele
-    .map((t) => t.telemetry_coverage_pct)
-    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
-  const avgCoverage =
-    coverage.length > 0
-      ? round(coverage.reduce((a, b) => a + b, 0) / coverage.length, 2)
-      : 0;
-  const totalAnomalies = tele.reduce((sum, t) => sum + (t.anomaly_count ?? 0), 0);
-  const flightsWithAnomalies = tele.filter((t) => (t.anomaly_count ?? 0) > 0).length;
-  const dropouts = tele
-    .map((t) => t.data_dropout_s)
-    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
-  const avgDropout =
-    dropouts.length > 0
-      ? round(dropouts.reduce((a, b) => a + b, 0) / dropouts.length, 1)
-      : 0;
-
   const components: ComponentSpec[] = [];
   const notice = outageNotice(outages);
   if (notice) components.push(notice);
+
+  if (!cost) {
+    // Nothing to be partial about. The KPI row still renders so the tab has a
+    // shape, and every figure says what it is: absent, not zero.
+    components.push({
+      type: "kpiRow",
+      title: "Platform run cost",
+      description: "Azure Cost Management - what this estate costs to operate.",
+      items: [
+        { label: "Total run cost", value: "not reported" },
+        { label: "Services billing", value: "not reported" },
+        { label: "Largest line item", value: "not reported" },
+      ],
+    });
+    return { version: "1", layout: "stack", components };
+  }
+
+  const money = (n: number): number => Math.round(n * 100) / 100;
+  const top = cost.byService[0];
+
+  // The window and the freshness belong ON the tab, not in a tooltip. "$14.81"
+  // means nothing without "month to date", and a retained figure presented as a
+  // current one is the same defect as an empty list presented as a zero.
+  const asOfLabel = cost.asOf.slice(0, 16).replace("T", " ");
   components.push({
     type: "kpiRow",
-    title: "Cost & reliability",
+    title: "Platform run cost",
     description:
-      "Well-Architected: Cost Optimization + Reliability — cost exports and flight telemetry from the lakehouse.",
+      `Azure Cost Management, ${cost.timeframe} actual cost in ${cost.currency}. ` +
+      `Read ${asOfLabel} UTC${cost.stale ? " - RETAINED, the upstream refused a fresh query" : ""}.`,
     items: [
-      // Same rule as the Sec tab: a store that did not answer yields "not
-      // reported", never a number. A spend of 0 k$ and 0 flight anomalies are
-      // both plausible-looking figures that would be read as fact.
-      costRows === null
-        ? { label: "Program spend (all time)", value: "not reported" }
-        : {
-            label: "Program spend (all time)",
-            value: round(totalAmount / 1000, 0),
-            unit: "k$",
-          },
-      costRows === null
-        ? { label: "Budget variance", value: "not reported" }
-        : {
-            label: "Budget variance",
-            value: budgetVariance,
-            unit: "%",
-            decimals: 1,
-            trend: budgetVariance > 0 ? "up" : budgetVariance < 0 ? "down" : "flat",
-          },
-      telemetry === null
-        ? { label: "Avg telemetry coverage", value: "not reported" }
-        : { label: "Avg telemetry coverage", value: avgCoverage, unit: "%", decimals: 2 },
-      telemetry === null
-        ? { label: "Flight anomalies", value: "not reported" }
-        : { label: "Flight anomalies", value: totalAnomalies },
+      { label: "Total run cost", value: money(cost.total), unit: cost.currency, decimals: 2 },
+      { label: "Services billing", value: cost.byService.length },
+      top
+        ? { label: `Largest: ${top.name}`, value: money(top.cost), unit: cost.currency, decimals: 2 }
+        : { label: "Largest line item", value: "nothing billed yet" },
+      {
+        label: "Resource groups billing",
+        value: cost.byResourceGroup.length,
+      },
     ],
   });
-  if (monthly.length >= 2) {
+
+  if (cost.daily.length >= 2) {
     components.push({
       type: "lineChart",
-      title: "Monthly program spend",
-      description: "Cost Management daily export aggregated by month, all cost centers.",
-      data: monthly,
-      unit: "k$",
-      decimals: 1,
+      title: "Daily run cost",
+      description: `Actual cost per day across every service, in ${cost.currency}.`,
+      // Noon UTC for the same reason the Dev tab's series uses it: the renderer
+      // coerces to Date and charts in the viewer's zone, so midnight slides the
+      // label back a day west of Greenwich.
+      data: cost.daily.map((d) => ({ x: `${d.date}T12:00:00Z`, y: money(d.cost) })),
+      unit: cost.currency,
+      decimals: 2,
     });
   }
-  if (centerData.length > 0) {
+
+  if (cost.byService.length > 0) {
     components.push({
       type: "donutChart",
-      title: "Spend by cost center",
-      data: centerData,
-      unit: "k$",
+      title: "Cost by Azure service",
+      description:
+        "Where the money actually goes: container apps, the SQL database, the lakehouse and Log Analytics.",
+      data: cost.byService
+        .slice(0, 8)
+        .map((sv) => ({ label: sv.name, value: money(sv.cost) })),
+      unit: cost.currency,
     });
   }
-  components.push(
-    {
-      type: "statCard",
-      title: "Launches with anomalies",
-      description:
-        tele.length > 0
-          ? `${flightsWithAnomalies} of ${tele.length} flights recorded at least one anomaly.`
-          : "No telemetry rows loaded.",
-      value: flightsWithAnomalies,
-    },
-    {
-      type: "statCard",
-      title: "Avg data dropout",
-      description: "Mean telemetry dropout per flight.",
-      value: avgDropout,
-      unit: "s",
-      decimals: 1,
-    },
-  );
+
+  if (cost.byResourceGroup.length > 0) {
+    components.push({
+      type: "barChart",
+      title: "Cost by resource group",
+      description: "Platform, apps, data and ops - the four groups teardown deletes.",
+      data: cost.byResourceGroup.map((rg) => ({ x: rg.name, y: money(rg.cost) })),
+      unit: cost.currency,
+      decimals: 2,
+    });
+  }
+
+  if (cost.byService.length > 0) {
+    components.push({
+      type: "dataTable",
+      title: "Run cost by service",
+      description: `Actual cost, ${cost.timeframe}, highest first.`,
+      columns: [
+        { key: "service", label: "Azure service" },
+        { key: "cost", label: `Cost (${cost.currency})`, align: "right" },
+      ],
+      rows: cost.byService.map((sv) => ({ service: sv.name, cost: money(sv.cost) })),
+    });
+  }
+
   return { version: "1", layout: "stack", components };
 }

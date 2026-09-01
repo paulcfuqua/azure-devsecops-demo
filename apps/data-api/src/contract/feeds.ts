@@ -100,6 +100,44 @@ export interface LogAnalyticsResult {
   }>;
 }
 
+/**
+ * What the estate COSTS TO RUN, which is a different question from what the
+ * fictional launch company spends.
+ *
+ * The lakehouse `cost_daily` table answers the second question: the generator
+ * seeds it with a synthetic launch-programme budget (Propulsion, Avionics,
+ * Range Operations), and even once the real Cost Management export lands,
+ * cost-ingest aggregates it to a `costCenter` TAG whose demo values are those
+ * same fictional business units. Real Azure money arrives wearing a costume.
+ *
+ * This feed asks Cost Management directly and groups by what actually incurs
+ * the charge - the Azure service and the resource group - so the Ops tab can
+ * say "Container Apps cost this much" rather than "Propulsion cost this much".
+ *
+ * `asOf` and `stale` are part of the contract, not decoration: the query API is
+ * aggressively throttled (429 on four consecutive calls while this was being
+ * written), so the backend caches and may serve a cached answer. A reader must
+ * be able to tell a current figure from a retained one.
+ */
+export interface AzureCostFeed {
+  /** ISO-8601 instant the underlying query was answered. */
+  asOf: string;
+  /** True when the upstream refused and this is a retained earlier answer. */
+  stale: boolean;
+  /** Billing currency reported by Cost Management, e.g. "USD". */
+  currency: string;
+  /** Total actual cost over the window, in `currency`. */
+  total: number;
+  /** The window these figures cover, as Cost Management was asked for it. */
+  timeframe: string;
+  /** Cost per Azure service - "Azure Container Apps", "Azure SQL Database". */
+  byService: Array<{ name: string; cost: number }>;
+  /** Cost per resource group - platform / apps / data / ops. */
+  byResourceGroup: Array<{ name: string; cost: number }>;
+  /** Daily totals across every service, oldest first. */
+  daily: Array<{ date: string; cost: number }>;
+}
+
 /** Any feed payload, as served. */
 export type FeedPayload =
   | WorkflowRunsFeed
@@ -107,4 +145,5 @@ export type FeedPayload =
   | DependabotAlert[]
   | SecureScoreResponse
   | SecureScoreControlsResponse
-  | LogAnalyticsResult;
+  | LogAnalyticsResult
+  | AzureCostFeed;
