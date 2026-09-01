@@ -33,13 +33,13 @@ below and know what to do next.*
 `docs/BRIEF.md` commits to **four showpieces** and **twelve layers**. This is what is true
 on 2026-09-01, with the evidence beside it.
 
-### The four showpieces — 2 working, 1 wired, 1 blocked on one manual action
+### The four showpieces — 2 working, 1 ready but unobserved, 1 blocked on one manual action
 
 | # | Showpiece | Status | Evidence |
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
 | **4** | **Compliance platform** — NIST 800-171 | ✅ **working** | **Independently audited for the first time, 2026-09-01.** `verification/layer-12-audit.ps1` runs as `mls-verifier` and reports **4 PASS + 2 SKIP**: the shipped artifact is complete against the catalog and carries no score, the honesty invariant holds in the file rather than only in the derivation, Easy Auth refuses anonymous callers, and the collection history is a git history. The two SKIPs name their owners rather than being gaps |
-| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **wired, one deploy away** | The agent is now **imported and published** (both firsts, 2026-09-01), the Direct Line secret is in Key Vault, and the token Function holds the reference. It still answers nothing because of **F122** — the Key Vault reference resolved to nothing while every view of it looked correct. Template fixed; needs L6 then L7. **Verify by opening the Ask tab, not by reading a green run** |
+| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **ready, unobserved** | Every link verified against the running system: agent **published**, secret in Key Vault, Key Vault reference `Resolved` (F122 fixed, V6.8 confirms), token endpoint returns **HTTP 200 with a real token**, and the deployed bundle now carries the endpoint (F124 fixed — confirmed by grepping the GHCR image layers). **Not yet seen answering:** Control Tower is behind Easy Auth, so a human must sign in and open the tab. Ready to demonstrate, not demonstrated |
 | **3** | **Self-healing code** | ❌ **never demonstrated** | `self-heal.yml` runs green on schedule and skips every healing lane. The reason is **not** "no alerts" — four are open, one critical. The selector gets **HTTP 403** and reports it as `found=false`, indistinguishable from an empty surface (**F123**). One manual action away: `SELF_HEAL_TOKEN` must be a **repository** secret, not a `demo` environment one |
 
 ### The twelve layers — 7 verified, 3 partial, 2 not done
@@ -75,13 +75,19 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 
 **BLOCKER-1 and BLOCKER-2 are both CLOSED as of 2026-09-01.** What is left:
 
-- **BLOCKER-3** (the Direct Line secret) is **server-side DONE and one image rebuild from
-  closed.** The agent is published, the secret is in Key Vault, F122's identity fix is
-  deployed, V6.8 confirms the reference resolves, and the token endpoint **returns a real
-  token (HTTP 200)**. What is left is purely client-side: **F124** - the bundle carries no
-  token URL, because the job that builds it declared no environment. Fixed in the workflow;
-  needs a control-tower image **rebuild** (a redeploy cannot help - the value is baked in at
-  build time). **Do not mark this closed from a green workflow: open the Ask tab.**
+- **BLOCKER-3 is CLOSED on every link that can be checked without a browser sign-in**
+  (2026-09-01). Each was verified against the running system, not inferred from a green run:
+  the agent is published; the secret is in Key Vault; the Key Vault reference reports
+  `Resolved` (F122 fixed, and **V6.8 confirms it in CI**); the token endpoint returns
+  **HTTP 200 with a real, origin-scoped Direct Line token**; and the deployed bundle -
+  pulled from GHCR and grepped layer by layer - now contains
+  `https://mls-directline-demo-func.azurewebsites.net/api/directline/token` (F124 fixed).
+  Revision `--0000010` carries 100% of traffic.
+
+  **What is NOT verified: nobody has watched the Ask tab render a conversation.** Control
+  Tower sits behind Easy Auth, so that last step needs a human signed in. Every link in the
+  chain is confirmed; the chain has not been observed end to end. Treat it as *ready to
+  demonstrate*, not *demonstrated*, until someone opens it.
 - **BLOCKER-4** was **misdiagnosed** and is now one manual action from closed. It is not
   "nothing to heal" - four Dependabot alerts are open, one critical, and the chain has been
   getting **HTTP 403** on every run because `SELF_HEAL_TOKEN` is an *environment* secret
@@ -142,8 +148,14 @@ it"*, and each failed silently and green.
 estate setting without declaring an environment — mutation-tested: with the fix reverted it
 names `app-control-tower-ci.yml::image reads MLS_DIRECTLINE_TOKEN_URL`.
 
-**Still required after this merges:** the control-tower image must be **rebuilt** — a
-redeploy of the existing image cannot help, because the value is baked in at build time.
+**Rebuilt and confirmed, 2026-09-01.** Image `sha-941f286`, revision `--0000010` at 100%
+traffic; its `index-BCApny3-.js` now contains the real endpoint. A redeploy could not have
+helped — the value is baked in at build time.
+
+The `image` job also now says, in its own log, whether the image will carry an endpoint. It
+is a **warning, never a failure**: this repository is meant to be cloned by strangers into
+their own tenants, and building with no published agent is a supported path. What was
+missing was never a gate — it was that `''` and "deliberately unset" looked identical.
 
 ### F123 — self-healing was never "nothing to heal"; it could not look *(fixed 2026-09-01)*
 

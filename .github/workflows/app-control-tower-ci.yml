@@ -208,6 +208,29 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      # AN EMPTY BUILD-TIME VARIABLE IS SILENT, AND THAT IS WHAT COST F124. A Vite
+      # variable is inlined at build time, so an empty one produces an image that is
+      # structurally fine and quietly missing a feature - here, an Ask tab that renders
+      # "no Direct Line channel is configured", which is a state this repo DELIBERATELY
+      # SUPPORTS and therefore cannot be told apart from the honest one.
+      #
+      # NOT A FAILURE, on purpose. This repository is meant to be cloned by strangers into
+      # their own tenants, and building it without a Copilot Studio agent is a supported
+      # path - failing here would break the first thing a newcomer does. What was missing
+      # was never a gate, it was VISIBILITY: the value silently resolving to '' looked
+      # exactly like the value being deliberately unset. Now the two are distinguishable in
+      # the log of the job that actually bakes it in.
+      - name: Say whether this image will carry a Direct Line endpoint
+        env:
+          TOKEN_URL: ${{ vars.MLS_DIRECTLINE_TOKEN_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN_URL}" ]; then
+            echo "::warning title=Image will ship WITHOUT a Direct Line endpoint::vars.MLS_DIRECTLINE_TOKEN_URL is empty in this job, so VITE_DIRECTLINE_TOKEN_URL is inlined as the empty string and the Ask tab will render its 'not configured' notice. That is correct and expected if no Copilot Studio agent is published. If one IS published, check that this job declares 'environment: demo' - an environment variable is invisible to a job that does not (F124)."
+          else
+            echo "Direct Line endpoint baked into this image: ${TOKEN_URL}"
+          fi
+
       - name: Build the image (context = repo root, open item P-7)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
