@@ -120,6 +120,54 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   checking - a wrapper, a helper default, or a fixture that re-wraps a return value is not a
   test, it is a mirror.
 
+## Direction
+
+*Sponsor direction, 2026-09-01. This is the ORDER the work is heading in, not the next
+ticket. Nothing here overrides an unblocked layer, a gate, or whatever the Orchestrator has
+in flight — if a phase-3 item is the thing in front of you and phase 1 is not blocked on it,
+do the work. What this section settles is **sequence when the sequence is in question**, and
+why each phase gates the next.*
+
+**1. The IaC runs smoothly, up and down.** A clean deploy of every layer, and a teardown and
+rebuild that completes. This is first because everything else is measured against a
+rebuilt estate: if the environment cannot be recreated, nothing built on it can be trusted
+or shown twice. F107 lives here — the rebuild currently fails at L6, because Log Analytics
+soft-deletes for 14 days and a same-name recreate recovers the old workspace.
+
+**2. The apps tell the truth about what is there.** The dashboards render real rows from the
+lakehouse, and what they display matches what the estate actually contains. F101 is the
+whole of this phase today: `data-api` cannot authenticate to Fabric's SQL endpoint, so every
+dashboard renders empty while every criterion passes. This phase is also where the gap named
+in `docs/DEMO-READINESS.md` § D closes — **no criterion currently asserts that the API
+returns a row**, and a layer that verifies plumbing without verifying water is why an empty
+estate signed off 5/5 for two days.
+
+**3. The advanced capabilities land.** Purview labels applied and visible; the Copilot agent
+published, authenticated and answering from the lakehouse; Defender scans producing real
+posture; the self-healing chain run at least once end to end. Each of these is a distinct
+showpiece and each is independently blocked today (P-12's certificates, F106's undeclared
+registrations, L10 never executed). They come third because a capability demonstrated over
+empty data demonstrates nothing.
+
+**4. The outbrief.** A document — target ~20 pages, PDF — that showcases the estate through
+**verifiable screenshots of real data in the running apps**, plus the narrative: the IaC,
+the apps as proof, the data segregation, the copilot on top, the self-healing pipeline, and
+disposable environments for sandboxes, upgrades and proofs of concept. The argument is
+business value and innovation — how this landscape shores up the automation floor so an
+enterprise can spend its attention on needle-moving work instead of undifferentiated
+plumbing.
+
+It is last for a reason that is not scheduling: **a screenshot is a claim, and three quarters
+of the intended screenshots would today photograph an empty page.** The document cannot be
+honest before phases 1–3 are real, and a polished outbrief over unverified capability is the
+exact failure this repository spends its verification budget preventing.
+
+One thing worth carrying into that document when it is written: the sharpest material is not
+the feature list. It is that this estate **catches its own false claims** — ten findings in a
+single session where a green check was confidently wrong, each now a test. For an audience
+answering to their own auditors, evidence that is structurally incapable of overstating
+itself is a stronger argument than any board or dashboard.
+
 ## Naming and tagging
 
 - Resource names: `mls-<app|role>-<env>-<type>` (e.g. `mls-mcp-demo-ca`,
