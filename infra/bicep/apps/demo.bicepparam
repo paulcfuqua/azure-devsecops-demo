@@ -129,3 +129,17 @@ param mcpToolsBackendMode = readEnvironmentVariable('MLS_TOOL_BACKENDS', 'local'
 // Scale-to-zero is non-negotiable (minReplicas=0 is hardcoded in main.bicep);
 // only the ceiling is tunable, and raising it is a spend-profile change (G2).
 param maxReplicas = 2
+
+// GitHub read-only token for data-api's three GitHub feeds (F116).
+//
+// The NAME of a Key Vault secret, never the token. Container Apps resolves the
+// value at runtime with data-api's own managed identity, so nothing here, in
+// ARM deployment history, or in a what-if log ever carries it - which matters
+// more than usual because this repository is public and what-if output is
+// printed into workflow logs GitHub cannot mask.
+//
+// Empty is a supported deployment and stays the default: the GitHub feeds then
+// answer 503 naming what is missing, and Control Tower's Ops tab - which reads
+// the lakehouse, not GitHub - is unaffected. Set MLS_GITHUB_TOKEN_SECRET to the
+// secret's name (mls-github-token) once it exists in the vault.
+param githubTokenSecretName = readEnvironmentVariable('MLS_GITHUB_TOKEN_SECRET', '')

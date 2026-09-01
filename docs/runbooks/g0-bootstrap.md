@@ -712,6 +712,52 @@ it is still about sign-in risk and auto-labeling, nothing else.
     so a gate that only armed itself in cloud was inert in production. `loadInboundAuth`
     in `apps/mcp-tools/src/auth-gate.ts` now throws regardless of mode.)
 
+11b. **`mls-github-token` — the GitHub read-only token for Control Tower's Dev and Sec
+    tabs** *(added 2026-09-01, finding F116)*. Optional, and the estate deploys and runs
+    without it: the three GitHub feeds then answer a typed **503** naming exactly what is
+    missing, Control Tower's **Ops** tab (lakehouse-backed) is unaffected, and Launch Ops
+    is unaffected. Skipping this is a supported configuration, not a broken one.
+
+    Provisioning it turns on `feeds/workflow-runs`, `feeds/code-scanning-alerts` and
+    `feeds/dependabot-alerts`. Note the repository is **public**, so `actions/runs` is
+    readable anonymously — it is `code-scanning` and `dependabot` that genuinely require
+    a credential.
+
+    Create a **fine-grained PAT** at
+    <https://github.com/settings/personal-access-tokens/new>, scoped to **this repository
+    only**, with **read-only** on **Actions**, **Code scanning alerts**, **Dependabot
+    alerts** and **Metadata**. Nothing needs write. Then:
+
+    ```bash
+    kv=mls-sec-demo-kv     # or <prefix>-sec-<env>-kv from infra/bicep/naming.bicep
+
+    # SAME RBAC PRECONDITION AS ITEM 11, and it catches people who skipped that item:
+    # this vault is RBAC-mode, so Owner and Global Admin grant NO data-plane access and
+    # the set below fails `ForbiddenByRbac / Assignment: (not found)` for an account that
+    # can otherwise do anything in the subscription. If you did item 11 you already hold
+    # the role; if you jumped here, grant it first.
+    az keyvault secret set --vault-name "$kv" --name mls-github-token --value '<PAT>'
+    ```
+
+    Then set the repository **variable** `MLS_GITHUB_TOKEN_SECRET` to `mls-github-token`
+    (a variable, not a secret — a secret's NAME is not sensitive), and redeploy L7. The
+    token itself never becomes a deploy parameter, a GitHub secret, or an env value:
+    `infra/bicep/apps/main.bicep` grants data-api's identity **Key Vault Secrets User**
+    (module `dataApiKvGrant`) and declares the container-app secret as a `keyVaultUrl`
+    reference, exactly as `mcp-auth-token` does — which matters more than usual here,
+    because this repository is public and `what-if` output is printed into workflow logs
+    GitHub cannot mask a value it never held.
+
+    **This is the seventh long-lived credential**, and hard rule 5 requires a written
+    reason. It is this: GitHub's code-scanning and Dependabot alert APIs have no
+    federated or anonymous path — both return **401** unauthenticated even on a public
+    repository — and the DevSecOps posture panels are a core part of what the estate
+    exists to show. Rotate it with the other six; `.github/workflows/gitleaks.yml`'s
+    incident text is the rotation list.
+
+    Verify: `GET /api/feeds/workflow-runs` on Control Tower returns **200** with runs,
+    and the Dev and Sec tabs render instead of reporting `backend_not_configured`.
+
 12. ⚠ **Entra ID `SignInLogs`/`AuditLogs` diagnostic setting** — *added 2026-08-26 for
     finding F9* (`compliance/findings/2026-08-26-prepublication-review.md#f9`);
     *deliberately a human step, not a pipeline step — see below.* **Out of sequence

@@ -41,10 +41,28 @@ export class ApiProvider implements DataProvider {
   private async get<T>(path: string): Promise<T> {
     const res = await fetch(`${this.baseUrl}/${path}`);
     if (!res.ok) {
-      throw new Error(
-        `API ${this.baseUrl}/${path} responded ${res.status}. ` +
-          "The live feeds come online at L7/L9; before tenant activation run the app in LOCAL_DATA mode.",
-      );
+      // PREFER THE SERVER'S OWN EXPLANATION over anything guessed here.
+      //
+      // data-api answers a failure with a typed envelope - {error:{code,message}} -
+      // and its message is written at the point that actually knows what is wrong.
+      // A 503 on the GitHub feeds says "The GitHub feeds require a repository token
+      // ... MLS_GITHUB_TOKEN is empty on this instance", which names the fix. The
+      // text this replaced said "the live feeds come online at L7/L9; before tenant
+      // activation run the app in LOCAL_DATA mode" - advice that was true before the
+      // tenant existed and misleading afterwards, because by the time anyone reads it
+      // L7 IS deployed and they are being told to wait for something that already
+      // happened, in an app that has no LOCAL_DATA build published.
+      let detail = "";
+      try {
+        const body: unknown = await res.json();
+        const message = (body as { error?: { message?: unknown } })?.error?.message;
+        if (typeof message === "string" && message.length > 0) detail = ` ${message}`;
+      } catch {
+        // A non-JSON body means the proxy answered rather than data-api - the status
+        // code is then the whole of what is known, and inventing a cause would be worse
+        // than saying nothing.
+      }
+      throw new Error(`API ${this.baseUrl}/${path} responded ${res.status}.${detail}`);
     }
     return (await res.json()) as T;
   }
