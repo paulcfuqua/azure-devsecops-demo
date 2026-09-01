@@ -192,11 +192,42 @@ The label taxonomy is a load-bearing part of the compliance story. L4's audit is
 blocked (`MLS_VERIFIER_CERT_BASE64`), and it says so honestly rather than passing:
 *"Nothing was verified and nothing was faked."*
 
-### B3. The Ask tab has never been lit
+### B3. The Ask tab has never been lit - and two links of the chain have no infrastructure (F118)
 
 The Copilot Studio agent is **exported into the repo** but has never been imported,
 published, or given a Direct Line secret in Key Vault. It ships dark by design at L7; it
 has never been anything else.
+
+**CORRECTED 2026-09-01 after opening the tab in the deployed estate.** The paragraph above
+was true and incomplete, in the way that matters: it described the agent as unpublished and
+left the impression that publishing it would light the tab. It would not. The chain has
+five links and **two of them do not exist as infrastructure at all**:
+
+| Link | State |
+|---|---|
+| Agent imported + published in Copilot Studio | never done (above) |
+| Direct Line channel + secret in Key Vault | never created (above) |
+| **`apps/directline-token` deployed** | **no Bicep, no CI workflow - it cannot deploy** |
+| **`VITE_DIRECTLINE_TOKEN_URL` in the control-tower build** | **set by no workflow, so every image is built dark** |
+| Entra registrations for agent user-auth | blocked, F106/B4 below |
+
+`apps/directline-token` is an Azure Function - `host.json`, no Dockerfile - with a README, a
+package, source and tests. It is a member of the root npm workspace and has its own
+Dependabot entry, so it is maintained like a deployable component. `grep -r directline
+infra/` returns exactly one hit, in a Copilot Studio markdown file. **Nothing declares it,
+no workflow builds or deploys it, and no environment points at it.**
+
+The tab's own message is misleading about this, and in the familiar direction: it says
+*"Ask is offline in local mode"* and *"this tab needs the deployed environment"* while
+running IN the deployed environment. The cause is not local mode - it is that
+`VITE_DIRECTLINE_TOKEN_URL` is a BUILD-time Vite variable that no pipeline sets, so the
+deployed bundle is identical to a laptop one. A reader is told to deploy something that is
+already deployed.
+
+The last link (F106) is needed for the agent to authenticate USERS. It is not on the
+critical path for the tab merely rendering a conversation: the Direct Line secret flow -
+exchanged server-side by the token function, never reaching a browser - stands on its own.
+So the Ask tab can be lit without solving F106, and should not wait for it.
 
 ### B4. The agent's authentication is blocked permanently, and no gate will ever say so (F106)
 
