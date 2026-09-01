@@ -39,8 +39,8 @@ on 2026-09-01, with the evidence beside it.
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
 | **4** | **Compliance platform** — NIST 800-171 | 🟡 **partial** | Collectors run, the board is deployed and reachable. **No `verification/layer-12-audit.ps1` exists**, so the layer has never been independently signed off — L12's own playbook says so rather than implying otherwise |
-| **1** | **Copilot service** — Ask tab over Direct Line | ❌ **not working** | The agent has never been imported or published. The Ask tab renders its own "not configured" notice. Blocked by **BLOCKER-2** |
-| **3** | **Self-healing code** | ❌ **never demonstrated** | `self-heal.yml` runs green on schedule, and **every healing job is skipped**: `select the alert to heal: success` → Dependabot lane skipped → Autofix lane skipped → verify skipped. The green is the no-op path. Blocked by **BLOCKER-1** and **BLOCKER-4** |
+| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **wired, one deploy away** | The agent is now **imported and published** (both firsts, 2026-09-01), the Direct Line secret is in Key Vault, and the token Function holds the reference. It still answers nothing because of **F122** — the Key Vault reference resolved to nothing while every view of it looked correct. Template fixed; needs L6 then L7. **Verify by opening the Ask tab, not by reading a green run** |
+| **3** | **Self-healing code** | ❌ **never demonstrated** | `self-heal.yml` runs green on schedule and skips every healing lane. The reason is **not** "no alerts" — four are open, one critical. The selector gets **HTTP 403** and reports it as `found=false`, indistinguishable from an empty surface (**F123**). One manual action away: `SELF_HEAL_TOKEN` must be a **repository** secret, not a `demo` environment one |
 
 ### The twelve layers — 5 verified, 4 partial, 3 not done
 
@@ -52,12 +52,12 @@ on 2026-09-01, with the evidence beside it.
 | L7 apps | ✅ verified | 5/5, **and** now serving real rows rather than plumbing |
 | L11 teardown | ✅ verified (down half) | V11.1 PASS. Rebuild proven once; V11.2 blocked by **BLOCKER-1** |
 | L5 Fabric | 🟡 partial | Deployed and seeded (10 tables, `launches`=1,200). Its audit has not passed cleanly since F104/F105/F114 were fixed — **re-run it** |
-| L6 platform | 🟡 partial | Was verified. Currently broken by an ACL change of my own (F119); correction in flight. V6.7 now guards it |
+| L6 platform | 🟡 partial | Deploys green and both Function Apps hold code (V6.7 confirms it). **F122** found its Key Vault reference resolving to nothing while all six criteria passed; V6.8 now asserts references actually resolve |
 | L9 DevSecOps chain | 🟡 partial | 4/5. GHAS, SBOM, Trivy and ZAP all run |
 | L12 compliance | 🟡 partial | Works; unaudited (see showpiece 4) |
 | L4 Purview labels | ✅ verified | **DONE 2026-09-01, the first time ever.** `verify L4 (mls-verifier)` PASSED. Four sensitivity labels now exist in the tenant - `mls-public`, `mls-internal`, `mls-confidential`, `mls-export-controlled` - where there had been none. The label POLICY failed (F121, fixed, re-run in flight) and the audit has not signed off yet |
-| L8 Copilot Studio | 🟡 partial | **The solution is IMPORTED, 2026-09-01, the first time ever - but the agent is NOT PUBLISHED.** Publishing is a separate, human, Copilot Studio step (`import-agent.ps1`: "--publish-changes publishes solution CUSTOMIZATIONS. That is NOT the same thing as publishing the agent"). Nothing answers until it is done. V8.1 fails on a Verifier read permission and V8.2-V8.5 SKIP awaiting Direct Line (BLOCKER-3) |
-| L10 self-healing | ❌ chain never executed | Blocked by **BLOCKER-1** and **BLOCKER-4** |
+| L8 Copilot Studio | 🟡 partial | **Solution IMPORTED and agent PUBLISHED, 2026-09-01 — both firsts.** Publishing is a separate, human, Copilot Studio step (`import-agent.ps1`: "--publish-changes publishes solution CUSTOMIZATIONS. That is NOT the same thing as publishing the agent"), now done. V8.1 still fails on a Verifier Dataverse read permission; V8.2-V8.5 wait on F122's fix reaching the Function |
+| L10 self-healing | ❌ chain never executed | Not for want of a subject: four Dependabot alerts are open. The chain cannot READ them (**F123**). V10.3 now fails on that rather than skipping quietly |
 
 ### The mission itself
 
@@ -83,11 +83,65 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   an L6 re-run to take effect, then L7 so the control-tower image carries the token URL.
   **Do not mark this closed from a green workflow: open the Ask tab.** F122 is precisely
   the case where all six L6 criteria passed over a Function holding an empty secret.
-- **BLOCKER-4** (self-healing has nothing to heal) still needs live alerts.
+- **BLOCKER-4** was **misdiagnosed** and is now one manual action from closed. It is not
+  "nothing to heal" - four Dependabot alerts are open, one critical, and the chain has been
+  getting **HTTP 403** on every run because `SELF_HEAL_TOKEN` is an *environment* secret
+  that no consuming job can see (**F123**). Re-create it as a **repository** secret and the
+  chain has both a subject and a token.
 - **BLOCKER-5** (L12 has no audit script) remains the one an agent can attack today with no
   credential and no human.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F123 — self-healing was never "nothing to heal"; it could not look *(fixed 2026-09-01)*
+
+**BLOCKER-4's diagnosis was wrong, and this entry is the correction.** It read *"nothing to
+heal — the alerts have to be live for the chain to have a subject."* The alerts have been
+live all along. There are **four open Dependabot alerts** — `minimist` (critical), `semver`
+(high), `json5` (high) in `apps/vuln-lab`, plus `esbuild` (low) at the root — which is
+exactly the seeded set `apps/vuln-lab` pins on purpose. A dispatched run says what is
+actually happening:
+
+    notice  Could not read alerts
+    gh: Resource not accessible by integration (HTTP 403)
+
+**The cause is a credential SCOPE, not a permission grant.** `SELF_HEAL_TOKEN` was created
+as a **`demo` environment secret**. Every job that consumes it — `self-heal.yml`'s `select`,
+`autofix` and `dependency`; `compliance.yml`'s `commit`; `gitleaks.yml`'s `scan`;
+`layer-09`'s `ghas` — declares **no `environment:`**, so `secrets.SELF_HEAL_TOKEN` is empty
+in all of them and the `|| GITHUB_TOKEN` fallback takes over. `GITHUB_TOKEN` cannot read
+`/dependabot/alerts`. The repo's own rotation table in `.github/workflows/gitleaks.yml` —
+which CLAUDE.md designates as the source of truth — says plainly:
+
+    | `SELF_HEAL_TOKEN` | repository secret — a PAT with `repo` write | ... |
+
+Spec and live state disagreed, and **every consumer degraded silently.** This also means
+F120's compliance fix has been inert for a different reason than recorded: not "the secret
+does not exist", but "the secret cannot be seen".
+
+**Why it survived: the chain reported a denial as an absence.** The select step set
+`found=false` on a 403 — the identical output it sets when the repository genuinely has no
+open alerts. Every lane then skipped and the run reported success. That is the
+absence-vs-denial class this repository has now paid for **seven** times, occurring inside
+the self-healing showpiece itself. Worse, the one state most needing an auditor was the one
+that skipped it: `verify` was gated on `found == 'true'`.
+
+**Fixed** in three places:
+
+- `select` now emits a **`readable`** output distinct from `found`, and a denial raises a
+  **warning** naming the environment-vs-repository scope trap. The run still succeeds — a
+  self-healing chain must not be able to break the repository it heals.
+- `verify` now also runs when `readable == 'false'`, so the unreadable case reaches its
+  auditor instead of skipping it.
+- **V10.3** fails on `readable=false` with the remedy in `Detail`, and fails as
+  **UNOBSERVABLE** when the chain reported nothing — never "healthy by default".
+
+**THE ONE MANUAL ACTION LEFT:** `SELF_HEAL_TOKEN` must be re-created as a **repository**
+secret (Settings → Secrets and variables → Actions → *Repository secrets*), not an
+environment secret. The PAT itself is fine — only its scope is wrong. Deleting the `demo`
+copy afterwards keeps the rotation table honest. **This single change unblocks four
+workflows at once**, and is all that stands between here and the first end-to-end
+self-healing run.
 
 ### F122 — the Direct Line secret never reached the Function, and *nothing* said so *(fixed 2026-09-01)*
 
