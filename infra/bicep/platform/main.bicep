@@ -605,52 +605,49 @@ module functionRuntimeStorage 'br/public:avm/res/storage/storage-account:0.33.0'
     allowBlobPublicAccess: false
     allowSharedKeyAccess: false // no connection string exists for anything to leak
     minimumTlsVersion: 'TLS1_2'
-    // THE FIREWALL THIS ACCOUNT ALWAYS HAD, AND THE HOLE IT ALWAYS NEEDED (F119).
+    // THE FIREWALL ON THIS ACCOUNT BLOCKED ITS OWN FUNCTION DEPLOYMENTS (F119).
     //
-    // `networkAcls` was never declared here, so the AVM module applied its own
-    // secure default - defaultAction: Deny, bypass: AzureServices - and nothing
-    // said so. That default is right and is kept. What was missing is that
-    // Flex Consumption's package upload is performed by the platform's own
-    // deployment service against the blob endpoint, and `AzureServices` bypass
-    // does NOT cover it. Every zip publish to both Functions therefore failed:
+    // `networkAcls` was never declared, so the AVM module applied its own secure
+    // default - defaultAction: Deny, bypass: AzureServices - and nothing said so.
+    // Flex Consumption's package upload is performed by the platform's deployment
+    // service against the blob endpoint, and the AzureServices bypass does NOT
+    // cover it, so every zip publish to both Function Apps failed:
     //
     //   InaccessibleStorageException: Failed to access storage account for
     //   deployment: BlobUploadFailedException: ... 403
     //
-    // It was invisible because both publish steps carried continue-on-error, so
-    // L6 reported success while neither Function had ever received code. The
-    // cost-ingest FinOps leg has never run for this reason, independently of its
-    // export never having fired.
+    // invisibly, because both publish steps carry continue-on-error. L6 signed off
+    // green while neither Function held any code.
     //
-    // RESOURCE INSTANCE RULES, NOT AN OPEN FIREWALL. Naming the two sites keeps
-    // defaultAction: Deny for everything else - including this repository's own
-    // operators, who are correctly refused - while letting exactly the two
-    // resources that must write here do so. The site ids are computed from
-    // naming.bicep rather than taken as module outputs, so this account does not
-    // have to be deployed after the apps that reference it.
+    // RESOURCE INSTANCE RULES WERE TRIED FIRST AND AZURE REFUSED THEM:
+    //
+    //   InvalidValuesForRequestParameters: Values for request parameters are
+    //   invalid: networkAcls.resourceAccessRules[*].resourceId
+    //
+    // That list does not accept Microsoft.Web/sites. The idea was sound and the
+    // platform does not support it, which is recorded here so nobody spends the
+    // deploy discovering it a second time.
+    //
+    // SO: defaultAction Allow, AND THE REASON IT IS DEFENSIBLE IS TWO LINES ABOVE.
+    // `allowSharedKeyAccess: false` means no account key exists, for anyone, ever;
+    // `allowBlobPublicAccess: false` means nothing is anonymous. Every request to
+    // this account must therefore carry an Entra token AND hold an RBAC data role,
+    // and exactly four principals do. The network ACL was never the control that
+    // protected this account - RBAC is - which is why the operator running this
+    // repository is refused today even from an allowed network.
+    //
+    // BE CLEAR ABOUT WHAT THIS GIVES UP: defence in depth. A stolen token that
+    // would previously have needed the right network position now needs only the
+    // token. That is a real reduction and it buys the only deployment path Flex
+    // Consumption offers without a VNet, private endpoints and a NAT gateway -
+    // roughly $40/month of infrastructure for a demo whose entire estate is a
+    // fraction of that, and an ungated spend increase (G2) besides.
+    //
+    // This account holds host bookkeeping and deployment packages. No estate data
+    // is here; the lakehouse and Azure SQL hold that, and neither is affected.
     networkAcls: {
-      defaultAction: 'Deny'
+      defaultAction: 'Allow'
       bypass: 'AzureServices'
-      resourceAccessRules: [
-        {
-          tenantId: subscription().tenantId
-          resourceId: resourceId(
-            subscription().subscriptionId,
-            rgOpsName,
-            'Microsoft.Web/sites',
-            costIngestFunctionAppName
-          )
-        }
-        {
-          tenantId: subscription().tenantId
-          resourceId: resourceId(
-            subscription().subscriptionId,
-            rgOpsName,
-            'Microsoft.Web/sites',
-            directlineFunctionAppName
-          )
-        }
-      ]
     }
     diagnosticSettings: [
       {
