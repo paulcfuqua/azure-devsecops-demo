@@ -116,6 +116,12 @@ $script:DefaultMaxWaitMinutes = 120
 # "loaded but the catalog was empty", so the unloaded state is its own sentinel.
 $script:ControlCatalogRequirementId = $null
 
+# When Restore-MlsAzLogin last re-authenticated. DECLARED HERE BECAUSE STRICT MODE MAKES
+# READING AN UNSET VARIABLE AN ERROR, and this one is read on the AADSTS700024 path - the
+# rarest path in the module and the one nobody exercises by accident. Left unset, the
+# recovery attempt would itself throw, and the F104 tests caught exactly that.
+$script:LastAzRelogin = $null
+
 # Sleep in slices so Ctrl+C lands promptly and the deadline is re-checked often.
 $script:SleepSliceSeconds = 5
 
@@ -607,6 +613,90 @@ function Invoke-MlsBoundedNativeCommand {
     }
 }
 
+function Restore-MlsAzLogin {
+    <#
+    .SYNOPSIS
+        Re-authenticate az with a FRESH GitHub OIDC token after the federated client
+        assertion has expired (F104). Returns $true when the login succeeded.
+    .DESCRIPTION
+        THE PROBLEM THIS SOLVES. A CI `azure/login` federates a GitHub OIDC token as a
+        client assertion. The ACCESS token az caches lives about an hour; the ASSERTION
+        behind it lives about FIVE MINUTES. So any audit that asks for a token az has not
+        already cached, later than five minutes in, fails with AADSTS700024 - and every
+        audit worth running takes longer than five minutes. L5's V5.3 hit it at minute 41
+        (F104), and L7's V7.5/V7.6/V7.7 have failed on it on every run since they were
+        written, which is why the scorecard could say "L7 verified 5/5" while three of its
+        seven criteria had never once been evaluated.
+
+        Detecting it was the first half and this is the second. The message this replaces
+        named the remedy exactly - "re-authenticate before it" - and then left the reader
+        to do it by hand in a script that cannot know when the clock ran out.
+
+        NO NEW PLUMBING, DELIBERATELY. The identity, tenant and subscription are recovered
+        from `az account show`, which reads the LOCAL az profile and needs no network and
+        no valid assertion. That means this works in every workflow that already calls
+        `azure/login`, with no new inputs, env vars or action changes to keep in sync -
+        and nothing new to forget in the next workflow somebody writes.
+
+        WHY IT IS SAFE FOR A READ-ONLY VERIFIER. `az login` authenticates; it changes
+        nothing in Azure, reads nothing from the estate, and cannot widen what the identity
+        may do - it re-establishes exactly the same service principal, with the same
+        role assignments, that the job already logged in as. The read-only guard on
+        Invoke-MlsAz still governs every command the audit actually issues.
+
+        THE TOKEN IS NEVER LOGGED. It is passed to az as an argument and held in a local
+        that goes out of scope; no caller receives it and no message quotes it.
+
+        Outside GitHub Actions there is no token endpoint to mint from, so this returns
+        $false and the caller throws its original, explanatory error. A developer running
+        an audit locally has a normal `az login` whose credential does not expire this way.
+    #>
+    param()
+    $requestUrl = [Environment]::GetEnvironmentVariable('ACTIONS_ID_TOKEN_REQUEST_URL')
+    $requestToken = [Environment]::GetEnvironmentVariable('ACTIONS_ID_TOKEN_REQUEST_TOKEN')
+    if ([string]::IsNullOrWhiteSpace($requestUrl) -or [string]::IsNullOrWhiteSpace($requestToken)) {
+        return $false
+    }
+
+    # Local profile read: no network, no assertion needed.
+    $account = $null
+    try {
+        $raw = Invoke-MlsBoundedNativeCommand -FilePath 'az' -Argument @('account', 'show', '-o', 'json') -TimeoutSeconds 60
+        if ($raw.ExitCode -ne 0) { return $false }
+        $account = ($raw.StdOut | Out-String) | ConvertFrom-Json
+    }
+    catch { return $false }
+
+    $clientId = ''
+    if ($null -ne $account -and (Test-MlsHasProperty -InputObject $account -Name 'user')) {
+        $clientId = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $account -Name 'user') -Name 'name')"
+    }
+    $tenantId = "$(Get-MlsProperty -InputObject $account -Name 'tenantId')"
+    $subscriptionId = "$(Get-MlsProperty -InputObject $account -Name 'id')"
+    if ([string]::IsNullOrWhiteSpace($clientId) -or [string]::IsNullOrWhiteSpace($tenantId)) { return $false }
+
+    $federatedToken = ''
+    try {
+        $response = Invoke-RestMethod -Method Get -TimeoutSec 30 `
+            -Uri "$requestUrl&audience=api://AzureADTokenExchange" `
+            -Headers @{ Authorization = "Bearer $requestToken" }
+        $federatedToken = "$(Get-MlsProperty -InputObject $response -Name 'value')"
+    }
+    catch { return $false }
+    if ([string]::IsNullOrWhiteSpace($federatedToken)) { return $false }
+
+    $login = Invoke-MlsBoundedNativeCommand -FilePath 'az' -Argument @(
+        'login', '--service-principal', '--username', $clientId, '--tenant', $tenantId,
+        '--federated-token', $federatedToken, '--allow-no-subscriptions', '-o', 'none') -TimeoutSeconds 120
+    if ($login.ExitCode -ne 0) { return $false }
+
+    if (-not [string]::IsNullOrWhiteSpace($subscriptionId)) {
+        $null = Invoke-MlsBoundedNativeCommand -FilePath 'az' -Argument @('account', 'set', '-s', $subscriptionId) -TimeoutSeconds 60
+    }
+    Write-MlsStatus -Message 'az federated assertion had expired; re-authenticated with a fresh GitHub OIDC token (F104).' -Color Yellow
+    return $true
+}
+
 function Invoke-MlsAz {
     <#
     .SYNOPSIS
@@ -645,8 +735,43 @@ function Invoke-MlsAz {
         # therefore raised whatever the caller asked for, exactly like a timeout.
         $stderr = "$($run.StdErr)"
         if ($stderr -match 'AADSTS700024|assertion is not within its valid time range') {
+            # RECOVER ONCE, THEN REPORT. The assertion is expired, not wrong: the identity,
+            # its roles and the subscription are all still correct, and a fresh GitHub OIDC
+            # token restores exactly the same session. Retrying WITHOUT re-authenticating
+            # would be pointless, which is why this is gated on the re-login succeeding.
+            #
+            # ONCE, and only once per call. If the command fails again the run has a real
+            # problem - a revoked federation, a dead token endpoint, a genuine permissions
+            # error arriving in the same shape - and a second recovery would just spin.
+            # A failure after recovery falls through to the original message below, so
+            # nothing is hidden by the attempt.
+            # RATE-LIMITED, NOT ONCE-PER-PROCESS. A fresh assertion is good for about five
+            # minutes too, so an audit that runs for forty will legitimately need several
+            # refreshes - a single-shot guard would fix the first expiry and let every
+            # later one through, which is most of the bug. Sixty seconds is long enough
+            # that a genuinely broken federation cannot spin, and short enough that a
+            # normal expiry mid-audit recovers immediately.
+            $sinceLast = if ($null -eq $script:LastAzRelogin) { [TimeSpan]::MaxValue }
+            else { [DateTime]::UtcNow - $script:LastAzRelogin }
+            if ($sinceLast.TotalSeconds -ge 60) {
+                $script:LastAzRelogin = [DateTime]::UtcNow
+                if (Restore-MlsAzLogin) {
+                    $run = Invoke-MlsBoundedNativeCommand -FilePath 'az' -Argument $Argument -TimeoutSeconds $TimeoutSeconds
+                    if ($run.TimedOut) {
+                        throw "az $($Argument -join ' ') did not return within $TimeoutSeconds s and was terminated (after re-authenticating)."
+                    }
+                    if ($run.ExitCode -eq 0) {
+                        $recovered = $run.StdOut
+                        $recoveredText = ($recovered | Out-String).Trim()
+                        if ([string]::IsNullOrWhiteSpace($recoveredText)) { return $null }
+                        if ($Raw) { return $recoveredText }
+                        return ($recoveredText | ConvertFrom-Json)
+                    }
+                    $stderr = "$($run.StdErr)"
+                }
+            }
             throw @"
-az $($Argument -join ' ') could not authenticate: the federated client assertion has EXPIRED (AADSTS700024).
+az $($Argument -join ' ') could not authenticate: the federated client assertion has EXPIRED (AADSTS700024), and re-authenticating did not recover it.
 
 This is NOT a permissions problem and not a missing resource, and it will look like both.
 The CI login's assertion lives about five minutes; this call asked for a token az had not
@@ -1830,6 +1955,7 @@ Export-ModuleMember -Function @(
     'Assert-MlsReadOnlyGhArgument',
     'Assert-MlsCommand',
     'Invoke-MlsAz',
+    'Restore-MlsAzLogin',
     'Invoke-MlsGh',
     'Invoke-MlsGit',
     'Invoke-MlsRest',
