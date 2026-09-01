@@ -1,4 +1,4 @@
-# Preventive checks for the failure CLASSES this estate has already paid for.
+﻿# Preventive checks for the failure CLASSES this estate has already paid for.
 #
 # Every finding below was discovered by deploying, failing, and reading a log - the most
 # expensive way there is. Each run buys one defect, because a layer stops at its first error,
@@ -1188,7 +1188,6 @@ Describe 'a job that reads an estate setting declares the environment holding it
         foreach ($workflow in $workflows) {
             $lines = Get-Content -LiteralPath $workflow.FullName
             $job = ''
-            $jobIndent = -1
             $declaresEnvironment = @{}
             $readsSetting = @{}
             foreach ($line in $lines) {
@@ -1196,7 +1195,6 @@ Describe 'a job that reads an estate setting declares the environment holding it
                 # key inside the job, which is where `environment:` and the `vars.` reads live.
                 if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') {
                     $job = $Matches[1]
-                    $jobIndent = 2
                     continue
                 }
                 if ([string]::IsNullOrWhiteSpace($job)) { continue }
