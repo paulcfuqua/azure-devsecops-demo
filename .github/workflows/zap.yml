@@ -14,6 +14,12 @@ name: zap
 # scan. An unreachable target produces an empty report, which this workflow
 # treats as a FAILURE, not a pass (L09 V9.4 retry note).
 #
+# `fail_action: false` is necessary and NOT sufficient: it stops the action failing
+# on the SCAN's findings, but the action can still fail on its own post-processing,
+# and a failed step skips the gate that was supposed to judge the run (F102). When a
+# workflow puts the verdict in a step of its own, every step before it has to be
+# incapable of pre-empting that verdict.
+#
 # `allow_issue_writing: false`: the scan must not open GitHub issues. Findings
 # ride the PR/report trail like every other check in this repo.
 # =============================================================================
@@ -100,12 +106,41 @@ jobs:
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         with:
           target: ${{ needs.target.outputs.url }}
-          # -a includes alpha passive rules; -J writes the JSON report V9.4 parses.
-          cmd_options: '-a -J report.json'
+          # -a includes alpha passive rules. `-J` is DELIBERATELY ABSENT (F102).
+          #
+          # This used to read '-a -J report.json', which looks harmless and is not:
+          # the action already passes its own `-J report_json.json`, so ZAP received
+          # -J twice, the second won, and the file the action then went looking for
+          # had never been written:
+          #
+          #   zap-baseline.py -t <url> -J report_json.json ... -a -J report.json
+          #   ##[error]File .../report_json.json does not exist
+          #
+          # The step failed, and because it failed, "Gate on High-risk alerts" below
+          # was SKIPPED - the step that actually owns pass/fail for this workflow. So
+          # a scan reporting FAIL-NEW: 0 (zero High, 59 passes) was recorded as a
+          # failed security gate that never ran. `fail_action: false` was already set
+          # with exactly the right intent; it cannot help when the action fails for a
+          # reason of its own.
+          #
+          # Let the action write its own file, then normalise the name below.
+          cmd_options: '-a'
           # The gate below owns pass/fail so the report is always archived.
           fail_action: false
           allow_issue_writing: false
           artifact_name: zap-scan-raw
+
+      # The action writes report_json.json; the artifact contract V9.4 reads is
+      # report.json (layer-09-audit.ps1 Test-ZapReport). Renaming here keeps one
+      # filename in the contract instead of teaching every consumer both.
+      - name: Normalise the JSON report filename
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          if [ -s report_json.json ] && [ ! -s report.json ]; then
+            cp report_json.json report.json
+          fi
+          ls -l report*.json report*.html report*.md 2>/dev/null || true
 
       - name: Publish the report artifact
         if: ${{ always() }}
@@ -120,7 +155,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      # always(), because THIS step is the verdict. Without it, any earlier step that
+      # fails - the action's own post-processing, an artifact upload hiccup - skips the
+      # gate and the job reports a security failure that was never actually assessed
+      # (F102). A workflow whose verdict lives in one step has to guarantee that step
+      # runs; an unreachable target still fails here, on the gate's own terms, because
+      # a missing report is treated as a FAILURE rather than a pass.
       - name: Gate on High-risk alerts
+        if: ${{ always() }}
         env:
           TARGET_URL: ${{ needs.target.outputs.url }}
         run: |

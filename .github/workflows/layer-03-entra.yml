@@ -58,6 +58,15 @@ on:
         required: false
         default: false
 
+      only_criterion:
+        description: >-
+          Verify only these criteria, e.g. `V3.2` or `V3.1,V3.3`. Everything else
+          reports SKIP and the audit exits 3 - a DIAGNOSTIC, never a sign-off. Re-testing
+          one criterion should not cost a whole audit's wall clock (P-10). Leave empty for
+          a verdict.
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 
@@ -267,6 +276,8 @@ jobs:
             -ManifestPath
             infra/entra/manifest.json
 
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v7

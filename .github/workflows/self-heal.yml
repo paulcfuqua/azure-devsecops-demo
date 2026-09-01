@@ -196,6 +196,15 @@ on:
         type: boolean
         default: false
 
+      only_criterion:
+        description: >-
+          Verify only these criteria, e.g. `V10.2` or `V10.1,V10.3`. Everything else
+          reports SKIP and the audit exits 3 - a DIAGNOSTIC, never a sign-off. Re-testing
+          one criterion should not cost a whole audit's wall clock (P-10). Leave empty for
+          a verdict.
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 
@@ -821,6 +830,8 @@ jobs:
             ${{ vars.MLS_L10_RESEED_MERGED_AT && '-ReseedMergedUtc' || '' }}
             ${{ vars.MLS_L10_RESEED_MERGED_AT }}
 
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v7

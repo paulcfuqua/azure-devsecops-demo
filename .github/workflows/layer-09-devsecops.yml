@@ -128,6 +128,15 @@ on:
         required: false
         default: false
 
+      only_criterion:
+        description: >-
+          Verify only these criteria, e.g. `V9.2` or `V9.1,V9.3`. Everything else
+          reports SKIP and the audit exits 3 - a DIAGNOSTIC, never a sign-off. Re-testing
+          one criterion should not cost a whole audit's wall clock (P-10). Leave empty for
+          a verdict.
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 
@@ -715,6 +724,8 @@ jobs:
             -DownloadRoot
             ${{ runner.temp }}/mls-l9-audit
 
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
       - name: Restate what the run produced
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         env:

@@ -59,6 +59,15 @@ on:
         required: false
         default: false
 
+      only_criterion:
+        description: >-
+          Verify only these criteria, e.g. `V6.2` or `V6.1,V6.3`. Everything else
+          reports SKIP and the audit exits 3 - a DIAGNOSTIC, never a sign-off. Re-testing
+          one criterion should not cost a whole audit's wall clock (P-10). Leave empty for
+          a verdict.
+        type: string
+        required: false
+        default: ''
 permissions:
   contents: read
 
@@ -809,6 +818,8 @@ jobs:
             -SqlPauseWaitMinutes
             0
 
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
       # ---------------------------------------------------------------------
       # RE-CHECK RUN (`verify_only: true`, dispatched once the windows have
       # elapsed): no deploy, no window starts, no grace. -EnforceCostExport
@@ -833,6 +844,8 @@ jobs:
             -SqlPauseWaitMinutes
             0
 
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
       - name: Restate what is still open
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         run: |

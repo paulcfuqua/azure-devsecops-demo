@@ -69,7 +69,10 @@ param(
     [double]$SqlPauseWaitMinutes = -1,
     [switch]$EnforceCostExport,
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V6.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -319,13 +322,15 @@ function Invoke-Main {
         [double]$SqlPauseWaitMinutes = -1,
         [switch]$EnforceCostExport,
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $subscription = Resolve-MlsInput -Name 'SubscriptionId' -Value $SubscriptionId -EnvironmentVariable @('AZURE_SUBSCRIPTION_ID') `
         -Hint 'The demo subscription holding mls-rg-platform; read as mls-verifier (Reader covers */read).'
 
     $context = New-MlsAuditContext -Layer 6 -Title 'Core platform: ACA env, SQL, observability, cost exports' `
-        -ScriptName 'verification/layer-06-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-06-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'SubscriptionId' -Value $subscription
 
     $output = Get-DeploymentOutput -SubscriptionId $subscription -DeploymentName $DeploymentName
@@ -448,7 +453,8 @@ if (-not $env:MLS_SKIP_MAIN) {
             -ExpectedBackupStorageRedundancy $ExpectedBackupStorageRedundancy -LayerCompletedUtc $LayerCompletedUtc `
             -SqlLastTouchedUtc $SqlLastTouchedUtc -SqlIdleWindowMinutes $SqlIdleWindowMinutes `
             -SqlPauseWaitMinutes $SqlPauseWaitMinutes `
-            -EnforceCostExport:$EnforceCostExport -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -EnforceCostExport:$EnforceCostExport -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-06-audit could not start: $($_.Exception.Message)" -Color Red

@@ -126,8 +126,18 @@ Describe 'layer-08-audit' {
             throw "unexpected Dataverse call: $Uri"
         }
 
-        Mock Invoke-MlsMcpToolCatalog {
-            return [pscustomobject]@{ result = [pscustomobject]@{ tools = @($script:AdvertisedTool | ForEach-Object { [pscustomobject]@{ name = $_ } }) } }
+        # V8.3 reads the DECLARED tool set from the unauthenticated /healthz, not from
+        # tools/list behind the shared-secret gate (F100). The fake answers as the server
+        # does: the same names the registry would publish, in a `toolNames` array.
+        $script:HealthStatus = 200
+        Mock Invoke-MlsHttp {
+            if ("$Uri" -notlike '*/healthz') { throw "unexpected HTTP call: $Uri" }
+            return [pscustomobject]@{
+                StatusCode = $script:HealthStatus
+                Content    = (@{ ok = $true; tools = @($script:AdvertisedTool).Count; toolNames = @($script:AdvertisedTool) } | ConvertTo-Json -Depth 5)
+                Headers    = @{}
+                Error      = $null
+            }
         }
 
         Mock Invoke-MlsSqlQuery {

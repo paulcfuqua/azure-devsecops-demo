@@ -63,7 +63,10 @@ param(
     [string]$SqlAccessToken,
     [string]$LakehouseName = 'mls_operations',
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V8.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -254,14 +257,38 @@ function Test-ToolAllowlist {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($McpServerUrl)) {
+        # READ FROM /healthz, NOT tools/list. Everything under MCP_PATH is behind the
+        # shared-secret gate, so this half used to 401 - an anonymous probe of an
+        # authenticated endpoint, F89's shape a second time (F100).
+        #
+        # The fix is not to hand the Verifier `mcp-auth-token`. That token is compared
+        # with timingSafeEqual: it IS the capability, and an auditor holding a working
+        # credential for the thing it audits is a far bigger concession than this
+        # criterion is worth. /healthz is unauthenticated BY DESIGN, for exactly this -
+        # apps/mcp-tools/src/app.ts says it is "what lets the L7/L8 audits assert from
+        # outside" - and it now publishes the declared tool names beside the count.
         $checked++
-        $catalog = Invoke-MlsMcpToolCatalog -Uri $McpServerUrl -Method 'tools/list'
-        $advertised = @(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $catalog -Name 'result') -Name 'tools' |
-                ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'name')" })
-        $comparison = Test-MlsSetEquality -Actual $advertised -Expected $AllowedTool
-        $observed.Add("tools/list: $($advertised.Count) tool(s)")
-        if (-not $comparison.Equal) {
-            $problem.Add("tools/list missing [$($comparison.Missing -join ', ')] extra [$($comparison.Extra -join ', ')]")
+        $health = "$McpServerUrl" -replace '/[^/]*$', '/healthz'
+        $response = Invoke-MlsHttp -Uri $health -TimeoutSec 30
+        $status = "$(Get-MlsProperty -InputObject $response -Name 'StatusCode')"
+        if ($status -ne '200') {
+            $problem.Add("GET /healthz returned $status, so the declared tool set could not be read")
+        }
+        else {
+            $payload = "$(Get-MlsProperty -InputObject $response -Name 'Content')" | ConvertFrom-Json
+            $advertised = @(Get-MlsProperty -InputObject $payload -Name 'toolNames')
+            if ($advertised.Count -eq 0) {
+                # An older image predates the toolNames field. Say which, rather than
+                # reporting an empty set as "the server declares no tools".
+                $problem.Add("GET /healthz carries no toolNames field (deployed image predates F100); the declared tool set could not be read")
+            }
+            else {
+                $comparison = Test-MlsSetEquality -Actual $advertised -Expected $AllowedTool
+                $observed.Add("declared: $($advertised.Count) tool(s)")
+                if (-not $comparison.Equal) {
+                    $problem.Add("declared set missing [$($comparison.Missing -join ', ')] extra [$($comparison.Extra -join ', ')]")
+                }
+            }
         }
     }
 
@@ -372,7 +399,8 @@ function Invoke-Main {
         [string]$SqlAccessToken,
         [string]$LakehouseName = 'mls_operations',
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     $solutionFile = $SolutionPath
@@ -413,7 +441,8 @@ function Invoke-Main {
     if ([string]::IsNullOrWhiteSpace($sqlToken)) { $sqlToken = [Environment]::GetEnvironmentVariable('MLS_SQL_ACCESS_TOKEN') }
 
     $context = New-MlsAuditContext -Layer 8 -Title 'Copilot: custom Copilot Studio agent' `
-        -ScriptName 'verification/layer-08-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-08-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Committed solution' -Value $solutionFile -Status $(if ($committed) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Power Platform environment' -Value "$environment" -Status $(if ($environment) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Eval artifact' -Value "$evalPath" -Status $(if ($artifact) { 'OK' } else { 'ABSENT' })
@@ -469,7 +498,8 @@ if (-not $env:MLS_SKIP_MAIN) {
             -SolutionPath $SolutionPath -EvalResultPath $EvalResultPath -McpServerUrl $McpServerUrl `
             -AllowedTool $AllowedTool -AdaptiveCardVersion $AdaptiveCardVersion `
             -LatencyBudgetSeconds $LatencyBudgetSeconds -EvalPassBar $EvalPassBar -SqlEndpoint $SqlEndpoint `
-            -SqlAccessToken $SqlAccessToken -LakehouseName $LakehouseName -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -SqlAccessToken $SqlAccessToken -LakehouseName $LakehouseName -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-08-audit could not start: $($_.Exception.Message)" -Color Red

@@ -43,7 +43,10 @@ param(
     # omit both and MlsAudit mints one from the mls-verifier login.
     [string]$SqlAccessToken,
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V5.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -257,7 +260,8 @@ function Invoke-Main {
         [string]$SqlEndpoint,
         [string]$SqlAccessToken,
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     $capacityId = Resolve-MlsInput -Name 'FabricCapacityId' -Value $FabricCapacityId -EnvironmentVariable @('FABRIC_CAPACITY_ID') `
@@ -278,7 +282,8 @@ function Invoke-Main {
     }
 
     $context = New-MlsAuditContext -Layer 5 -Title 'Fabric workspace, lakehouse, generators, seeding' `
-        -ScriptName 'verification/layer-05-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-05-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Capacity' -Value $capacityId
     Add-MlsPreflight -Context $context -Name 'Fabric token' -Value 'present (value never logged)'
     Add-MlsPreflight -Context $context -Name 'Expected-counts fixture' -Value $countPath `
@@ -350,7 +355,8 @@ if (-not $env:MLS_SKIP_MAIN) {
         $auditContext = Invoke-Main -FabricCapacityId $FabricCapacityId -FabricToken $FabricToken `
             -WorkspaceName $WorkspaceName -LakehouseName $LakehouseName -ExpectedTable $ExpectedTable `
             -ExpectedLaunchCount $ExpectedLaunchCount -ExpectedCountPath $ExpectedCountPath `
-            -SqlEndpoint $SqlEndpoint -SqlAccessToken $SqlAccessToken -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -SqlEndpoint $SqlEndpoint -SqlAccessToken $SqlAccessToken -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-05-audit could not start: $($_.Exception.Message)" -Color Red

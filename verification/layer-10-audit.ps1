@@ -50,7 +50,10 @@ param(
     [double]$ChainWindowHours = 24,
     [int]$DependencyPassBar = 2,
     [string]$ReportRoot,
-    [switch]$NoRetry
+    [switch]$NoRetry,
+    # Run only these criteria (e.g. -OnlyCriterion V10.2). Everything else reports SKIP
+    # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -387,7 +390,8 @@ function Invoke-Main {
         [double]$ChainWindowHours = 24,
         [int]$DependencyPassBar = 2,
         [string]$ReportRoot,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [string[]]$OnlyCriterion = @()
     )
     $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
         -Hint 'The public repo the healing trail lives on.'
@@ -411,7 +415,8 @@ function Invoke-Main {
     if (-not [string]::IsNullOrWhiteSpace($reseed)) { $windowStart = [datetime]::Parse($reseed).ToUniversalTime() }
 
     $context = New-MlsAuditContext -Layer 10 -Title 'Self-healing pipeline on GitHub Copilot Autofix' `
-        -ScriptName 'verification/layer-10-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry
+        -ScriptName 'verification/layer-10-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+        -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Repository' -Value $repositoryName
     Add-MlsPreflight -Context $context -Name 'CodeQL alert / heal PR' -Value "$codeqlAlert / $healPr" `
         -Status $(if ($codeqlAlert -and $healPr) { 'OK' } else { 'ABSENT' })
@@ -465,7 +470,8 @@ if (-not $env:MLS_SKIP_MAIN) {
             -AutofixPrNumber $AutofixPrNumber -DependabotAlertNumber $DependabotAlertNumber `
             -VulnLabAppName $VulnLabAppName -ResourceGroupName $ResourceGroupName -AutomationLogin $AutomationLogin `
             -ReseedMergedUtc $ReseedMergedUtc -ChainWindowHours $ChainWindowHours `
-            -DependencyPassBar $DependencyPassBar -ReportRoot $ReportRoot -NoRetry:$NoRetry
+            -DependencyPassBar $DependencyPassBar -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -OnlyCriterion $OnlyCriterion
     }
     catch {
         Write-MlsStatus -Message "layer-10-audit could not start: $($_.Exception.Message)" -Color Red

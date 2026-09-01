@@ -61,6 +61,16 @@ describe("MCP over Streamable HTTP", () => {
       ok: true,
       mode: "local",
       tools: 6,
+      // The DECLARED names, not just the count: V8.3 reads them from here rather
+      // than from tools/list, which sits behind the shared-secret gate (F100).
+      toolNames: [
+        "query_lakehouse_sql",
+        "query_log_analytics",
+        "get_github_security",
+        "get_defender_posture",
+        "get_cost_series",
+        "query_compliance",
+      ],
       transport: "streamable-http",
       endpoint: "/mcp",
       sqlDialect: "sqlite",
