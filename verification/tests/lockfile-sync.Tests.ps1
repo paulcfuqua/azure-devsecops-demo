@@ -106,7 +106,7 @@ Describe 'every tracked lockfile matches its package.json' {
     }
 }
 
-# A LOCKFILE INSIDE A ROOT WORKSPACE MEMBER CANNOT BE MAINTAINED, BY ANYONE.
+# A LOCKFILE INSIDE A ROOT WORKSPACE MEMBER CANNOT BE MAINTAINED, BY ANYONE (F115).
 #
 # The check above says a lockfile must agree with its manifest. This one says
 # which directories are allowed to have a lockfile at all, and it exists because
