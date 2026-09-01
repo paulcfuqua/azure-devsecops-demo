@@ -49,7 +49,10 @@ Describe 'layer-05-audit' {
         $script:LiveTable = $script:Table
         $script:RowCount = [ordered]@{}
         foreach ($name in $script:ExpectedCount.Keys) { $script:RowCount[$name] = $script:ExpectedCount[$name] }
-        $script:CapacitySku = 'Trial'
+        # The LIVE trial capacity reports FTL4, not the literal 'Trial'. Pinning the
+        # fixture to the real value is what makes this a test of the estate rather than a
+        # test of a string somebody imagined (F114).
+        $script:CapacitySku = 'FTL4'
         $script:CapacityState = 'Active'
         $script:WorkspaceCapacityId = $script:TrialCapacityId
 
@@ -153,6 +156,18 @@ Describe 'layer-05-audit' {
             $row.Detail | Should -Match 'OneLake read'
             $row.Detail | Should -Match 'V5.3' `
                 -Because 'the SQL endpoint fails loudly where this one fails silently, so the report must point at it'
+        }
+
+        It 'still fails V5.4 for a PAID capacity left running' {
+            # The trial branch must not become a blanket pass. F2 resumed is a real cost
+            # anomaly and the reason this criterion exists; widening the SKU match to the
+            # FT* family must not widen it to F*.
+            $script:CapacitySku = 'F2'
+            $script:CapacityState = 'Active'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V5.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match "paid SKU 'F2'"
         }
 
         It 'fails V5.1 when the workspace is bound to a different capacity (the stray-workspace case)' {

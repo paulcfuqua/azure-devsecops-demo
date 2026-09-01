@@ -253,7 +253,23 @@ function Test-CapacityPaused {
     }
     $sku = "$(Get-MlsProperty -InputObject $found[0] -Name 'sku')"
     $state = "$(Get-MlsProperty -InputObject $found[0] -Name 'state')"
-    if ($sku -match '^(Trial|FT1)$') {
+    # TRIAL SKUs ARE THE FT* FAMILY, NOT THE TWO LITERALS THIS ONCE MATCHED (F114).
+    #
+    # The pattern was '^(Trial|FT1)$'. The live trial capacity reports **FTL4**, so it
+    # matched neither, fell through to the paid branch, and reported
+    #
+    #   state=Active on paid SKU 'FTL4', expected 'Paused'
+    #
+    # calling a free trial capacity a PAID one and failing the criterion on a cost anomaly
+    # that does not exist. Two SKU names written from memory, which is precisely what
+    # CLAUDE.md's "a constant that names something in another system is verified against
+    # that system" is about - and this one was never checked because the trial capacity
+    # was not created until long after the check was written.
+    #
+    # Paid capacities are F<number> (F2, F64). Trial capacities are FT<something> - FT1
+    # historically, FTL<n> now. The prefix is what distinguishes them, and matching on it
+    # survives the next rename of the trial tier, which a literal list does not.
+    if ($sku -match '^(Trial|FT)') {
         return New-MlsCheckResult -Passed $true -Observed "state=$state (trial SKU '$sku', `$0/hr)" `
             -Detail 'Trial phase equivalence per L05.md V5.4: trial capacities expose no pause control and bill $0. This criterion re-arms verbatim (Paused required) the moment G2 moves the workspace to paid F2.'
     }
