@@ -712,8 +712,10 @@ it is still about sign-in risk and auto-labeling, nothing else.
     so a gate that only armed itself in cloud was inert in production. `loadInboundAuth`
     in `apps/mcp-tools/src/auth-gate.ts` now throws regardless of mode.)
 
-11b. **`mls-github-token` — the GitHub read-only token for Control Tower's Dev and Sec
-    tabs** *(added 2026-09-01, finding F116)*. Optional, and the estate deploys and runs
+11b. **`mls-data-api-github-token` — the GitHub read-only token for Control Tower's Dev
+    and Sec tabs** *(added 2026-09-01, finding F116; renamed from `mls-github-token` the
+    same day, because three GitHub tokens now exist in this estate and a name that says
+    only "github" cannot tell you which one it is — this is **data-api's** read token)*. Optional, and the estate deploys and runs
     without it: the three GitHub feeds then answer a typed **503** naming exactly what is
     missing, Control Tower's **Ops** tab (lakehouse-backed) is unaffected, and Launch Ops
     is unaffected. Skipping this is a supported configuration, not a broken one.
@@ -736,10 +738,11 @@ it is still about sign-in risk and auto-labeling, nothing else.
     # the set below fails `ForbiddenByRbac / Assignment: (not found)` for an account that
     # can otherwise do anything in the subscription. If you did item 11 you already hold
     # the role; if you jumped here, grant it first.
-    az keyvault secret set --vault-name "$kv" --name mls-github-token --value '<PAT>'
+    az keyvault secret set --vault-name "$kv" --name mls-data-api-github-token --value '<PAT>'
     ```
 
-    Then set the repository **variable** `MLS_GITHUB_TOKEN_SECRET` to `mls-github-token`
+    Then set the repository **variable** `MLS_GITHUB_TOKEN_SECRET` to
+    `mls-data-api-github-token`
     (a variable, not a secret — a secret's NAME is not sensitive), and redeploy L7. The
     token itself never becomes a deploy parameter, a GitHub secret, or an env value:
     `infra/bicep/apps/main.bicep` grants data-api's identity **Key Vault Secrets User**
