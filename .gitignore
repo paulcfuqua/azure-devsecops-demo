@@ -49,3 +49,4 @@ pester-results.xml
 # Per-deployment estate identity (prefix, env segment, company name, tags).
 # estate.env.example is the template and IS committed; the real one never is.
 estate.env
+.playwright-mcp/

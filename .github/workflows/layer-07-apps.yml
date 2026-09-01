@@ -1195,6 +1195,26 @@ jobs:
               $existing = @(@($existingJson | ConvertFrom-Json) | Where-Object { $_ -and ([string]$_).Trim() })
             }
 
+            # ID TOKEN ISSUANCE, EVERY RUN, INDEPENDENT OF THE REDIRECT URI (F110).
+            #
+            # Easy Auth's AAD provider signs users in with the implicit flow -
+            # `response_type=id_token&response_mode=form_post` - which Entra refuses unless
+            # the registration has web.implicitGrantSettings.enableIdTokenIssuance = true.
+            # It defaults to FALSE, and nothing in infra/entra ever set it, so Entra
+            # form_posted an error back to the callback and the browser SAVED IT AS A FILE.
+            # Nobody could sign in to any dashboard - not "nobody had tried", nobody could.
+            #
+            # It is set before the redirect-URI early-exit on purpose: an app whose URI was
+            # already registered still needs this, and putting it after the `continue` is
+            # how a fix reaches only the apps that happened to be new.
+            $implicit = az ad app show --id $target.AppId --query 'web.implicitGrantSettings.enableIdTokenIssuance' -o tsv
+            Assert-AzSucceeded -What "az ad app show --id $($target.AppId)"
+            if ("$implicit".Trim() -ne 'true') {
+              az ad app update --id $target.AppId --enable-id-token-issuance true | Out-Null
+              Assert-AzSucceeded -What "az ad app update --enable-id-token-issuance --id $($target.AppId)"
+              Write-Host "$($target.Name): enabled ID token issuance (Easy Auth's login flow requires it; it defaults to false)."
+            }
+
             if ($existing -contains $redirectUri) {
               Write-Host "$($target.Name): redirect URI already registered ($redirectUri). Nothing to do."
               continue
