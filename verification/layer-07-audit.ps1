@@ -370,13 +370,29 @@ function Test-ApiRowPayload {
             continue
         }
 
+        # A BARE JSON ARRAY, not an envelope. GET /tables/:table answers `res.json(result.rows)`
+        # - app.ts says so in its own header comment - and reports truncation in the
+        # X-MLS-Truncated header instead. The first version of this criterion parsed
+        # `payload.rows`, which is $null against an array, so it would have reported rows=0
+        # and FAILED A WORKING API. Found because Paul opened the app and its error text
+        # named the provider's `rows<T>` helper, which throws unless the body is an array.
         $rowCount = -1
+        $body = "$(Get-MlsProperty -InputObject $response -Name 'Content')".Trim()
+        # ARRAY-NESS COMES FROM THE RAW TEXT, NOT THE PARSED OBJECT. ConvertFrom-Json turns
+        # `[]` into $null, so an EMPTY array and a NON-array are indistinguishable after
+        # parsing - and those are two different findings: zero rows is a seeding problem,
+        # a non-array is a contract violation. Deciding from the leading `[` keeps them apart.
+        if (-not $body.StartsWith('[')) {
+            $problem.Add("$roleName returned 200 but the body is not a JSON array; /tables/:table answers a bare array of rows")
+            $observed.Add("$roleName http=200 rows=not-an-array")
+            continue
+        }
         try {
-            $payload = "$(Get-MlsProperty -InputObject $response -Name 'Content')" | ConvertFrom-Json
-            $rowCount = @(Get-MlsProperty -InputObject $payload -Name 'rows').Count
+            $payload = $body | ConvertFrom-Json
+            $rowCount = @($payload).Count
         }
         catch {
-            $problem.Add("$roleName returned 200 but its body did not parse as the documented {rows,truncated} envelope: $($_.Exception.Message)")
+            $problem.Add("$roleName returned 200 but its body did not parse as JSON: $($_.Exception.Message)")
             $observed.Add("$roleName http=200 rows=unparseable")
             continue
         }
@@ -668,7 +684,7 @@ function Invoke-Main {
     Invoke-MlsCriterion -Context $context -Id 'V7.6' -Control @('3.4.1') `
         -Description 'The data API answers with rows, not merely with a status code' `
         -Command "az account get-access-token --resource <easy-auth-client-id>`nGET https://<fqdn>$ProbePath  -H 'Authorization: Bearer <token>'`n# assert HTTP 200 AND (.rows | length) >= $MinimumRow" `
-        -Expected "HTTP 200 from every frontend with at least $MinimumRow row(s) in the documented {rows,truncated} envelope. A 2xx alone is NOT sufficient: an empty array is a well-formed 200, and is what both a broken backend and an empty lakehouse return." `
+        -Expected "HTTP 200 from every frontend with at least $MinimumRow row(s) in the bare JSON array /tables/:table returns. A 2xx alone is NOT sufficient: an empty array is a well-formed 200, and is what both a broken backend and an empty store return." `
         -PollIntervalSeconds 30 `
         -RetryWindowMinutes 5 `
         -Test {

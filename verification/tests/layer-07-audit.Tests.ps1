@@ -129,7 +129,10 @@ Describe 'layer-07-audit' {
             if ("$Uri" -like '*/api/tables/*') {
                 return [pscustomobject]@{
                     StatusCode = $script:ApiStatus
-                    Content    = (@{ rows = @($script:ApiRows); truncated = $false } | ConvertTo-Json -Depth 6)
+                    # A BARE ARRAY, which is what res.json(result.rows) puts on the wire.
+                    # The fake used to serve an envelope, and would have kept a criterion
+                    # green that could never pass against the real API.
+                    Content    = (ConvertTo-Json -InputObject @($script:ApiRows) -Depth 6)
                     Headers    = @{}
                     Error      = $null
                 }
