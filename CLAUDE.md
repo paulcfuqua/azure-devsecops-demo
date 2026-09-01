@@ -4,6 +4,17 @@ Rules for every agent (Orchestrator, Verifier, leads, ICs) working in this repo.
 authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
 [docs/superpowers/plans/2026-08-22-g1-master-plan.md](docs/superpowers/plans/2026-08-22-g1-master-plan.md).
 
+> **Starting cold, or resuming after a compaction? Read
+> [docs/DEMO-READINESS.md](docs/DEMO-READINESS.md) first — its SCORECARD and BLOCKER TREE
+> are at the top.** The brief says what the demo is *for*; the scorecard says how much of
+> it actually works today (1 showpiece of 4, 5 layers verified of 12) and the blocker tree
+> says what stands in the way, ordered by how much each one unblocks. Nothing in this file
+> tells you what to *do next*; that document does.
+>
+> Two habits it will save you: check a blocker's evidence yourself before acting on it -
+> several entries record a confident diagnosis that a second sample disproved - and treat a
+> finding with a test as closed and a finding with only prose as open.
+
 ## Hard rules
 
 1. **Agents execute the estate. Two things still stop them: money and deletion.**
@@ -115,6 +126,24 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   answer was settled the moment the deploy step returned - it spent all thirty minutes
   reaching a wrong verdict. Match the window to the thing being waited for, and remember
   propagation is shared wall clock: the second criterion is not starting the clock again.
+- **A step allowed to fail is a step nobody is watching. Assert its EFFECT, not its
+  exit code.** Twice in one day a job reported success while the work it exists to do had
+  silently stopped happening. Every zip publish to every Function App had failed 403
+  against a storage firewall since the estate was built, and L6 signed off green each
+  time, because both publish steps carry `continue-on-error` (F119) - so
+  `mls-cost-ingest-demo-func` held no functions at all, and the FinOps leg everyone
+  believed was blocked on a Cost Management export was *also* missing the Function meant
+  to consume it. The nightly compliance artifact was pushed to a branch and opened as a
+  pull request exactly as designed, and that pull request could never merge, because a
+  `GITHUB_TOKEN` push triggers no workflow runs, so no required check ever reported
+  (F120): nine days of state never reached `main` while the job stayed green.
+  `continue-on-error` is often RIGHT - a non-critical step must not be able to starve the
+  audit that would judge it, and removing it makes a silent failure loud by stopping the
+  Verifier, which trades away the wrong thing. What it costs is visibility, and visibility
+  is verification's job: for every step permitted to fail, something must assert the state
+  it was supposed to produce. V6.7 asserts the Function Apps actually contain functions -
+  the capability, not the artefact that usually accompanies it, which was "the publish
+  step ran".
 - **A test harness runs in the language mode of the script it tests.** No
   `Set-StrictMode -Off` in `*.Tests.ps1`, and no test that supplies the answer it is
   checking - a wrapper, a helper default, or a fixture that re-wraps a return value is not a

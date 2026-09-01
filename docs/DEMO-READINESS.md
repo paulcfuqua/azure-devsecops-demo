@@ -8,8 +8,211 @@ This file exists because a layer sign-off and a working demo are different claim
 this project had been tracking only the first. Every layer audit asserts something true;
 none of them asserts *the thing a viewer would notice in the first ten seconds*.
 
-> **Nobody has opened any of these applications in a browser.** Not once, at any point in
-> the project. Everything below about the UI is inference from code and telemetry.
+> **SUPERSEDED 2026-09-01.** This line read *"Nobody has opened any of these applications
+> in a browser. Not once, at any point in the project. Everything below about the UI is
+> inference from code and telemetry."* That was true when written and is no longer: the
+> apps have since been opened repeatedly, every route probed, and five defects found that
+> way — F110, F111, F116, F117 and a "Defender secure score 0.0%" rendered from an empty
+> API response. The inference was not merely incomplete; it was wrong in both directions,
+> reporting working things as broken (F101) and broken things as working (every criterion
+> that passed over an empty page).
+>
+> CI now opens a page too: `apps/control-tower/tests/render.browser.mjs` drives real
+> Chromium against the production bundle under the production Content-Security-Policy on
+> every pull request. That closes the half of section D that could be closed without a
+> tenant.
+
+---
+
+## THE SCORECARD — where the demo stands against its own brief
+
+*Standing section. Update it when a status changes; do not let it drift. A new agent, or a
+conversation that has been compacted, should be able to read only this and the blocker tree
+below and know what to do next.*
+
+`docs/BRIEF.md` commits to **four showpieces** and **twelve layers**. This is what is true
+on 2026-09-01, with the evidence beside it.
+
+### The four showpieces — 1 working, 1 partial, 2 not demonstrated
+
+| # | Showpiece | Status | Evidence |
+|---|---|---|---|
+| **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
+| **4** | **Compliance platform** — NIST 800-171 | 🟡 **partial** | Collectors run, the board is deployed and reachable. **No `verification/layer-12-audit.ps1` exists**, so the layer has never been independently signed off — L12's own playbook says so rather than implying otherwise |
+| **1** | **Copilot service** — Ask tab over Direct Line | ❌ **not working** | The agent has never been imported or published. The Ask tab renders its own "not configured" notice. Blocked by **BLOCKER-2** |
+| **3** | **Self-healing code** | ❌ **never demonstrated** | `self-heal.yml` runs green on schedule, and **every healing job is skipped**: `select the alert to heal: success` → Dependabot lane skipped → Autofix lane skipped → verify skipped. The green is the no-op path. Blocked by **BLOCKER-1** and **BLOCKER-4** |
+
+### The twelve layers — 5 verified, 4 partial, 3 not done
+
+| Layer | Status | Note |
+|---|---|---|
+| L1 repo / IaC / OIDC / up-down | ✅ verified | The pipelines are the product and they run |
+| L2 landing zone | ✅ verified | V2.1, V2.2 PASS |
+| L3 Entra | ✅ verified | V3.1–V3.4 PASS |
+| L7 apps | ✅ verified | 5/5, **and** now serving real rows rather than plumbing |
+| L11 teardown | ✅ verified (down half) | V11.1 PASS. Rebuild proven once; V11.2 blocked by **BLOCKER-1** |
+| L5 Fabric | 🟡 partial | Deployed and seeded (10 tables, `launches`=1,200). Its audit has not passed cleanly since F104/F105/F114 were fixed — **re-run it** |
+| L6 platform | 🟡 partial | Was verified. Currently broken by an ACL change of my own (F119); correction in flight. V6.7 now guards it |
+| L9 DevSecOps chain | 🟡 partial | 4/5. GHAS, SBOM, Trivy and ZAP all run |
+| L12 compliance | 🟡 partial | Works; unaudited (see showpiece 4) |
+| L4 Purview labels | ❌ never run | **Zero sensitivity labels exist in the tenant.** Blocked by **BLOCKER-1** |
+| L8 Copilot Studio | ❌ never succeeded | Blocked by **BLOCKER-2** |
+| L10 self-healing | ❌ chain never executed | Blocked by **BLOCKER-1** and **BLOCKER-4** |
+
+### The mission itself
+
+*"Fully agent-instantiated … destroyed and rebuilt on demand … the repo is the product."*
+**Substantially achieved.** The estate deploys from a cold dispatch in layer order with
+independent sign-off at each step, and teardown and rebuild have both been demonstrated.
+Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint; the
+30-day calendar is.**
+
+---
+
+## THE BLOCKER TREE — what actually stands between here and 4/4
+
+*Ordered by how much each unblocks. Everything not-done above traces to one of these five.*
+
+**BLOCKER-1 is CLOSED as of 2026-09-01.** The highest open blocker is now **BLOCKER-2**
+(the Copilot Studio environment), and the one an agent can attack today with no credential
+and no human is **BLOCKER-5** (L12 has no audit script).
+
+### ~~BLOCKER-1 — No GitHub secrets exist. Not one.~~ **CLOSED 2026-09-01**
+
+**All six of CLAUDE.md's permitted long-lived credentials now exist**, in the environments
+the design calls for:
+
+| `demo` | `verify` |
+|---|---|
+| `PURVIEW_CERT_BASE64` | `MLS_VERIFIER_CERT_BASE64` |
+| `PURVIEW_CERT_PASSWORD` | `MLS_VERIFIER_CERT_PASSWORD` |
+| `SELF_HEAL_TOKEN` | `MLS_VERIFIER_GH_TOKEN` |
+
+The `mls-purview` app registration (`838332d8-16f9-4a83-82af-80a97502b6e6`) was created for
+the Security & Compliance app-only identity, holds a certificate valid to 2027-09-01, has
+**Exchange.ManageAsApp** granted and is a member of **Compliance Administrator**. Both
+grants were verified by READING THEM BACK, which mattered — see the two notes below.
+
+**Two things went wrong provisioning this, and both are the estate's own recurring class.**
+
+1. **A silent failure.** The setup script's `az ad app permission admin-consent` exited 0
+   and granted nothing: the permission was correctly *requested* on the app and no
+   `appRoleAssignment` was ever created. It was caught only because the grant was read back
+   rather than assumed from the exit code, and fixed with a direct Graph POST. A script
+   that reports success while its work did not happen is the same shape as F119 and F120,
+   committed while writing the fix for them.
+2. **A false alarm, from a blind read.** The same script's Compliance Administrator
+   assignment DID work, and was briefly reported as failed because
+   `GET /v1.0/directoryRoles/{id}/members` **does not enumerate service principal
+   members** — it returns `[]`. `GET /beta/directoryRoles/{id}/members` and
+   `GET /servicePrincipals/{id}/memberOf` both show it. An empty list read as absence,
+   which is the absence-vs-denial class, committed inside the verification of a fix for it.
+   **Use `memberOf` to check a service principal's directory roles.**
+
+What this unblocks, now actionable: L4 can apply the label taxonomy for the first time;
+V11.2 and L4's audit can be signed off; L10's Dependabot lane can author and auto-merge;
+F120's compliance fix is live rather than inert; and V9.1 can read `security_and_analysis`
+if the verifier PAT carries **Administration: Read**.
+
+*Original entry follows, kept because a register that quietly edits itself is not a
+register.*
+
+### BLOCKER-1 (original) — No GitHub secrets exist. Not one. *(P-12, confirmed 2026-09-01)*
+
+```
+gh api repos/paulcfuqua/azure-devsecops-demo/actions/secrets      -> {"total_count":0,"secrets":[]}
+gh api .../environments/demo/secrets                              -> {"total_count":0,"secrets":[]}
+```
+
+CLAUDE.md hard rule 5 permits exactly six long-lived credentials and **none of them has
+been created**. This is unfinished G0, not a new decision — no written justification is
+needed, because all six are already inventoried as permitted.
+
+| Credential | What it unblocks | Consequence today |
+|---|---|---|
+| `PURVIEW_CERT_BASE64` / `_PASSWORD` | L4 **applies** the label taxonomy | No sensitivity labels exist in the tenant at all |
+| `MLS_VERIFIER_CERT_BASE64` / `_PASSWORD` | L4's audit and **V11.2** | The teardown's safety criterion cannot be signed off; L4 is never independently verified |
+| `SELF_HEAL_TOKEN` | L10's Dependabot lane **and F120's fix** | **Read this one twice.** The F120 fix ships a `SELF_HEAL_TOKEN` push path so the nightly compliance PR gets checks and can merge — and with the secret absent it falls back to `GITHUB_TOKEN` and the PR still cannot merge. The fix is correct and inert until this exists |
+| `MLS_VERIFIER_GH_TOKEN` | The Verifier reads GitHub as **itself** | It falls back to the workflow's `GITHUB_TOKEN`, so L9's stated design — *"GitHub is read with the Verifier's own read token"* — is not true today |
+
+Two are X.509 certificates because Security & Compliance PowerShell has no federated path;
+two are PATs. All four are portal/CLI work measured in minutes. **Human-only** — an agent
+cannot mint them.
+
+**Unblocks:** L4 entirely, V11.2, half of showpiece 3, and makes the F120 fix live.
+
+### BLOCKER-2 — The Copilot Studio environment cannot be reached
+
+L8 now gets *past* the `pac` PATH problem (F113 is fixed and confirmed: `pac help` runs) and
+fails on the next thing:
+
+```
+Error: The value passed to '--environment' is invalid. No Dataverse organization was
+found matching the specified criteria (--environment https://org67cdd5cc.crm.dynamics.com/)
+```
+
+`MLS_POWER_PLATFORM_ENV_URL` and `POWERPLATFORM_ENVIRONMENT_URL` both point at
+`https://org67cdd5cc.crm.dynamics.com/`. Three candidate causes, **not yet distinguished** —
+do not guess, check:
+
+1. the environment was deleted or recreated and the URL moved;
+2. the deploying service principal has no access to that Dataverse org;
+3. the URL is right but the org is in a different tenant/region than `pac` is authenticated
+   against.
+
+**Unblocks:** L8 → the Direct Line channel → the Direct Line secret → the Ask tab →
+**showpiece 1**. Also the only path to giving showpiece 3 something to heal that is not a
+dependency alert.
+
+### BLOCKER-3 — The Direct Line secret does not exist *(downstream of BLOCKER-2)*
+
+The infrastructure is now complete and waiting: `mls-directline-demo-func` is deployed,
+`VITE_DIRECTLINE_TOKEN_URL` is wired into the control-tower image build, and
+`directlineSecretName` is a supported-empty parameter. The Ask tab stays dark, honestly,
+until a published agent produces a Direct Line channel whose secret can be put in Key Vault
+as `mls-directline-secret` and named in the `demo` environment variable
+`MLS_DIRECTLINE_SECRET_NAME`.
+
+**Do not start here.** Nothing about this is actionable until BLOCKER-2 clears.
+
+### BLOCKER-4 — Self-healing has nothing to heal, and would stall if it did
+
+Two independent problems, both needed:
+
+1. **Nothing to heal.** Every scheduled run reports `select the alert to heal: success`
+   and then skips every lane. `apps/vuln-lab` pins three known-vulnerable packages on
+   purpose; the alerts have to be live for the chain to have a subject.
+2. **It would stall anyway.** The Dependabot lane needs `SELF_HEAL_TOKEN` (BLOCKER-1),
+   because a `GITHUB_TOKEN` push does not trigger the workflows the gauntlet depends on.
+
+**Unblocks:** showpiece 3. Note the demo needs the chain to run **once, end to end,
+observed** — not to run nightly and report green, which it already does and which means
+nothing.
+
+### BLOCKER-5 — L12 has no audit script
+
+The compliance platform is the only layer with no `verification/layer-*-audit.ps1`. It is
+therefore the only layer whose claims rest on itself. For a showpiece whose entire argument
+is *"this estate catches its own false claims"*, that is the wrong layer to leave unaudited.
+
+**Unblocks:** showpiece 4 moving from partial to done. **Agent-doable** — no credential, no
+tenant access beyond what already exists.
+
+---
+
+## HOW TO USE THIS DOCUMENT
+
+- **Sections A–E below are the historical register** — what was found, when, and what was
+  wrong about earlier diagnoses. It is deliberately not rewritten when a finding is closed;
+  a register that quietly edits itself is not a register.
+- **This scorecard and blocker tree are the working surface.** If you have just been handed
+  this repository, or your conversation has been compacted: read the two tables above, pick
+  the highest blocker you can actually act on, and check its evidence yourself before
+  acting on it — several entries below record a confident diagnosis that a second sample
+  disproved.
+- **The finding numbers are the trail.** F1–F120 are greppable across `docs/`, `CLAUDE.md`,
+  the runbooks under `docs/runbooks/layers/`, and the tests in `verification/tests/`. A
+  finding with a test is closed; a finding with only prose is not.
 
 ---
 
@@ -119,7 +322,9 @@ of them touches: a row of data, a rendered page, a working answer.
 > in the subscription. The operator needs **Key Vault Secrets Officer** on the vault.
 > I first recorded this as undocumented; that was wrong. `docs/runbooks/g0-bootstrap.md`
 > item C11 already carries the grant, for `mcp-auth-token`. What was actually missing is
-> that `mls-github-token` is a NEW secret with no runbook step of its own, so anyone
+> that `mls-github-token` (**renamed `mls-data-api-github-token` later the same day** -
+> three GitHub tokens now exist and the old name could not say which) is a NEW secret with
+> no runbook step of its own, so anyone
 > following the runbook provisions the vault without it and the GitHub feeds stay 503 with
 > nothing saying why. That step now exists.
 
@@ -191,6 +396,27 @@ the tenant** — not mislabelled, absent.
 The label taxonomy is a load-bearing part of the compliance story. L4's audit is equally
 blocked (`MLS_VERIFIER_CERT_BASE64`), and it says so honestly rather than passing:
 *"Nothing was verified and nothing was faked."*
+
+### B-1. The nightly compliance artifact has not reached main since 2026-08-30 (F120)
+
+PR #88 has been open, BLOCKED, with **no failing checks — because it has no checks at
+all**.
+
+`compliance.yml` tries a direct push to `main` and falls back to a branch plus a pull
+request when branch protection refuses. That fallback worked exactly as designed; the
+file's own comment predicted the day it would be needed. What it could not predict is that
+the pull request would be **unmergeable**: a branch pushed with `GITHUB_TOKEN` triggers no
+workflow runs — GitHub's recursion guard, which this same workflow relies on deliberately
+two steps earlier — so no required status check ever reports and branch protection refuses
+the merge forever.
+
+The artifact was safe on a branch and the nightly job was green, while the thing the job
+exists to do had silently stopped happening. **Nine days of compliance state never reached
+`main`.**
+
+Fixed by pushing the fallback branch with `SELF_HEAL_TOKEN`, which hard rule 5 already
+describes as existing for this exact reason. The `GITHUB_TOKEN` path is kept for a clone
+with no PAT and now warns that the resulting pull request will carry no checks.
 
 ### B0. NO FUNCTION APP HAS EVER RECEIVED CODE (F119)
 

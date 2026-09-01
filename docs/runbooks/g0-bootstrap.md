@@ -712,8 +712,10 @@ it is still about sign-in risk and auto-labeling, nothing else.
     so a gate that only armed itself in cloud was inert in production. `loadInboundAuth`
     in `apps/mcp-tools/src/auth-gate.ts` now throws regardless of mode.)
 
-11b. **`mls-github-token` — the GitHub read-only token for Control Tower's Dev and Sec
-    tabs** *(added 2026-09-01, finding F116)*. Optional, and the estate deploys and runs
+11b. **`mls-data-api-github-token` — the GitHub read-only token for Control Tower's Dev
+    and Sec tabs** *(added 2026-09-01, finding F116; renamed from `mls-github-token` the
+    same day, because three GitHub tokens now exist in this estate and a name that says
+    only "github" cannot tell you which one it is — this is **data-api's** read token)*. Optional, and the estate deploys and runs
     without it: the three GitHub feeds then answer a typed **503** naming exactly what is
     missing, Control Tower's **Ops** tab (lakehouse-backed) is unaffected, and Launch Ops
     is unaffected. Skipping this is a supported configuration, not a broken one.
@@ -736,10 +738,11 @@ it is still about sign-in risk and auto-labeling, nothing else.
     # the set below fails `ForbiddenByRbac / Assignment: (not found)` for an account that
     # can otherwise do anything in the subscription. If you did item 11 you already hold
     # the role; if you jumped here, grant it first.
-    az keyvault secret set --vault-name "$kv" --name mls-github-token --value '<PAT>'
+    az keyvault secret set --vault-name "$kv" --name mls-data-api-github-token --value '<PAT>'
     ```
 
-    Then set the repository **variable** `MLS_GITHUB_TOKEN_SECRET` to `mls-github-token`
+    Then set the repository **variable** `MLS_GITHUB_TOKEN_SECRET` to
+    `mls-data-api-github-token`
     (a variable, not a secret — a secret's NAME is not sensitive), and redeploy L7. The
     token itself never becomes a deploy parameter, a GitHub secret, or an env value:
     `infra/bicep/apps/main.bicep` grants data-api's identity **Key Vault Secrets User**
@@ -757,6 +760,80 @@ it is still about sign-in risk and auto-labeling, nothing else.
 
     Verify: `GET /api/feeds/workflow-runs` on Control Tower returns **200** with runs,
     and the Dev and Sec tabs render instead of reporting `backend_not_configured`.
+
+11c. **`mls-purview` — the Security & Compliance app-only identity** *(added
+    2026-09-01)*. Without it L4 cannot apply the label taxonomy unattended and the
+    tenant has **no sensitivity labels at all**, which is where this estate sat for
+    its whole life until now.
+
+    A certificate, not OIDC, because **Security & Compliance PowerShell has no
+    federated auth path** — that is why hard rule 5 permits these two as long-lived
+    credentials rather than treating them as a lapse.
+
+    ```bash
+    # 1. the app, and its certificate
+    openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes       -keyout purview.key -out purview.crt -subj "/CN=mls-purview"
+    openssl pkcs12 -export -out mls-purview.pfx -inkey purview.key -in purview.crt       -passout pass:"$PW"
+
+    APP_ID=$(az ad app create --display-name mls-purview       --sign-in-audience AzureADMyOrg --query appId -o tsv)
+    az ad app credential reset --id "$APP_ID" --cert @purview.crt --append --years 1
+    az ad sp create --id "$APP_ID"
+    SP_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+    ```
+
+    **`--append` IS NOT OPTIONAL.** `az ad app credential reset` REPLACES every existing
+    credential by default. On an app that already has one, omitting it is a silent
+    outage.
+
+    ```bash
+    # 2. Exchange.ManageAsApp on Office 365 Exchange Online
+    az ad app permission add --id "$APP_ID"       --api 00000002-0000-0ff1-ce00-000000000000       --api-permissions dc50a0fb-09a3-484d-be87-e023b12c6440=Role
+    az ad app permission admin-consent --id "$APP_ID"
+    ```
+
+    **VERIFY THAT CONSENT, DO NOT TRUST ITS EXIT CODE.** Observed on the first run:
+    `admin-consent` exited 0 and created no assignment at all. Read it back —
+
+    ```bash
+    az rest --method get       --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/appRoleAssignments"
+    ```
+
+    — and if it is empty, grant it directly, which works:
+
+    ```bash
+    # resourceId is the Office 365 Exchange Online SERVICE PRINCIPAL in your tenant:
+    #   az ad sp show --id 00000002-0000-0ff1-ce00-000000000000 --query id -o tsv
+    az rest --method post       --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/appRoleAssignments"       --headers "Content-Type=application/json"       --body '{"principalId":"<SP_ID>","resourceId":"<exchange sp objectId>","appRoleId":"dc50a0fb-09a3-484d-be87-e023b12c6440"}'
+    ```
+
+    ```bash
+    # 3. the directory role - the API permission authenticates it but grants it
+    #    nothing to DO; Connect-IPPSSession needs a compliance role as well.
+    #    17315797-102d-40b4-93e0-432062caca18 is the Compliance Administrator template.
+    ```
+
+    **CHECKING THAT ROLE WILL LIE TO YOU IF YOU ASK THE WRONG WAY.**
+    `GET /v1.0/directoryRoles/{id}/members` **does not enumerate service principal
+    members** — it returns `[]` for a role the SP is genuinely in. Ask the principal
+    instead:
+
+    ```bash
+    az rest --method get       --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/memberOf"
+    ```
+
+    That cost a wrong conclusion the first time, and it is the same absence-vs-denial
+    shape as F103 and F105: an empty list read as absence when it meant "this endpoint
+    will not tell you".
+
+    Finally the three values L4 gates on — **all three, or the apply job skips GREEN
+    with a notice, which is finding F43**:
+
+    ```bash
+    gh variable set PURVIEW_APP_ID       --env demo --body "$APP_ID"
+    gh variable set PURVIEW_ORGANIZATION --env demo --body '<tenant>.onmicrosoft.com'
+    gh secret   set PURVIEW_CERT_BASE64   --env demo < <(base64 -w0 mls-purview.pfx)
+    gh secret   set PURVIEW_CERT_PASSWORD --env demo
+    ```
 
 12. ⚠ **Entra ID `SignInLogs`/`AuditLogs` diagnostic setting** — *added 2026-08-26 for
     finding F9* (`compliance/findings/2026-08-26-prepublication-review.md#f9`);

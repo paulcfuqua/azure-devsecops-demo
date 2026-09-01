@@ -141,5 +141,5 @@ param maxReplicas = 2
 // Empty is a supported deployment and stays the default: the GitHub feeds then
 // answer 503 naming what is missing, and Control Tower's Ops tab - which reads
 // the lakehouse, not GitHub - is unaffected. Set MLS_GITHUB_TOKEN_SECRET to the
-// secret's name (mls-github-token) once it exists in the vault.
+// secret's name (mls-data-api-github-token) once it exists in the vault.
 param githubTokenSecretName = readEnvironmentVariable('MLS_GITHUB_TOKEN_SECRET', '')
