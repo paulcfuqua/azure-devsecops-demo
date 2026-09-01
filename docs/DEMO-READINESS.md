@@ -65,7 +65,32 @@ The Copilot Studio agent is **exported into the repo** but has never been import
 published, or given a Direct Line secret in Key Vault. It ships dark by design at L7; it
 has never been anything else.
 
-### B4. Cost dashboards have no data
+### B4. The agent's authentication is blocked permanently, and no gate will ever say so (F106)
+
+`agent-definition.md` 7.2 names two app registrations the agent's Entra ID V2
+authentication needs: `mls-copilot-auth` (the provider, exposing an API scope) and
+`mls-copilot-canvas` (the SPA the control-tower canvas uses for MSAL).
+
+**Neither is declared in `infra/entra/manifest.json`**, which is the only thing L3 creates
+from. So L3 has nothing to create, no layer fails, and every gate stays green forever.
+
+This is the night's recurring defect in its purest form. V3.1 confirms object counts
+*against the manifest*, so a registration nobody declared is **unfalsifiable by
+construction**: a criterion that validates reality against a declaration can find drift,
+never omission. Something outside the declaration has to notice.
+
+**The fix is not two lines in the manifest.** Its schema carries only `displayName`,
+`appKey`, `signInAudience`, `notes` and `verifierProbeRole` - it cannot express an exposed
+API scope, an SPA redirect URI, or an authorized client application, which are exactly the
+three things 7.2 requires. Declaring the names alone would create two empty shells: L3
+creates them, the count matches, every gate greens, and authentication is still blocked -
+**the gap made invisible instead of merely present**, which is worse than today.
+
+Real fix: extend the manifest schema and `apply-entra.ps1` to configure all three, then
+declare them. Identity-workstream call. `failure-classes.Tests.ps1` carries the check,
+skipped with that reason rather than deleted or satisfied.
+
+### B5. Cost dashboards have no data
 
 The `cost-ingest` Function has produced **zero telemetry in 24 hours** — it appears never
 to have executed. Whatever the cost tab renders, it is not rendering ingested cost data.

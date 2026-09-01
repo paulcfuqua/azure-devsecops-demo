@@ -884,3 +884,62 @@ Describe 'a console helper can print the blank line its own banner needs' {
         $offender | Should -BeNullOrEmpty -Because 'a Mandatory [string] rejects an empty string, so a banner printing a blank spacer line throws before the script does anything - add [AllowEmptyString()]'
     }
 }
+
+Describe 'a registration the design depends on is declared where L3 can create it' {
+    # agent-definition.md 7.2 names two app registrations the agent's authentication needs:
+    # mls-copilot-auth (the Entra ID V2 provider) and mls-copilot-canvas (the SPA the
+    # control-tower canvas uses for MSAL). NEITHER IS DECLARED in infra/entra/manifest.json,
+    # which is the only thing L3 creates from (F106).
+    #
+    # This is the night's recurring defect in its purest form. V3.1 confirms object counts
+    # AGAINST THE MANIFEST, so a registration nobody declared is unfalsifiable by
+    # construction: L3 has nothing to create, no layer fails, every gate stays green, and
+    # the agent's authentication is blocked permanently. F98/F102/F103/F105 were checks that
+    # could not see; this is a check that cannot even be asked.
+    #
+    # A criterion validating reality against a declaration can only ever find drift, never
+    # omission. Something outside the declaration has to notice - which is what this is.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    # SKIPPED, NOT DELETED, AND NOT MADE TO PASS. The requirement is real and unmet: the
+    # two registrations do not exist. It is skipped rather than red because the fix is NOT
+    # two lines in the manifest - the schema carries only displayName/appKey/signInAudience/
+    # notes/verifierProbeRole, and section 7.2 needs an exposed API scope, an SPA redirect
+    # URI, and an authorized client application. Declaring the names alone would create two
+    # EMPTY SHELLS: L3 creates them, V3.1's count matches, every gate goes green, and the
+    # authentication is still blocked - the gap made invisible instead of merely present,
+    # which is strictly worse than today.
+    #
+    # Un-skip when infra/entra/manifest.json and apply-entra.ps1 can express those three
+    # things. Until then this is an Identity-workstream escalation, recorded in
+    # docs/DEMO-READINESS.md, not a test to satisfy.
+    It 'declares every app registration the agent definition depends on' -Skip {
+        $definition = Join-Path $script:Root 'infra/copilot-studio/agent-definition.md'
+        Test-Path -LiteralPath $definition | Should -BeTrue `
+            -Because 'the agent definition is the human-readable source of truth for showpiece #1'
+
+        # Section 7.2 is a two-column table whose first cell is the registration name.
+        $section = (Get-Content -LiteralPath $definition -Raw) -split '(?m)^###\s' |
+            Where-Object { $_ -match '^7\.2' }
+        $section | Should -Not -BeNullOrEmpty -Because 'section 7.2 is where the registrations are named'
+
+        $required = @([regex]::Matches("$section", '(?m)^\|\s*`([^`]+)`\s*\|') |
+                ForEach-Object { $_.Groups[1].Value } |
+                Where-Object { $_ -match 'copilot|app$' } | Sort-Object -Unique)
+        $required.Count | Should -BeGreaterThan 0 `
+            -Because 'the sweep must actually find the named registrations; finding none means the table shape changed, not that the repo is clean'
+
+        # manifest.json is tokenised; the definition writes the resolved prefix.
+        $manifest = (Get-Content -LiteralPath (Join-Path $script:Root 'infra/entra/manifest.json') -Raw).
+            Replace('${prefix}', 'mls').Replace('${env}', 'demo')
+        $declared = @([regex]::Matches($manifest, '"displayName"\s*:\s*"([^"]+)"') |
+                ForEach-Object { $_.Groups[1].Value })
+
+        $missing = @($required | Where-Object { $_ -notin $declared })
+        $missing -join ', ' | Should -BeNullOrEmpty `
+            -Because 'L3 creates only what the manifest declares, so a registration named in the design but absent from the manifest is never created and no layer ever fails - the agent authentication is blocked permanently while every gate stays green (F106)'
+    }
+}
