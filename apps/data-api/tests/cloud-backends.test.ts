@@ -1074,10 +1074,11 @@ describe("CloudFeedsBackend: azure-cost", () => {
       vi.useRealTimers();
     }
 
-    // More than one, not exactly two: fetchJson retries a 429 internally, so the
-    // count is the retry policy's business. What matters here is that the cache
-    // really did expire and the upstream really was re-asked.
-    expect(hits).toBeGreaterThan(1);
+    // EXACTLY two: one call to fill the cache, one refusal. This feed passes
+    // retries:0 because Cost Management's throttle window is minutes long, so a
+    // retry cannot succeed and only spends quota that deepens the block. If the
+    // shared default ever leaks back in, this count rises and the test says so.
+    expect(hits).toBe(2);
     expect(retained.stale).toBe(true);
     expect(retained.total).toBe(10);
   });
