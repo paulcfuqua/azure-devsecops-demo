@@ -153,6 +153,16 @@ Two Power Platform environments, both **Developer** type and therefore **free**:
 > currently a one-way street. Until it exists, principle #1 claim #3 is unfalsifiable
 > exactly as this section warns.
 >
+> **Access change made 2026-08-31, recorded so it is not a mystery in an audit:** `admin@`
+> was granted **Viewer** on the `mls-operations` Fabric workspace, via
+> `POST api.powerbi.com/v1.0/myorg/admin/groups/{id}/users`. Reason: `GET /v1/workspaces`
+> only returns workspaces the caller belongs to, so `admin@` could not see `fabric@`'s
+> workspace at all and it looked absent. Worse, the lakehouse `/tables` endpoint returns
+> `[]` rather than `403` to a caller without OneLake read — an empty list is
+> indistinguishable from an empty lakehouse. Viewer plus the SQL analytics endpoint is the
+> honest read path, and it is the same role `mls-verifier` holds. Revoke it if the split
+> between `admin@` and `fabric@` is ever made deliberate.
+>
 > That admin API call is also the **twelfth G0 check** that
 > [`g0-bootstrap.md`](../../docs/runbooks/g0-bootstrap.md) says is unshipped "for one
 > reason only: nobody has exercised it against a tenant". It works, under an ordinary

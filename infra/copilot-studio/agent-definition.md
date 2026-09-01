@@ -493,10 +493,20 @@ the auth settings are blank (§6) and must be reconfigured by hand.
 
 > **[verified 2026-08-31] Current state is NOT this.** `settings.mcs.yml` reads
 > `authenticationMode: Integrated` — that is "Authenticate with Microsoft", the option
-> this section rejects. Expected at this stage: manual mode needs the `mls-copilot-auth`
-> and `mls-copilot-canvas` registrations, which are L3's deliverable and do not exist
-> yet. Recorded here so it is a tracked gap rather than a surprise at channel time. The
-> change is one field in `settings.mcs.yml` followed by `pac copilot push`, then publish.
+> this section rejects. Manual mode needs the `mls-copilot-auth` and `mls-copilot-canvas`
+> registrations from §7.2 — and **neither will ever appear, because neither is declared in
+> `infra/entra/manifest.json`.** That file holds the four dashboard registrations and the
+> `${prefix}-copilot-authors` group; it has no entry for either copilot registration. So
+> this is not "L3 has not got there yet" — L3 has nothing to create, no layer fails, and
+> nothing in the pipeline would ever say so. Confirmed against the tenant on 2026-08-31:
+> six app registrations exist, and the two this section depends on are not among them.
+>
+> **Closing it means adding both to the manifest**, which is an Identity-workstream change
+> to L3's deliverable, not an L8 one. Deliberately not done here: an L2–L11 bring-up was in
+> flight, and a manifest edit creates tenant objects on the next L3 run.
+>
+> Once the registrations exist, the agent-side change is small: one field in
+> `settings.mcs.yml`, `pac copilot push`, then publish.
 
 ### 7.2 App registrations
 

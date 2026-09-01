@@ -109,9 +109,22 @@ scope; the gap is between the layers, which is exactly where nobody owns it.
 1. **Fix the identity (F101).** One federated credential pattern fixes `data-api` and
    `mcp-tools`. Nothing else in section B matters until data flows — the dashboards, the
    copilot's answers and the eval all sit downstream of it.
-2. **Create the four missing credentials (P-12).** Two certificates and two tokens, all
-   already inventoried in CLAUDE.md. They unblock L4's labels, L4's audit, V11.2, and
-   L10's Dependabot half.
+2. **Create the four missing credentials (P-12).** All four are already inventoried in
+   CLAUDE.md as permitted long-lived credentials, so this adds no new secret and needs no
+   written justification - it is unfinished G0, not a new decision. What each one buys:
+
+   | Credential | Unblocks | Consequence today |
+   |---|---|---|
+   | `PURVIEW_CERT_BASE64` / `_PASSWORD` | L4 **applies** the label taxonomy | No sensitivity labels exist in the tenant at all |
+   | `MLS_VERIFIER_CERT_BASE64` / `_PASSWORD` | L4's audit, and **V11.2** | The teardown's safety criterion cannot be signed off; L4 is never independently verified |
+   | `MLS_VERIFIER_GH_TOKEN` | The Verifier reads GitHub as **itself** | It currently falls back to the workflow's `GITHUB_TOKEN`, so L9's stated design - *"GitHub is read with the Verifier's own read token"* - is not true |
+   | `SELF_HEAL_TOKEN` | L10's Dependabot half | A `GITHUB_TOKEN` push does not trigger workflows, so that track stalls (honestly, with a summary line) |
+
+   Two of these are certificates for Security & Compliance PowerShell, which has no
+   federated path - that is why they are certificates and not OIDC. The two tokens are
+   PATs. All four are portal/CLI work measured in minutes, and between them they close
+   one broken layer, one unprovable safety criterion, one false design claim and half a
+   showpiece.
 3. **Open the applications and look at them.** Before writing another criterion. The
    fastest way to find the next ten holes is to use the product for five minutes.
 4. **Add the criterion nobody wrote.** An end-to-end check that a dashboard renders real

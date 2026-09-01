@@ -872,3 +872,47 @@ Describe 'criterion selection is a diagnostic, never a sign-off' {
         Get-MlsExitCode -Context $context | Should -Be 0
     }
 }
+
+
+Describe 'an expired federated assertion is raised, never swallowed' {
+    # A CI login federates a short-lived GitHub OIDC token as a client assertion. The access
+    # token az caches lasts about an hour; the assertion behind it lasts about five minutes.
+    # So the first request for a resource az has not already cached, made later than that,
+    # fails with AADSTS700024 - and long audits reach that point routinely. L5's V5.3 asked
+    # for a SQL token 41 minutes into a run whose assertion expired at minute 5 (F104).
+    #
+    # Swallowed by -AllowFailure it returns $null, and every caller reads $null as "not
+    # there": an expired credential becomes "the lakehouse has no tables" or "the control is
+    # off". Same disease as F102/F103/F105 - could-not-tell reported as is-not-there - so it
+    # is raised whatever the caller asked for, exactly like a timeout.
+
+    BeforeEach {
+        Mock Assert-MlsCommand {} -ModuleName 'MlsAudit'
+        Mock Invoke-MlsBoundedNativeCommand {
+            return [pscustomobject]@{
+                TimedOut = $false
+                ExitCode = 1
+                StdOut   = ''
+                StdErr   = "ERROR: AADSTS700024: Client assertion is not within its valid time range. Current time: 2026-09-01T02:39:18Z, assertion valid from 2026-09-01T01:58:26Z, expiry time of assertion 2026-09-01T02:03:26Z."
+            }
+        } -ModuleName 'MlsAudit'
+    }
+
+    It 'throws even when the caller passed -AllowFailure' {
+        {
+            InModuleScope 'MlsAudit' { Invoke-MlsAz -AllowFailure -Argument @('account', 'get-access-token', '--resource', 'https://database.windows.net') }
+        } | Should -Throw -ExpectedMessage '*AADSTS700024*' `
+            -Because 'returning $null here makes an expired credential indistinguishable from an absent resource'
+    }
+
+    It 'says it is not a permissions problem, because that is what it looks like' {
+        $message = ''
+        try {
+            InModuleScope 'MlsAudit' { Invoke-MlsAz -AllowFailure -Argument @('account', 'get-access-token', '--resource', 'https://database.windows.net') }
+        }
+        catch { $message = "$($_.Exception.Message)" }
+        $message | Should -BeLike '*NOT a permissions problem*'
+        $message | Should -BeLike '*five minutes*' -Because 'the lifetime is the whole explanation and nobody guesses it'
+        $message | Should -BeLike '*already cached*' -Because 'why the run got this far is the confusing part'
+    }
+}

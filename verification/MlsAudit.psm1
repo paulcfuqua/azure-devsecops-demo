@@ -629,6 +629,37 @@ function Invoke-MlsAz {
         throw "az $($Argument -join ' ') did not return within $TimeoutSeconds s and was terminated."
     }
     if ($run.ExitCode -ne 0) {
+        # AN EXPIRED CREDENTIAL IS NOT A FAILED LOOKUP, AND -AllowFailure MUST NOT EAT IT.
+        #
+        # A CI login federates a short-lived GitHub OIDC token as a client assertion. The
+        # ACCESS token az caches lasts about an hour, but the ASSERTION behind it lasts
+        # about five minutes - so the first request for a resource az has not already
+        # cached, made later than that, fails with AADSTS700024. Long audits reach that
+        # point routinely: L5's V5.3 asked for a SQL token 41 minutes into a run whose
+        # assertion had expired at minute 5 (F104).
+        #
+        # Swallowed by -AllowFailure this returns $null, and every caller reads $null as
+        # "not there" - so an expired credential becomes "the lakehouse has no tables" or
+        # "the control is off". That is the same mistake as the timeout above, and the same
+        # disease as F102/F103/F105: could-not-tell reported as is-not-there. It is
+        # therefore raised whatever the caller asked for, exactly like a timeout.
+        $stderr = "$($run.StdErr)"
+        if ($stderr -match 'AADSTS700024|assertion is not within its valid time range') {
+            throw @"
+az $($Argument -join ' ') could not authenticate: the federated client assertion has EXPIRED (AADSTS700024).
+
+This is NOT a permissions problem and not a missing resource, and it will look like both.
+The CI login's assertion lives about five minutes; this call asked for a token az had not
+already cached, later than that. Anything already cached keeps working, which is why the
+run got this far.
+
+Fix by shortening the path to the first request for each resource, or by re-authenticating
+before it: mint the tokens a long audit needs while the assertion is fresh, or narrow the
+retry windows ahead of the criterion that needs a new one.
+
+Original error: $($stderr.Trim())
+"@
+        }
         if ($AllowFailure) { return $null }
         $why = if ([string]::IsNullOrWhiteSpace($run.StdErr)) { '' } else { ": $($run.StdErr.Trim())" }
         throw "az $($Argument -join ' ') failed with exit code $($run.ExitCode)$why"
