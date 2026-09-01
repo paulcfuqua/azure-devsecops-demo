@@ -257,14 +257,38 @@ function Test-ToolAllowlist {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($McpServerUrl)) {
+        # READ FROM /healthz, NOT tools/list. Everything under MCP_PATH is behind the
+        # shared-secret gate, so this half used to 401 - an anonymous probe of an
+        # authenticated endpoint, F89's shape a second time (F100).
+        #
+        # The fix is not to hand the Verifier `mcp-auth-token`. That token is compared
+        # with timingSafeEqual: it IS the capability, and an auditor holding a working
+        # credential for the thing it audits is a far bigger concession than this
+        # criterion is worth. /healthz is unauthenticated BY DESIGN, for exactly this -
+        # apps/mcp-tools/src/app.ts says it is "what lets the L7/L8 audits assert from
+        # outside" - and it now publishes the declared tool names beside the count.
         $checked++
-        $catalog = Invoke-MlsMcpToolCatalog -Uri $McpServerUrl -Method 'tools/list'
-        $advertised = @(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $catalog -Name 'result') -Name 'tools' |
-                ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'name')" })
-        $comparison = Test-MlsSetEquality -Actual $advertised -Expected $AllowedTool
-        $observed.Add("tools/list: $($advertised.Count) tool(s)")
-        if (-not $comparison.Equal) {
-            $problem.Add("tools/list missing [$($comparison.Missing -join ', ')] extra [$($comparison.Extra -join ', ')]")
+        $health = "$McpServerUrl" -replace '/[^/]*$', '/healthz'
+        $response = Invoke-MlsHttp -Uri $health -TimeoutSec 30
+        $status = "$(Get-MlsProperty -InputObject $response -Name 'StatusCode')"
+        if ($status -ne '200') {
+            $problem.Add("GET /healthz returned $status, so the declared tool set could not be read")
+        }
+        else {
+            $payload = "$(Get-MlsProperty -InputObject $response -Name 'Content')" | ConvertFrom-Json
+            $advertised = @(Get-MlsProperty -InputObject $payload -Name 'toolNames')
+            if ($advertised.Count -eq 0) {
+                # An older image predates the toolNames field. Say which, rather than
+                # reporting an empty set as "the server declares no tools".
+                $problem.Add("GET /healthz carries no toolNames field (deployed image predates F100); the declared tool set could not be read")
+            }
+            else {
+                $comparison = Test-MlsSetEquality -Actual $advertised -Expected $AllowedTool
+                $observed.Add("declared: $($advertised.Count) tool(s)")
+                if (-not $comparison.Equal) {
+                    $problem.Add("declared set missing [$($comparison.Missing -join ', ')] extra [$($comparison.Extra -join ', ')]")
+                }
+            }
         }
     }
 

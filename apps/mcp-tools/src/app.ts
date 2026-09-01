@@ -62,6 +62,23 @@ export function createApp(deps: AppDeps = {}): Express {
       ok: true,
       mode: config.backendMode,
       tools: registry.definitions.length,
+      // The DECLARED tool names, not just the count.
+      //
+      // /healthz exists so the L7/L8 audits can assert from outside that this
+      // endpoint is not open (see `auth` below). V8.3 asserts something adjacent:
+      // that the server declares exactly the six allowlisted tools and no more.
+      // It was reaching for that over `tools/list`, which is behind the gate, so
+      // it got a 401 - an anonymous probe of an authenticated endpoint, which is
+      // F89's shape a second time (F100).
+      //
+      // Publishing the names here is the right fix rather than handing the
+      // Verifier `mcp-auth-token`. That token is compared with timingSafeEqual:
+      // it IS the capability, so giving it to the auditor would make it a fully
+      // authorised caller of the thing it audits - a much larger concession than
+      // the criterion is worth. A tool NAME, by contrast, is the one thing an MCP
+      // server exists to advertise, the count is already here, and the `adapters`
+      // map below already names five of the six. Nothing new is disclosed.
+      toolNames: registry.definitions.map((tool) => tool.name),
       transport: "streamable-http",
       endpoint: MCP_PATH,
       // Which SQL dialect the agent is currently being told to write. This is
