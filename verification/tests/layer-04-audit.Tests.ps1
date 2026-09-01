@@ -65,7 +65,9 @@ Describe 'layer-04-audit' {
         $script:Policy = [pscustomobject]@{
             Identity         = 'mls-demo-label-policy'
             Labels           = $script:ExpectedLabel
-            ExchangeLocation = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives')
+            # F121: the policy publishes to All - L3's security groups are not valid
+            # Security & Compliance recipients and never were.
+            ExchangeLocation = @('All')
         }
         Mock Get-MlsLabelPolicy { return $script:Policy }
     }
@@ -200,7 +202,7 @@ Describe 'layer-04-audit' {
         }
     }
 
-    Context 'V4.3 - label policy exists and is scoped to the demo groups (F18)' {
+    Context 'V4.3 - label policy exists and is scoped (F18, F121)' {
         It 'fails when no policy has been published at all' {
             Mock Get-MlsLabelPolicy { return $null }
             $context = Invoke-AuditForTest -NoRetry
@@ -213,16 +215,20 @@ Describe 'layer-04-audit' {
             Get-MlsExitCode -Context $context | Should -Be 1
         }
 
-        It 'fails when the published policy is missing one of the demo groups' {
-            $script:Policy.ExchangeLocation = @('mls-flight-operations', 'mls-security-team', 'mls-finance')
+        It 'fails when the published policy is scoped to nobody' {
+            # Was "missing one of the demo groups", which the policy no longer names:
+            # since F121 it publishes to All, because L3's security groups are not valid
+            # Security & Compliance recipients. A policy scoped to nothing still has to
+            # fail - a label taxonomy nobody can apply is not a delivered layer.
+            $script:Policy.ExchangeLocation = @()
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V4.3'
             $row.Status | Should -Be 'FAIL'
-            $row.Detail | Should -BeLike '*scoping error*mls-executives*'
+            $row.Detail | Should -BeLike '*scoping error*All*'
         }
 
         It 'fails when the published policy is scoped to a group nobody asked for' {
-            $script:Policy.ExchangeLocation = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives', 'mls-contractors')
+            $script:Policy.ExchangeLocation = @('All', 'mls-contractors')
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V4.3'
             $row.Status | Should -Be 'FAIL'

@@ -143,26 +143,48 @@ function Get-LabelPolicyName {
 
 function Get-LabelPolicyScope {
     <#
-        The demo groups the label policy is published to. Source of truth:
-        infra/entra/manifest.json groups[].displayName (all four - every demo user
-        belongs to at least one). The SUFFIXES are still a literal list here rather than a
-        runtime read of another layer's input file, for the reason this comment always
-        gave: labels.ps1 has no dependency on L3's manifest, and a read-only script
-        inspecting one is a bigger coupling than four names.
+        WHO THE LABEL POLICY IS PUBLISHED TO, and why it is no longer four group names.
 
-        WHAT CHANGED IS THE PREFIX. The list used to be four fully-qualified literals
-        "kept in sync by hand", which was true while the prefix was fixed. It stopped being
-        true when the estate became renameable: a deployment with MLS_COMPANY_PREFIX=acme
-        publishes its label policy to four groups that exist in no tenant, and L4 fails on
-        names the operator never typed (F94).
+        THIS RETURNED FOUR DEMO GROUPS AND COULD NEVER HAVE WORKED (F121). The four
+        exist - L3 creates them and every demo user is in at least one - and
+        New-LabelPolicy still failed on the first real run:
 
-        Only the prefix is derived. The suffixes remain the hand-kept list, so adding a
-        group to the manifest still requires adding it here - which is the coupling this
-        function deliberately accepts.
+            New-LabelPolicy: ManagementObjectNotFoundException
+            The specified recipient "mls-flight-operations" couldn't be found.
+
+        `-ExchangeLocation` takes a RECIPIENT, and L3 creates pure SECURITY groups:
+        mailEnabled=False, no mail address, groupTypes=[]. A security group is not a
+        recipient, so Security & Compliance cannot resolve one however correct its name
+        is. The two layers disagreed about what a group is, and nothing caught it because
+        L4 had never run - the credential to run it did not exist until 2026-09-01.
+
+        WHY `All` RATHER THAN MAKING THE GROUPS MAIL-ENABLED. Three options existed:
+
+          1. Publish to All. One line, works today, and is what most tenants actually do -
+             a sensitivity label everyone can apply is the common enterprise default.
+          2. Make L3 create Microsoft 365 (Unified) groups instead. Those ARE recipients,
+             but they also provision a mailbox, a SharePoint site and a Teams surface per
+             group, and L3's conditional-access policies and role assignments all
+             reference these objects. A four-group change there to satisfy a label
+             policy is the tail wagging the dog.
+          3. Create mail-enabled security groups. Exchange-side objects that Graph cannot
+             create, so this layer would need a second credential and a second API.
+
+        (1) is taken. What it costs is honest and small: the policy no longer expresses
+        "these four teams", so the SCOPING half of the segregation story is not
+        demonstrated by this policy. The labels themselves - what they are, what they
+        mark, and the fact that they exist in the tenant at all - are unaffected, and
+        they are the part the demo actually shows.
+
+        If per-team scoping is wanted later, option 2 is the honest route and it belongs
+        in L3, not here: this function should keep returning whatever L3 makes
+        addressable, rather than this layer inventing recipients L3 does not create.
     #>
     param([Parameter(Mandatory)][string]$Prefix)
-    return @('flight-operations', 'security-team', 'finance', 'executives') |
-        ForEach-Object { "$Prefix-$_" }
+    # $Prefix is retained deliberately: option 2 above would make this per-group again,
+    # and the caller should not have to change shape when it does.
+    $null = $Prefix
+    return @('All')
 }
 
 function Test-IppSession {

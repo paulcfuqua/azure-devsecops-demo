@@ -47,7 +47,15 @@ param(
     [switch]$NoRetry,
     # Empty resolves to '<prefix>-demo-label-policy'.
     [string]$ExpectedLabelPolicy = '',
-    [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives'),
+    # 'All', NOT FOUR GROUP NAMES (F121). The policy used to be published to four demo
+    # groups and never could be: `-ExchangeLocation` takes a RECIPIENT, and L3 creates
+    # pure security groups - mailEnabled=False, no mail address - which Security &
+    # Compliance cannot resolve however correct the name is. The first real L4 run failed
+    # with `The specified recipient "mls-flight-operations" couldn't be found`, and this
+    # expectation would then have failed the criterion on its own fix. See
+    # Get-LabelPolicyScope in infra/purview/labels.ps1 for why All was chosen over making
+    # the groups mail-enabled.
+    [string[]]$ExpectedLabelPolicyScope = @('All'),
     # Run only these criteria (e.g. -OnlyCriterion V4.2). Everything else reports SKIP
     # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
     [string[]]$OnlyCriterion = @()
@@ -230,7 +238,7 @@ function Invoke-Main {
         [switch]$NoRetry,
         [switch]$SkipConnect,
         [string]$ExpectedLabelPolicy = '',
-        [string[]]$ExpectedLabelPolicyScope = @('mls-flight-operations', 'mls-security-team', 'mls-finance', 'mls-executives'),
+        [string[]]$ExpectedLabelPolicyScope = @('All'),
         [string[]]$OnlyCriterion = @()
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
