@@ -209,7 +209,11 @@ Describe 'every provider the estate uses is registered up front' {
 
     It 'declares a registration list at all' {
         $script:InfraUp | Should -Match 'az provider register'
-        ([regex]::Matches($script:InfraUp, '(?m)^\s+Microsoft\.[A-Za-z]+ \\?$')).Count |
+        # The last entry of the list ends ` ; do`, not ` \`. A pattern that requires
+        # the trailing backslash silently skips whichever provider happens to be
+        # last - which is how the check below came to report Microsoft.Web as
+        # missing from a list that declares it.
+        ([regex]::Matches($script:InfraUp, '(?m)^\s+Microsoft\.[A-Za-z]+(?:\s+\\|\s+;\s+do)?\s*$')).Count |
             Should -BeGreaterThan 8 -Because 'the list is what stops a provider being discovered a layer at a time'
     }
 
@@ -218,7 +222,11 @@ Describe 'every provider the estate uses is registered up front' {
         $alwaysPresent = @('Microsoft.Resources', 'Microsoft.Authorization', 'Microsoft.Management')
 
         $declared = [System.Collections.Generic.HashSet[string]]::new()
-        foreach ($m in [regex]::Matches($script:InfraUp, '(?m)^\s+(Microsoft\.[A-Za-z]+) \\?$')) {
+        # Same pattern as the check above, and for the same reason: the final entry
+        # of the list ends ` ; do` rather than ` \`, so a pattern requiring the
+        # trailing backslash reports a provider absent that is declared two lines
+        # away.
+        foreach ($m in [regex]::Matches($script:InfraUp, '(?m)^\s+(Microsoft\.[A-Za-z]+)(?:\s+\\|\s+;\s+do)?\s*$')) {
             $null = $declared.Add($m.Groups[1].Value)
         }
 

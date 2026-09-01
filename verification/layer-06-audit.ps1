@@ -68,6 +68,12 @@ param(
     [double]$SqlIdleWindowMinutes = 75,
     [double]$SqlPauseWaitMinutes = -1,
     [switch]$EnforceCostExport,
+    # V6.7's subjects. Supplied by the workflow from the L6 outputs; when absent
+    # they are derived from the same naming rule the templates use, so a local run
+    # needs no arguments and a rebranded estate (MLS_COMPANY_PREFIX) still checks
+    # its own apps rather than someone else's.
+    [string]$FunctionResourceGroupName,
+    [string[]]$FunctionAppName = @(),
     [string]$ReportRoot,
     [switch]$NoRetry,
     # Run only these criteria (e.g. -OnlyCriterion V6.2). Everything else reports SKIP
@@ -118,6 +124,87 @@ function Resolve-ManifestValue {
         if ($Output.Contains($name) -and -not [string]::IsNullOrWhiteSpace($Output[$name])) { return $Output[$name] }
     }
     return ''
+}
+
+function Test-FunctionAppsHaveCode {
+    <# V6.7 - A FUNCTION APP WITH NO FUNCTIONS IS NOT A DEPLOYED LAYER (F119).
+
+       Every zip publish to every Function App in this estate failed, from the day
+       it was built, and L6 reported SUCCESS every time:
+
+           InaccessibleStorageException: Failed to access storage account for
+           deployment: BlobUploadFailedException: ... 403
+
+       The deployment storage account never declared networkAcls, so the module
+       applied its own secure default (Deny + AzureServices bypass) - and Flex
+       Consumption's package upload is not covered by that bypass. The fix is a
+       resource instance rule per site, in the template.
+
+       WHY THIS CRITERION EXISTS RATHER THAN A LOUDER DEPLOY STEP. Both publish
+       steps carry `continue-on-error: true`, deliberately and correctly: the
+       verify job is `needs: [preflight, deploy]` and requires deploy to succeed,
+       so a non-critical publish must not be able to starve the audit. That choice
+       is asserted by cost-ingest.Tests.ps1 and it is the right one - the Verifier
+       judging a layer is worth more than a deploy step vetoing it.
+
+       What the flag cost was VISIBILITY, and visibility is this file's job. So the
+       deploy step keeps its flag and the audit gains the ability to see what it
+       hid. This is the estate's own rule applied to its own pipeline: assert the
+       CAPABILITY - code is present and listable - not the artefact that usually
+       accompanies it, which was "the publish step ran".
+
+       OBSERVABILITY IS ESTABLISHED BEFORE ABSENCE IS REPORTED. The functions
+       endpoint answers 403 to a caller without rights and an empty list to a
+       caller with them and nothing deployed, and those must never be conflated -
+       the entire absence-vs-denial class this repository keeps paying for. A
+       non-success response is therefore UNOBSERVABLE, never "no functions". #>
+    param(
+        [Parameter(Mandatory)][string]$SubscriptionId,
+        [Parameter(Mandatory)][string]$ResourceGroupName,
+        [Parameter(Mandatory)][string[]]$FunctionAppName
+    )
+    $observed = [System.Collections.Generic.List[string]]::new()
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $unobservable = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($name in $FunctionAppName) {
+        $uri = "https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName" +
+               "/providers/Microsoft.Web/sites/$name/functions?api-version=2023-12-01"
+        $raw = Invoke-MlsAz -AllowFailure -Raw -Argument @('rest', '--method', 'get', '--url', $uri)
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            $unobservable.Add("$name (the functions endpoint returned nothing - this reads the same whether the app has no code or the caller may not look, so it is not reported as empty)")
+            continue
+        }
+        $parsed = $null
+        try { $parsed = $raw | ConvertFrom-Json } catch {
+            $unobservable.Add("$name (the functions endpoint did not return JSON)")
+            continue
+        }
+        $names = @()
+        if ($null -ne $parsed -and $null -ne $parsed.value) {
+            $names = @($parsed.value | ForEach-Object { $_.properties.name } | Where-Object { $_ })
+        }
+        if ($names.Count -eq 0) {
+            $problem.Add("$name has NO functions deployed - its package publish failed and the layer reported success anyway (F119)")
+            $observed.Add("$name=0")
+        }
+        else {
+            $observed.Add("$name=$($names.Count) ($($names -join ', '))")
+        }
+    }
+
+    if ($unobservable.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Observed (($observed + $unobservable) -join '; ') `
+            -Detail 'UNOBSERVABLE, not absent: the ARM functions endpoint answers the same way to a caller who may not read it as to an app with nothing deployed. Establish that mls-verifier can read Microsoft.Web/sites/functions before treating an empty list as evidence.'
+    }
+    if ($problem.Count -gt 0) {
+        # The problem text goes in OBSERVED, not only Detail: the report's summary
+        # line is what a reader scans, and "app=0" without the sentence beside it
+        # is a number nobody will act on.
+        return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
+            -Detail 'A Function App with no functions is a layer that did not deliver. Check the "Publish the ... Function package" step: it carries continue-on-error, so its failure does not fail the job. F119 was a 403 from the deployment storage firewall - the account needs a resourceAccessRules entry naming each site.'
+    }
+    return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
 }
 
 function Test-ArmStateMatchesManifest {
@@ -321,10 +408,26 @@ function Invoke-Main {
         [double]$SqlIdleWindowMinutes = 75,
         [double]$SqlPauseWaitMinutes = -1,
         [switch]$EnforceCostExport,
+        [string]$FunctionResourceGroupName,
+        [string[]]$FunctionAppName = @(),
         [string]$ReportRoot,
         [switch]$NoRetry,
         [string[]]$OnlyCriterion = @()
     )
+    # Derived, not hardcoded: 'mls' and 'demo' are DEFAULTS in naming.bicep that a
+    # deployment overrides with MLS_COMPANY_PREFIX / MLS_ENV_SEGMENT. Reading the
+    # same variables here keeps this criterion pointed at the estate that was
+    # actually deployed - CLAUDE.md's rule that a constant naming something in
+    # another system is resolved, not written from memory.
+    $prefix = if ($env:MLS_COMPANY_PREFIX) { $env:MLS_COMPANY_PREFIX } else { 'mls' }
+    $envSeg = if ($env:MLS_ENV_SEGMENT) { $env:MLS_ENV_SEGMENT } else { 'demo' }
+    $functionResourceGroupName = if ($FunctionResourceGroupName) { $FunctionResourceGroupName } else { "$prefix-rg-ops" }
+    $FunctionAppNames = if ($FunctionAppName.Count -gt 0) {
+        $FunctionAppName
+    }
+    else {
+        @("$prefix-cost-ingest-$envSeg-func", "$prefix-directline-$envSeg-func")
+    }
     $subscription = Resolve-MlsInput -Name 'SubscriptionId' -Value $SubscriptionId -EnvironmentVariable @('AZURE_SUBSCRIPTION_ID') `
         -Hint 'The demo subscription holding mls-rg-platform; read as mls-verifier (Reader covers */read).'
 
@@ -440,6 +543,22 @@ function Invoke-Main {
         -RetryWindowMinutes 5 `
         -Test { Test-SqlBackupPosture -SqlDatabaseId $databaseId -ExpectedRetentionDays $ExpectedBackupRetentionDays -ExpectedStorageRedundancy $ExpectedBackupStorageRedundancy } | Out-Null
 
+    # V6.7 - the criterion that would have caught F119 on the day the estate was
+    # built. A SHORT window on purpose: the answer is settled the moment the
+    # publish step returns, so there is nothing to wait for. Per the working
+    # agreement, a criterion that needs longer states the number and what it is
+    # waiting on; this one needs none and says so.
+    Invoke-MlsCriterion -Context $context -Id 'V6.7' -Control @() `
+        -Description 'Every Function App the layer deploys actually has functions deployed to it' `
+        -Command "az rest --method get --url https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Web/sites/<app>/functions?api-version=2023-12-01" `
+        -Expected 'each Function App reports at least one function' `
+        -RetryWindowMinutes 2 `
+        -Test {
+            Test-FunctionAppsHaveCode -SubscriptionId $SubscriptionId `
+                -ResourceGroupName $functionResourceGroupName `
+                -FunctionAppName $FunctionAppNames
+        } | Out-Null
+
     return $context
 }
 
@@ -454,6 +573,7 @@ if (-not $env:MLS_SKIP_MAIN) {
             -SqlLastTouchedUtc $SqlLastTouchedUtc -SqlIdleWindowMinutes $SqlIdleWindowMinutes `
             -SqlPauseWaitMinutes $SqlPauseWaitMinutes `
             -EnforceCostExport:$EnforceCostExport -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -FunctionResourceGroupName $FunctionResourceGroupName -FunctionAppName $FunctionAppName `
             -OnlyCriterion $OnlyCriterion
     }
     catch {

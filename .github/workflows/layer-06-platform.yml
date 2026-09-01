@@ -612,6 +612,20 @@ jobs:
         id: cost_ingest_publish
         if: ${{ !inputs.dry_run }}
         continue-on-error: true
+        # continue-on-error STAYS, and F119 is why it is not enough on its own.
+        #
+        # The flag exists so a failed publish cannot starve the verify job, which
+        # is `needs: [preflight, deploy]` and requires deploy to succeed - a
+        # deliberate choice, asserted by cost-ingest.Tests.ps1, and correct: the
+        # Verifier judging a layer is more valuable than a deploy step vetoing it.
+        #
+        # What it cost was visibility. Every publish here has failed 403 against
+        # the deployment storage firewall since the estate was built, and L6 signed
+        # off GREEN each time while neither Function held any code. The answer is
+        # not to remove the flag - that starves the audit - but to make the AUDIT
+        # able to see it: V6.7 now asserts each Function App actually has functions,
+        # so a silent publish failure fails the layer where it should, in
+        # verification rather than in a step that was told not to matter.
         run: |
           set -euo pipefail
 
@@ -671,6 +685,20 @@ jobs:
         id: directline_publish
         if: ${{ !inputs.dry_run }}
         continue-on-error: true
+        # continue-on-error STAYS, and F119 is why it is not enough on its own.
+        #
+        # The flag exists so a failed publish cannot starve the verify job, which
+        # is `needs: [preflight, deploy]` and requires deploy to succeed - a
+        # deliberate choice, asserted by cost-ingest.Tests.ps1, and correct: the
+        # Verifier judging a layer is more valuable than a deploy step vetoing it.
+        #
+        # What it cost was visibility. Every publish here has failed 403 against
+        # the deployment storage firewall since the estate was built, and L6 signed
+        # off GREEN each time while neither Function held any code. The answer is
+        # not to remove the flag - that starves the audit - but to make the AUDIT
+        # able to see it: V6.7 now asserts each Function App actually has functions,
+        # so a silent publish failure fails the layer where it should, in
+        # verification rather than in a step that was told not to matter.
         run: |
           set -euo pipefail
 
