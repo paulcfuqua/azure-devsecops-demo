@@ -273,7 +273,16 @@ jobs:
           echo "${pac_dir}" >> "${GITHUB_PATH}"
           # Prove the capability in THIS step, using the PATH we just built, rather than
           # discovering it eighteen calls later inside a PowerShell script.
-          PATH="${pac_dir}:${PATH}" pac --version
+          #
+          # `pac help`, NOT `pac --version`. There is no --version flag: pac rejects it with
+          #
+          #   Error: Not a valid command. Try running 'pac [command] help'.
+          #   Parse failed on:            --version
+          #
+          # and exits 1, which failed this step on the very run that proved the PATH fix
+          # worked. Written from memory rather than checked - the same defect this
+          # repository keeps paying for, in the step whose whole purpose is verification.
+          PATH="${pac_dir}:${PATH}" pac help >/dev/null
           echo "pac resolved from POWERPLATFORMTOOLS_PACPATH=${raw}; ${pac_dir} is now on PATH."
 
       - name: Create the pac auth profile
