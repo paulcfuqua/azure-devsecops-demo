@@ -192,6 +192,27 @@ The label taxonomy is a load-bearing part of the compliance story. L4's audit is
 blocked (`MLS_VERIFIER_CERT_BASE64`), and it says so honestly rather than passing:
 *"Nothing was verified and nothing was faked."*
 
+### B-1. The nightly compliance artifact has not reached main since 2026-08-30 (F120)
+
+PR #88 has been open, BLOCKED, with **no failing checks — because it has no checks at
+all**.
+
+`compliance.yml` tries a direct push to `main` and falls back to a branch plus a pull
+request when branch protection refuses. That fallback worked exactly as designed; the
+file's own comment predicted the day it would be needed. What it could not predict is that
+the pull request would be **unmergeable**: a branch pushed with `GITHUB_TOKEN` triggers no
+workflow runs — GitHub's recursion guard, which this same workflow relies on deliberately
+two steps earlier — so no required status check ever reports and branch protection refuses
+the merge forever.
+
+The artifact was safe on a branch and the nightly job was green, while the thing the job
+exists to do had silently stopped happening. **Nine days of compliance state never reached
+`main`.**
+
+Fixed by pushing the fallback branch with `SELF_HEAL_TOKEN`, which hard rule 5 already
+describes as existing for this exact reason. The `GITHUB_TOKEN` path is kept for a clone
+with no PAT and now warns that the resulting pull request will carry no checks.
+
 ### B0. NO FUNCTION APP HAS EVER RECEIVED CODE (F119)
 
 Found 2026-09-01 while deploying the Direct Line Function. Every zip publish to

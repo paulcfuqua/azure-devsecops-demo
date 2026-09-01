@@ -115,6 +115,24 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   answer was settled the moment the deploy step returned - it spent all thirty minutes
   reaching a wrong verdict. Match the window to the thing being waited for, and remember
   propagation is shared wall clock: the second criterion is not starting the clock again.
+- **A step allowed to fail is a step nobody is watching. Assert its EFFECT, not its
+  exit code.** Twice in one day a job reported success while the work it exists to do had
+  silently stopped happening. Every zip publish to every Function App had failed 403
+  against a storage firewall since the estate was built, and L6 signed off green each
+  time, because both publish steps carry `continue-on-error` (F119) - so
+  `mls-cost-ingest-demo-func` held no functions at all, and the FinOps leg everyone
+  believed was blocked on a Cost Management export was *also* missing the Function meant
+  to consume it. The nightly compliance artifact was pushed to a branch and opened as a
+  pull request exactly as designed, and that pull request could never merge, because a
+  `GITHUB_TOKEN` push triggers no workflow runs, so no required check ever reported
+  (F120): nine days of state never reached `main` while the job stayed green.
+  `continue-on-error` is often RIGHT - a non-critical step must not be able to starve the
+  audit that would judge it, and removing it makes a silent failure loud by stopping the
+  Verifier, which trades away the wrong thing. What it costs is visibility, and visibility
+  is verification's job: for every step permitted to fail, something must assert the state
+  it was supposed to produce. V6.7 asserts the Function Apps actually contain functions -
+  the capability, not the artefact that usually accompanies it, which was "the publish
+  step ran".
 - **A test harness runs in the language mode of the script it tests.** No
   `Set-StrictMode -Off` in `*.Tests.ps1`, and no test that supplies the answer it is
   checking - a wrapper, a helper default, or a fixture that re-wraps a return value is not a
