@@ -4,6 +4,17 @@ Rules for every agent (Orchestrator, Verifier, leads, ICs) working in this repo.
 authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
 [docs/superpowers/plans/2026-08-22-g1-master-plan.md](docs/superpowers/plans/2026-08-22-g1-master-plan.md).
 
+> **Starting cold, or resuming after a compaction? Read
+> [docs/DEMO-READINESS.md](docs/DEMO-READINESS.md) first — its SCORECARD and BLOCKER TREE
+> are at the top.** The brief says what the demo is *for*; the scorecard says how much of
+> it actually works today (1 showpiece of 4, 5 layers verified of 12) and the blocker tree
+> says what stands in the way, ordered by how much each one unblocks. Nothing in this file
+> tells you what to *do next*; that document does.
+>
+> Two habits it will save you: check a blocker's evidence yourself before acting on it -
+> several entries record a confident diagnosis that a second sample disproved - and treat a
+> finding with a test as closed and a finding with only prose as open.
+
 ## Hard rules
 
 1. **Agents execute the estate. Two things still stop them: money and deletion.**
