@@ -274,3 +274,133 @@ describe("resolveDataMode", () => {
     expect(resolveDataMode({ DEV: false, VITE_LOCAL_DATA: "1" })).toBe("local");
   });
 });
+
+// ---------------------------------------------------------------------------
+// F116 - a feed that did not answer must cost its own panels and nothing else,
+// and must never be rendered as a number.
+//
+// Both halves were observed live on 2026-09-01. Three GitHub feeds answered 503
+// for want of a token and the Dev tab rendered NOTHING, discarding the
+// app-requests payload it was already holding. And with the token wired, the
+// Defender feed answered `200 {"value":[]}` and the dashboard displayed
+// "Defender secure score 0.0%" - the most alarming figure the panel can show,
+// produced by having no figure at all.
+// ---------------------------------------------------------------------------
+describe("F116: partial data renders, absence is never zero", () => {
+  const kpiOf = (spec: ReturnType<typeof buildSecSpec>, label: string) => {
+    const kpi = spec.components.find((c) => c.type === "kpiRow");
+    if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
+    return kpi.items.find((i) => i.label === label)?.value;
+  };
+
+  it("renders an EMPTY Defender response as 'not reported', not 0 - the live case", () => {
+    // This exact payload is what the estate returns today.
+    const spec = buildSecSpec(
+      localFixtures.codeScanningAlerts,
+      localFixtures.dependabotAlerts,
+      { value: [] },
+      { value: [] },
+    );
+    expect(kpiOf(spec, "Defender secure score")).toBe("not reported");
+    expect(kpiOf(spec, "Defender secure score")).not.toBe(0);
+    expect(validateSpec(spec).ok).toBe(true);
+  });
+
+  it("renders absent GitHub alert feeds as 'not reported', never as zero alerts", () => {
+    // "Open code scanning alerts: 0" is the most reassuring thing this dashboard
+    // can say. Saying it because the endpoint refused is the failure the
+    // absence-vs-denial agreement exists to stop.
+    const spec = buildSecSpec(null, null, localFixtures.secureScore, localFixtures.secureScoreControls);
+    expect(kpiOf(spec, "Open code scanning alerts")).toBe("not reported");
+    expect(kpiOf(spec, "Open dependency alerts")).toBe("not reported");
+    expect(kpiOf(spec, "Critical (open)")).toBe("not reported");
+    expect(validateSpec(spec).ok).toBe(true);
+  });
+
+  it("still reports real alert counts when the feeds DO answer", () => {
+    // The guard above must not become a blanket 'not reported'.
+    const spec = buildSecSpec(
+      localFixtures.codeScanningAlerts,
+      localFixtures.dependabotAlerts,
+      localFixtures.secureScore,
+      localFixtures.secureScoreControls,
+    );
+    expect(typeof kpiOf(spec, "Open code scanning alerts")).toBe("number");
+    expect(typeof kpiOf(spec, "Defender secure score")).toBe("number");
+  });
+
+  it("keeps the panels a surviving feed can build when its sibling fails", () => {
+    // The Dev tab holds app-requests; losing workflow-runs must not discard it.
+    const spec = buildDevSpec(null, localFixtures.appRequests, [
+      { feed: "feeds/workflow-runs", reason: "responded 503. MLS_GITHUB_TOKEN is empty on this instance" },
+    ]);
+    const types = spec.components.map((c) => c.type);
+    expect(types).toContain("lineChart"); // built from app-requests, survived
+    expect(types).not.toContain("kpiRow"); // needs workflow-runs, correctly absent
+    expect(validateSpec(spec).ok).toBe(true);
+  });
+
+  it("names the missing feed AND the server's reason in the notice", () => {
+    const spec = buildDevSpec(null, localFixtures.appRequests, [
+      { feed: "feeds/workflow-runs", reason: "responded 503. MLS_GITHUB_TOKEN is empty on this instance" },
+    ]);
+    const notice = spec.components.find((c) => c.type === "markdownBlock");
+    if (notice?.type !== "markdownBlock") throw new Error("no outage notice");
+    expect(notice.markdown).toContain("feeds/workflow-runs");
+    // The reason is the actionable half - a notice saying only "unavailable"
+    // starts an investigation the server already finished.
+    expect(notice.markdown).toContain("MLS_GITHUB_TOKEN is empty on this instance");
+  });
+
+  it("emits no notice at all when every feed answered", () => {
+    const spec = buildOpsSpec(sampleCostRows, sampleTelemetryRows);
+    expect(spec.components.find((c) => c.type === "markdownBlock")).toBeUndefined();
+  });
+
+  it("renders absent lakehouse tables as 'not reported' rather than 0 spend", () => {
+    const spec = buildOpsSpec(null, null, [
+      { feed: "tables/cost_daily", reason: "responded 502." },
+      { feed: "tables/telemetry_summary", reason: "responded 502." },
+    ]);
+    const kpi = spec.components.find((c) => c.type === "kpiRow");
+    if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
+    expect(kpi.items.find((i) => i.label === "Program spend (all time)")?.value).toBe("not reported");
+    expect(kpi.items.find((i) => i.label === "Flight anomalies")?.value).toBe("not reported");
+    expect(validateSpec(spec).ok).toBe(true);
+  });
+});
+
+describe("F116: ApiProvider degrades per feed", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("renders the Ops tab when only one of the two tables fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("telemetry_summary")
+          ? new Response(JSON.stringify({ error: { code: "upstream_unavailable", message: "the lakehouse refused" } }), {
+              status: 502,
+              headers: { "content-type": "application/json" },
+            })
+          : new Response(JSON.stringify(sampleCostRows), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+      ),
+    );
+    const spec = await new ApiProvider().getOpsSpec();
+    const notice = spec.components.find((c) => c.type === "markdownBlock");
+    if (notice?.type !== "markdownBlock") throw new Error("expected an outage notice");
+    expect(notice.markdown).toContain("tables/telemetry_summary");
+    expect(notice.markdown).toContain("the lakehouse refused");
+    // The cost data survived and is rendered, which is the whole point.
+    expect(spec.components.some((c) => c.type === "donutChart" || c.type === "lineChart")).toBe(true);
+  });
+
+  it("throws when EVERY feed fails, rather than showing a page of 'not reported'", async () => {
+    // A tab holding no data has nothing to be partial about; the app's error
+    // panel is a better answer than a grid of empty tiles.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 502 })));
+    await expect(new ApiProvider().getOpsSpec()).rejects.toThrow(/responded 502/);
+  });
+});

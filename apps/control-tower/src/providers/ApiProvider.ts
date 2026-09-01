@@ -1,5 +1,5 @@
 import type { Spec } from "@mls/spec-renderer";
-import { buildDevSpec, buildOpsSpec, buildSecSpec } from "./specs";
+import { buildDevSpec, buildOpsSpec, buildSecSpec, type FeedOutage } from "./specs";
 import type {
   CodeScanningAlert,
   CostDailyRow,
@@ -62,34 +62,90 @@ export class ApiProvider implements DataProvider {
         // code is then the whole of what is known, and inventing a cause would be worse
         // than saying nothing.
       }
-      throw new Error(`API ${this.baseUrl}/${path} responded ${res.status}.${detail}`);
+      const error = new Error(`API ${this.baseUrl}/${path} responded ${res.status}.${detail}`);
+      // The notice already names the feed, so carry the reason separately rather
+      // than repeating the path inside it.
+      (error as Error & { reason?: string }).reason =
+        `responded ${res.status}.${detail}`.trim();
+      throw error;
     }
     return (await res.json()) as T;
   }
 
+  /**
+   * One feed's outcome: its value, or the reason it did not answer.
+   *
+   * THE POINT OF THIS (F116). These methods used `Promise.all`, which rejects on
+   * the first failure and discards every sibling that had already resolved. With
+   * the three GitHub feeds answering 503 for want of a token, the Dev tab threw
+   * away the app-requests payload it was holding and rendered nothing at all -
+   * five of eight routes were serving real data and the page showed none of it.
+   */
+  private async settle<T>(
+    feed: string,
+    work: Promise<T>,
+  ): Promise<{ value: T | null; outage: FeedOutage | null; error: unknown }> {
+    try {
+      return { value: await work, outage: null, error: null };
+    } catch (err) {
+      const reason =
+        (err as { reason?: string }).reason ??
+        (err instanceof Error ? err.message : String(err));
+      return { value: null, outage: { feed, reason }, error: err };
+    }
+  }
+
+  /**
+   * Partial data renders; no data throws.
+   *
+   * The distinction is deliberate. A tab holding SOME data should show it and
+   * name what is missing. A tab holding NONE has nothing to be partial about,
+   * and a page of "not reported" tiles would be a worse answer than the error
+   * panel the app already knows how to display - so total failure keeps the old
+   * behaviour and surfaces the first reason.
+   */
+  private static resolve(
+    results: readonly { outage: FeedOutage | null; error: unknown }[],
+  ): FeedOutage[] {
+    const failed = results.filter((r) => r.outage !== null);
+    if (failed.length === results.length) {
+      // RETHROW THE ORIGINAL, rather than composing a summary from it. The first
+      // error already carries the full path, the status and the server's own
+      // explanation; anything rebuilt here is strictly less than that, and the
+      // app's error panel is the only place a user will see it.
+      throw failed[0]?.error instanceof Error
+        ? failed[0].error
+        : new Error(String(failed[0]?.error ?? "every feed failed"));
+    }
+    return failed.map((r) => r.outage as FeedOutage);
+  }
+
   async getDevSpec(): Promise<Spec> {
     const [runs, appRequests] = await Promise.all([
-      this.get<WorkflowRunsFeed>("feeds/workflow-runs"),
-      this.get<LogAnalyticsResult>("feeds/app-requests"),
+      this.settle("feeds/workflow-runs", this.get<WorkflowRunsFeed>("feeds/workflow-runs")),
+      this.settle("feeds/app-requests", this.get<LogAnalyticsResult>("feeds/app-requests")),
     ]);
-    return buildDevSpec(runs, appRequests);
+    const outages = ApiProvider.resolve([runs, appRequests]);
+    return buildDevSpec(runs.value, appRequests.value, outages);
   }
 
   async getSecSpec(): Promise<Spec> {
     const [codeAlerts, depAlerts, secureScore, controls] = await Promise.all([
-      this.get<CodeScanningAlert[]>("feeds/code-scanning-alerts"),
-      this.get<DependabotAlert[]>("feeds/dependabot-alerts"),
-      this.get<SecureScoreResponse>("feeds/secure-score"),
-      this.get<SecureScoreControlsResponse>("feeds/secure-score-controls"),
+      this.settle("feeds/code-scanning-alerts", this.get<CodeScanningAlert[]>("feeds/code-scanning-alerts")),
+      this.settle("feeds/dependabot-alerts", this.get<DependabotAlert[]>("feeds/dependabot-alerts")),
+      this.settle("feeds/secure-score", this.get<SecureScoreResponse>("feeds/secure-score")),
+      this.settle("feeds/secure-score-controls", this.get<SecureScoreControlsResponse>("feeds/secure-score-controls")),
     ]);
-    return buildSecSpec(codeAlerts, depAlerts, secureScore, controls);
+    const outages = ApiProvider.resolve([codeAlerts, depAlerts, secureScore, controls]);
+    return buildSecSpec(codeAlerts.value, depAlerts.value, secureScore.value, controls.value, outages);
   }
 
   async getOpsSpec(): Promise<Spec> {
     const [cost, telemetry] = await Promise.all([
-      this.get<CostDailyRow[]>("tables/cost_daily"),
-      this.get<TelemetrySummaryRow[]>("tables/telemetry_summary"),
+      this.settle("tables/cost_daily", this.get<CostDailyRow[]>("tables/cost_daily")),
+      this.settle("tables/telemetry_summary", this.get<TelemetrySummaryRow[]>("tables/telemetry_summary")),
     ]);
-    return buildOpsSpec(cost, telemetry);
+    const outages = ApiProvider.resolve([cost, telemetry]);
+    return buildOpsSpec(cost.value, telemetry.value, outages);
   }
 }
