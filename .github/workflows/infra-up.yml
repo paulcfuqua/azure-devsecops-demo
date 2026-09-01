@@ -86,6 +86,34 @@ on:
           instead, which provisions cleanly and serves none of the demo (F88).
         type: string
         default: latest
+      only_criterion:
+        description: >-
+          Verify only these criteria in the L11 up-phase proof, e.g. `V11.4` or
+          `V11.1,V11.4`. Everything else reports SKIP and the audit exits 3 - a DIAGNOSTIC,
+          never a sign-off (P-10). Applies only when l11_up_audit is on.
+        type: string
+        required: false
+        default: ''
+      l11_up_audit:
+        description: >-
+          Run the L11 UP-phase rebuild proof after every layer completes (V11.2 tenant
+          objects intact, V11.3 layer audits green, V11.4 wall clock, V11.5 idle cost).
+          OFF by default: a normal bring-up is not a rebuild proof, and the criterion that
+          matters most - wall clock under 60 minutes - is only meaningful when this run
+          IS the rebuild half of a kill/reinstantiate cycle.
+        type: boolean
+        required: false
+        default: false
+      l11_child_audit_layers:
+        description: >-
+          Which layer audits V11.2/V11.3 re-execute, as a comma list (e.g. `2,3,4,6`), or
+          `none` to suppress them. Empty means all of 1-10, which is the honest default and
+          also the expensive one: each child audit runs with ITS OWN retry windows, and L7
+          alone waits ~30 minutes for a real scale-in cycle. Narrowing the set narrows what
+          V11.3 may claim, and the report says which layers were actually re-run.
+        type: string
+        required: false
+        default: ''
       enable_fabric_data_agent:
         description: >-
           L8 only: also create the Fabric connected agent. OFF by default — it needs a
@@ -170,6 +198,19 @@ jobs:
             echo "${layer}=${enabled}" >> "${GITHUB_OUTPUT}"
           done
           echo "Selection: ${selection}"
+
+  # The L11 wall clock (V11.4) starts at the invocation of the rebuild, not at the audit.
+  # up.ps1 records it locally in verification/reports/up-clock.json; in CI the equivalent
+  # instant is this run's own start, captured once here so every consumer reads one value.
+  up-clock:
+    name: record the rebuild start instant
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      started: ${{ steps.clock.outputs.started }}
+    steps:
+      - id: clock
+        run: echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
 
   oidc-login:
     # Job name is load-bearing: verification/layer-01-audit.ps1 selects the job
@@ -359,6 +400,96 @@ jobs:
       dry_run: ${{ inputs.dry_run }}
       enable_fabric_data_agent: ${{ inputs.enable_fabric_data_agent }}
     secrets: inherit
+
+  # ---------------------------------------------------------------------
+  # L11 UP-PHASE PROOF. infra-down.yml runs the DOWN half (V11.1 + V11.2) and
+  # nothing ran the UP half, so verification/layer-11-audit.ps1 -Phase Up had no
+  # caller anywhere in CI: the layer shipped a verification script the pipeline
+  # could not invoke. A triplet whose third leg is unreachable is two legs.
+  #
+  # Gated OFF by default. A routine bring-up is not a rebuild proof, and V11.4
+  # measures wall clock from the rebuild's start - a number that only means
+  # something when this run is the up half of a kill/reinstantiate cycle.
+  # ---------------------------------------------------------------------
+  layer-11-up:
+    name: L11 rebuild proof (up phase)
+    needs: [preflight, plan, up-clock, layer-02, layer-03, layer-04, layer-05, layer-06, layer-07, layer-08]
+    if: ${{ always() && inputs.l11_up_audit && needs.preflight.outputs.configured == 'true' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    # Bounded, and generously: V11.3 re-executes child audits that carry their own
+    # retry windows. Narrow l11_child_audit_layers rather than raising this (F81).
+    timeout-minutes: 180
+    environment: verify
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - id: names
+        uses: ./.github/actions/naming
+
+      - name: Azure login (OIDC, mls-verifier — Reader only)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Stamp the completion instant
+        id: done
+        run: echo "completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve the child-audit selection
+        id: children
+        env:
+          SELECTION: ${{ inputs.l11_child_audit_layers }}
+        run: |
+          set -euo pipefail
+          # 'none' suppresses child audits entirely; the audit then records SKIP for the
+          # criteria that depend on them rather than passing without evidence.
+          if [ "${SELECTION}" = "none" ]; then
+            echo "flag=-SkipChildAudit" >> "${GITHUB_OUTPUT}"
+            echo "layers=" >> "${GITHUB_OUTPUT}"
+          elif [ -n "${SELECTION}" ]; then
+            echo "flag=-ChildAuditLayer" >> "${GITHUB_OUTPUT}"
+            echo "layers=${SELECTION}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "flag=" >> "${GITHUB_OUTPUT}"
+            echo "layers=" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Run verification/layer-11-audit.ps1 (up phase)
+        id: audit
+        uses: ./.github/actions/layer-audit
+        with:
+          layer: '11'
+          run-budget-minutes: '150'
+          args: |
+            -Phase
+            Up
+            -SubscriptionId
+            ${{ vars.AZURE_SUBSCRIPTION_ID }}
+            -ResourceGroupPrefix
+            ${{ steps.names.outputs.prefix }}-rg-
+            -Repository
+            ${{ github.repository }}
+            -UpStartUtc
+            ${{ needs.up-clock.outputs.started }}
+            -UpCompletedUtc
+            ${{ steps.done.outputs.completed }}
+            ${{ steps.children.outputs.flag }}
+            ${{ steps.children.outputs.layers }}
+            ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
+            ${{ inputs.only_criterion }}
+
+      - name: Upload audit report
+        if: ${{ always() && steps.audit.outputs.ran == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: layer-11-audit-report-up
+          path: verification/reports/
+          if-no-files-found: warn
+          retention-days: 30
 
   summary:
     name: run summary

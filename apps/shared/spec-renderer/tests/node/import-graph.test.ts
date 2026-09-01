@@ -42,7 +42,13 @@ function specifiersOf(file: string): string[] {
   return found;
 }
 
-const CANDIDATES = ["", ".ts", ".tsx", ".json", "/index.ts", "/index.tsx"];
+// ".js" is last, and it is here for ONE file: src/validate.generated.js, which is
+// genuinely JavaScript rather than a TypeScript source compiled to it (F111 - the
+// schema is precompiled at build time because ajv.compile() needs 'unsafe-eval',
+// which the dashboards' CSP forbids). Every other ".js" specifier in this package is
+// the ESM convention for a ".ts" source and is stripped before the lookup, so putting
+// ".js" after ".ts" keeps that behaviour unchanged.
+const CANDIDATES = ["", ".ts", ".tsx", ".json", "/index.ts", "/index.tsx", ".js"];
 
 function resolveRelative(spec: string, fromFile: string): string | undefined {
   // Strip the ESM ".js"/".jsx" extension convention back to source.
@@ -97,12 +103,25 @@ describe("src/validate-entry.ts import graph is UI-free", () => {
       "spec.schema.json",
       "src/types.ts",
       "src/validate-entry.ts",
+      // The schema, precompiled to a standalone validator at build time. It is in the
+      // graph deliberately: the point of this test is that the validate entry pulls in
+      // nothing but the contract, and the generated validator IS the contract, in
+      // executable form (F111).
+      "src/validate.generated.js",
       "src/validate.ts",
     ]);
   });
 
-  it("has ajv as its only external dependency", () => {
-    expect(graph.bare).toEqual(["ajv", "ajv/dist/2020.js"]);
+  it("has ajv as its only external dependency, and no longer its compiler", () => {
+    // This used to read ["ajv", "ajv/dist/2020.js"] - the Ajv COMPILER, which builds a
+    // validator by generating JavaScript and evaluating it. That needs 'unsafe-eval',
+    // which the dashboards' CSP forbids, so every spec failed validation in the browser
+    // however valid it was (F111).
+    //
+    // The schema is now compiled at build time, and what remains at runtime is a small
+    // string-length helper the generated code calls. The narrowing is the point: the
+    // package went from shipping a code generator to shipping a function.
+    expect(graph.bare).toEqual(["ajv", "ajv/dist/runtime/ucs2length.js"]);
   });
 
   it("contains no React, Fluent, tabster, or keyborg import anywhere", () => {

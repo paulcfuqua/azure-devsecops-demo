@@ -822,3 +822,322 @@ Describe 'a step that owns the verdict actually runs' {
         }
     }
 }
+
+Describe 'a console helper can print the blank line its own banner needs' {
+
+    # L8, 2026-08-31. export-agent.ps1 had never been run. Its first real invocation died
+    # on its own "Add required objects" reminder, before contacting anything, because
+    # Write-Status '' against [Parameter(Mandatory)][string]$Message is rejected:
+    # Mandatory implies a non-empty check for strings unless AllowEmptyString says
+    # otherwise. import-agent.ps1 carried the same helper and the same calls.
+    #
+    # This class was already paid for once. infra/entra/teardown.ps1,
+    # infra/policy/teardown.ps1 and infra/purview/teardown.ps1 each carry a comment
+    # explaining exactly this, and up.ps1, down.ps1 and seed.ps1 all guard it. Three files
+    # still missed it - which is the entire argument for a check over a fix.
+    #
+    # Asserted on the CAPABILITY - the parameter can accept an empty string - rather than
+    # on the artefact that usually accompanies it - this file happens to call it with ''.
+    # A helper that gains a blank-line call tomorrow is already covered.
+
+    BeforeAll {
+        $script:ScriptFile = @(
+            Get-ChildItem -Path $script:RepoRoot -Filter '*.ps1' -Recurse -File |
+                Where-Object {
+                    $_.FullName -notmatch '[\/](node_modules|\.git|bin|obj)[\/]' -and
+                    $_.Name -notlike '*.Tests.ps1'
+                }
+        )
+
+        # Parameters that carry human-facing console text, and so eventually get asked to
+        # print a spacer line.
+        $script:MessageParamPattern = '\[string\]\$(Message|Text|Line|Banner)\b'
+
+        # Scoped to Write-* functions on purpose. The first draft of this check keyed on the
+        # parameter name alone and flagged infra/entra/apply-entra.ps1's Get-DeterministicGuid,
+        # whose [Parameter(Mandatory)][string]$Text derives an app-role GUID from a string --
+        # a parameter that SHOULD reject an empty value, because an empty one would silently
+        # mint a GUID for nothing. A console helper is identified by being one, not by the
+        # spelling of its parameter.
+        $script:ConsoleFunctionPattern = '^\s*function\s+(Write-[A-Za-z]+)'
+    }
+
+    It 'finds PowerShell scripts to check, so the assertions are not vacuous' {
+        $script:ScriptFile.Count | Should -BeGreaterThan 10
+    }
+
+    It 'every Mandatory console-text parameter accepts an empty string' {
+        $offender = foreach ($file in $script:ScriptFile) {
+            $relative = $file.FullName.Substring($script:RepoRoot.Length).TrimStart('\', '/')
+            $currentFunction = ''
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                if ($line -match $script:ConsoleFunctionPattern) { $currentFunction = $Matches[1] }
+                elseif ($line -match '^\s*function\s') { $currentFunction = '' }
+                if ($currentFunction -and
+                    $line -match '\[Parameter\(Mandatory\)\]' -and
+                    $line -match $script:MessageParamPattern -and
+                    $line -notmatch 'AllowEmptyString') {
+                    "${relative}: $currentFunction -> $($line.Trim())"
+                }
+            }
+        }
+        $offender | Should -BeNullOrEmpty -Because 'a Mandatory [string] rejects an empty string, so a banner printing a blank spacer line throws before the script does anything - add [AllowEmptyString()]'
+    }
+}
+
+Describe 'a registration the design depends on is declared where L3 can create it' {
+    # agent-definition.md 7.2 names two app registrations the agent's authentication needs:
+    # mls-copilot-auth (the Entra ID V2 provider) and mls-copilot-canvas (the SPA the
+    # control-tower canvas uses for MSAL). NEITHER IS DECLARED in infra/entra/manifest.json,
+    # which is the only thing L3 creates from (F106).
+    #
+    # This is the night's recurring defect in its purest form. V3.1 confirms object counts
+    # AGAINST THE MANIFEST, so a registration nobody declared is unfalsifiable by
+    # construction: L3 has nothing to create, no layer fails, every gate stays green, and
+    # the agent's authentication is blocked permanently. F98/F102/F103/F105 were checks that
+    # could not see; this is a check that cannot even be asked.
+    #
+    # A criterion validating reality against a declaration can only ever find drift, never
+    # omission. Something outside the declaration has to notice - which is what this is.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    # SKIPPED, NOT DELETED, AND NOT MADE TO PASS. The requirement is real and unmet: the
+    # two registrations do not exist. It is skipped rather than red because the fix is NOT
+    # two lines in the manifest - the schema carries only displayName/appKey/signInAudience/
+    # notes/verifierProbeRole, and section 7.2 needs an exposed API scope, an SPA redirect
+    # URI, and an authorized client application. Declaring the names alone would create two
+    # EMPTY SHELLS: L3 creates them, V3.1's count matches, every gate goes green, and the
+    # authentication is still blocked - the gap made invisible instead of merely present,
+    # which is strictly worse than today.
+    #
+    # Un-skip when infra/entra/manifest.json and apply-entra.ps1 can express those three
+    # things. Until then this is an Identity-workstream escalation, recorded in
+    # docs/DEMO-READINESS.md, not a test to satisfy.
+    It 'declares every app registration the agent definition depends on' -Skip {
+        $definition = Join-Path $script:Root 'infra/copilot-studio/agent-definition.md'
+        Test-Path -LiteralPath $definition | Should -BeTrue `
+            -Because 'the agent definition is the human-readable source of truth for showpiece #1'
+
+        # Section 7.2 is a two-column table whose first cell is the registration name.
+        $section = (Get-Content -LiteralPath $definition -Raw) -split '(?m)^###\s' |
+            Where-Object { $_ -match '^7\.2' }
+        $section | Should -Not -BeNullOrEmpty -Because 'section 7.2 is where the registrations are named'
+
+        $required = @([regex]::Matches("$section", '(?m)^\|\s*`([^`]+)`\s*\|') |
+                ForEach-Object { $_.Groups[1].Value } |
+                Where-Object { $_ -match 'copilot|app$' } | Sort-Object -Unique)
+        $required.Count | Should -BeGreaterThan 0 `
+            -Because 'the sweep must actually find the named registrations; finding none means the table shape changed, not that the repo is clean'
+
+        # manifest.json is tokenised; the definition writes the resolved prefix.
+        $manifest = (Get-Content -LiteralPath (Join-Path $script:Root 'infra/entra/manifest.json') -Raw).
+            Replace('${prefix}', 'mls').Replace('${env}', 'demo')
+        $declared = @([regex]::Matches($manifest, '"displayName"\s*:\s*"([^"]+)"') |
+                ForEach-Object { $_.Groups[1].Value })
+
+        $missing = @($required | Where-Object { $_ -notin $declared })
+        $missing -join ', ' | Should -BeNullOrEmpty `
+            -Because 'L3 creates only what the manifest declares, so a registration named in the design but absent from the manifest is never created and no layer ever fails - the agent authentication is blocked permanently while every gate stays green (F106)'
+    }
+}
+
+Describe 'a teardown leaves nothing a rebuild will recover' {
+    # The first kill/reinstantiate cycle failed on the way back up. Log Analytics workspaces
+    # soft-delete for 14 days: `az group delete` did not destroy the workspace, and
+    # recreating one with the same name in the same resource group RECOVERED it. ARM then
+    # called the recovered workspace Succeeded while the scheduled-query-rule provider still
+    # refused it, so both L6 alert rules failed with "The workspace could not be found"
+    # (F107).
+    #
+    # Measured, not assumed: forty minutes after the rebuild, the workspace was STILL listed
+    # by list-deleted-workspaces while simultaneously live, with a createdDate predating the
+    # teardown and its original customerId intact. A stable contradiction, not propagation -
+    # so the cheaper candidate fix, waiting it out, would have waited forever.
+    #
+    # The rule this encodes is broader than one resource: a teardown whose deletes are
+    # RECOVERABLE has not torn anything down, it has hidden it, and the next rebuild inherits
+    # the hidden thing instead of building fresh. Anything Azure soft-deletes has to be
+    # purged explicitly by a teardown that claims the estate can be rebuilt from code.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:Down = Get-Content -LiteralPath (Join-Path $script:Root '.github/workflows/infra-down.yml') -Raw
+    }
+
+    It 'purges the Log Analytics workspace rather than letting the resource-group delete soft-delete it' {
+        $script:Down | Should -Match 'log-analytics workspace delete' `
+            -Because 'a resource-group delete soft-deletes the workspace, and a same-name rebuild then recovers it'
+        # ANCHORED TO THE EXECUTED COMMAND, NOT THE PROSE ABOUT IT. The first version of
+        # this matched `--force` within 200 characters of the command name, and the warning
+        # text below the invocation tells the reader to run the same command by hand - so
+        # deleting --force from the REAL call still passed. A sweep that matches its own
+        # documentation is a mirror. `; then` pins it to the if-conditional that actually
+        # runs.
+        $script:Down | Should -Match '--workspace-name "\$\{LAW_NAME\}" --force --yes; then' `
+            -Because '--force is what removes the 14-day recovery option; without it the delete IS the soft-delete this finding is about'
+    }
+
+    It 'purges before the resource groups go, because the workspace must still exist' {
+        $purge = $script:Down.IndexOf('log-analytics workspace delete')
+        $delete = $script:Down.IndexOf('Delete in parallel')
+        $purge | Should -BeGreaterThan 0
+        $delete | Should -BeGreaterThan 0
+        $purge | Should -BeLessThan $delete `
+            -Because 'purging after the resource group is gone finds nothing to purge, and the soft-deleted workspace survives to break the next rebuild'
+    }
+
+    It 'reports what the next rebuild will find, whether or not the purge worked' {
+        # F107 cost an hour precisely because "The workspace could not be found" against a
+        # workspace az calls Succeeded explains nothing. A teardown that leaves a recoverable
+        # workspace behind must say so, at the moment it happens.
+        $script:Down | Should -Match 'list-deleted-workspaces' `
+            -Because 'the teardown should check what it left behind rather than assume the purge worked'
+        $script:Down | Should -Match 'Soft-deleted workspace remains' `
+            -Because 'the next rebuild inherits this, so the teardown is where it has to be said'
+    }
+}
+
+Describe 'an array parameter a workflow passes is split, or not passed at all' {
+    # `pwsh -File` cannot bind an array from separate argv tokens - a comma-joined value
+    # arrives as ONE element and a space-separated one silently drops its tail. So a
+    # workflow can only ever hand one token, and an array parameter that does not split it
+    # receives something nobody wrote.
+    #
+    # [int[]]$ChildAuditLayer coerced "2,3,6" into the single layer 2346, and the L11 audit
+    # went looking for verification/layer-2346-audit.ps1 (F108). -OnlyCriterion had been
+    # given a comma split for exactly this reason; the same fix was not applied here, which
+    # is the F90 shape in miniature - a class fixed only at the instance it was found.
+    #
+    # THREE EARLIER VERSIONS OF THIS SWEEP COULD NOT SEE THE PARAMETER IT EXISTS FOR. The
+    # first matched only flags written literally on their own line; the second only flags in
+    # single quotes; and the flag in question is produced by an expression and written in
+    # double quotes. Matching the bare NAME cannot be defeated by punctuation - but it then
+    # matches prose, so comment lines are stripped first. layer-07-apps.yml mentions
+    # -AppName only to explain why it deliberately does NOT pass it, and a sweep that reads
+    # that as "passed" is reading documentation, which is the same mistake in a third dress.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'splits every array parameter that a workflow actually hands it' {
+        $workflowText = ''
+        foreach ($file in Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File) {
+            $raw = Get-Content -LiteralPath $file.FullName
+            if (($raw -join "`n") -notmatch 'actions/layer-audit') { continue }
+            # Comments are prose about the workflow, not the workflow.
+            $workflowText += (($raw | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+        }
+        $workflowText | Should -Not -BeNullOrEmpty -Because 'the sweep must find the workflows that run audits'
+
+        # A split done once in the shared module counts, and is better than per-script.
+        $module = Get-Content -LiteralPath (Join-Path $script:Root 'verification/MlsAudit.psm1') -Raw
+
+        $checked = [System.Collections.Generic.List[string]]::new()
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($audit in Get-ChildItem -Path (Join-Path $script:Root 'verification') -Filter 'layer-*-audit.ps1' -File) {
+            $content = Get-Content -LiteralPath $audit.FullName -Raw
+            foreach ($match in [regex]::Matches($content, '(?m)^\s{4}(?:\[[^\]]+\])*\[[a-z]+\[\]\]\$([A-Za-z]+)')) {
+                $name = $match.Groups[1].Value
+                if ($workflowText -notmatch "-$name\b") { continue }   # never handed over: safe
+                $checked.Add("$($audit.Name):-$name")
+                $pattern = '\$' + $name + '\s*=\s*@\(\$' + $name + '\s*\|'
+                if (-not (($content -match $pattern) -or ($module -match $pattern))) {
+                    $offender.Add("$($audit.Name): -$name")
+                }
+            }
+        }
+
+        $checked.Count | Should -BeGreaterThan 0 `
+            -Because 'a sweep that examines no parameter proves nothing - it must at least find -OnlyCriterion, which every audit declares and every workflow hands over'
+        $offender -join '; ' | Should -BeNullOrEmpty `
+            -Because 'CI hands an array parameter ONE token, so a script that does not split it receives something nobody wrote - "2,3,6" became layer 2346 (F108)'
+    }
+}
+
+Describe 'a resource is looked up in the group that actually holds it' {
+    # The F20 grant pass searched for the Azure SQL logical server in the PLATFORM resource
+    # group. L6 creates it in the DATA resource group. So on every run since it was written
+    # the step found nothing and skipped - and the message it printed was
+    #
+    #   "Could not find an Azure SQL logical server ... L6 has probably not deployed yet"
+    #
+    # which is plausible, wrong, and the reason nobody chased it for days (F109). The
+    # contained-database user was therefore never created, data-api's managed identity had
+    # no SQL login, and every /api/tables route on a SQL-backed table answered 502
+    # "Login failed for user '<token-identified principal>'" - a failure that was then
+    # attributed to a Fabric limitation the SQL tables never touch.
+    #
+    # The estate's own naming action already knows where everything lives. A workflow that
+    # hardcodes a resource group for a lookup is asserting a layout it does not own; a
+    # workflow that reads the wrong OUTPUT is doing the same thing more quietly.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'looks for the Azure SQL server in the data resource group, where L6 puts it' {
+        $l7 = Get-Content -LiteralPath (Join-Path $script:Root '.github/workflows/layer-07-apps.yml') -Raw
+        # The lookup and every call chained off it must use the same group.
+        $l7 | Should -Match 'az sql server list --resource-group \$env:RG_DATA' `
+            -Because 'L6 creates the logical server in the data resource group; searching the platform group finds nothing and skips silently'
+        $l7 | Should -Not -Match 'az sql (server|db) (list|show) --resource-group \$env:RG_PLATFORM' `
+            -Because 'a SQL lookup against the platform group cannot succeed, and its "not deployed yet" message is convincing enough to stop anyone looking further'
+    }
+
+    It 'confirms the template really does put the SQL server in the data resource group' {
+        # The premise. If it ever moves, the check above becomes the wrong assertion, and
+        # this one says so rather than the two drifting apart silently.
+        #
+        # Note where this reads: the TEMPLATE, not the workflow. The first version of this
+        # test grepped layer-06-platform.yml, which never names the group - the same
+        # mistake as the finding itself, made while writing the check for it. The Bicep
+        # template is what actually decides.
+        $template = Get-Content -LiteralPath (Join-Path $script:Root 'infra/bicep/platform/main.bicep') -Raw
+        $template | Should -Match '(?i)mls-rg-data\s*:\s*Azure SQL logical server' `
+            -Because 'this test asserts where the server lives, so it must fail if that stops being true'
+    }
+}
+
+Describe 'a PowerShell file with non-ASCII content carries its BOM' {
+    # provision-workspace.ps1 lost its byte-order mark in an edit and failed CI with
+    # PSUseBOMForUnicodeEncodedFile. The file's em-dashes were pre-existing and harmless;
+    # what changed was the BOM, silently, because almost no editor shows one.
+    #
+    # It matters beyond the linter: Windows PowerShell 5.1 reads a BOM-less file as ANSI,
+    # so every non-ASCII character in it becomes mojibake - in a repository whose comments
+    # carry most of its reasoning. CLAUDE.md targets pwsh 7, but this repo is cloned by
+    # strangers onto machines nobody here controls.
+    #
+    # Cheap to check, invisible to review, and it has now happened twice.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'writes a BOM on every .ps1/.psm1 that contains non-ASCII characters' {
+        $checked = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+        $files = @(Get-ChildItem -Path $script:Root -Include '*.ps1', '*.psm1' -Recurse -File |
+                Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*\.git\*' })
+
+        foreach ($file in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+            if ($bytes.Length -lt 1) { continue }
+            $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+            if ($hasBom) { continue }
+            # Only files that actually need one: pure ASCII is fine without.
+            if (-not ($bytes | Where-Object { $_ -gt 127 })) { continue }
+            $checked++
+            $offender.Add($file.FullName.Substring($script:Root.Length + 1))
+        }
+
+        $files.Count | Should -BeGreaterThan 20 `
+            -Because 'the sweep must actually find the PowerShell in this repo; finding almost none means the glob is broken'
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'PSScriptAnalyzer fails the build on this, and Windows PowerShell 5.1 reads a BOM-less file as ANSI - turning every non-ASCII character into mojibake'
+    }
+}

@@ -1,5 +1,27 @@
 # Demo Script — Meridian Launch Systems
 
+> ## ⚠ THIS SCRIPT CANNOT BE PERFORMED TODAY (2026-09-01)
+>
+> It describes the demo as designed, not as it currently runs. Attempting it live would
+> fail in front of an audience, at these points:
+>
+> | Segment | What happens today |
+> |---|---|
+> | Cold-start rebuild | **Fixed 2026-09-01 (F107).** The teardown now purges the Log Analytics workspace, so a rebuild creates a new one instead of recovering a soft-deleted one. The full cycle has not been re-run since |
+> | Any dashboard showing data | **Fixed 2026-09-01.** Sign-in works (F110), the SQL grant applies (F109/F112) and the renderer validates under the CSP (F111). Dashboards fetch and render real rows |
+> | Showpiece #1, the Ask tab | **Dark.** The agent is built and exported but never published; no Direct Line channel, no Key Vault secret; its two auth registrations are undeclared (F106) |
+> | Purview labels segment | **Nothing to show.** The taxonomy has never been applied - no certificate (P-12) |
+> | Showpiece #3, self-healing | **Never run.** Both tracks are armed but L10 has not executed |
+>
+> **What CAN be shown today**, and is genuinely strong: the layered deploy with independent
+> Verifier sign-off at each step; L7 at 5/5; a real teardown with the four resource groups
+> verifiably gone and tenant objects intact; and the failure-class test suite - an estate
+> that catches its own false claims, which is a better story than most demos have.
+>
+> See [docs/DEMO-READINESS.md](../DEMO-READINESS.md). Delete this box when the rows above
+> are false; do not delete it because it is unflattering.
+
+
 The stage flow a presenter follows, end to end: cold open on an empty subscription,
 rebuild kickoff, the four showpieces in order, and the kill demo with the idle-cost
 view. Audience: launch-industry engineering/security/ops leaders — the narrative is

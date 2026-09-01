@@ -75,7 +75,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path -Path $PSScriptRoot -ChildPath 'MlsAudit.psm1') -Force
 
 function Get-CommittedSolution {
-    <# The unpacked solution in the repo: infra/copilot-studio/solution/Other/Solution.xml #>
+    <# The unpacked solution in the repo: infra/copilot-studio/solution/<SolutionName>/Other/Solution.xml #>
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     [xml]$document = Get-Content -LiteralPath $Path -Raw
@@ -405,7 +405,18 @@ function Invoke-Main {
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     $solutionFile = $SolutionPath
     if ([string]::IsNullOrWhiteSpace($solutionFile)) {
-        $solutionFile = Join-Path -Path $repoRoot -ChildPath 'infra' -AdditionalChildPath 'copilot-studio', 'solution', 'Other', 'Solution.xml'
+        # pac solution unpack writes solution/<SolutionName>/Other/Solution.xml, NOT
+        # solution/Other/Solution.xml (README section 4; confirmed by the first real export,
+        # 2026-08-31). The old default could never match, so V8.1 returned SKIP -- "still
+        # holds only its .gitkeep placeholder" -- however complete the export actually was.
+        # No test caught it because every test passes -SolutionPath explicitly.
+        # Globbing rather than hardcoding keeps this correct under POWERPLATFORM_SOLUTION_NAME.
+        $solutionRoot = Join-Path -Path $repoRoot -ChildPath 'infra' -AdditionalChildPath 'copilot-studio', 'solution'
+        $found = Get-ChildItem -Path $solutionRoot -Filter 'Solution.xml' -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq 'Other' } | Select-Object -First 1
+        $solutionFile = if ($found) { $found.FullName } else {
+            Join-Path -Path $solutionRoot -ChildPath 'Other' -AdditionalChildPath 'Solution.xml'
+        }
     }
     $committed = Get-CommittedSolution -Path $solutionFile
 

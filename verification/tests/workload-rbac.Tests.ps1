@@ -262,9 +262,22 @@ Describe 'F20: the SQL contained-user grant is re-applied once the identity exis
         $seedInvocation | Should -Not -Match '-Force\b'
     }
 
-    It 'resolves the Azure SQL server from Azure itself, scoped to the platform RG, not a hardcoded name' {
+    It 'resolves the Azure SQL server from Azure itself, scoped to the DATA RG, not a hardcoded name' {
+        # This test used to assert $env:RG_PLATFORM, and in doing so it PINNED THE BUG.
+        # L6 creates the logical server in the data resource group; the grant step searched
+        # the platform group, found nothing, and skipped with "L6 has probably not deployed
+        # yet" - so the contained-database user was never created and every SQL-backed
+        # /api/tables route answered 502 (F109).
+        #
+        # A test that asserts the current behaviour rather than the required one turns a
+        # defect into a specification. This one did that for days, and it would have blocked
+        # the fix if nobody had read it. The right assertion is the group that actually holds
+        # the server - and the failure-classes sweep now checks the template still puts it
+        # there, so the two cannot drift apart silently.
         $script:GrantStep | Should -Match 'az sql server list'
-        $script:GrantStep | Should -Match '\$env:RG_PLATFORM'
+        $script:GrantStep | Should -Match '\$env:RG_DATA'
+        $script:GrantStep | Should -Not -Match '\$env:RG_PLATFORM' `
+            -Because 'a SQL lookup against the platform group cannot succeed'
         $script:GrantStep | Should -Not -Match 'mls-ops-demo-sql'
     }
 

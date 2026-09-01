@@ -36,7 +36,15 @@ export class ApiProvider implements DataProvider {
     if (!res.ok) {
       throw new Error(
         `API ${this.baseUrl}/tables/${table} responded ${res.status}. ` +
-          "The live backend comes online at L7; before tenant activation run the app in LOCAL_DATA mode.",
+          // The old text said "the live backend comes online at L7", which was true before
+          // the tenant existed and is misleading now: L7 IS deployed when a user sees this,
+          // so it sends them to wait for something that already happened. A 502 here means
+          // data-api is running and its store is refusing it - almost always the SQL
+          // contained-database user (F109) or, for the three lakehouse-backed tables, the
+          // managed-identity limitation on Fabric's TDS endpoint (F101).
+          (res.status === 502 || res.status === 503
+            ? "data-api is running but its data store refused the connection. Check the container log for 'Login failed for user' - the app identity needs a contained-database user in Azure SQL (F109), or, for telemetry/cost/findings tables, an identity Fabric's SQL endpoint accepts (F101)."
+            : "Check that data-api is deployed and reachable from this app's /api proxy."),
       );
     }
     const json: unknown = await res.json();

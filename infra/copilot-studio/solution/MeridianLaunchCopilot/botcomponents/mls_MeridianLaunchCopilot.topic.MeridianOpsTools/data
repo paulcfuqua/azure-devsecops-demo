@@ -1,0 +1,21 @@
+kind: TaskDialog
+modelDisplayName: Meridian Ops Tools
+modelDescription: Deployment health, security findings and cloud spend for the Meridian Launch Systems estate. Read-only.
+action:
+  kind: InvokeExternalAgentTaskAction
+  connectionReference: mls_MeridianLaunchCopilot.shared_mls-5fmeridian-20ops-20tools-5fa5da83b50654451e.4e31c01eeef94cd983fdae563909d611
+  connectionProperties:
+    mode: Invoker
+
+  operationDetails:
+    kind: ModelContextProtocolMetadata
+    operationId: InvokeServer
+    tools:
+      kind: UseSpecificTools
+      tools:
+        - query_lakehouse_sql
+        - query_log_analytics
+        - get_github_security
+        - get_defender_posture
+        - get_cost_series
+        - query_compliance

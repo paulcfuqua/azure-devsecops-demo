@@ -162,13 +162,32 @@ describe("ApiProvider (L7 wiring contract)", () => {
     expect(urls).toEqual(["/api/tables/launches", "/api/tables/pads", "/api/tables/vehicles"]);
   });
 
-  it("surfaces a LOCAL_DATA hint when the backend is not wired yet", async () => {
+  it("names the status and the endpoint when the API refuses", async () => {
+    // This used to assert the message mentioned LOCAL_DATA, pinning advice that was true
+    // before the tenant existed and misleading afterwards: by the time a user sees this,
+    // L7 IS deployed, and "run the app in LOCAL_DATA mode" sends them to wait for
+    // something that already happened. A test asserting the CURRENT message rather than a
+    // USEFUL one turns stale guidance into a contract.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("not here", { status: 404 })),
     );
     const provider = new ApiProvider();
-    await expect(provider.getOutcomesSpec()).rejects.toThrow(/LOCAL_DATA/);
+    await expect(provider.getOutcomesSpec()).rejects.toThrow(/responded 404/);
+    await expect(provider.getOutcomesSpec()).rejects.toThrow(/\/api\/tables\//);
+  });
+
+  it("explains a 502 as a data-store refusal, not a missing backend", async () => {
+    // The failure a user actually hits. 502/503 means data-api is RUNNING and its store
+    // refused it - the SQL contained-database user (F109/F112), or Fabric's
+    // managed-identity limitation for the three lakehouse tables (F101). Saying "check
+    // the backend is deployed" here would send someone to look at a healthy container.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("bad gateway", { status: 502 })),
+    );
+    const provider = new ApiProvider();
+    await expect(provider.getOutcomesSpec()).rejects.toThrow(/data store refused/);
   });
 });
 

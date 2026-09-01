@@ -134,6 +134,27 @@ Describe 'layer-05-audit' {
             $row.Observed | Should -Match 'extra \[scratch_tmp\]'
         }
 
+        It 'names denial rather than absence when the tables endpoint returns nothing' {
+            # Fabric answers /lakehouses/<id>/tables with [] - not 403 - to a caller
+            # without OneLake read, so a Viewer sees an empty lakehouse and a genuinely
+            # empty lakehouse looks identical. On 2026-09-01 V5.2 reported "missing [all
+            # ten]" against a lakehouse whose SQL endpoint had just returned
+            # launches = 1,200. Same class as F103: an audit announcing a thing is absent
+            # when it was refused the look.
+            $script:LiveTable = @()
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V5.2'
+            # Still FAILS - unobservable is not a sign-off - but it must not claim the
+            # tables are gone.
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'EMPTY LIST'
+            $row.Observed | Should -Not -Match 'missing \[' `
+                -Because 'an empty response from this endpoint is not evidence the tables are missing'
+            $row.Detail | Should -Match 'OneLake read'
+            $row.Detail | Should -Match 'V5.3' `
+                -Because 'the SQL endpoint fails loudly where this one fails silently, so the report must point at it'
+        }
+
         It 'fails V5.1 when the workspace is bound to a different capacity (the stray-workspace case)' {
             $script:WorkspaceCapacityId = 'some-other-capacity'
             $context = Invoke-AuditForTest -NoRetry

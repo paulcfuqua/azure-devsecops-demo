@@ -33,6 +33,10 @@ param(
     [string]$CanaryPrNumber,
     [string]$HealthPath = '/healthz',
     [string]$ProbePath = '/api/tables/launches',
+    # V7.6's floor. The seed is deterministic (L5 loads 1,200 launches), so any positive
+    # number proves the path works; 1 is deliberately the weakest useful assertion,
+    # because this criterion is about "answers at all" and V5.3 owns exact counts.
+    [int]$MinimumRow = 1,
     [int]$LoadRequestCount = 20,
     [double]$ScaleInWaitMinutes = 15,
     [double]$ScaleInDeadlineMinutes = 30,
@@ -307,6 +311,191 @@ function Test-OtelSpan {
         -Detail 'A 401 is an ACCESS problem - the probe never reached the app, so no span could exist (L07 failure mode 3). A non-401 status with zero rows is one of three things, in order of likelihood: App Insights ingestion lag (the retry window covers 15 minutes of it); the traceparent header not surviving the hop chain (nginx and the Easy Auth sidecar both forward it by default, so suspect a proxy_set_header that drops it); or a broken connection string. Tell them apart with: AppRequests | where AppRoleName == ''data-api'' | top 5 by TimeGenerated desc - rows there but none here is a correlation problem, no rows at all is an emission problem.'
 }
 
+function Test-ApiRowPayload {
+    <# V7.6 - THE CRITERION NOBODY WROTE.
+
+       L7 signed off 5/5 for two days over an estate where every /api/tables route
+       answered 503, and later 502. Not one of V7.1-V7.5 reads a row: V7.1 checks
+       /healthz, which nginx answers from its own config without touching application
+       code; V7.2 is a local schema check; V7.3 asks only that a span exists, and a 404
+       emits one; V7.4 reads GitHub; V7.5 counts replicas. The layer verified that the
+       plumbing existed and never that water came out of the tap (docs/DEMO-READINESS.md
+       section D).
+
+       This is the assertion that would have caught F98 (placeholder images serving
+       nothing), F101 (data-api cannot authenticate to the lakehouse) and the empty cost
+       dashboards on its own, on the day each began.
+
+       It deliberately does NOT accept a 2xx alone. An empty array is a valid, correct,
+       well-formed HTTP 200 - and it is exactly what a broken backend and an empty
+       lakehouse both produce. "Responds" and "answers" are different claims, and only
+       the second is worth a criterion. #>
+    param(
+        [Parameter(Mandatory)][string]$ResourceGroupName,
+        [Parameter(Mandatory)][string[]]$AppName,
+        [Parameter(Mandatory)][string]$ProbePath,
+        [Parameter(Mandatory)][int]$MinimumRow
+    )
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $observed = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($name in $AppName) {
+        $roleName = ($name -replace '^mls-', '') -replace '-demo-ca$', ''
+        $fqdn = Get-AppFqdn -ResourceGroupName $ResourceGroupName -Name $name
+        if ([string]::IsNullOrWhiteSpace($fqdn)) {
+            $problem.Add("$roleName has no ingress FQDN")
+            continue
+        }
+        $clientId = Get-AppEasyAuthClientId -ResourceGroupName $ResourceGroupName -Name $name
+        if ([string]::IsNullOrWhiteSpace($clientId) -or $clientId -eq 'None') {
+            $problem.Add("$roleName has no Easy Auth client id, so no audience to request a token for")
+            continue
+        }
+        $token = "$(Invoke-MlsAz -AllowFailure -Raw -Argument @(
+                'account', 'get-access-token', '--resource', $clientId, '--query', 'accessToken', '--output', 'tsv'
+            ))".Trim()
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            $problem.Add("$roleName could not obtain a token for audience $clientId (see F89)")
+            continue
+        }
+
+        $response = Invoke-MlsHttp -Uri "https://$fqdn$ProbePath" -TimeoutSec 60 `
+            -Header @{ Authorization = "Bearer $token" }
+        $status = "$(Get-MlsProperty -InputObject $response -Name 'StatusCode')"
+
+        if ($status -ne '200') {
+            # 502/503 is the F101 signature: the app is up, its upstream is not.
+            $observed.Add("$roleName http=$status rows=n/a")
+            $problem.Add("$roleName returned $status from $ProbePath, so it served no data")
+            continue
+        }
+
+        # A BARE JSON ARRAY, not an envelope. GET /tables/:table answers `res.json(result.rows)`
+        # - app.ts says so in its own header comment - and reports truncation in the
+        # X-MLS-Truncated header instead. The first version of this criterion parsed
+        # `payload.rows`, which is $null against an array, so it would have reported rows=0
+        # and FAILED A WORKING API. Found because Paul opened the app and its error text
+        # named the provider's `rows<T>` helper, which throws unless the body is an array.
+        $rowCount = -1
+        $body = "$(Get-MlsProperty -InputObject $response -Name 'Content')".Trim()
+        # ARRAY-NESS COMES FROM THE RAW TEXT, NOT THE PARSED OBJECT. ConvertFrom-Json turns
+        # `[]` into $null, so an EMPTY array and a NON-array are indistinguishable after
+        # parsing - and those are two different findings: zero rows is a seeding problem,
+        # a non-array is a contract violation. Deciding from the leading `[` keeps them apart.
+        if (-not $body.StartsWith('[')) {
+            $problem.Add("$roleName returned 200 but the body is not a JSON array; /tables/:table answers a bare array of rows")
+            $observed.Add("$roleName http=200 rows=not-an-array")
+            continue
+        }
+        try {
+            $payload = $body | ConvertFrom-Json
+            $rowCount = @($payload).Count
+        }
+        catch {
+            $problem.Add("$roleName returned 200 but its body did not parse as JSON: $($_.Exception.Message)")
+            $observed.Add("$roleName http=200 rows=unparseable")
+            continue
+        }
+
+        $observed.Add("$roleName http=200 rows=$rowCount")
+        if ($rowCount -lt $MinimumRow) {
+            $problem.Add("$roleName returned $rowCount row(s) from $ProbePath, expected at least $MinimumRow")
+        }
+    }
+
+    if ($problem.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
+    }
+    return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
+        -Detail 'A 502 or 503 here means the app is running and its data backend is not - as of 2026-09-01 that is F101: data-api authenticates as a user-assigned managed identity, and Fabric''s SQL endpoint accepts only users and application objects. A 200 with zero rows means the lakehouse is reachable but empty, which is an L5 seeding problem, not this one. The two are different failures and this criterion names which.'
+}
+
+function Test-InteractiveSignIn {
+    <# V7.7 - CAN A HUMAN ACTUALLY SIGN IN?
+
+       Nobody could, for the entire life of this project, and no criterion noticed
+       (F110). Easy Auth's AAD provider signs users in with the implicit flow -
+       `response_type=id_token&response_mode=form_post` - and Entra refuses that unless
+       the app registration has web.implicitGrantSettings.enableIdTokenIssuance = true.
+       It defaults to FALSE and nothing in infra/entra ever set it, so Entra posted an
+       error back to the callback and the browser SAVED IT AS A FILE.
+
+       Three existing checks pass straight over this. V7.1 gets 200 from /healthz, which
+       Easy Auth explicitly excludes. V7.3 presents a bearer token, which never touches
+       the interactive flow. frontend-auth.Tests.ps1 reads configuration, not behaviour.
+       None of them signs in, so none of them could see it.
+
+       This does not drive a browser - that is still the open half of
+       docs/DEMO-READINESS.md section D. It asserts the two things that must be true for
+       a browser to succeed, both readable without one:
+
+         1. Easy Auth is IN FRONT of the app. /.auth/me must answer 401 from the auth
+            middleware, identified by its own x-ms-middleware-request-id header. If nginx
+            answers instead - serving index.html through the SPA fallback - the callback
+            has nowhere to land and sign-in cannot complete however well Entra behaves.
+         2. The registration will ISSUE the token the flow asks for. Without
+            enableIdTokenIssuance the redirect to Entra still looks perfect, the sign-in
+            page still renders, and the flow dies at the callback.
+
+       A 401 here is the PASS. That reads oddly until you notice what the criterion is
+       asking: not "is the door open" but "is there a door, and does the key exist". #>
+    param(
+        [Parameter(Mandatory)][string]$ResourceGroupName,
+        [Parameter(Mandatory)][string[]]$AppName
+    )
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $observed = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($name in $AppName) {
+        $roleName = ($name -replace '^mls-', '') -replace '-demo-ca$', ''
+        $fqdn = Get-AppFqdn -ResourceGroupName $ResourceGroupName -Name $name
+        if ([string]::IsNullOrWhiteSpace($fqdn)) {
+            $problem.Add("$roleName has no ingress FQDN")
+            continue
+        }
+
+        # 1. Easy Auth must own /.auth, not the container behind it.
+        $auth = Invoke-MlsHttp -Uri "https://$fqdn/.auth/me" -TimeoutSec 30
+        $status = "$(Get-MlsProperty -InputObject $auth -Name 'StatusCode')"
+        $headers = Get-MlsProperty -InputObject $auth -Name 'Headers'
+        $middleware = ''
+        if ($null -ne $headers) {
+            foreach ($key in @($headers.Keys)) {
+                if ("$key" -ieq 'x-ms-middleware-request-id') { $middleware = "$($headers[$key])" }
+            }
+        }
+        if ($status -ne '401' -or [string]::IsNullOrWhiteSpace($middleware)) {
+            $problem.Add("$roleName /.auth/me answered $status$(if (-not $middleware) { ' with no x-ms-middleware-request-id' }) - Easy Auth is not handling /.auth, so the sign-in callback has nowhere to land")
+        }
+
+        # 2. The registration must be able to issue the token the flow requests.
+        $clientId = Get-AppEasyAuthClientId -ResourceGroupName $ResourceGroupName -Name $name
+        if ([string]::IsNullOrWhiteSpace($clientId) -or $clientId -eq 'None') {
+            $problem.Add("$roleName has no Easy Auth client id, so it is not published for interactive sign-in")
+            $observed.Add("$roleName auth=$status idToken=n/a")
+            continue
+        }
+        $idToken = "$(Invoke-MlsAz -AllowFailure -Raw -Argument @(
+                'ad', 'app', 'show', '--id', $clientId,
+                '--query', 'web.implicitGrantSettings.enableIdTokenIssuance', '--output', 'tsv'
+            ))".Trim()
+        $observed.Add("$roleName auth=$status idToken=$(if ($idToken) { $idToken } else { '<unreadable>' })")
+
+        if ($idToken -ieq 'false') {
+            $problem.Add("$roleName registration $clientId has enableIdTokenIssuance=false, so Entra will refuse the id_token Easy Auth asks for and the callback receives an error the browser saves as a file (F110)")
+        }
+        elseif ($idToken -inotlike 'true') {
+            $problem.Add("$roleName registration $clientId - could not read enableIdTokenIssuance, so this criterion could not confirm sign-in is possible")
+        }
+    }
+
+    if ($problem.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
+    }
+    return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
+        -Detail 'Fix with: az ad app update --id <clientId> --enable-id-token-issuance true. L7''s redirect-URI step does this for every published dashboard on each run, so a failure here means that step was skipped or the registration was changed outside the pipeline. This criterion does not open a browser - that gap is DEMO-READINESS section D - it asserts the two preconditions a browser needs.'
+}
+
 function Test-CanaryPipeline {
     <# V7.4 - every required check green on the canary PR, and the path filters behaving:
        both app pipelines when the canary touches apps/shared/**, only the matching app's
@@ -478,6 +667,7 @@ function Invoke-Main {
         # criterion was technically satisfiable while only ever exercising a route the
         # product does not have, which is not a demonstration anyone wants to give.
         [string]$ProbePath = '/api/tables/launches',
+        [int]$MinimumRow = 1,
         [string]$DeployManifestPath,
         [string]$LogAnalyticsWorkspaceId,
         [string]$Repository,
@@ -576,6 +766,26 @@ function Invoke-Main {
             -LoadRequestCount $LoadRequestCount -ScaleInWaitMinutes $ScaleInWaitMinutes -ScaleInDeadlineMinutes $ScaleInDeadlineMinutes
     } | Out-Null
 
+    # L07: the criterion that closes DEMO-READINESS section D.
+    Invoke-MlsCriterion -Context $context -Id 'V7.6' -Control @('3.4.1') `
+        -Description 'The data API answers with rows, not merely with a status code' `
+        -Command "az account get-access-token --resource <easy-auth-client-id>`nGET https://<fqdn>$ProbePath  -H 'Authorization: Bearer <token>'`n# assert HTTP 200 AND (.rows | length) >= $MinimumRow" `
+        -Expected "HTTP 200 from every frontend with at least $MinimumRow row(s) in the bare JSON array /tables/:table returns. A 2xx alone is NOT sufficient: an empty array is a well-formed 200, and is what both a broken backend and an empty store return." `
+        -PollIntervalSeconds 30 `
+        -RetryWindowMinutes 5 `
+        -Test {
+        Test-ApiRowPayload -ResourceGroupName $ResourceGroupName -AppName $AppName `
+            -ProbePath $ProbePath -MinimumRow $MinimumRow
+    } | Out-Null
+
+    # L07: the criterion that would have caught F110 - see DEMO-READINESS section D.
+    Invoke-MlsCriterion -Context $context -Id 'V7.7' -Control @('3.5.1', '3.5.2') `
+        -Description 'A human can complete an interactive sign-in' `
+        -Command "GET https://<fqdn>/.auth/me   # expect 401 WITH x-ms-middleware-request-id`naz ad app show --id <easy-auth-client-id> --query web.implicitGrantSettings.enableIdTokenIssuance" `
+        -Expected 'Easy Auth answers /.auth itself (401 carrying x-ms-middleware-request-id, not the SPA fallback), and every published dashboard''s registration has enableIdTokenIssuance=true so Entra will issue the token the login flow requests' `
+        -RetryWindowMinutes 5 `
+        -Test { Test-InteractiveSignIn -ResourceGroupName $ResourceGroupName -AppName $AppName } | Out-Null
+
     return $context
 }
 
@@ -583,7 +793,7 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -ResourceGroupName $ResourceGroupName -AppName $AppName `
             -DeployManifestPath $DeployManifestPath -LogAnalyticsWorkspaceId $LogAnalyticsWorkspaceId `
-            -Repository $Repository -CanaryPrNumber $CanaryPrNumber -HealthPath $HealthPath -ProbePath $ProbePath `
+            -Repository $Repository -CanaryPrNumber $CanaryPrNumber -HealthPath $HealthPath -ProbePath $ProbePath -MinimumRow $MinimumRow `
             -LoadRequestCount $LoadRequestCount -ScaleInWaitMinutes $ScaleInWaitMinutes `
             -ScaleInDeadlineMinutes $ScaleInDeadlineMinutes -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion

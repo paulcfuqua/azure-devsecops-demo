@@ -1,0 +1,31 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ImportExportXml xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" OrganizationVersion="9.2.26074.163" OrganizationSchemaType="Standard" CRMServerServiceabilityVersion="9.2.26074.00163">
+  <Entities />
+  <Roles />
+  <Workflows />
+  <FieldSecurityProfiles />
+  <Templates />
+  <EntityMaps />
+  <EntityRelationships />
+  <OrganizationSettings />
+  <optionsets />
+  <CustomControls />
+  <EntityDataProviders />
+  <Connectors />
+  <connectionreferences>
+    <connectionreference connectionreferencelogicalname="mls_MeridianLaunchCopilot.shared_mls-5fmeridian-20ops-20tools-5fa5da83b50654451e.4e31c01eeef94cd983fdae563909d611">
+      <connectionreferencedisplayname>mls_MeridianLaunchCopilot.shared_mls-5fmeridian-20ops-20tools-5fa5da83b50654451e.4e31c01eeef94cd983fdae563909d611</connectionreferencedisplayname>
+      <connectorid>/providers/Microsoft.PowerApps/apis/shared_mls-5fmeridian-20ops-20tools-5fa5da83b50654451e</connectorid>
+      <customconnectorid>
+        <connectorid>80a15a23-00bc-4232-9ebf-5780fb7eff89</connectorid>
+      </customconnectorid>
+      <iscustomizable>0</iscustomizable>
+      <promptingbehavior>0</promptingbehavior>
+      <statecode>0</statecode>
+      <statuscode>1</statuscode>
+    </connectionreference>
+  </connectionreferences>
+  <Languages>
+    <Language>1033</Language>
+  </Languages>
+</ImportExportXml>

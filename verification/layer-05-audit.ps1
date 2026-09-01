@@ -152,6 +152,24 @@ function Test-LakehouseTableList {
     if ($comparison.Equal) {
         return New-MlsCheckResult -Passed $true -Observed "$($tables.Count) tables: $(($tables | Sort-Object) -join ', ')"
     }
+    # EMPTY IS NOT THE SAME AS MISSING, AND THIS ENDPOINT MAKES THEM LOOK IDENTICAL.
+    #
+    # /lakehouses/<id>/tables returns an EMPTY ARRAY - not 403 - to a caller without
+    # OneLake read. So a Viewer sees a lakehouse with no tables in it, and a lakehouse
+    # that genuinely has no tables looks exactly the same. On 2026-09-01 this reported
+    # "missing [all ten]" against a lakehouse whose SQL endpoint had just returned
+    # launches = 1,200, and whose own deploy step had listed all ten by name.
+    #
+    # "Every expected table absent AND nothing unexpected present" is the signature of
+    # not being allowed to look, not of an empty lakehouse: a real seeding failure loses
+    # some tables, or leaves partial writes behind. Saying so is the whole fix - the same
+    # class as F103, where an audit announced that security controls were off when it had
+    # simply been refused the field.
+    if ($tables.Count -eq 0 -and $comparison.Missing.Count -eq $ExpectedTable.Count) {
+        return New-MlsCheckResult -Passed $false `
+            -Observed "the tables endpoint returned an EMPTY LIST - this is what it returns without OneLake read, not necessarily an empty lakehouse" `
+            -Detail 'Fabric answers /lakehouses/<id>/tables with [] rather than 403 when the caller lacks OneLake read, so absence and denial are indistinguishable here. Confirm which it is against the SQL analytics endpoint, which fails loudly instead: V5.3 queries the same tables over TDS. If V5.3 returns rows, the lakehouse is fine and this identity needs OneLake read on the workspace.'
+    }
     return New-MlsCheckResult -Passed $false `
         -Observed "missing [$($comparison.Missing -join ', ')]; extra [$($comparison.Extra -join ', ')]" `
         -Detail 'Table registration after Delta writes can lag the load by several minutes; the 30-minute window covers that.'

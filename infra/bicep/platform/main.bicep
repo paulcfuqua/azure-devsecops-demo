@@ -336,6 +336,27 @@ module sqlServer 'br/public:avm/res/sql/server:0.22.0' = {
     name: sqlName
     location: location
     tags: tagsSqlServer
+    // THE SERVER NEEDS ITS OWN IDENTITY, OR ENTRA USERS CANNOT BE CREATED BY AUTOMATION
+    // (F112). `CREATE USER ... FROM EXTERNAL PROVIDER` makes the SQL engine resolve the
+    // principal in Microsoft Graph. When a USER runs it, Azure SQL impersonates that user
+    // with delegated permissions - which is why it worked by hand and never in CI. An
+    // application cannot impersonate another application, so for a service principal the
+    // engine falls back to THE SERVER'S OWN identity, and Microsoft's documentation is
+    // explicit: "The server identity must exist and have the Microsoft Graph query
+    // permissions or the operations fail."
+    //
+    // This server had `identity: null`, so the F20 contained-user grant could never
+    // succeed unattended - and 900-contained-users.sql's TRY/CATCH turned that failure
+    // into a warning nobody read, which is why every SQL-backed /api/tables route
+    // answered 502 while the pipeline reported the grant "applied".
+    //
+    // Creating the identity is only half. It must also be granted directory read - the
+    // Directory Readers role, or the individual Graph permissions, which Microsoft
+    // prefers as least privilege. That assignment needs Privileged Role Administrator,
+    // so it is a G0 step a human performs once per tenant; see docs/runbooks/g0-bootstrap.md.
+    managedIdentities: {
+      systemAssigned: true
+    }
     // Entra-only authentication — no SQL passwords anywhere (CLAUDE.md rule 5).
     administrators: empty(sqlAadAdminObjectId)
       ? null
