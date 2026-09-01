@@ -231,6 +231,51 @@ jobs:
       - name: Install the Power Platform CLI
         uses: microsoft/powerplatform-actions/actions-install@v1
 
+      # PUT pac ON THE PATH (F113). actions-install drops the binary in a temp tool-path
+      # and exports POWERPLATFORMTOOLS_PACPATH; it does NOT add it to PATH. So every
+      # later step calling bare `pac` - two in this workflow, eighteen more inside
+      # infra/copilot-studio/import-agent.ps1 - died with
+      #
+      #   line 5: pac: command not found
+      #   ##[error]Process completed with exit code 127
+      #
+      # which reads like a missing install, immediately after a step that logged
+      # "pac installed to /tmp/...". Adding the directory once fixes every caller, which
+      # is why it is done here rather than by rewriting twenty invocations to use the
+      # variable - and a laptop run, where pac is on PATH normally, keeps working
+      # unchanged.
+      #
+      # THE VARIABLE IS NOT DOCUMENTED AS EITHER A FILE OR A DIRECTORY, so this resolves
+      # it instead of assuming. `dirname` is correct if it names the executable and
+      # silently wrong if it names the folder - it would put the PARENT on PATH and
+      # reproduce exit 127 through a step that logged success. Both shapes are handled,
+      # and then `pac --version` is run: the criterion is "pac is callable", and the only
+      # honest way to assert that is to call it. A PATH entry is the artefact that
+      # usually accompanies the capability, not the capability itself.
+      - name: Put pac on the PATH
+        run: |
+          set -euo pipefail
+          raw="${POWERPLATFORMTOOLS_PACPATH:-}"
+          if [ -z "${raw}" ]; then
+            echo "::error title=pac path not exported::actions-install did not set POWERPLATFORMTOOLS_PACPATH, so pac cannot be located. Every later pac call would fail with exit 127 immediately after a successful-looking install."
+            exit 1
+          fi
+          if [ -d "${raw}" ]; then
+            pac_dir="${raw}"
+          else
+            pac_dir="$(dirname "${raw}")"
+          fi
+          if [ ! -x "${pac_dir}/pac" ]; then
+            echo "::error title=pac not executable at resolved path::POWERPLATFORMTOOLS_PACPATH=${raw} resolved to directory ${pac_dir}, which holds no executable named pac. Contents follow."
+            ls -la "${pac_dir}" || true
+            exit 1
+          fi
+          echo "${pac_dir}" >> "${GITHUB_PATH}"
+          # Prove the capability in THIS step, using the PATH we just built, rather than
+          # discovering it eighteen calls later inside a PowerShell script.
+          PATH="${pac_dir}:${PATH}" pac --version
+          echo "pac resolved from POWERPLATFORMTOOLS_PACPATH=${raw}; ${pac_dir} is now on PATH."
+
       - name: Create the pac auth profile
         run: |
           set -euo pipefail
