@@ -55,8 +55,8 @@ on 2026-09-01, with the evidence beside it.
 | L6 platform | 🟡 partial | Was verified. Currently broken by an ACL change of my own (F119); correction in flight. V6.7 now guards it |
 | L9 DevSecOps chain | 🟡 partial | 4/5. GHAS, SBOM, Trivy and ZAP all run |
 | L12 compliance | 🟡 partial | Works; unaudited (see showpiece 4) |
-| L4 Purview labels | 🟡 partial | **RAN 2026-09-01, the first time ever.** Four sensitivity labels now exist in the tenant - `mls-public`, `mls-internal`, `mls-confidential`, `mls-export-controlled` - where there had been none. The label POLICY failed (F121, fixed, re-run in flight) and the audit has not signed off yet |
-| L8 Copilot Studio | ❌ never succeeded | Blocked by **BLOCKER-2** |
+| L4 Purview labels | ✅ verified | **DONE 2026-09-01, the first time ever.** `verify L4 (mls-verifier)` PASSED. Four sensitivity labels now exist in the tenant - `mls-public`, `mls-internal`, `mls-confidential`, `mls-export-controlled` - where there had been none. The label POLICY failed (F121, fixed, re-run in flight) and the audit has not signed off yet |
+| L8 Copilot Studio | 🟡 partial | **The agent is IMPORTED AND DEPLOYED, 2026-09-01, the first time ever.** V8.1 fails on a Verifier read permission and V8.2-V8.5 SKIP awaiting Direct Line (BLOCKER-3) |
 | L10 self-healing | ❌ chain never executed | Blocked by **BLOCKER-1** and **BLOCKER-4** |
 
 ### The mission itself
@@ -73,9 +73,17 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 
 *Ordered by how much each unblocks. Everything not-done above traces to one of these five.*
 
-**BLOCKER-1 is CLOSED as of 2026-09-01.** The highest open blocker is now **BLOCKER-2**
-(the Copilot Studio environment), and the one an agent can attack today with no credential
-and no human is **BLOCKER-5** (L12 has no audit script).
+**BLOCKER-1 and BLOCKER-2 are both CLOSED as of 2026-09-01.** What is left:
+
+- **BLOCKER-3** (the Direct Line secret) is now the top of the chain for showpiece 1, and it
+  is finally *reachable* - the agent is deployed, so a Direct Line channel can be created
+  and its secret put in Key Vault. The token Function and the build-time URL are already in
+  place and waiting.
+- **BLOCKER-4** (self-healing has nothing to heal) still needs live alerts.
+- **BLOCKER-5** (L12 has no audit script) remains the one an agent can attack today with no
+  credential and no human.
+- **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
+  `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
 ### F121 — the label policy was published to recipients that cannot exist *(fixed 2026-09-01)*
 
@@ -166,7 +174,45 @@ cannot mint them.
 
 **Unblocks:** L4 entirely, V11.2, half of showpiece 3, and makes the F120 fix live.
 
-### BLOCKER-2 — The Copilot Studio environment cannot be reached
+### ~~BLOCKER-2 — The Copilot Studio environment cannot be reached~~ **RESOLVED 2026-09-01**
+
+**The Copilot Studio solution imported successfully and the agent is deployed** - the first
+time in this project's life.
+
+**The cause was not what this entry predicted, and that is recorded rather than edited
+away.** The text below reasoned toward the Developer environment type being the wall:
+Developer environments are provisioned for one individual, so a service principal was
+expected to be unable to access one. That was wrong. A Developer environment accepts
+application users perfectly well.
+
+The actual cause was simpler: **a service principal gets no Dataverse access from Entra
+alone.** `mls-github-deployer` had to be registered as an APPLICATION USER inside
+`mls-authoring` and given **System Administrator**, which a solution import requires
+(System Customizer routinely fails partway through an import, which is worse than failing
+at the start). Once added, L8's import step passed on the next run.
+
+**A second app user is needed and is not yet solved.** `mls-verifier` must also be an
+application user there for **V8.1** to read the deployed solution's metadata, and finding a
+read-only role for it is genuinely hard:
+
+| Role tried | Result |
+|---|---|
+| `Basic User` | 403 |
+| `Export Customizations (Solution Checker)` | 403 |
+| `Service Reader`, `Solution Checker` | added 2026-09-01, **untested at time of writing** |
+
+Two cautions for whoever picks this up. **Dataverse role changes take minutes to
+propagate**, and both failures above were tested immediately after the change - so neither
+is a safe conclusion on its own; re-run unchanged before adding another role. And if no
+read-only combination works, the honest resolution is **System Customizer recorded as a
+deliberate compromise in L08.md**, stating that Dataverse offers no clean read-only grant
+for solution metadata - because "the Verifier reads as a read-only identity" is a STATED
+design claim, and it is about to be either true-with-effort or quietly false.
+
+*Original entry follows, kept because a register that quietly edits itself is not a
+register.*
+
+### BLOCKER-2 (original) — The Copilot Studio environment cannot be reached
 
 L8 now gets *past* the `pac` PATH problem (F113 is fixed and confirmed: `pac help` runs) and
 fails on the next thing:
