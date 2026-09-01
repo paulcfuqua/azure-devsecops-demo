@@ -246,6 +246,22 @@ export class CloudFeedsBackend implements FeedsBackend {
         },
         timeoutMs: this.deps.config.upstreamTimeoutMs,
         label: "Cost Management",
+        // NO RETRIES, DELIBERATELY, AND THIS IS THE ONE UPSTREAM WHERE THAT IS RIGHT.
+        //
+        // The shared default retries a 429 twice with backoff, which is correct for an
+        // upstream whose throttle clears in milliseconds. Cost Management's does not: its
+        // window is minutes, so the two extra attempts cannot succeed and each one spends
+        // quota that deepens the block for everyone - including the next request, which
+        // might have succeeded. Observed live: the first deploy of this feed answered
+        //
+        //   upstream_unavailable (502) detail=HTTP 429 from Cost Management
+        //
+        // after probing had exhausted the budget, and every retry made the window longer.
+        //
+        // Failing on the first refusal is not giving up: the hour-long cache above is the
+        // real fallback, and a 429 with something cached is served STALE rather than as an
+        // error. Retrying is what this feed does across requests, not within one.
+        retries: 0,
         ...(this.deps.fetchImpl ? { fetchImpl: this.deps.fetchImpl } : {}),
       });
       const projected = projectAzureCost(raw, timeframe);
