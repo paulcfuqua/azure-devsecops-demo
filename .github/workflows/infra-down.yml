@@ -256,6 +256,68 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # ---------------------------------------------------------------------
+      # F107 - PURGE THE WORKSPACE, DO NOT LET THE RG DELETE SOFT-DELETE IT.
+      #
+      # Log Analytics workspaces soft-delete for 14 days. `az group delete` does
+      # NOT destroy the workspace inside it; it soft-deletes it. Recreating a
+      # workspace with the same name in the same resource group then RECOVERS the
+      # old one rather than creating a new one - and the recovered workspace sits
+      # in a state ARM reports as `Succeeded` while the scheduled-query-rule
+      # provider still refuses it:
+      #
+      #   l6-alert-kv   BadRequest: The workspace could not be found
+      #   l6-alert-sql  BadRequest: The workspace could not be found
+      #
+      # Measured on 2026-09-01 rather than assumed. Forty minutes after the
+      # rebuild recovered it, the workspace was STILL listed by
+      # `list-deleted-workspaces` while simultaneously live, with a createdDate
+      # PREDATING the teardown and its original customerId intact. That is not
+      # propagation settling - it is a stable contradiction, so waiting it out
+      # (the cheaper candidate fix) would have waited forever.
+      #
+      # So the teardown purges. `--force` removes the workspace WITHOUT the
+      # recovery option, which is a real trade and worth stating: a 14-day undo
+      # is forfeited. It is the right trade here because this estate's central
+      # claim is that it can be destroyed and rebuilt from code - a recovery net
+      # for telemetry that is entirely reproducible buys nothing, and costs the
+      # rebuild. Anyone who wants the net back should keep the workspace outside
+      # the four demo resource groups, not soften this step.
+      #
+      # Runs BEFORE the resource groups go, because the workspace has to still
+      # exist to be purged. Failure is a WARNING, not a stop: a teardown that
+      # refuses to proceed because an optional purge failed is worse than one
+      # that leaves a soft-deleted workspace behind and says so.
+      # ---------------------------------------------------------------------
+      - name: Purge the Log Analytics workspace so the rebuild gets a new one (F107)
+        env:
+          RG_PLATFORM: ${{ steps.names.outputs.rg-platform }}
+          LAW_NAME: ${{ steps.names.outputs.law }}
+        run: |
+          set -uo pipefail
+          if ! az monitor log-analytics workspace show \
+                 --resource-group "${RG_PLATFORM}" --workspace-name "${LAW_NAME}" >/dev/null 2>&1; then
+            echo "${LAW_NAME} is not present in ${RG_PLATFORM}; nothing to purge."
+            exit 0
+          fi
+
+          echo "Purging ${LAW_NAME} (--force: no 14-day recovery, so the rebuild creates a NEW workspace)."
+          if az monitor log-analytics workspace delete \
+               --resource-group "${RG_PLATFORM}" --workspace-name "${LAW_NAME}" --force --yes; then
+            echo "Purged."
+          else
+            echo "::warning title=Workspace purge failed::Could not purge ${LAW_NAME}. The resource-group delete below will SOFT-delete it instead, and the next rebuild will recover it - at which point L6's alert rules fail with 'The workspace could not be found' (F107). Purge it by hand before rebuilding: az monitor log-analytics workspace delete -g ${RG_PLATFORM} -n ${LAW_NAME} --force --yes"
+          fi
+
+          # Whether it purged or not, say what the next rebuild will find. A
+          # teardown that leaves this ambiguous is how F107 cost an hour.
+          if az monitor log-analytics workspace list-deleted-workspaces \
+               --query "[?name=='${LAW_NAME}'] | length(@)" -o tsv 2>/dev/null | grep -q '^0$'; then
+            echo "No soft-deleted ${LAW_NAME} remains - the rebuild will create a genuinely new workspace."
+          else
+            echo "::warning title=Soft-deleted workspace remains::A soft-deleted ${LAW_NAME} is still registered, so a same-name rebuild will RECOVER it and L6's alert rules will fail (F107)."
+          fi
+
       - name: Delete in parallel, then wait for the estate to drain
         timeout-minutes: 45
         env:

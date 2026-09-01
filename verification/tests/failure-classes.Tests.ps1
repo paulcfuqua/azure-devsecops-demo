@@ -943,3 +943,59 @@ Describe 'a registration the design depends on is declared where L3 can create i
             -Because 'L3 creates only what the manifest declares, so a registration named in the design but absent from the manifest is never created and no layer ever fails - the agent authentication is blocked permanently while every gate stays green (F106)'
     }
 }
+
+Describe 'a teardown leaves nothing a rebuild will recover' {
+    # The first kill/reinstantiate cycle failed on the way back up. Log Analytics workspaces
+    # soft-delete for 14 days: `az group delete` did not destroy the workspace, and
+    # recreating one with the same name in the same resource group RECOVERED it. ARM then
+    # called the recovered workspace Succeeded while the scheduled-query-rule provider still
+    # refused it, so both L6 alert rules failed with "The workspace could not be found"
+    # (F107).
+    #
+    # Measured, not assumed: forty minutes after the rebuild, the workspace was STILL listed
+    # by list-deleted-workspaces while simultaneously live, with a createdDate predating the
+    # teardown and its original customerId intact. A stable contradiction, not propagation -
+    # so the cheaper candidate fix, waiting it out, would have waited forever.
+    #
+    # The rule this encodes is broader than one resource: a teardown whose deletes are
+    # RECOVERABLE has not torn anything down, it has hidden it, and the next rebuild inherits
+    # the hidden thing instead of building fresh. Anything Azure soft-deletes has to be
+    # purged explicitly by a teardown that claims the estate can be rebuilt from code.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:Down = Get-Content -LiteralPath (Join-Path $script:Root '.github/workflows/infra-down.yml') -Raw
+    }
+
+    It 'purges the Log Analytics workspace rather than letting the resource-group delete soft-delete it' {
+        $script:Down | Should -Match 'log-analytics workspace delete' `
+            -Because 'a resource-group delete soft-deletes the workspace, and a same-name rebuild then recovers it'
+        # ANCHORED TO THE EXECUTED COMMAND, NOT THE PROSE ABOUT IT. The first version of
+        # this matched `--force` within 200 characters of the command name, and the warning
+        # text below the invocation tells the reader to run the same command by hand - so
+        # deleting --force from the REAL call still passed. A sweep that matches its own
+        # documentation is a mirror. `; then` pins it to the if-conditional that actually
+        # runs.
+        $script:Down | Should -Match '--workspace-name "\$\{LAW_NAME\}" --force --yes; then' `
+            -Because '--force is what removes the 14-day recovery option; without it the delete IS the soft-delete this finding is about'
+    }
+
+    It 'purges before the resource groups go, because the workspace must still exist' {
+        $purge = $script:Down.IndexOf('log-analytics workspace delete')
+        $delete = $script:Down.IndexOf('Delete in parallel')
+        $purge | Should -BeGreaterThan 0
+        $delete | Should -BeGreaterThan 0
+        $purge | Should -BeLessThan $delete `
+            -Because 'purging after the resource group is gone finds nothing to purge, and the soft-deleted workspace survives to break the next rebuild'
+    }
+
+    It 'reports what the next rebuild will find, whether or not the purge worked' {
+        # F107 cost an hour precisely because "The workspace could not be found" against a
+        # workspace az calls Succeeded explains nothing. A teardown that leaves a recoverable
+        # workspace behind must say so, at the moment it happens.
+        $script:Down | Should -Match 'list-deleted-workspaces' `
+            -Because 'the teardown should check what it left behind rather than assume the purge worked'
+        $script:Down | Should -Match 'Soft-deleted workspace remains' `
+            -Because 'the next rebuild inherits this, so the teardown is where it has to be said'
+    }
+}
