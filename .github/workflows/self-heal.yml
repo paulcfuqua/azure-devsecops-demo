@@ -688,7 +688,14 @@ jobs:
 
           echo "url=${url}" >> "${GITHUB_OUTPUT}"
           if [ -z "${url}" ]; then
-            echo "::notice title=No Dependabot PR to gauntlet::No open Dependabot pull request mentions '${PACKAGE}'. Copilot Autofix does not cover dependency alerts, and no API can request a security-update PR — so this path needs 'Dependabot security updates' switched ON in repository settings. Until then this alert has no automated fix path."
+            # THREE CANDIDATE CAUSES, NOT ONE (F126). This notice used to assert a
+            # single remedy - "this path needs 'Dependabot security updates' switched ON"
+            # - and on 2026-09-01 it said exactly that on a repository where the setting
+            # was already ON (`{"enabled":true,"paused":false}`). A confident, specific,
+            # WRONG remedy is worse than no remedy: it sends the reader to change a
+            # setting that is already correct and stops them looking further. The actual
+            # cause that day was the third one below.
+            echo "::notice title=No Dependabot PR to gauntlet::No open Dependabot pull request mentions '${PACKAGE}'. Copilot Autofix does not cover dependency alerts and no API can request a security-update PR on demand, so this lane can only ADOPT a PR Dependabot has already opened. Check three things, in this order, rather than assuming the first: (1) is 'Dependabot security updates' ON? (gh api repos/OWNER/REPO/automated-security-fixes) - if it is already on, this is NOT your cause; (2) is there an ignore condition on the package? (comment '@dependabot show ${PACKAGE} ignore conditions' on any Dependabot PR); (3) was a previous security PR for this advisory CLOSED unmerged? Dependabot does not reopen one, and no ignore condition is recorded when it happens - the alert stays open forever with no PR. The fix for (3) is to re-trigger the alert by changing the manifest: run apps/vuln-lab/reseed.ps1 and merge the result, which rewrites the pins and raises the advisory afresh."
           else
             echo "Found ${url}"
           fi

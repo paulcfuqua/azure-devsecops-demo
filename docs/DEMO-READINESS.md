@@ -88,19 +88,57 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   Tower sits behind Easy Auth, so that last step needs a human signed in. Every link in the
   chain is confirmed; the chain has not been observed end to end. Treat it as *ready to
   demonstrate*, not *demonstrated*, until someone opens it.
-- **BLOCKER-4** was **misdiagnosed** and is now one manual action from closed. It is not
-  "nothing to heal" - four Dependabot alerts are open, one critical, and the chain has been
-  getting **HTTP 403** on every run because `SELF_HEAL_TOKEN` is an *environment* secret
-  that no consuming job can see (**F123**). Re-create it as a **repository** secret and the
-  chain has both a subject and a token. Its *second* recorded problem - "it would stall
-  anyway" - turned out to have a second cause too: **F125**, the verify job could never run
-  at all. Both are now fixed in code; only the token's scope needs a human.
+- **BLOCKER-4: the token half is DONE and proven.** `SELF_HEAL_TOKEN` is now a repository
+  secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the
+  Dependabot lane runs instead of skipping. Both recorded problems are closed: the chain can
+  see its subject (**F123**), and its verify job can actually run (**F125** - it never could).
+  **What remains is not a bug:** the three seeded security PRs were closed unmerged on
+  2026-08-29, and Dependabot does not reopen those (**F126**). Run
+  `apps/vuln-lab/reseed.ps1`, merge the PR, and the advisories are raised afresh - which is
+  the chain's designed re-arm path and the last step before the showpiece runs end to end.
 - **BLOCKER-5 is CLOSED** (2026-09-01). `verification/layer-12-audit.ps1` exists, runs as
   `mls-verifier`, and is wired into `compliance.yml`. Four criteria are checked
   independently and two are explicit SKIPs naming where they *are* checked - V12.3 would
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F126 — the self-heal notice named a remedy that was already done *(fixed 2026-09-01)*
+
+`SELF_HEAL_TOKEN` was re-scoped to a repository secret and **the chain immediately started
+working**: the selector reads the alert surface, **V10.3 PASSES**, and the Dependabot lane
+runs instead of skipping. It then stopped on this:
+
+    notice: No Dependabot PR to gauntlet
+    ... so this path needs 'Dependabot security updates' switched ON in repository settings.
+
+**The setting was already on.** `gh api repos/.../automated-security-fixes` →
+`{"enabled":true,"paused":false}`. A confident, specific, *wrong* remedy is worse than no
+remedy: it sends the reader to change something already correct and stops them looking.
+
+**The real cause**, established by elimination rather than asserted:
+
+| Checked | Result |
+|---|---|
+| `automated-security-fixes` | **enabled, not paused** — not the cause |
+| Alerts have patched versions | all four do (`minimist` 1.2.6, `semver` 7.5.2, `json5` 2.2.2, `esbuild` 0.28.1) |
+| Ignore conditions | Dependabot: *"No dependency name (minimist) or ignore conditions found to unignore"* — **none exist** |
+| Lingering `dependabot/**` branch | only PR #102's; the vuln-lab ones are gone |
+| Prior security PRs | **#30, #35, #36 opened 2026-08-28 and closed unmerged 2026-08-29 04:45**, all in one minute |
+
+**Dependabot does not reopen a security PR that was closed unmerged, and records no ignore
+condition when it happens** — so the alert stays open forever with no PR and nothing
+anywhere explains why. `@dependabot reopen` does not bring it back either.
+
+The way out is to **re-trigger the advisory by changing the manifest**, which is exactly
+what `apps/vuln-lab/reseed.ps1` exists to do: it rewrites the pins and regenerates the
+lockfile, raising the advisories afresh. Reseed is normally described as "re-arm the lab
+after a heal"; its *other* job — the one that matters here — is to make Dependabot look
+again.
+
+**Fixed** by replacing the single asserted remedy with three candidate causes in order,
+each with the command that tests it, and an explicit note that the first one being already
+on means *it is not your cause*.
 
 ### F125 — a job-level `if:` cannot see environment variables, so two verify jobs never ran *(fixed 2026-09-01)*
 
