@@ -33,6 +33,10 @@ param(
     [string]$CanaryPrNumber,
     [string]$HealthPath = '/healthz',
     [string]$ProbePath = '/api/tables/launches',
+    # V7.6's floor. The seed is deterministic (L5 loads 1,200 launches), so any positive
+    # number proves the path works; 1 is deliberately the weakest useful assertion,
+    # because this criterion is about "answers at all" and V5.3 owns exact counts.
+    [int]$MinimumRow = 1,
     [int]$LoadRequestCount = 20,
     [double]$ScaleInWaitMinutes = 15,
     [double]$ScaleInDeadlineMinutes = 30,
@@ -307,6 +311,89 @@ function Test-OtelSpan {
         -Detail 'A 401 is an ACCESS problem - the probe never reached the app, so no span could exist (L07 failure mode 3). A non-401 status with zero rows is one of three things, in order of likelihood: App Insights ingestion lag (the retry window covers 15 minutes of it); the traceparent header not surviving the hop chain (nginx and the Easy Auth sidecar both forward it by default, so suspect a proxy_set_header that drops it); or a broken connection string. Tell them apart with: AppRequests | where AppRoleName == ''data-api'' | top 5 by TimeGenerated desc - rows there but none here is a correlation problem, no rows at all is an emission problem.'
 }
 
+function Test-ApiRowPayload {
+    <# V7.6 - THE CRITERION NOBODY WROTE.
+
+       L7 signed off 5/5 for two days over an estate where every /api/tables route
+       answered 503, and later 502. Not one of V7.1-V7.5 reads a row: V7.1 checks
+       /healthz, which nginx answers from its own config without touching application
+       code; V7.2 is a local schema check; V7.3 asks only that a span exists, and a 404
+       emits one; V7.4 reads GitHub; V7.5 counts replicas. The layer verified that the
+       plumbing existed and never that water came out of the tap (docs/DEMO-READINESS.md
+       section D).
+
+       This is the assertion that would have caught F98 (placeholder images serving
+       nothing), F101 (data-api cannot authenticate to the lakehouse) and the empty cost
+       dashboards on its own, on the day each began.
+
+       It deliberately does NOT accept a 2xx alone. An empty array is a valid, correct,
+       well-formed HTTP 200 - and it is exactly what a broken backend and an empty
+       lakehouse both produce. "Responds" and "answers" are different claims, and only
+       the second is worth a criterion. #>
+    param(
+        [Parameter(Mandatory)][string]$ResourceGroupName,
+        [Parameter(Mandatory)][string[]]$AppName,
+        [Parameter(Mandatory)][string]$ProbePath,
+        [Parameter(Mandatory)][int]$MinimumRow
+    )
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $observed = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($name in $AppName) {
+        $roleName = ($name -replace '^mls-', '') -replace '-demo-ca$', ''
+        $fqdn = Get-AppFqdn -ResourceGroupName $ResourceGroupName -Name $name
+        if ([string]::IsNullOrWhiteSpace($fqdn)) {
+            $problem.Add("$roleName has no ingress FQDN")
+            continue
+        }
+        $clientId = Get-AppEasyAuthClientId -ResourceGroupName $ResourceGroupName -Name $name
+        if ([string]::IsNullOrWhiteSpace($clientId) -or $clientId -eq 'None') {
+            $problem.Add("$roleName has no Easy Auth client id, so no audience to request a token for")
+            continue
+        }
+        $token = "$(Invoke-MlsAz -AllowFailure -Raw -Argument @(
+                'account', 'get-access-token', '--resource', $clientId, '--query', 'accessToken', '--output', 'tsv'
+            ))".Trim()
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            $problem.Add("$roleName could not obtain a token for audience $clientId (see F89)")
+            continue
+        }
+
+        $response = Invoke-MlsHttp -Uri "https://$fqdn$ProbePath" -TimeoutSec 60 `
+            -Header @{ Authorization = "Bearer $token" }
+        $status = "$(Get-MlsProperty -InputObject $response -Name 'StatusCode')"
+
+        if ($status -ne '200') {
+            # 502/503 is the F101 signature: the app is up, its upstream is not.
+            $observed.Add("$roleName http=$status rows=n/a")
+            $problem.Add("$roleName returned $status from $ProbePath, so it served no data")
+            continue
+        }
+
+        $rowCount = -1
+        try {
+            $payload = "$(Get-MlsProperty -InputObject $response -Name 'Content')" | ConvertFrom-Json
+            $rowCount = @(Get-MlsProperty -InputObject $payload -Name 'rows').Count
+        }
+        catch {
+            $problem.Add("$roleName returned 200 but its body did not parse as the documented {rows,truncated} envelope: $($_.Exception.Message)")
+            $observed.Add("$roleName http=200 rows=unparseable")
+            continue
+        }
+
+        $observed.Add("$roleName http=200 rows=$rowCount")
+        if ($rowCount -lt $MinimumRow) {
+            $problem.Add("$roleName returned $rowCount row(s) from $ProbePath, expected at least $MinimumRow")
+        }
+    }
+
+    if ($problem.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
+    }
+    return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
+        -Detail 'A 502 or 503 here means the app is running and its data backend is not - as of 2026-09-01 that is F101: data-api authenticates as a user-assigned managed identity, and Fabric''s SQL endpoint accepts only users and application objects. A 200 with zero rows means the lakehouse is reachable but empty, which is an L5 seeding problem, not this one. The two are different failures and this criterion names which.'
+}
+
 function Test-CanaryPipeline {
     <# V7.4 - every required check green on the canary PR, and the path filters behaving:
        both app pipelines when the canary touches apps/shared/**, only the matching app's
@@ -478,6 +565,7 @@ function Invoke-Main {
         # criterion was technically satisfiable while only ever exercising a route the
         # product does not have, which is not a demonstration anyone wants to give.
         [string]$ProbePath = '/api/tables/launches',
+        [int]$MinimumRow = 1,
         [string]$DeployManifestPath,
         [string]$LogAnalyticsWorkspaceId,
         [string]$Repository,
@@ -576,6 +664,18 @@ function Invoke-Main {
             -LoadRequestCount $LoadRequestCount -ScaleInWaitMinutes $ScaleInWaitMinutes -ScaleInDeadlineMinutes $ScaleInDeadlineMinutes
     } | Out-Null
 
+    # L07: the criterion that closes DEMO-READINESS section D.
+    Invoke-MlsCriterion -Context $context -Id 'V7.6' -Control @('3.4.1') `
+        -Description 'The data API answers with rows, not merely with a status code' `
+        -Command "az account get-access-token --resource <easy-auth-client-id>`nGET https://<fqdn>$ProbePath  -H 'Authorization: Bearer <token>'`n# assert HTTP 200 AND (.rows | length) >= $MinimumRow" `
+        -Expected "HTTP 200 from every frontend with at least $MinimumRow row(s) in the documented {rows,truncated} envelope. A 2xx alone is NOT sufficient: an empty array is a well-formed 200, and is what both a broken backend and an empty lakehouse return." `
+        -PollIntervalSeconds 30 `
+        -RetryWindowMinutes 5 `
+        -Test {
+        Test-ApiRowPayload -ResourceGroupName $ResourceGroupName -AppName $AppName `
+            -ProbePath $ProbePath -MinimumRow $MinimumRow
+    } | Out-Null
+
     return $context
 }
 
@@ -583,7 +683,7 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -ResourceGroupName $ResourceGroupName -AppName $AppName `
             -DeployManifestPath $DeployManifestPath -LogAnalyticsWorkspaceId $LogAnalyticsWorkspaceId `
-            -Repository $Repository -CanaryPrNumber $CanaryPrNumber -HealthPath $HealthPath -ProbePath $ProbePath `
+            -Repository $Repository -CanaryPrNumber $CanaryPrNumber -HealthPath $HealthPath -ProbePath $ProbePath -MinimumRow $MinimumRow `
             -LoadRequestCount $LoadRequestCount -ScaleInWaitMinutes $ScaleInWaitMinutes `
             -ScaleInDeadlineMinutes $ScaleInDeadlineMinutes -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion

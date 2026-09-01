@@ -152,7 +152,16 @@ scope; the gap is between the layers, which is exactly where nobody owns it.
    showpiece.
 3. **Open the applications and look at them.** Before writing another criterion. The
    fastest way to find the next ten holes is to use the product for five minutes.
-4. **Add the criterion nobody wrote.** An end-to-end check that a dashboard renders real
+4. ~~**Add the criterion nobody wrote.**~~ **DONE 2026-09-01 — V7.6.** L7 now asserts that
+   the data API answers with **rows**, not merely with a status code, and deliberately does
+   not accept a 2xx alone: an empty array is a well-formed HTTP 200 and is exactly what a
+   broken backend and an empty lakehouse both return, so the criterion separates them and
+   names which it saw. **It fails today**, correctly, on F101 - so L7 signs off 5 of 6
+   rather than 5 of 5, which is the honest number and was not available before. The
+   remaining half of this item is still open: nothing yet opens a page or asserts the demo's
+   narrative end to end.
+
+5. **The original item, for the record:** An end-to-end check that a dashboard renders real
    rows, and that the copilot answers a golden question from the lakehouse. It belongs at
    L8 or in a new L12, and it is the only criterion that would have caught F98, F101 and
    B4 on its own.

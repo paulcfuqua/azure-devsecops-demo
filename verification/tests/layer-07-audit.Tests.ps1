@@ -119,8 +119,21 @@ Describe 'layer-07-audit' {
             throw "unexpected az call: $joined"
         }
 
+        # V7.6 reads the {rows,truncated} envelope, so the fake serves one. $script:ApiRows
+        # is the knob: a broken backend is modelled by $script:ApiStatus, an empty lakehouse
+        # by an empty array - the two failures V7.6 exists to tell apart.
+        $script:ApiStatus = 200
+        $script:ApiRows = @(@('2026-01-01', 'Falcon-9', 'success'))
         Mock Invoke-MlsHttp {
             Register-ProbeTrace -Header $Header
+            if ("$Uri" -like '*/api/tables/*') {
+                return [pscustomobject]@{
+                    StatusCode = $script:ApiStatus
+                    Content    = (@{ rows = @($script:ApiRows); truncated = $false } | ConvertTo-Json -Depth 6)
+                    Headers    = @{}
+                    Error      = $null
+                }
+            }
             $name = ($Uri -split '//')[1].Split('.')[0]
             return [pscustomobject]@{
                 StatusCode = $script:HealthStatus
@@ -147,7 +160,7 @@ Describe 'layer-07-audit' {
     Context 'all criteria pass' {
         It 'records V7.1-V7.5 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V7.1', 'V7.2', 'V7.3', 'V7.4', 'V7.5')
+            @($context.Criterion).Id | Should -Be @('V7.1', 'V7.2', 'V7.3', 'V7.4', 'V7.5', 'V7.6')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -288,7 +301,7 @@ Describe 'layer-07-audit' {
         It 'records V7.2 as FAIL when npm is unavailable, and still evaluates the rest' {
             Mock Invoke-MlsLocalCommand { throw "'npm' is not available on this machine." }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 5
+            @($context.Criterion).Count | Should -Be 6
             (Get-Row -Context $context -Id 'V7.2').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V7.2').Observed | Should -BeLike '*not available*'
             (Get-Row -Context $context -Id 'V7.1').Status | Should -Be 'PASS'
@@ -402,6 +415,29 @@ Describe 'layer-07-audit' {
                 $allowed | Should -BeLike "*`"$($Matches[2])`"*" `
                     -Because 'the segment is matched against data-api''s frozen allowlist, and anything else is a 404'
             }
+        }
+
+        It 'fails V7.6 when the API returns a status but no data' {
+            # The F101 signature: the app is up, its upstream is not. 502/503 with a
+            # perfectly healthy /healthz is exactly the state L7 signed off 5/5 in.
+            $script:ApiStatus = 502
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V7.6'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'http=502'
+            $row.Detail | Should -Match 'F101'
+        }
+
+        It 'fails V7.6 on a well-formed 200 that carries no rows' {
+            # An empty array is a valid, correct HTTP 200. Accepting 2xx alone would let a
+            # broken backend and an empty lakehouse both pass - which is the whole reason
+            # this criterion exists rather than reusing V7.1.
+            $script:ApiRows = @()
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V7.6'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'rows=0'
+            $row.Detail | Should -Match 'seeding'
         }
 
         It 'waits for a warm app to settle to zero instead of failing V7.5 on the spot' {
