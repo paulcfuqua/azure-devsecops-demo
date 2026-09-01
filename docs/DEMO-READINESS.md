@@ -55,7 +55,7 @@ on 2026-09-01, with the evidence beside it.
 | L6 platform | 🟡 partial | Was verified. Currently broken by an ACL change of my own (F119); correction in flight. V6.7 now guards it |
 | L9 DevSecOps chain | 🟡 partial | 4/5. GHAS, SBOM, Trivy and ZAP all run |
 | L12 compliance | 🟡 partial | Works; unaudited (see showpiece 4) |
-| L4 Purview labels | ❌ never run | **Zero sensitivity labels exist in the tenant.** Blocked by **BLOCKER-1** |
+| L4 Purview labels | 🟡 partial | **RAN 2026-09-01, the first time ever.** Four sensitivity labels now exist in the tenant - `mls-public`, `mls-internal`, `mls-confidential`, `mls-export-controlled` - where there had been none. The label POLICY failed (F121, fixed, re-run in flight) and the audit has not signed off yet |
 | L8 Copilot Studio | ❌ never succeeded | Blocked by **BLOCKER-2** |
 | L10 self-healing | ❌ chain never executed | Blocked by **BLOCKER-1** and **BLOCKER-4** |
 
@@ -76,6 +76,31 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 **BLOCKER-1 is CLOSED as of 2026-09-01.** The highest open blocker is now **BLOCKER-2**
 (the Copilot Studio environment), and the one an agent can attack today with no credential
 and no human is **BLOCKER-5** (L12 has no audit script).
+
+### F121 — the label policy was published to recipients that cannot exist *(fixed 2026-09-01)*
+
+L4's first real run created all four labels and then failed:
+
+    New-LabelPolicy: ManagementObjectNotFoundException
+    The specified recipient "mls-flight-operations" couldn't be found.
+
+The group exists — L3 creates it. But `-ExchangeLocation` takes a **recipient**, and L3
+creates pure **security** groups (`mailEnabled=False`, no mail address), which Security &
+Compliance cannot resolve however correct the name is. Two layers disagreeing about what a
+group is, invisible for the life of the project because **L4 had never run**: the
+credential to run it did not exist until BLOCKER-1 closed.
+
+Published to `All` instead. The alternatives — M365 groups (which provision a mailbox,
+SharePoint site and Teams surface each, and are referenced by L3's CA policies) and
+mail-enabled security groups (Exchange-side, not creatable via Graph) — are recorded in
+`Get-LabelPolicyScope`. **What it costs:** the policy no longer expresses "these four
+teams", so the *scoping* half of the segregation story is not demonstrated by this object.
+The labels themselves are unaffected.
+
+**Two test suites pinned the unachievable scope** and would have failed the fix for the bug
+they encode — `verification/tests/layer-04-audit.Tests.ps1` and
+`infra/purview/tests/labels.Tests.ps1`. That is the fourth occurrence of that shape in two
+days.
 
 ### ~~BLOCKER-1 — No GitHub secrets exist. Not one.~~ **CLOSED 2026-09-01**
 
@@ -197,6 +222,28 @@ is *"this estate catches its own false claims"*, that is the wrong layer to leav
 
 **Unblocks:** showpiece 4 moving from partial to done. **Agent-doable** — no credential, no
 tenant access beyond what already exists.
+
+---
+
+## IN FLIGHT AS OF 2026-09-01 19:20 UTC — check these first
+
+Three things were running when this was written. **Check their outcome before starting
+anything new**, because two of them change the scorecard above.
+
+| What | Run | What it proves |
+|---|---|---|
+| **L6 re-run** | `33547680971` | Whether the F119 storage-firewall fix let the Function Apps finally receive code. **V6.7 answers this explicitly** — it asserts each Function App contains functions, and distinguishes "empty" from "could not look" |
+| **L4 re-run** | `33548766843` | Whether the F121 fix publishes the label policy cleanly. The four labels already exist; this is the policy and then the audit |
+| **compliance re-run** | `33548856920` | **Whether F120 is actually fixed.** PR #88 was closed and its branch deleted deliberately, so the repaired `SELF_HEAL_TOKEN` path recreates it. If the new PR has checks attached, F120 is proven; if it does not, F120 is not fixed and the entry should be reopened |
+
+That last one is a deliberate test rather than a workaround. #88 could never merge because
+its head commit was pushed by `GITHUB_TOKEN` and had **zero check runs attached** — nothing
+retroactively attaches checks to a commit, so reopening the PR ran workflows against the
+merge ref and left the head unchecked. The artifact is regenerable from the workflow, so
+nothing was lost by deleting the branch.
+
+**Do not assume any of the three succeeded.** Every one of them is a fix whose predecessor
+looked fine and was not.
 
 ---
 
