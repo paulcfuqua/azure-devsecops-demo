@@ -1,4 +1,4 @@
-# Preventive checks for the failure CLASSES this estate has already paid for.
+﻿# Preventive checks for the failure CLASSES this estate has already paid for.
 #
 # Every finding below was discovered by deploying, failing, and reading a log - the most
 # expensive way there is. Each run buys one defect, because a layer stops at its first error,
@@ -1147,6 +1147,75 @@ Describe 'a PowerShell file with non-ASCII content carries its BOM' {
             -Because 'the sweep must actually find the PowerShell in this repo; finding almost none means the glob is broken'
         $offender -join ', ' | Should -BeNullOrEmpty `
             -Because 'PSScriptAnalyzer fails the build on this, and Windows PowerShell 5.1 reads a BOM-less file as ANSI - turning every non-ASCII character into mojibake'
+    }
+}
+
+Describe 'a job that reads an estate setting declares the environment holding it' {
+    # F124, and it is the THIRD instance of one shape in a single session.
+    #
+    #   F122  a Key Vault reference could not resolve, because the site named no identity
+    #         to resolve it with.
+    #   F123  the self-heal chain got HTTP 403 on every run, because SELF_HEAL_TOKEN is an
+    #         environment secret and no job that uses it declares an environment.
+    #   F124  the control-tower image shipped with no Direct Line endpoint, because the
+    #         `image` job - the only job that BUILDS the bundle - declared no environment,
+    #         so `vars.MLS_DIRECTLINE_TOKEN_URL` resolved to the empty string.
+    #
+    # Every one of them is "the value exists, is spelled correctly, and is INVISIBLE to the
+    # thing that needs it", and every one of them failed silently, because an absent GitHub
+    # variable is the empty string rather than an error.
+    #
+    # F124's own detail is worth keeping: `preflight` and `deploy` in that workflow BOTH
+    # declared `environment: demo`, and neither of them builds anything. The value was
+    # reaching the two jobs that did not need it and missing the one that did. A reviewer
+    # scanning for "does this workflow use the demo environment" would have seen yes.
+    #
+    # WHY MLS_ SPECIFICALLY. CLAUDE.md is explicit that estate-wide settings live in the
+    # `demo` GitHub environment, and every MLS_-prefixed variable in this repository is one
+    # of those. A job reading one without declaring an environment is therefore reading an
+    # empty string, always - there is no configuration in which that line does what it
+    # looks like it does.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'declares an environment in every job that reads a vars.MLS_* estate setting' {
+        $workflows = @(Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File)
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($workflow in $workflows) {
+            $lines = Get-Content -LiteralPath $workflow.FullName
+            $job = ''
+            $declaresEnvironment = @{}
+            $readsSetting = @{}
+            foreach ($line in $lines) {
+                # A job header is exactly two spaces in, under `jobs:`. Anything deeper is a
+                # key inside the job, which is where `environment:` and the `vars.` reads live.
+                if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') {
+                    $job = $Matches[1]
+                    continue
+                }
+                if ([string]::IsNullOrWhiteSpace($job)) { continue }
+                if ($line -match '^\s{3,}environment:\s*\S') { $declaresEnvironment[$job] = $true }
+                if ($line -match 'vars\.(MLS_[A-Z0-9_]+)') {
+                    if (-not $readsSetting.ContainsKey($job)) { $readsSetting[$job] = [System.Collections.Generic.List[string]]::new() }
+                    if (-not $readsSetting[$job].Contains($Matches[1])) { $readsSetting[$job].Add($Matches[1]) }
+                }
+            }
+            foreach ($name in $readsSetting.Keys) {
+                $scanned++
+                if (-not $declaresEnvironment.ContainsKey($name)) {
+                    $offender.Add("$($workflow.Name)::$name reads $($readsSetting[$name] -join ', ')")
+                }
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 0 `
+            -Because 'if no job reads a vars.MLS_* setting, this test asserts nothing and would pass over the very defect it exists to catch'
+        $offender -join ' | ' | Should -BeNullOrEmpty `
+            -Because 'an MLS_ variable lives in the demo environment, so a job that does not declare one reads the EMPTY STRING - silently, because an absent GitHub variable is not an error (F124)'
     }
 }
 

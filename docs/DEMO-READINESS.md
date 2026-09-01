@@ -75,14 +75,13 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 
 **BLOCKER-1 and BLOCKER-2 are both CLOSED as of 2026-09-01.** What is left:
 
-- **BLOCKER-3** (the Direct Line secret) is **wired and one deploy from closed.** The agent
-  is published, the secret is in Key Vault as `mls-directline-secret`, the environment
-  variables hold the *name* (not the value), and the token Function is deployed with the
-  reference. What stood between that and a working Ask tab was **F122** - the reference
-  resolved to nothing while every view of it looked correct. Fixed in the template; needs
-  an L6 re-run to take effect, then L7 so the control-tower image carries the token URL.
-  **Do not mark this closed from a green workflow: open the Ask tab.** F122 is precisely
-  the case where all six L6 criteria passed over a Function holding an empty secret.
+- **BLOCKER-3** (the Direct Line secret) is **server-side DONE and one image rebuild from
+  closed.** The agent is published, the secret is in Key Vault, F122's identity fix is
+  deployed, V6.8 confirms the reference resolves, and the token endpoint **returns a real
+  token (HTTP 200)**. What is left is purely client-side: **F124** - the bundle carries no
+  token URL, because the job that builds it declared no environment. Fixed in the workflow;
+  needs a control-tower image **rebuild** (a redeploy cannot help - the value is baked in at
+  build time). **Do not mark this closed from a green workflow: open the Ask tab.**
 - **BLOCKER-4** was **misdiagnosed** and is now one manual action from closed. It is not
   "nothing to heal" - four Dependabot alerts are open, one critical, and the chain has been
   getting **HTTP 403** on every run because `SELF_HEAL_TOKEN` is an *environment* secret
@@ -94,6 +93,57 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F124 — the Ask tab's endpoint never reached the bundle, and the image was newer than the variable *(fixed 2026-09-01)*
+
+**Everything on the server side works.** The agent is published, the Direct Line secret is
+in Key Vault, F122's identity fix landed, and the token endpoint mints real tokens:
+
+    POST https://mls-directline-demo-func.azurewebsites.net/api/directline/token
+    HTTP 200  {"token":"eyJ...","expires_in":3600,"conversationId":"Lh8SX4GBfTCJQGdSUsKiBh-us"}
+
+The Ask tab still renders "not configured", because **the deployed bundle contains no token
+URL.** Pulled the running image from GHCR and grepped its layers directly rather than
+inferring: `usr/share/nginx/html/assets/index-CfaMGZ2F.js` matches `directline/token` — from
+a *documentation string inside an error message* — and does **not** contain `azurewebsites`
+anywhere.
+
+**The image was NEWER than the variable, and still did not have it.** `MLS_DIRECTLINE_TOKEN_URL`
+was set at 15:08; the running image was built at 16:13. The inference "the build is newer, so
+it picked the value up" is exactly the reasoning this repository keeps paying for, and it is
+wrong here:
+
+    app-control-tower-ci.yml
+      preflight   environment: demo     <- builds nothing
+      image       (no environment)      <- BUILDS THE BUNDLE, reads vars.MLS_DIRECTLINE_TOKEN_URL
+      deploy      environment: demo     <- builds nothing
+
+`VITE_DIRECTLINE_TOKEN_URL` is a **Vite** variable: inlined into the bundle at `npm run
+build`, which happens inside the `image` job's docker build. That job declared no
+environment, so `vars.MLS_DIRECTLINE_TOKEN_URL` resolved to the empty string — silently,
+because **an absent GitHub variable is the empty string, not an error**. The value was
+reaching the two jobs that did not need it and missing the one that did, and a reviewer
+asking "does this workflow use the demo environment?" would have seen *yes*.
+
+**This is the THIRD instance of one shape in a single session**, which is why it is now a
+test rather than three findings:
+
+| | What was invisible | To what |
+|---|---|---|
+| **F122** | the identity that resolves a Key Vault reference | the site holding the reference |
+| **F123** | `SELF_HEAL_TOKEN` (an environment secret) | every job that uses it — none declares an environment |
+| **F124** | `MLS_DIRECTLINE_TOKEN_URL` (an environment variable) | the one job that builds the bundle |
+
+Each is *"the value exists, is spelled correctly, and cannot be seen by the thing that needs
+it"*, and each failed silently and green.
+
+**Fixed** by declaring `environment: demo` on the `image` job.
+`verification/tests/failure-classes.Tests.ps1` now fails any job that reads a `vars.MLS_*`
+estate setting without declaring an environment — mutation-tested: with the fix reverted it
+names `app-control-tower-ci.yml::image reads MLS_DIRECTLINE_TOKEN_URL`.
+
+**Still required after this merges:** the control-tower image must be **rebuilt** — a
+redeploy of the existing image cannot help, because the value is baked in at build time.
 
 ### F123 — self-healing was never "nothing to heal"; it could not look *(fixed 2026-09-01)*
 
