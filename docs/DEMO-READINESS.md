@@ -64,6 +64,65 @@ of them touches: a row of data, a rendered page, a working answer.
 > The original text is kept below because a register that quietly rewrites itself is not a
 > register.
 
+> ---
+>
+> **UPDATE 2026-09-01, later the same day — the apps were opened and every route probed.**
+>
+> **F101 is closed outright, not merely narrowed.** The claim that Fabric's TDS endpoint
+> rejects user-assigned managed identities was established from documentation and is
+> contradicted by the running estate: through `data-api`'s own managed identity, over the
+> same proxy a browser uses, `cost_daily` returned **4,515 rows** and `telemetry_summary`
+> returned **1,200**. No federated identity credential was ever created. The fix listed
+> below as "understood and unstarted" was not needed and must not be built.
+>
+> Launch Ops renders **20 real launches** from Azure SQL. Control Tower's **Ops tab renders
+> fully** — KPIs, a 30-point monthly spend line, a cost-centre donut, anomaly counts — all
+> from the lakehouse. **Phase 2 of the Direction is met for those surfaces.**
+>
+> **All eight Control Tower routes, probed from the authenticated browser:**
+>
+> | Route | Status | Reality |
+> |---|---|---|
+> | `feeds/workflow-runs` | 503 | `MLS_GITHUB_TOKEN` unprovisioned **by design** |
+> | `feeds/code-scanning-alerts` | 503 | same |
+> | `feeds/dependabot-alerts` | 503 | same |
+> | `feeds/secure-score` | 200 | `{"value":[]}` — **empty, and nothing asserts why** |
+> | `feeds/secure-score-controls` | 200 | **empty, same caveat** |
+> | `feeds/app-requests` | 200 | real rows |
+> | `tables/cost_daily` | 200 | **4,515 rows** |
+> | `tables/telemetry_summary` | 200 | **1,200 rows** |
+>
+> **F116 — one dead feed blanks a whole tab.** Each tab fetches its feeds with
+> `Promise.all`, so a single rejection discards the panels that did resolve. The Dev tab
+> has `app-requests` in hand and renders nothing. Five of eight routes carry data and the
+> default view shows none of it. Per-panel degradation is the fix.
+>
+> **The two Defender feeds are an absence-vs-denial case and are NOT yet resolved.** They
+> answer `200 {"value":[]}`. The identity does hold **Security Reader** at subscription
+> scope, so this is probably a genuine empty rather than a silent denial — but "probably"
+> is exactly what the working agreement forbids. Nothing establishes that the caller
+> *could* have observed a score before reporting there is none, and the dashboard will
+> render "0" either way. Until something distinguishes the two, treat these panels as
+> **UNOBSERVABLE, not zero**.
+>
+> **The GitHub 503s are a deliberate default, not a defect.** `infra/bicep/apps/main.bicep`
+> says so in terms: the token is "deliberately NOT set here … a better default than a
+> half-wired secret path". Sponsor decision the same day: wire it. The plumbing now exists
+> (`githubTokenSecretName`, resolved by reference from Key Vault via data-api's own UAMI,
+> empty still supported); only the secret value is outstanding. Note the repo is **public**,
+> so `actions/runs` reads **200 anonymously** — `code-scanning` and `dependabot` are the two
+> that genuinely require the credential.
+>
+> **Operational trap, and a correction.** `mls-sec-demo-kv` is **RBAC-mode**: Owner and
+> Global Admin grant *no* data-plane access, so `az keyvault secret set` fails
+> `ForbiddenByRbac / Assignment: (not found)` for an account that can otherwise do anything
+> in the subscription. The operator needs **Key Vault Secrets Officer** on the vault.
+> I first recorded this as undocumented; that was wrong. `docs/runbooks/g0-bootstrap.md`
+> item C11 already carries the grant, for `mcp-auth-token`. What was actually missing is
+> that `mls-github-token` is a NEW secret with no runbook step of its own, so anyone
+> following the runbook provisions the vault without it and the GitHub feeds stay 503 with
+> nothing saying why. That step now exists.
+
 ### B1. The API serves no data (F101) — the biggest hole *(RESOLVED 2026-09-01, see above)*
 
 `data-api` returns **502** on every `/api/tables/*` route. Fabric's SQL endpoint accepts

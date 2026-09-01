@@ -217,13 +217,48 @@ describe("ApiProvider (L7/L9 wiring contract)", () => {
     ]);
   });
 
-  it("surfaces a LOCAL_DATA hint when the feeds are not wired yet", async () => {
+  // This used to assert the message mentioned LOCAL_DATA, pinning advice that was true
+  // before the tenant existed and misleading afterwards: by the time anyone reads it L7
+  // IS deployed, and there is no LOCAL_DATA build published for them to switch to. A
+  // test asserting the CURRENT message rather than a USEFUL one turns stale guidance
+  // into a contract - and this one would have blocked its own fix.
+  it("names the status and the endpoint when a feed refuses", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("not here", { status: 404 })),
     );
     const provider = new ApiProvider();
-    await expect(provider.getSecSpec()).rejects.toThrow(/LOCAL_DATA/);
+    await expect(provider.getSecSpec()).rejects.toThrow(/responded 404/);
+    await expect(provider.getSecSpec()).rejects.toThrow(/\/api\/feeds\//);
+  });
+
+  it("surfaces data-api's own explanation when it sends one", async () => {
+    // The 503 that actually blanks the Dev and Sec tabs carries a typed envelope whose
+    // message names the fix. Repeating that text here would only re-pin a string; what
+    // this asserts is that whatever the server explains REACHES THE USER, because the
+    // alternative - a client-side guess - is how the LOCAL_DATA advice survived so long.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code: "backend_not_configured", message: "MLS_GITHUB_TOKEN is empty on this instance" },
+            }),
+            { status: 503, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const provider = new ApiProvider();
+    await expect(provider.getSecSpec()).rejects.toThrow(/MLS_GITHUB_TOKEN is empty on this instance/);
+  });
+
+  it("still reports the status when the body is not the typed envelope", async () => {
+    // A non-JSON body means the proxy answered, not data-api. Inventing a cause there
+    // would be worse than saying nothing, so the status must still get through.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>502 Bad Gateway</html>", { status: 502 })));
+    const provider = new ApiProvider();
+    await expect(provider.getSecSpec()).rejects.toThrow(/responded 502/);
   });
 });
 

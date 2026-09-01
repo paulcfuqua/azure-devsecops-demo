@@ -43,7 +43,7 @@ export class ApiProvider implements DataProvider {
           // contained-database user (F109) or, for the three lakehouse-backed tables, the
           // managed-identity limitation on Fabric's TDS endpoint (F101).
           (res.status === 502 || res.status === 503
-            ? "data-api is running but its data store refused the connection. Check the container log for 'Login failed for user' - the app identity needs a contained-database user in Azure SQL (F109), or, for telemetry/cost/findings tables, an identity Fabric's SQL endpoint accepts (F101)."
+            ? "data-api is running but its data store refused the connection. Check the container log for 'Login failed for user' - the app identity needs a contained-database user in Azure SQL (F109). The three lakehouse-backed tables no longer belong in this sentence: F101 was closed on 2026-09-01 when cost_daily and telemetry_summary served 4,515 and 1,200 rows through this same proxy."
             : "Check that data-api is deployed and reachable from this app's /api proxy."),
       );
     }
