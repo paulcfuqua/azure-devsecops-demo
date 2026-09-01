@@ -195,11 +195,46 @@ at the start). Once added, L8's import step passed on the next run.
 application user there for **V8.1** to read the deployed solution's metadata, and finding a
 read-only role for it is genuinely hard:
 
-| Role tried | Result |
+**SOLVED, and the read-only property survived it.** The sequence:
+
+| Roles held | V8.1 |
 |---|---|
 | `Basic User` | 403 |
-| `Export Customizations (Solution Checker)` | 403 |
-| `Service Reader`, `Solution Checker` | added 2026-09-01, **untested at time of writing** |
+| `Basic User` + `Export Customizations (Solution Checker)` | 403 |
+| + `Service Reader` + `Solution Checker` (all four) | **reads the solution** |
+
+The 403 is gone and V8.1 now fails on CONTENT rather than permission - a different and far
+healthier failure, described below.
+
+**None of those four is `System Customizer` or `System Administrator`**, so `mls-verifier`
+still cannot write customizations to the environment it audits. That was the reason for
+refusing System Customizer earlier, and the read was obtained without giving it up: the
+stated design claim is intact rather than quietly compromised.
+
+**The minimal role has NOT been isolated, and nobody should assume it was.** All four were
+granted together. The enabling one is `Service Reader` or `Solution Checker` - almost
+certainly the latter, since reading a solution's component list is its purpose - and
+proving it means removing one, re-running L8, and watching whether V8.1 reverts to 403.
+Three cycles would pin it. That is hygiene, not a fix, and it is left undone deliberately.
+
+**What V8.1 now says, and the open question it raises:**
+
+    components missing []  extra [Conversation Start, Conversational boosting,
+    End of Conversation, Escalate, Fallback, Goodbye, Greeting,
+    Meridian Launch Copilot, Meridian Ops Tools, ..., Sign in, Start Over, Thank you]
+
+**Nothing is missing.** The deployed agent carries 16 components the committed solution
+does not list, and most are Copilot Studio's DEFAULT SYSTEM TOPICS - Greeting, Goodbye,
+Escalate, Fallback, Multiple Topics Matched - which the platform adds to every published
+agent. So the criterion compares an exact set against a solution export that never
+contained them.
+
+That is a real judgement, not a bug to paper over: either the committed export is stale and
+should be re-exported to include what a published agent actually contains, or V8.1 should
+tolerate platform-generated topics while still failing on a missing or unexpected CUSTOM
+component. The second is probably right - a criterion that breaks every time Microsoft adds
+a default topic is measuring the wrong thing - but it must not become "ignore extras",
+which would let a real stray component through.
 
 Two cautions for whoever picks this up. **Dataverse role changes take minutes to
 propagate**, and both failures above were tested immediately after the change - so neither
