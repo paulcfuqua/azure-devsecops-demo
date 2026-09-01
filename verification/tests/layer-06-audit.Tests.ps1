@@ -55,6 +55,10 @@ Describe 'layer-06-audit' {
         $script:Blobs = @([pscustomobject]@{ name = '20260824/mls-cost-export.csv'; len = 20480 })
         $script:BackupRedundancy = 'Local'
         $script:BackupRetentionDays = 7
+        # Two functions deployed, which is the healthy state. F119 was the
+        # opposite - both apps empty because every publish 403'd - and L6
+        # reported success anyway, which is why V6.7 exists.
+        $script:FunctionsPayload = '{"value":[{"properties":{"name":"cost-ingest"}},{"properties":{"name":"directline-token"}}]}'
 
         Mock Invoke-MlsAz {
             $joined = $Argument -join ' '
@@ -77,14 +81,21 @@ Describe 'layer-06-audit' {
             if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') {
                 return [pscustomobject]@{ retentionDays = $script:BackupRetentionDays }
             }
+            if ($joined -like '*Microsoft.Web/sites*functions*') {
+                # V6.7's subject. A JSON STRING, not an object: the criterion asks
+                # for -Raw so it can tell "the endpoint said nothing" (which reads
+                # the same as a denial) from "the endpoint said []" - and a mock
+                # returning a live object would hide exactly that distinction.
+                return $script:FunctionsPayload
+            }
             throw "unexpected az call: $joined"
         }
     }
 
     Context 'all criteria pass' {
-        It 'records V6.1-V6.5 as PASS and exits 0' {
+        It 'records V6.1-V6.7 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V6.1', 'V6.2', 'V6.3', 'V6.4', 'V6.5')
+            @($context.Criterion).Id | Should -Be @('V6.1', 'V6.2', 'V6.3', 'V6.4', 'V6.5', 'V6.7')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -224,7 +235,14 @@ Describe 'layer-06-audit' {
                 if ($joined -like 'monitor log-analytics query*') { return @([pscustomobject]@{ x = 1 }) }
                 if ($joined -like 'storage blob list*') { return @([pscustomobject]@{ name = 'x.csv'; len = 10 }) }
                 if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') { return $null }
-                throw "unexpected az call: $joined"
+                if ($joined -like '*Microsoft.Web/sites*functions*') {
+                # V6.7's subject. A JSON STRING, not an object: the criterion asks
+                # for -Raw so it can tell "the endpoint said nothing" (which reads
+                # the same as a denial) from "the endpoint said []" - and a mock
+                # returning a live object would hide exactly that distinction.
+                return $script:FunctionsPayload
+            }
+            throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V6.5'
@@ -238,7 +256,14 @@ Describe 'layer-06-audit' {
                 if ($joined -like 'deployment sub show*') { return $null }
                 if ($joined -like 'monitor log-analytics query*') { return @() }
                 if ($joined -like 'storage blob list*') { return @() }
-                throw "unexpected az call: $joined"
+                if ($joined -like '*Microsoft.Web/sites*functions*') {
+                # V6.7's subject. A JSON STRING, not an object: the criterion asks
+                # for -Raw so it can tell "the endpoint said nothing" (which reads
+                # the same as a denial) from "the endpoint said []" - and a mock
+                # returning a live object would hide exactly that distinction.
+                return $script:FunctionsPayload
+            }
+            throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V6.5'
@@ -275,7 +300,14 @@ Describe 'layer-06-audit' {
                 if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') {
                     return [pscustomobject]@{ retentionDays = 7 }
                 }
-                throw "unexpected az call: $joined"
+                if ($joined -like '*Microsoft.Web/sites*functions*') {
+                # V6.7's subject. A JSON STRING, not an object: the criterion asks
+                # for -Raw so it can tell "the endpoint said nothing" (which reads
+                # the same as a denial) from "the endpoint said []" - and a mock
+                # returning a live object would hide exactly that distinction.
+                return $script:FunctionsPayload
+            }
+            throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest
             $row = Get-Row -Context $context -Id 'V6.2'
@@ -311,10 +343,20 @@ Describe 'layer-06-audit' {
                 if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') {
                     return [pscustomobject]@{ retentionDays = 7 }
                 }
-                throw "unexpected az call: $joined"
+                if ($joined -like '*Microsoft.Web/sites*functions*') {
+                # V6.7's subject. A JSON STRING, not an object: the criterion asks
+                # for -Raw so it can tell "the endpoint said nothing" (which reads
+                # the same as a denial) from "the endpoint said []" - and a mock
+                # returning a live object would hide exactly that distinction.
+                return $script:FunctionsPayload
+            }
+            throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 5
+            # Six since V6.7 joined the layer. The number is asserted rather than
+            # the ids because this test is about a THROWING check not aborting the
+            # run - every criterion after V6.1 must still be evaluated.
+            @($context.Criterion).Count | Should -Be 6
             (Get-Row -Context $context -Id 'V6.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V6.1').Observed | Should -BeLike '*exit code 3*'
             (Get-Row -Context $context -Id 'V6.2').Status | Should -Be 'PASS'
@@ -332,7 +374,14 @@ Describe 'layer-06-audit' {
                 if ($joined -like 'deployment sub show*') { return $null }
                 if ($joined -like 'monitor log-analytics query*') { return @() }
                 if ($joined -like 'storage blob list*') { return @() }
-                throw "unexpected az call: $joined"
+                if ($joined -like '*Microsoft.Web/sites*functions*') {
+                # V6.7's subject. A JSON STRING, not an object: the criterion asks
+                # for -Raw so it can tell "the endpoint said nothing" (which reads
+                # the same as a denial) from "the endpoint said []" - and a mock
+                # returning a live object would hide exactly that distinction.
+                return $script:FunctionsPayload
+            }
+            throw "unexpected az call: $joined"
             }
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V6.1'
@@ -341,4 +390,47 @@ Describe 'layer-06-audit' {
             (Get-Row -Context $context -Id 'V6.2').Detail | Should -BeLike '*MLS_LAW_CUSTOMER_ID*'
         }
     }
+
+    # -----------------------------------------------------------------------
+    # V6.7 - F119. Every zip publish in this estate failed 403 against the
+    # deployment storage firewall and L6 reported SUCCESS every time, because
+    # both publish steps carry continue-on-error by design. That flag stays -
+    # it exists so a non-critical publish cannot starve the verify job. This
+    # criterion is what makes the failure visible instead, so these cases are
+    # the reason it exists rather than decoration on it.
+    # -----------------------------------------------------------------------
+    Context 'V6.7: a Function App with no functions is a layer that did not deliver' {
+        It 'FAILS when a Function App reports an empty function list' {
+            $script:FunctionsPayload = '{"value":[]}'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.7'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'NO functions deployed'
+            # It names the finding because the cause is two layers from the
+            # symptom: a firewall on a storage account nobody was looking at.
+            $row.Observed | Should -Match 'F119'
+        }
+
+        It 'reports UNOBSERVABLE, not "no functions", when the endpoint says nothing' {
+            # THE DISTINCTION THIS CRITERION EXISTS TO PRESERVE. The ARM functions
+            # endpoint answers a caller who may not read it and an app with
+            # nothing deployed in ways that are easy to conflate. Reporting "no
+            # functions" for a permissions problem is the absence-vs-denial class
+            # that has cost this repository six findings: it must never say the
+            # control is missing when it could not look.
+            $script:FunctionsPayload = ''
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V6.7'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'not reported as empty'
+            $row.Observed | Should -Not -Match 'NO functions deployed'
+        }
+
+        It 'PASSES when the apps hold functions, so the guard is not a blanket fail' {
+            $script:FunctionsPayload = '{"value":[{"properties":{"name":"cost-ingest"}}]}'
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V6.7').Status | Should -Be 'PASS'
+        }
+    }
+
 }

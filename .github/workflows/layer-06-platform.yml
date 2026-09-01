@@ -611,12 +611,21 @@ jobs:
       - name: Publish the cost-ingest Function package (F19)
         id: cost_ingest_publish
         if: ${{ !inputs.dry_run }}
-        # NO continue-on-error (F119). This step carried it, so when every zip
-        # publish failed 403 against the deployment storage firewall, L6 reported
-        # SUCCESS while neither Function had ever received code - the estate's own
-        # recurring defect, in its own pipeline: a step that reports success while
-        # the work it names did not happen. A Function App with no functions is
-        # not a partial success, it is a layer that did not deliver.
+        continue-on-error: true
+        # continue-on-error STAYS, and F119 is why it is not enough on its own.
+        #
+        # The flag exists so a failed publish cannot starve the verify job, which
+        # is `needs: [preflight, deploy]` and requires deploy to succeed - a
+        # deliberate choice, asserted by cost-ingest.Tests.ps1, and correct: the
+        # Verifier judging a layer is more valuable than a deploy step vetoing it.
+        #
+        # What it cost was visibility. Every publish here has failed 403 against
+        # the deployment storage firewall since the estate was built, and L6 signed
+        # off GREEN each time while neither Function held any code. The answer is
+        # not to remove the flag - that starves the audit - but to make the AUDIT
+        # able to see it: V6.7 now asserts each Function App actually has functions,
+        # so a silent publish failure fails the layer where it should, in
+        # verification rather than in a step that was told not to matter.
         run: |
           set -euo pipefail
 
@@ -675,12 +684,21 @@ jobs:
       - name: Publish the directline-token Function package (F118)
         id: directline_publish
         if: ${{ !inputs.dry_run }}
-        # NO continue-on-error (F119). This step carried it, so when every zip
-        # publish failed 403 against the deployment storage firewall, L6 reported
-        # SUCCESS while neither Function had ever received code - the estate's own
-        # recurring defect, in its own pipeline: a step that reports success while
-        # the work it names did not happen. A Function App with no functions is
-        # not a partial success, it is a layer that did not deliver.
+        continue-on-error: true
+        # continue-on-error STAYS, and F119 is why it is not enough on its own.
+        #
+        # The flag exists so a failed publish cannot starve the verify job, which
+        # is `needs: [preflight, deploy]` and requires deploy to succeed - a
+        # deliberate choice, asserted by cost-ingest.Tests.ps1, and correct: the
+        # Verifier judging a layer is more valuable than a deploy step vetoing it.
+        #
+        # What it cost was visibility. Every publish here has failed 403 against
+        # the deployment storage firewall since the estate was built, and L6 signed
+        # off GREEN each time while neither Function held any code. The answer is
+        # not to remove the flag - that starves the audit - but to make the AUDIT
+        # able to see it: V6.7 now asserts each Function App actually has functions,
+        # so a silent publish failure fails the layer where it should, in
+        # verification rather than in a step that was told not to matter.
         run: |
           set -euo pipefail
 
