@@ -162,6 +162,18 @@ jobs:
     name: container build, scan and push (control-tower)
     needs: build-test
     runs-on: ubuntu-latest
+    # THE BUNDLE IS BUILT HERE, SO THE BUILD-TIME VALUES MUST BE VISIBLE HERE (F124).
+    # `VITE_DIRECTLINE_TOKEN_URL` is a Vite variable: it is INLINED INTO THE BUNDLE at
+    # `npm run build`, which happens inside this job's docker build. Without this line
+    # `vars.MLS_DIRECTLINE_TOKEN_URL` resolves to the empty string, the image ships with no
+    # token endpoint, and the Ask tab renders its "no Direct Line channel is configured"
+    # notice - which is a state the app deliberately supports and which is therefore
+    # indistinguishable from the honest pre-publication state.
+    #
+    # `preflight` and `deploy` in this same workflow both declare `environment: demo`, and
+    # neither of them builds anything. The value was reaching the two jobs that did not
+    # need it and not the one that did, for as long as the Ask tab has existed.
+    environment: demo
     # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
     # default, which is how a hung what-if consumed a whole run (F81).
     timeout-minutes: 45
