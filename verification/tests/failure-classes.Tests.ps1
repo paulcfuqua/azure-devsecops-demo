@@ -1416,3 +1416,61 @@ Describe 'a site that references Key Vault names the identity that will resolve 
             -Because 'a Key Vault reference on a site with only a user-assigned identity resolves to an EMPTY VALUE and reports success everywhere a reader would look (F122)'
     }
 }
+
+Describe 'a workflow default asks for a build the committed source can produce' {
+    # F132. `layer-08-copilot-studio.yml` defaulted `deploy_as_managed: true` while the
+    # committed solution says <Managed>0</Managed>, so `pac solution pack --packagetype
+    # Managed` refused with:
+    #
+    #   Solution package type did not match requested type.
+    #
+    # The default had NEVER been satisfiable. Every L8 import since the workflow was
+    # written either skipped (F130's version-keyed check) or failed here, and the failure
+    # read as a `pac` problem rather than as a workflow asking for an artifact the
+    # repository has never contained.
+    #
+    # This is the "constant that names something in another system" rule pointed inward:
+    # the other system is the committed solution tree, and it is right there to read. The
+    # deploy path now asserts it too (Assert-PackageTypeMatchesSource, in preflight, before
+    # any tenant write) - this catches the same thing in a second, on a laptop, without a
+    # Power Platform environment.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:Workflow = Join-Path $script:Root '.github/workflows/layer-08-copilot-studio.yml'
+        $script:SolutionXml = Join-Path $script:Root 'infra/copilot-studio/solution/MeridianLaunchCopilot/Other/Solution.xml'
+    }
+
+    It 'finds both the workflow and the solution source, so the assertion is not vacuous' {
+        # Without this, a rename would turn the check below into a silent pass - which is
+        # the shape of defect this whole file exists to catch.
+        $script:Workflow | Should -Exist
+        $script:SolutionXml | Should -Exist
+    }
+
+    It 'defaults deploy_as_managed to whatever the committed solution actually is' {
+        $sourceIsManaged = ([xml](Get-Content -LiteralPath $script:SolutionXml -Raw)).SelectSingleNode('//Managed').InnerText.Trim() -eq '1'
+
+        # Every declaration of the input, not just the first: the workflow declares it once
+        # per trigger, and F132 survived in BOTH copies.
+        $defaults = @()
+        $lines = Get-Content -LiteralPath $script:Workflow
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -notmatch '^\s*deploy_as_managed:\s*$') { continue }
+            for ($j = $i + 1; $j -lt [Math]::Min($i + 12, $lines.Count); $j++) {
+                if ($lines[$j] -match '^\s*default:\s*(\S+)') { $defaults += $Matches[1]; break }
+                if ($lines[$j] -match '^\s{0,8}\w[\w-]*:\s*$') { break }
+            }
+        }
+
+        $defaults.Count | Should -BeGreaterThan 0 -Because 'deploy_as_managed must declare a default somewhere'
+        foreach ($default in $defaults) {
+            ($default -eq 'true') | Should -Be $sourceIsManaged -Because @"
+The workflow defaults deploy_as_managed=$default while $($script:SolutionXml)
+says the source is $(if ($sourceIsManaged) { 'managed' } else { 'unmanaged' }). pac will
+refuse the pack. Change the default, or export the solution the other way - but they
+cannot disagree, because the disagreement is unsatisfiable rather than merely unwise.
+"@
+        }
+    }
+}

@@ -67,10 +67,15 @@ on:
         required: false
         default: MeridianLaunchCopilot
       deploy_as_managed:
-        description: Import a managed build (recommended). Unmanaged is for troubleshooting only.
+        # Defaults FALSE because the committed source is unmanaged (<Managed>0</Managed>)
+        # and a managed pack of unmanaged source cannot succeed - F132. Microsoft's ALM
+        # guidance to deploy managed assumes a separate authoring environment; this demo
+        # has ONE Power Platform environment, which is both the maker environment and the
+        # deployment target. Set true only alongside a managed export.
+        description: Import a managed build. Defaults false - the committed source is unmanaged (F132).
         type: boolean
         required: false
-        default: true
+        default: false
       enable_fabric_data_agent:
         description: >-
           Create the Fabric data agent (connected agent). OFF by default: it needs a
@@ -98,10 +103,15 @@ on:
         required: false
         default: MeridianLaunchCopilot
       deploy_as_managed:
-        description: Import a managed build (recommended). Unmanaged is for troubleshooting only.
+        # Defaults FALSE because the committed source is unmanaged (<Managed>0</Managed>)
+        # and a managed pack of unmanaged source cannot succeed - F132. Microsoft's ALM
+        # guidance to deploy managed assumes a separate authoring environment; this demo
+        # has ONE Power Platform environment, which is both the maker environment and the
+        # deployment target. Set true only alongside a managed export.
+        description: Import a managed build. Defaults false - the committed source is unmanaged (F132).
         type: boolean
         required: false
-        default: true
+        default: false
       enable_fabric_data_agent:
         description: >-
           Create the Fabric data agent (connected agent). OFF by default: it needs a
@@ -315,7 +325,6 @@ jobs:
             SolutionName   = $env:SOLUTION_NAME
           }
           if ($env:DEPLOY_AS_MANAGED -ne 'true') {
-            Write-Host '::warning title=Unmanaged import::deploy_as_managed is false. Microsoft ALM guidance is to deploy managed except in development environments.'
             $importArgs['Unmanaged'] = $true
           }
           if ($env:DRY_RUN -eq 'true') {
