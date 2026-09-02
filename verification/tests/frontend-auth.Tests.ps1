@@ -89,7 +89,10 @@ Describe 'F25: the frontends that proxy /api/ are Easy Auth gated' {
         $script:ModuleCode['launchOpsApp'] | Should -Match 'authConfig: launchOpsAuthConfigured'
         $script:ModuleCode['launchOpsApp'] | Should -Match 'entraEasyAuthConfig\(launchOpsEntraClientId'
         $script:ModuleCode['controlTowerApp'] | Should -Match 'authConfig: controlTowerAuthConfigured'
-        $script:ModuleCode['controlTowerApp'] | Should -Match 'entraEasyAuthConfig\(controlTowerEntraClientId'
+        # \s* after the paren: the control tower's call is multi-line since F135 gave it
+        # a token store, and the assertion is about WHICH BUILDER it uses, not how the
+        # argument list is wrapped.
+        $script:ModuleCode['controlTowerApp'] | Should -Match '(?s)entraEasyAuthConfig\(\s*controlTowerEntraClientId'
     }
 
     It 'never publishes a human-facing app externally without that authConfig' {
@@ -127,8 +130,19 @@ Describe 'F25: the frontends that proxy /api/ are Easy Auth gated' {
     It 'configures no client secret anywhere in the Easy Auth path' {
         $script:EasyAuthFuncCode | Should -Not -Match 'clientSecretSettingName'
         $script:EasyAuthFuncCode | Should -Not -Match 'clientSecretCertificateThumbprint'
-        $script:EasyAuthFuncCode | Should -Match 'tokenStore: \{'
+        # THE TOKEN STORE IS NO LONGER UNCONDITIONALLY OFF, and these two lines used to
+        # assert that it was. That was a PROXY for "no confidential-client behaviour",
+        # and the proxy stopped tracking the thing once the control tower needed the
+        # store to forward this session's token to the directline-token Function (F135).
+        #
+        # What actually matters is asserted directly instead: no client secret anywhere
+        # (above), and the store OFF unless a caller supplies a container - so an app
+        # that does not ask for one cannot acquire it by omission.
+        $script:EasyAuthFuncCode | Should -Match 'tokenStore: empty\(tokenStoreContainerUri\)'
         $script:EasyAuthFuncCode | Should -Match 'enabled: false'
+        # Enabling the store must not smuggle in a secret: the blob path authenticates
+        # with a managed identity, which is the whole reason it needs no client secret.
+        $script:EasyAuthFuncCode | Should -Match 'managedIdentityResourceId'
     }
 }
 

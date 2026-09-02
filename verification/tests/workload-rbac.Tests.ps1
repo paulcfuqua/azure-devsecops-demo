@@ -100,6 +100,25 @@ BeforeAll {
         'Security Reader'        = '39bc4728-0917-49c7-9d2c-d95423bc2eb4'
         'Cost Management Reader' = '72fafb9e-0641-4937-9268-a91bfd8191a3'
         'Log Analytics Reader'   = '73c42c96-874c-492b-b04d-ab87d138a893'
+        # THE ONE WRITE ROLE, AND IT IS NOT AN EXCEPTION TO THE RULE - it is the rule
+        # working. Adding it failed this suite first, which is what a documented set is
+        # for: a fourth GUID appearing silently is either an undocumented grant or a
+        # privilege escalation, and this one had to be argued for rather than merged.
+        #
+        # WHY IT IS NEEDED. Container Apps has no built-in Easy Auth token store; unlike
+        # App Service it persists each session's token to a blob container, and it
+        # WRITES as well as reads - Storage Blob Data Reader is non-functional here. The
+        # control tower needs the store because its Ask tab forwards this session's
+        # Entra token to the directline-token Function, so the copilot inherits the
+        # identity of the app instead of sitting open beside it (F135). Without the
+        # store /.auth/me returns claims and no raw token, which is precisely how the
+        # gap was found.
+        #
+        # WHY IT IS STILL LEAST PRIVILEGE. Scoped to ONE storage account that holds
+        # nothing but those session tokens, granted to ONE identity that exists only for
+        # this purpose, on an account with shared-key access disabled so RBAC is the only
+        # way in. It grants no read of the lakehouse, the estate, or any other store.
+        'Storage Blob Data Contributor' = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
     }
     # Roles nothing in this layer may ever grant a workload identity. Owner and
     # Contributor are the two that would make F13's least-privilege claim false
@@ -131,10 +150,16 @@ Describe 'workload identities have their grants expressed in code' {
             Should -BeGreaterOrEqual 2
     }
 
-    It 'grants no role outside the documented read-only set' {
-        # Every roleDefinitionId literal anywhere in this layer's executable
-        # Bicep must be one of the three above. A fourth GUID is either a new
-        # grant nobody documented or a privilege escalation.
+    It 'grants no role outside the documented set' {
+        # Every roleDefinitionId literal anywhere in this layer's executable Bicep
+        # must be one of the four above. A fifth GUID is either a new grant nobody
+        # documented or a privilege escalation.
+        #
+        # This said "read-only set" until F135 needed Easy Auth's token store, which
+        # writes. The rename is deliberate rather than cosmetic: three of the four are
+        # still read-only and the fourth is argued for at its definition, but a test
+        # whose NAME claims read-only while its list contains a writer would be lying
+        # in exactly the way this suite exists to prevent.
         $guidPattern = "'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'"
         $observed = @()
         foreach ($key in @('main', 'workloadRole', 'lawRole')) {
@@ -143,7 +168,7 @@ Describe 'workload identities have their grants expressed in code' {
         }
         $allowed = @($script:RoleGuid.Values | ForEach-Object { $_.ToLowerInvariant() })
         foreach ($guid in ($observed | Sort-Object -Unique)) {
-            $guid | Should -BeIn $allowed -Because 'every role definition GUID in this layer must be one of the three documented read-only roles'
+            $guid | Should -BeIn $allowed -Because 'every role definition GUID in this layer must be one of the four documented roles, three read-only and one write that is argued for where it is defined'
         }
     }
 
