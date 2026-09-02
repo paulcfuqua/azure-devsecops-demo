@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     L7 Verifier audit - spec-renderer, launch-ops, control tower, per-app CI. READ-ONLY.
@@ -455,7 +455,21 @@ function Test-InteractiveSignIn {
         }
 
         # 1. Easy Auth must own /.auth, not the container behind it.
-        $auth = Invoke-MlsHttp -Uri "https://$fqdn/.auth/me" -TimeoutSec 30
+        #
+        # -MaximumRedirection 0, AND THAT IS THE WHOLE CRITERION (F127). This probe used
+        # to follow redirects, so on a HEALTHY estate it did this:
+        #
+        #     GET /.auth/me      -> 302 to login.microsoftonline.com   (Easy Auth, correct)
+        #     follow             -> 200 from the Entra sign-in page    (not this app at all)
+        #
+        # and then reported "answered 200 with no x-ms-middleware-request-id - Easy Auth is
+        # not handling /.auth". It was measuring MICROSOFT'S LOGIN PAGE and attributing the
+        # answer to our container. Both frontends failed it while `curl` against the same
+        # URL returned 401 with the header present, which is the correct answer.
+        #
+        # The first response is the only one that carries the verdict, so the redirect is
+        # not followed.
+        $auth = Invoke-MlsHttp -Uri "https://$fqdn/.auth/me" -TimeoutSec 30 -MaximumRedirection 0
         $status = "$(Get-MlsProperty -InputObject $auth -Name 'StatusCode')"
         $headers = Get-MlsProperty -InputObject $auth -Name 'Headers'
         $middleware = ''
@@ -464,7 +478,22 @@ function Test-InteractiveSignIn {
                 if ("$key" -ieq 'x-ms-middleware-request-id') { $middleware = "$($headers[$key])" }
             }
         }
-        if ($status -ne '401' -or [string]::IsNullOrWhiteSpace($middleware)) {
+        # THE HEADER IS THE SIGNAL; THE STATUS IS A PROXY FOR IT. Easy Auth stamps
+        # x-ms-middleware-request-id on everything it answers and nginx cannot forge it, so
+        # its presence is what actually proves the middleware is in front of the app.
+        #
+        # 401 AND 302 ARE BOTH THE DOOR. Easy Auth chooses its refusal by what the caller
+        # looks like: this endpoint answers 302 to PowerShell and 401 to curl, on the same
+        # app, in the same minute - the same client-dependent shape the compliance board
+        # shows V12.4. Pinning 401 alone fails a working control on the User-Agent of
+        # whoever ran the audit, which is the trap the working agreement names: assert what
+        # makes the control real, not the artefact that usually accompanies it.
+        #
+        # What must still FAIL is a 2xx: that is nginx serving index.html through the SPA
+        # fallback, which is precisely the state where a sign-in callback has nowhere to
+        # land - and it is the state this criterion was written for (F110).
+        $isRefusal = $status -eq '401' -or $status -eq '302'
+        if (-not $isRefusal -or [string]::IsNullOrWhiteSpace($middleware)) {
             $problem.Add("$roleName /.auth/me answered $status$(if (-not $middleware) { ' with no x-ms-middleware-request-id' }) - Easy Auth is not handling /.auth, so the sign-in callback has nowhere to land")
         }
 

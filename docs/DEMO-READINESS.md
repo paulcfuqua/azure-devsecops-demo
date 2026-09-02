@@ -49,7 +49,7 @@ on 2026-09-01, with the evidence beside it.
 | L1 repo / IaC / OIDC / up-down | ✅ verified | The pipelines are the product and they run |
 | L2 landing zone | ✅ verified | V2.1, V2.2 PASS |
 | L3 Entra | ✅ verified | V3.1–V3.4 PASS |
-| L7 apps | ✅ verified | 5/5, **and** now serving real rows rather than plumbing |
+| L7 apps | ✅ verified | **6/7 on 2026-09-01, and the layer has 7 criteria now, not 5.** V7.5, V7.6 and V7.7 had NEVER been evaluated on any run - every failure was F104's expired assertion, not the estate. With that fixed, V7.5 and V7.6 passed first time: **V7.6 independently confirms the data API returns real rows**, which is what section D was about. V7.7's failure was F127, a probe following a redirect into Microsoft's login page; fixed |
 | L11 teardown | ✅ verified (down half) | V11.1 PASS. Rebuild proven once; V11.2 blocked by **BLOCKER-1** |
 | L5 Fabric | 🟡 partial | Deployed and seeded (10 tables, `launches`=1,200). Its audit has not passed cleanly since F104/F105/F114 were fixed — **re-run it** |
 | L6 platform | 🟡 partial | Deploys green and both Function Apps hold code (V6.7 confirms it). **F122** found its Key Vault reference resolving to nothing while all six criteria passed; V6.8 now asserts references actually resolve |
@@ -106,6 +106,43 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F127 — V7.7 measured Microsoft's login page and blamed our app *(fixed 2026-09-01)*
+
+With F104 fixed, L7 ran to completion for the first time and reached **6/7** — V7.5 and
+V7.6 passing on their first-ever evaluation. V7.7 failed:
+
+    launch-ops    /.auth/me answered 200 with no x-ms-middleware-request-id
+    control-tower /.auth/me answered 200 with no x-ms-middleware-request-id
+    - Easy Auth is not handling /.auth, so the sign-in callback has nowhere to land
+
+**Easy Auth was handling it perfectly.** `curl` against the same URLs returns **401 with the
+header present**, and all three container apps carry identical, correct auth config.
+Reproduced the discrepancy directly:
+
+    maxRedirect=-1 (default)  ->  HTTP 200, middleware header ABSENT
+    maxRedirect=0             ->  HTTP 302, middleware header PRESENT
+
+The probe followed the redirect. `/.auth/me` answers **302 to the Entra sign-in page**, and
+the criterion dutifully followed it and reported **`login.microsoftonline.com`'s 200** as our
+container's answer. It was measuring Microsoft's login page and attributing the result to our
+app. Both frontends failed a control that works.
+
+This is the **same trap that bit V12.4 hours earlier** — the reason `-MaximumRedirection`
+was added to `Invoke-MlsHttp` in the first place. V7.7 predates it and never adopted it.
+
+**Fixed** with `-MaximumRedirection 0`, and the assertion widened from `401` to *any refusal
+carrying the middleware header* — because **Easy Auth picks its refusal by the caller**: 302
+to PowerShell, 401 to curl, same app, same minute. Pinning 401 fails a working control on the
+User-Agent of whoever ran the audit. A **2xx still fails**, which is the SPA-fallback state
+the criterion was written for (F110).
+
+**A note on the test, because it is the more useful lesson.** The first version of the
+regression test *passed with the defect reintroduced* — a mirror, not a test. It captured the
+probe's argument into a `$script:` variable that did not survive Pester's scoping, so the
+assertion compared `$null` and never fired. Only the mutation run exposed it. It now uses
+`Should -Invoke -ParameterFilter`, asserts that **no** `/.auth/me` probe follows redirects,
+and separately asserts the probe ran at all so the first assertion cannot be vacuous.
 
 ### F126 — the self-heal notice named a remedy that was already done *(fixed 2026-09-01)*
 
