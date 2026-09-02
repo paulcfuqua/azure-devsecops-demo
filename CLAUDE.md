@@ -144,6 +144,34 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   it was supposed to produce. V6.7 asserts the Function Apps actually contain functions -
   the capability, not the artefact that usually accompanies it, which was "the publish
   step ran".
+- **A value that exists, is spelled correctly, and cannot be seen by the thing that reads it
+  is the most expensive defect this estate produces.** Four in one session, in four
+  subsystems, all silent and all green. A Key Vault reference resolved to nothing because the
+  site named no identity to resolve it with, and `az ... appsettings list` printed the
+  reference back perfectly either way (F122). `SELF_HEAL_TOKEN` was an *environment* secret
+  and every job that consumes it declares no environment, so the self-healing chain got HTTP
+  403 for nine days and reported "nothing to heal" (F123). `MLS_DIRECTLINE_TOKEN_URL` reached
+  the two jobs that did not need it and missed the one that builds the bundle, so an image
+  built an hour *after* the variable was set still shipped without it (F124). And a job-level
+  `if:` gated on `vars.AZURE_VERIFIER_CLIENT_ID != ''` — which is evaluated **before** the
+  environment resolves, so a guard meaning "skip when unconfigured" meant "skip always", and
+  two verify jobs had never once run (F125).
+  Each looked correct from every angle a reviewer checks, because **an absent GitHub variable
+  is the empty string, not an error**, and an unresolvable reference is still a well-formed
+  string. Ask not "is this value right" but "can the thing that reads it see it at all", and
+  prefer a value the template DERIVES over one a human stores: the control tower's own origin
+  was a GitHub variable containing a Container Apps FQDN, which is a name that cannot survive
+  the rebuild this demo exists to show (F129, F90's class in configuration).
+
+- **Verify that the input can be obtained before verifying that it is valid.** The
+  directline-token Function got a careful user-token verifier: signature, issuer, audience and
+  expiry, twelve negative cases, real RSA key pairs, mutation-tested. It shipped and the Ask
+  tab broke, because Container Apps' Easy Auth token store was disabled and `/.auth/me`
+  returns claims with **no raw token** — there was nothing to verify and no test had asked
+  whether there could be (F135). The checking was rigorous about the half that was already in
+  hand and silent about the half it depended on. A guard has a precondition; test the
+  precondition, or the guard is a well-tested branch that never executes.
+
 - **A test harness runs in the language mode of the script it tests.** No
   `Set-StrictMode -Off` in `*.Tests.ps1`, and no test that supplies the answer it is
   checking - a wrapper, a helper default, or a fixture that re-wraps a return value is not a
