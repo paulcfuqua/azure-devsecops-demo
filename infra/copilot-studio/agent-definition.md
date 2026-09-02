@@ -491,6 +491,31 @@ absolute no-stored-secrets position.
 **Authentication changes take effect only after publishing**, and after a solution import
 the auth settings are blank (§6) and must be reconfigured by hand.
 
+> ### DECIDED 2026-09-01: use **No authentication** while the agent is tools-only (F128)
+>
+> A signed-in human opened the Ask tab and the agent replied
+> `IntegratedAuthenticationNotSupportedInChannel` — the first time this section's flagged
+> deviation was exercised by a real channel. Direct Line does not support integrated auth.
+>
+> **This section's prescribed fix — manual mode — is the wrong one right now**, for a reason
+> that lives in §3 rather than here. Manual mode exists to obtain a `User.AccessToken`, which
+> §3.3 needs *for the connected Fabric data agent*. §3 opens by stating that path is the
+> **paid-F2 upgrade** and that during the trial the agent runs **tools-only via MCP**, where
+> the MCP server authenticates with its own API key and no user token is involved at all.
+> Manual mode would additionally require `mls-copilot-auth` and `mls-copilot-canvas`, neither
+> of which is declared in `infra/entra/manifest.json` (F106) — so it is not merely
+> unnecessary, it is unreachable.
+>
+> **So: `No authentication` for the tools-only configuration.** It is the correct setting for
+> what is deployed, not a concession. Everything in §7.1 above becomes binding again the day
+> the estate moves to paid F2 and attaches the Fabric data agent — and F106 must be closed
+> before it can.
+>
+> Set it in **Settings → Security → Authentication → No authentication**, Save, then
+> **Publish**. Afterwards run `export-agent.ps1` so the committed solution captures the real
+> option-set value; do not hand-edit `<authenticationmode>` in `bot.xml` to an integer nobody
+> has verified.
+
 > **[verified 2026-08-31] Current state is NOT this.** `settings.mcs.yml` reads
 > `authenticationMode: Integrated` — that is "Authenticate with Microsoft", the option
 > this section rejects. Manual mode needs the `mls-copilot-auth` and `mls-copilot-canvas`
