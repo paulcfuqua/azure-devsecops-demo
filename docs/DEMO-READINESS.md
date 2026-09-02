@@ -33,16 +33,16 @@ below and know what to do next.*
 `docs/BRIEF.md` commits to **four showpieces** and **twelve layers**. This is what is true
 on 2026-09-01, with the evidence beside it.
 
-### The four showpieces — 2 working, 1 ready but unobserved, 1 blocked on one manual action
+### The four showpieces — 2 working, 1 ready but unobserved, 1 blocked
 
 | # | Showpiece | Status | Evidence |
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
 | **4** | **Compliance platform** — NIST 800-171 | ✅ **working** | **Independently audited for the first time, 2026-09-01.** `verification/layer-12-audit.ps1` runs as `mls-verifier` and reports **4 PASS + 2 SKIP**: the shipped artifact is complete against the catalog and carries no score, the honesty invariant holds in the file rather than only in the derivation, Easy Auth refuses anonymous callers, and the collection history is a git history. The two SKIPs name their owners rather than being gaps |
 | **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **ready, unobserved** | Every link verified against the running system: agent **published**, secret in Key Vault, Key Vault reference `Resolved` (F122 fixed, V6.8 confirms), token endpoint returns **HTTP 200 with a real token**, and the deployed bundle now carries the endpoint (F124 fixed — confirmed by grepping the GHCR image layers). **Not yet seen answering:** Control Tower is behind Easy Auth, so a human must sign in and open the tab. Ready to demonstrate, not demonstrated |
-| **3** | **Self-healing code** | ❌ **never demonstrated** | `self-heal.yml` runs green on schedule and skips every healing lane. The reason is **not** "no alerts" — four are open, one critical. The selector gets **HTTP 403** and reports it as `found=false`, indistinguishable from an empty surface (**F123**). One manual action away: `SELF_HEAL_TOKEN` must be a **repository** secret, not a `demo` environment one |
+| **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | **The token half is DONE and proven** (2026-09-01): `SELF_HEAL_TOKEN` is a repository secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the Dependabot lane runs instead of skipping. What is missing is a **subject**: Dependabot opens no security PR for the three seeded CVEs, so the lane has nothing to adopt (**F126**, cause unresolved, deferred). This is the ONLY showpiece with an open engineering blocker |
 
-### The twelve layers — 7 verified, 3 partial, 2 not done
+### The twelve layers — 8 verified, 2 partial, 2 not done
 
 | Layer | Status | Note |
 |---|---|---|
@@ -50,10 +50,10 @@ on 2026-09-01, with the evidence beside it.
 | L2 landing zone | ✅ verified | V2.1, V2.2 PASS |
 | L3 Entra | ✅ verified | V3.1–V3.4 PASS |
 | L7 apps | ✅ verified | **6/7 on 2026-09-01, and the layer has 7 criteria now, not 5.** V7.5, V7.6 and V7.7 had NEVER been evaluated on any run - every failure was F104's expired assertion, not the estate. With that fixed, V7.5 and V7.6 passed first time: **V7.6 independently confirms the data API returns real rows**, which is what section D was about. V7.7's failure was F127, a probe following a redirect into Microsoft's login page; fixed |
-| L11 teardown | ✅ verified (down half) | V11.1 PASS. Rebuild proven once; V11.2 blocked by **BLOCKER-1** |
+| L11 teardown | ✅ verified (down half) | V11.1 PASS. Rebuild proven once. V11.2's blocker (BLOCKER-1) is **closed** — the up-half has simply not been re-run since, and doing so is the sponsor's phase-1 item |
 | L5 Fabric | 🟡 partial | Deployed and seeded (10 tables, `launches`=1,200). Its audit has not passed cleanly since F104/F105/F114 were fixed — **re-run it** |
-| L6 platform | 🟡 partial | Deploys green and both Function Apps hold code (V6.7 confirms it). **F122** found its Key Vault reference resolving to nothing while all six criteria passed; V6.8 now asserts references actually resolve |
-| L9 DevSecOps chain | 🟡 partial | 4/5. GHAS, SBOM, Trivy and ZAP all run |
+| L6 platform | ✅ verified | **5 PASS + 2 PENDING on 2026-09-01**, and both PENDINGs sign off by design (V6.3's cost export has a 24 h window, V6.4's SQL auto-pause a 75 min one — L06.md V6.3). Both Function Apps hold code (V6.7) and **V6.8 confirms the Key Vault reference actually resolves**, which is what F122 broke silently |
+| L9 DevSecOps chain | 🟡 partial | 4/5 — V9.2-V9.5 PASS (negative CVE test, SBOM, ZAP, Defender toggle). **V9.1 fails reading its own evidence, not the estate**: `secret_scanning=''`, `push_protection=''`, and "Dependabot alerts are off" when `gh api .../vulnerability-alerts` returns **204** as admin. That is F103's shape again — admin-only endpoints read by `mls-verifier`. Last run 2026-09-01T00:52, before several fixes landed; **re-run before diagnosing** |
 | L12 compliance | ✅ verified | **The last layer to get an audit, 2026-09-01.** 4 PASS + 2 SKIP; wired into `compliance.yml` as a `verify` job after every collection. `MlsAudit` capped `Layer` at 11 until now - the module could not represent layer 12 even if someone had written the script |
 | L4 Purview labels | ✅ verified | **DONE 2026-09-01, the first time ever.** `verify L4 (mls-verifier)` PASSED. Four sensitivity labels now exist in the tenant - `mls-public`, `mls-internal`, `mls-confidential`, `mls-export-controlled` - where there had been none. The label POLICY failed (F121, fixed, re-run in flight) and the audit has not signed off yet |
 | L8 Copilot Studio | 🟡 partial | **Solution IMPORTED and agent PUBLISHED, 2026-09-01 — both firsts.** Publishing is a separate, human, Copilot Studio step (`import-agent.ps1`: "--publish-changes publishes solution CUSTOMIZATIONS. That is NOT the same thing as publishing the agent"), now done. V8.1 still fails on a Verifier Dataverse read permission; V8.2-V8.5 wait on F122's fix reaching the Function |
@@ -190,13 +190,27 @@ they are the same alerts. Ten minutes after the re-arm, still no Dependabot secu
 
 **So the cause is still not established, and this entry does not pretend otherwise.** What
 is now ruled out: the repo setting, missing patched versions, ignore conditions, lingering
-branches, and a stale alert state. The leading remaining candidate is
-`open-pull-requests-limit: 0` on the `/apps/vuln-lab` directory in `dependabot.yml`. That
-file asserts in a comment that *"GitHub documents that security update pull requests are
-not subject to this limit"* — **an assertion nobody has verified against the system**, which
-is exactly the shape this repository keeps paying for. Testing it is not free: raising the
-limit also enables version-update PRs for the lab, which would bump the pins and disarm the
-seed, so it needs a deliberate decision rather than a quiet edit.
+branches, and a stale alert state.
+
+**`open-pull-requests-limit: 0` is ALSO ruled out, and the evidence was in the repo the
+whole time.** That was named here as the leading candidate; it is wrong. PRs #30, #35 and
+#36 were security-update PRs *for `/apps/vuln-lab`*, opened 2026-08-28 — **while that
+directory already had `open-pull-requests-limit: 0`**. The limit demonstrably did not stop
+them, so `dependabot.yml`'s comment on the subject is correct after all. Anyone tempted to
+test it by raising the limit would be disarming the seed for nothing.
+
+**`esbuild` (#5) looks like a counter-example and is not.** It sits in the ROOT manifest,
+where the limit is 5, and has never had a PR either — but it is a **transitive dev
+dependency**, so there is no direct pin for Dependabot to bump and no fix it can author. Its
+silence is expected and says nothing about the three seeded CVEs, which are direct
+dependencies.
+
+That leaves the closed-unmerged history of #30/#35/#36 as the only explanation still
+standing, and the reopened-alert cycle showed it survives a fixed/open transition. **The next
+useful observation is free:** Dependabot re-evaluates on its own weekly schedule (Monday
+06:00 per `dependabot.yml`), so a scheduled pass may open the PRs without anyone doing
+anything. Sponsor decision 2026-09-01: **wait for that rather than spend more on it** — there
+is a month of runway and nothing else depends on it.
 
 The cycle was not wasted: it proved the lab's heal/re-arm machinery works end to end, and
 `reseed.ps1` verified its own output (3 advisories present, 2 code flaws restored).
