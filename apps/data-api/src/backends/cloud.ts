@@ -549,6 +549,9 @@ export function projectDependabotAlerts(raw: unknown): DependabotAlert[] {
         created_at: str(alert.created_at),
         dependency: {
           package: { ecosystem: str(pkg.ecosystem), name: str(pkg.name) },
+          // Projected, not dropped: the Sec board cannot tell a seeded CVE from a
+          // real one without it, and a fixture counted as posture is an overstatement.
+          manifest_path: optionalStr(obj(alert.dependency).manifest_path),
         },
         security_advisory: {
           ghsa_id: str(advisory.ghsa_id),

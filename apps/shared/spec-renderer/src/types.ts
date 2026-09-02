@@ -8,6 +8,13 @@ export type Layout = "stack" | "grid";
 export type Trend = "up" | "down" | "flat";
 
 export interface XyPoint {
+  /**
+   * Explicit bar colour, for the cases where colour CARRIES MEANING the reader
+   * must not mistake - a severity, a pass/fail. Left unset, the chart library
+   * assigns from a categorical palette by index, which on the security board
+   * rendered "High" green: the one colour that reads as "fine".
+   */
+  color?: string;
   x: string | number;
   y: number;
 }
