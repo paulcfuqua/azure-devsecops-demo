@@ -549,19 +549,39 @@ jobs:
         id: eval
         env:
           KEY_VAULT_NAME: ${{ steps.names.outputs.key-vault }}
+          # ONE SOURCE FOR THE NAME (F147). This step used to hardcode
+          # `directline-secret`, the name in the G0 bootstrap runbook. The estate
+          # actually creates `mls-directline-secret` and names it in the `demo`
+          # environment variable MLS_DIRECTLINE_SECRET_NAME, which is what L6 passes
+          # to the Bicep and what the Function's Key Vault reference resolves. So the
+          # secret existed, was spelled correctly, and could not be seen by the thing
+          # that read it - and this step reported it ABSENT, sending a reader off to
+          # publish an agent and create a secret that had been there for a day.
+          SECRET_NAME: ${{ vars.MLS_DIRECTLINE_SECRET_NAME }}
           # Recorded in the artifact so the report names which path answered:
           # the Fabric connected agent (paid F2) or the tools-only MCP fallback.
           MLS_AGENT_PATH: ${{ inputs.enable_fabric_data_agent && 'fabric-data-agent' || 'mcp-tools-only' }}
         run: |
           set -euo pipefail
+
+          # An absent GitHub variable is the empty string, not an error. Say which of
+          # the two states this is, because they need different fixes: an unset
+          # variable is configuration, a missing secret is the G0 item. Guessing a
+          # legacy name is exactly how F147 hid a secret that existed all along.
+          if [ -z "${SECRET_NAME}" ]; then
+            echo "ran=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning title=MLS_DIRECTLINE_SECRET_NAME is not set::The demo environment does not name the Direct Line secret, so this job cannot know what to look up. Set it to the secret L6 created. This is NOT the same as the secret being absent."
+            exit 0
+          fi
+
           secret="$(az keyvault secret show \
             --vault-name "${KEY_VAULT_NAME}" \
-            --name directline-secret \
+            --name "${SECRET_NAME}" \
             --query value -o tsv 2>/dev/null || true)"
 
           if [ -z "${secret}" ]; then
             echo "ran=false" >> "${GITHUB_OUTPUT}"
-            echo "::notice title=No Direct Line secret::${KEY_VAULT_NAME} holds no 'directline-secret', so the agent cannot be evaluated and no artifact was produced. That secret is G0 item C7 and can only be created AFTER this pipeline first publishes the agent (Copilot Studio -> Settings -> Security -> Web channel security). Until then verification/layer-08-audit.ps1 records V8.2/V8.4/V8.5 as SKIP with that reason — which is the honest state, not a pass."
+            echo "::notice title=No Direct Line secret::${KEY_VAULT_NAME} holds no '${SECRET_NAME}', so the agent cannot be evaluated and no artifact was produced. That secret is G0 item C7 and can only be created AFTER this pipeline first publishes the agent (Copilot Studio -> Settings -> Security -> Web channel security). Until then verification/layer-08-audit.ps1 records V8.2/V8.4/V8.5 as SKIP with that reason — which is the honest state, not a pass."
             exit 0
           fi
 

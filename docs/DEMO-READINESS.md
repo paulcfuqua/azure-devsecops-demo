@@ -117,6 +117,40 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F147 — the eval looked for the Direct Line secret under a name nothing creates *(fixed 2026-09-02)*
+
+L8's eval job has reported, on every run:
+
+    mls-sec-demo-kv holds no 'directline-secret', so the agent cannot be evaluated
+    and no artifact was produced.
+
+**The vault holds `mls-directline-secret`.** The estate names it in the `demo` environment
+variable `MLS_DIRECTLINE_SECRET_NAME`, which is what L6 hands the Bicep and what the Function's
+Key Vault reference resolves - V6.8 confirms that reference resolves, so the secret has been
+readable all along. The eval job hardcoded `directline-secret`, the name in the **G0 bootstrap
+runbook**, and never read the variable.
+
+**The invisible-value class again** (F122, F123, F124, F125): a value that exists, is spelled
+correctly, and cannot be seen by the thing that reads it. What makes this one expensive is the
+MESSAGE - "holds no 'directline-secret'" reads as *nobody has created it yet*, and it sent a
+reader off to publish an agent and mint a secret that had been in the vault for a day.
+
+**Four criteria skipped on it - V8.2, V8.3, V8.4, V8.5 - on every run, while the job reported
+success**, which is correct: skipping cleanly is exactly what that job is designed to do when it
+cannot evaluate. Nothing was lying. The wrong name simply meant it could never evaluate.
+
+**I repeated the error in my own reporting**, which is worth recording: I told the sponsor the
+Direct Line golden-question eval "passed" after the 1.0.3.0 import, and offered it as evidence
+the agent still answered. It never ran. A job whose success means "I correctly declined to do
+anything" is not evidence that the thing works.
+
+**Fixed:** the job reads `vars.MLS_DIRECTLINE_SECRET_NAME`, and distinguishes the two states
+that used to collapse into one message - an **unset variable** is configuration, a **missing
+secret** is the G0 item, and they need different fixes. Encoded as a class: `az keyvault secret
+show/set --name` must take an expansion, never a literal, because a name written in a workflow
+is a second source for a value the environment already owns and outranks it silently. Mutation-
+tested.
+
 ### F146 — I broke L9's startup with F144's own fix *(fixed 2026-09-02)*
 
 The full L9 run dispatched to **prove** F144's fix reported:

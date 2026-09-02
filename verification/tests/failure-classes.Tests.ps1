@@ -1646,3 +1646,70 @@ permissions block.
 "@
     }
 }
+
+Describe 'a Key Vault secret is looked up under the name the estate configured' {
+    # F147. L8's eval job read the Direct Line secret as `directline-secret` - the name in
+    # the G0 bootstrap runbook. The estate creates `mls-directline-secret` and names it in
+    # the `demo` environment variable MLS_DIRECTLINE_SECRET_NAME, which is what L6 hands
+    # the Bicep and what the Function's Key Vault reference resolves.
+    #
+    # So the secret EXISTED, was spelled correctly, and could not be seen by the thing that
+    # read it - the invisible-value class again - and the job reported:
+    #
+    #   mls-sec-demo-kv holds no 'directline-secret', so the agent cannot be evaluated
+    #
+    # which reads as "nobody has created it yet" and sent a reader off to publish an agent
+    # and mint a secret that had been sitting in the vault for a day. Four criteria
+    # (V8.2, V8.3, V8.4, V8.5) skipped on it, every run, and the job reported success -
+    # correctly, because skipping cleanly is what it is designed to do when it cannot
+    # evaluate.
+    #
+    # CLAUDE.md: "Every value has one source." A literal in a second place is a second
+    # source, and it outranks the real one silently because nothing compares them.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:WorkflowDir = Join-Path $script:Root '.github/workflows'
+    }
+
+    It 'finds workflows that read Key Vault, so the sweep is not vacuous' {
+        $readers = @(Get-ChildItem -Path $script:WorkflowDir -Filter '*.yml' -File |
+                Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'az keyvault secret' })
+        $readers.Count | Should -BeGreaterThan 0
+    }
+
+    It 'passes --name a variable, never a hardcoded secret name' {
+        $offenders = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($workflow in (Get-ChildItem -Path $script:WorkflowDir -Filter '*.yml' -File)) {
+            $lines = Get-Content -LiteralPath $workflow.FullName
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -notmatch 'az keyvault secret (show|set)') { continue }
+                # The command may be split across continuation lines; --name can be on any
+                # of them, so read forward until the continuation stops.
+                $j = $i
+                while ($j -lt $lines.Count) {
+                    if ($lines[$j] -match '--name\s+(\S+)') {
+                        $value = $Matches[1]
+                        # An expansion - "${VAR}", $VAR, ${{ vars.X }} - is a single source.
+                        # A bare literal is a second one.
+                        if ($value -notmatch '\$') {
+                            $offenders.Add("$($workflow.Name):$($j + 1) hardcodes --name $value")
+                        }
+                        break
+                    }
+                    if ($lines[$j] -notmatch '\\\s*$') { break }
+                    $j++
+                }
+            }
+        }
+
+        $offenders -join "`n" | Should -BeNullOrEmpty -Because @"
+A secret name written in a workflow is a second source for a value the demo environment
+already owns, and it outranks the real one silently because nothing compares them. Read the
+name from the variable that L6 uses (MLS_DIRECTLINE_SECRET_NAME), and when the variable is
+unset say THAT rather than guessing a name - an unset variable and a missing secret need
+different fixes and must not produce the same message.
+"@
+    }
+}
