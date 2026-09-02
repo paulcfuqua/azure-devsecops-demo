@@ -175,14 +175,43 @@ jobs:
           # answers an anonymous request with a 302 to Entra and a zero-length
           # body; ZAP would report "0 High" about a login redirect. That is not a
           # security result, and the gate below refuses to record it as one.
+          # AUTHENTICATE WHERE WE CAN (F157). The three Easy Auth apps each declare
+          # a `Telemetry.Probe` application role - the mechanism the Verifier
+          # already uses to probe them - and the deployer now holds it too. A
+          # client-credentials token for the app's own audience therefore gets
+          # past Easy Auth, so the scan reaches the application instead of its
+          # login page.
+          #
+          # The deployer, NOT the Verifier: mls-verifier holds the same role, but
+          # CLAUDE.md says the Verifier runs only code in verification/ and this
+          # workflow is not that. Granting the deployer a read-probe role on apps
+          # it created itself is no escalation.
+          #
+          # DEGRADES SAFELY. If a token cannot be minted the header is simply
+          # absent, classify() sees the login redirect, and the endpoint is
+          # reported `auth-wall` exactly as before - never scanned-and-passed on
+          # a redirect. Authentication failing costs coverage, never honesty.
+          token_for() {
+            az account get-access-token --resource "api://$1" --query accessToken -o tsv 2>/dev/null || true
+          }
+
           classify() {
-            local code loc
-            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1" || echo 000)"
-            loc="$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 30 "$1" || true)"
+            local code loc auth=()
+            [ -n "${2:-}" ] && auth=(-H "Authorization: Bearer $2")
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${auth[@]}" "$1" || echo 000)"
+            loc="$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 30 "${auth[@]}" "$1" || true)"
             case "${loc}" in
               *login.microsoftonline.com*) echo "auth-wall" ;;
               *) if [ "${code}" = "000" ]; then echo "unreachable"; else echo "content"; fi ;;
             esac
+          }
+
+          # Container App name -> Easy Auth client id, read from the live app so a
+          # rebuild cannot leave this pointing at a dead registration (F144's class).
+          client_id_for() {
+            az containerapp auth show -n "$1" -g "${RG_APPS}" \
+              --query 'identityProviders.azureActiveDirectory.registration.clientId' \
+              -o tsv 2>/dev/null || true
           }
 
           json="["
@@ -204,7 +233,25 @@ jobs:
               continue
             fi
 
+            # Try anonymously first: that is what an internet attacker sees, and
+            # for the Functions and the MCP server it is the whole story.
             class="$(classify "${url}")"
+            token=""
+
+            # Only if it IS a wall is there anything for a credential to open.
+            if [ "${class}" = "auth-wall" ]; then
+              cid="$(client_id_for "${name}")"
+              if [ -n "${cid}" ]; then
+                token="$(token_for "${cid}")"
+                if [ -n "${token}" ]; then
+                  class="$(classify "${url}" "${token}")"
+                  echo "${name}: authenticated as the deployer via Telemetry.Probe -> ${class}"
+                else
+                  echo "::warning title=No token for ${name}::Could not mint a token for api://${cid}. The app stays behind its login page and is reported auth-wall rather than scanned (F157)."
+                fi
+              fi
+            fi
+
             summary="${summary} ${name}:${class}"
             echo "${name} -> ${url} [${class}]"
 
@@ -213,7 +260,12 @@ jobs:
             if [ "${class}" = "content" ]; then
               scannable=$((scannable + 1))
               [ "${first}" -eq 0 ] && json="${json},"
-              json="${json}{\"name\":\"${name}\",\"url\":\"${url}\"}"
+              # THE TOKEN NEVER ENTERS THE MATRIX. Matrix values are printed in
+              # the job name, the run summary and the logs, so carrying a bearer
+              # here would publish it. Only the FACT that auth is needed travels;
+              # the scanning job mints its own and masks it.
+              needs_auth="$( [ -n "${token}" ] && echo true || echo false )"
+              json="${json}{\"name\":\"${name}\",\"url\":\"${url}\",\"auth\":${needs_auth}}"
               first=0
             fi
           done
@@ -249,6 +301,7 @@ jobs:
     needs: target
     if: ${{ needs.target.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
+    environment: demo
     strategy:
       # fail-fast OFF: a run is an expensive observation and it returns everything
       # it saw. One endpoint's High-risk alert must not cancel the scan of five
@@ -261,8 +314,41 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
+
+      # Only for a target that needs it. The token is minted HERE, in the job
+      # that uses it, and masked immediately - it is never an output, never a
+      # matrix value and never in a job name (F157).
+      - name: Azure login (OIDC, mls-github-deployer)
+        id: login
+        if: ${{ matrix.target.auth && vars.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Mint the probe token for this target
+        id: probe
+        if: ${{ matrix.target.auth && steps.login.outcome == 'success' }}
+        env:
+          APP: ${{ matrix.target.name }}
+          RG_APPS: ${{ vars.MLS_RG_APPS }}
+        run: |
+          set -uo pipefail
+          rg="${RG_APPS:-mls-rg-apps}"
+          cid="$(az containerapp auth show -n "${APP}" -g "${rg}"                    --query 'identityProviders.azureActiveDirectory.registration.clientId'                    -o tsv 2>/dev/null || true)"
+          token=""
+          [ -n "${cid}" ] && token="$(az account get-access-token --resource "api://${cid}" --query accessToken -o tsv 2>/dev/null || true)"
+          if [ -n "${token}" ]; then
+            echo "::add-mask::${token}"
+            echo "token=${token}" >> "${GITHUB_OUTPUT}"
+            echo "Probe token minted for ${APP}."
+          else
+            echo "::warning title=No probe token::${APP} needs authentication and none could be minted; the scan will see its login page."
+          fi
 
       - name: Run the ZAP baseline scan
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
@@ -286,7 +372,12 @@ jobs:
           # reason of its own.
           #
           # Let the action write its own file, then normalise the name below.
-          cmd_options: '-a'
+          # `-a` adds alpha passive rules. When a probe token exists, ZAP's
+          # replacer injects it on every request so the crawl reaches the
+          # application rather than its login redirect. `-J` stays absent (F102).
+          cmd_options: >-
+            -a
+            ${{ steps.probe.outputs.token && format('-config replacer.full_list(0).description=probe -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Authorization -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement="Bearer {0}"', steps.probe.outputs.token) || '' }}
           # The gate below owns pass/fail so the report is always archived.
           fail_action: false
           allow_issue_writing: false
