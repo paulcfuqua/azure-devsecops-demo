@@ -327,13 +327,48 @@ jobs:
             candidate_numbers="$(jq -r '.[].number' alerts.json)"
           fi
 
-          number="$(printf '%s\n' "${candidate_numbers}" | while read -r n; do
-            [ -n "${n}" ] || continue
-            if ! grep -q "self-heal/${kind}-${n}-" self-heal-branches.txt; then
+          # PREFER AN ALERT THIS LANE CAN ACTUALLY ACT ON (F137).
+          #
+          # The dependabot lane can only ADOPT a security-update PR Dependabot has
+          # already opened - it cannot author one, and no API can request one. So an
+          # alert with no such PR is a guaranteed no-op, and picking the first
+          # candidate regardless is how the chain came to select `esbuild`: a
+          # TRANSITIVE dev dependency with no direct pin, which Dependabot can never
+          # fix, while three healable seeded CVEs sat beside it in the same list.
+          #
+          # This is the estate's own rule about capability versus artefact applied to
+          # a queue: the artefact is "an open alert", the capability is "an open alert
+          # with something to merge".
+          if [ "${kind}" = "dependabot" ]; then
+            gh pr list --repo "${REPO}" --state open --author 'app/dependabot' --limit 100 --json title --jq '.[].title' > dependabot-prs.txt 2>/dev/null || : > dependabot-prs.txt
+          else
+            : > dependabot-prs.txt
+          fi
+
+          pick_from() {
+            echo "${candidate_numbers}" | while read -r n; do
+              [ -n "${n}" ] || continue
+              if grep -q "self-heal/${kind}-${n}-" self-heal-branches.txt; then continue; fi
+              if [ "$1" = "adoptable-only" ]; then
+                pkg="$(jq -r --argjson n "${n}" '.[] | select(.number == $n) | .dependency.package.name // empty' alerts.json)"
+                if [ -z "${pkg}" ]; then continue; fi
+                if ! grep -qi -- "${pkg}" dependabot-prs.txt; then continue; fi
+              fi
               echo "${n}"
               break
+            done
+          }
+
+          number="$(pick_from adoptable-only)"
+          if [ -z "${number}" ]; then
+            # Fall back to the old behaviour so the gauntlet's own notice still
+            # explains WHY nothing could be adopted - losing that diagnostic would
+            # trade one silent state for another.
+            number="$(pick_from any)"
+            if [ -n "${number}" ] && [ "${kind}" = "dependabot" ]; then
+              echo "::warning title=No adoptable alert::No open Dependabot alert has a security-update PR this lane could merge, so the chain selected one it cannot heal. That is usually F126 (a previous PR was closed unmerged and Dependabot does not reopen it) or a TRANSITIVE dependency with no direct pin to bump, such as esbuild. Re-arm with apps/vuln-lab/reseed.ps1 to raise the seeded advisories afresh."
             fi
-          done)"
+          fi
 
           if [ -z "${number}" ]; then
             echo "::notice title=Nothing to heal::No open ${kind} alert without an existing self-heal PR."
