@@ -217,10 +217,12 @@ jobs:
             fi
           fi
 
-          echo "classification=${app_class}" >> "${GITHUB_OUTPUT}"
-          echo "app_url=${url}" >> "${GITHUB_OUTPUT}"
-          echo "ready=true" >> "${GITHUB_OUTPUT}"
-          echo "url=${scanned}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "classification=${app_class}"
+            echo "app_url=${url}"
+            echo "ready=true"
+            echo "url=${scanned}"
+          } >> "${GITHUB_OUTPUT}"
 
   baseline:
     name: ZAP baseline scan

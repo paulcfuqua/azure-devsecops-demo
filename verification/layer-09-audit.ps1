@@ -293,7 +293,7 @@ function Test-ZapReport {
         -Detail 'Fix the finding in the app or its config via the normal PR path; only rule-tune via a committed zap.conf with justification - never by editing the report (L09 failure mode 3).'
 }
 
-function Test-DefenderPostureExists {
+function Test-DefenderPosture {
     <#
     .SYNOPSIS
         V9.6 - Defender for Cloud produces assessable posture (F153).
@@ -482,7 +482,7 @@ function Invoke-Main {
         -Description 'Defender for Cloud actually produces posture for this subscription' `
         -Command "GET /subscriptions/<sub>/providers/Microsoft.Security/secureScores?api-version=2020-01-01`nGET /subscriptions/<sub>/providers/Microsoft.Security/assessments?api-version=2021-06-01" `
         -Expected 'at least one secure score OR at least one assessment; an unanswered endpoint is UNOBSERVABLE, never "absent"' `
-        -Test { Test-DefenderPostureExists -SubscriptionId $subscription } | Out-Null
+        -Test { Test-DefenderPosture -SubscriptionId $subscription } | Out-Null
 
     return $context
 }
