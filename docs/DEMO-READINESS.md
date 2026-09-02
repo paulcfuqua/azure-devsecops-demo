@@ -64,8 +64,13 @@ on 2026-09-02, with the evidence beside it.
 *"Fully agent-instantiated … destroyed and rebuilt on demand … the repo is the product."*
 **Substantially achieved.** The estate deploys from a cold dispatch in layer order with
 independent sign-off at each step, and teardown and rebuild have both been demonstrated.
-Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint; the
-30-day calendar is.**
+
+**Money is closer to being a constraint than this section used to claim.** It said "~$1.40
+against a $200 ceiling" and that figure is stale by roughly 5x: month-to-date is **$7.70**, of
+which **Azure SQL is $7.65 - 99% of all spend** - on a run rate of roughly **$4/day, about $120
+over the 30-day window**. Nothing is broken and no budget has been breached; the point is that
+one idle database is most of the bill, and the number a planner reads should be the number.
+See **F143**. The calendar is still the tighter constraint, but not by the margin claimed.
 
 ---
 
@@ -111,6 +116,46 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F143 — one idle database is 99% of the bill, and auto-pause is working correctly *(open, needs a decision)*
+
+Measured directly from Azure Monitor rather than inferred, because Cost Management was
+throttling (F140, and retrying deepens the window):
+
+    mls-launch-ops-demo-sqldb   GP_S_Gen5 serverless, min 0.5 vCore, max 2, autoPauseDelay 60
+    31 Aug 00:00 - 2 Sep 18:00Z (66 h): 61,596 vCore-seconds billed = 17.1 vCore-hours
+    app_cpu_billed non-zero in 34 of 66 hours; cpu_percent non-zero in only 16
+
+Month-to-date spend is **$7.70**, of which **$7.65 is SQL**. Everything else in the estate -
+five Container Apps, two Function Apps, storage, Log Analytics, Key Vault - is four cents.
+
+**Auto-pause is not broken. V6.4 is not lying.** Long stretches bill exactly zero, which is the
+proof. Two things about the shape of serverless billing make an idle database expensive anyway:
+
+1. **Every connection buys a minimum of 60 minutes online.** 60 minutes is the *floor* Azure
+   allows for `autoPauseDelay`; it cannot be set lower. A single one-connection wake at 02:17
+   costs a full hour.
+2. **While online but idle it bills ~0.68 vCore/hour, above the 0.5 floor.** Serverless bills
+   `max(CPU, memory/3GB)`, and `cpu_percent` is non-zero in half as many hours as
+   `app_cpu_billed` - so this is the memory of a warm cache, not work being done.
+
+**What wakes it, and none of it is wrong:** `data-api` serving the Ops tab (the daytime
+clusters), `compliance.yml` at 02:17 daily, `self-heal.yml` every six hours at :13. Those are
+the estate verifying itself, which is the thing this repository is *for*.
+
+**So this is a decision, not a defect, and it is the sponsor's:**
+
+- **Do nothing.** ~$120 of a $200 ceiling over the remaining 30 days. It fits, with less
+  headroom than the old $1.40 figure implied.
+- **Wake it less.** Drop `self-heal.yml` from every 6 hours to daily: up to 3 fewer hour-long
+  wakes a day, maybe $1.50/day. It costs self-healing latency, on the one showpiece that is
+  still not demonstrated.
+- **Ask whether the database is needed at all.** The lakehouse already holds the launch data,
+  and `data-api` reads Fabric for most feeds. If Azure SQL only backs one feed, retiring it is
+  the whole $120. That is a design question worth an hour before it is worth a change.
+
+**Not acted on.** Every lever trades away either verification frequency or a component the
+demo may need, and none of the three is mine to choose.
 
 ### F142 — the sign-in expires after an hour and nothing renewed it *(fixed 2026-09-02)*
 
