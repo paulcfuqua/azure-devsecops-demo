@@ -117,6 +117,36 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F156 — the cost donut dropped services silently, so new spend could vanish *(fixed 2026-09-02)*
+
+Asked to make sure newly enabled Defender spend reaches the Ops tab, the plumbing checked out:
+the Cost Management query groups by `ServiceName` with **no filter**, and the "Run cost by
+service" table lists every row. Defender appears there by construction.
+
+**The chart above it did not.** `Cost by Azure service` charted `byService.slice(0, 8)` and
+discarded the tail, so:
+
+- the ring totalled **less** than the "Total run cost" KPI printed directly above it, and
+- a small line simply vanished — which is precisely what a Defender plan billing cents beside a
+  database billing dollars would do.
+
+Five Defender plans were enabled today. Each is individually tiny next to Azure SQL, so all five
+would have fallen off the ring while the total silently disagreed with itself.
+
+**Fixed:** the tail is grouped as `Other (N services)` rather than dropped, so the ring
+reconciles with the total and the chart says how many it summarised. Mutation-tested — restoring
+the plain `slice` fails three tests, including one that plants a cent-sized
+`Microsoft Defender for Cloud` line and asserts it survives into the total.
+
+**A cost chart that does not add up is worse than no cost chart**, because it invites arithmetic
+a reader will trust.
+
+**Not fixed, and worth stating:** the Ops tab shows what is billing, not what is *about to*.
+All five Defender plans are on free trials that expire **2026-10-01/02** — about ten days after
+the 30-day demo window closes. Nothing on the tab would warn anyone that a $0 line becomes a real
+one on that date. Surfacing trial expiry needs a feed that carries it; `az security pricing list`
+returns `freeTrialRemainingTime`, so the data exists.
+
 ### F155 — the attack surface was written by hand, so two internet-facing apps were never scanned *(fixed 2026-09-02)*
 
 F152, earlier the same day, enumerated the estate's external surface and listed **four** entries.
