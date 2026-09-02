@@ -8,6 +8,7 @@ import {
   createTokenFetcher,
   DirectLineAgentProvider,
   DirectLineTokenError,
+  easyAuthSignInAgainUrl,
   OfflineAgentProvider,
   parseTokenResponse,
   resolveAgentConfig,
@@ -181,6 +182,66 @@ describe("the token seam never lets a secret reach the app", () => {
     // Still no secret and no cookie: the forwarded token is the only credential.
     expect(init.body).toBeUndefined();
     expect(init.credentials).toBeUndefined();
+  });
+
+  it("hands the caller somewhere to GO when the sign-in has expired (F149)", async () => {
+    // F142 shipped a retry through /.auth/refresh. That endpoint cannot work on
+    // this app: redeeming a refresh token is a confidential-client grant, and the
+    // Easy Auth registration has no client secret and no offline_access scope, so
+    // no refresh token is ever issued. The retry could not have succeeded on any
+    // run - and the message it fell back to said "reload the page", which does
+    // nothing either, because the session cookie is still valid and Easy Auth
+    // hands back the SAME expired token. That is why Incognito worked and F5 did
+    // not.
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u === "/.auth/me") {
+        return new Response(JSON.stringify([{ id_token: "expired" }]), { status: 200 });
+      }
+      if (u === "/.auth/refresh") return new Response(null, { status: 401 });
+      return new Response("nope", { status: 401 });
+    });
+
+    const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const error = await fetchToken().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DirectLineTokenError);
+    // The recovery is an ACTION, not an instruction to try the thing that fails.
+    expect((error as DirectLineTokenError).signInUrl).toMatch(/^\/\.auth\/logout\?/);
+    expect((error as DirectLineTokenError).message).not.toMatch(/[Rr]eload/);
+  });
+
+  it("offers no sign-in link for a failure signing in would not fix", async () => {
+    // A 500 from the token endpoint is the deployment being wrong, not the
+    // caller. Offering "sign in again" there sends someone round a loop that
+    // cannot help and hides the real fault.
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u === "/.auth/me") {
+        return new Response(JSON.stringify([{ id_token: "fine" }]), { status: 200 });
+      }
+      return new Response("boom", { status: 500 });
+    });
+
+    const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const error = await fetchToken().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DirectLineTokenError);
+    expect((error as DirectLineTokenError).signInUrl).toBeUndefined();
+  });
+
+  it("ends the session rather than just visiting the login endpoint", async () => {
+    // Hitting /.auth/login while a valid session cookie exists can return the
+    // cached principal - the same stale token - which is the loop this whole
+    // finding is about. Logging out is the part that changes anything; the app's
+    // own unauthenticatedClientAction: RedirectToLoginPage does the rest.
+    const url = easyAuthSignInAgainUrl("/ask");
+    expect(url).toContain("/.auth/logout");
+    expect(url).toContain(encodeURIComponent("/ask"));
   });
 
   it("refreshes once and retries when the endpoint says the token expired (F142)", async () => {

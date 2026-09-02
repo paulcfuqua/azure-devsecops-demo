@@ -117,6 +117,50 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F149 — I fixed the expiry with a refresh the provider cannot perform *(fixed 2026-09-02)*
+
+F142's fix reached the browser and produced exactly the message it was written to produce:
+
+> **Agent unavailable** This sign-in has expired, so the Ask tab cannot prove who is asking.
+> Reload the page to sign in again - the agent itself is fine.
+
+**Both halves of that fix were wrong, and the configuration says so plainly:**
+
+    az containerapp auth show -n mls-control-tower-demo-ca ...
+      identityProviders.azureActiveDirectory.registration
+        clientSecretSettingName : (none)
+        login (scopes)          : (none - so no offline_access)
+
+Redeeming a refresh token is a **confidential-client grant**. With no client secret and no
+`offline_access`, **no refresh token is ever issued**, so `/.auth/refresh` had nothing to redeem
+and could not have succeeded on any run. And the fallback advice was equally empty: **reloading
+does nothing**, because the session cookie is still valid and Easy Auth serves the SAME stored
+token rather than re-authenticating. That is precisely why an Incognito window worked and F5 did
+not - evidence that was already in hand when F142 was written.
+
+**This is F135's class for the third time in two days.** F135: verified a token without checking
+one could be obtained. F142: verified expiry without asking what happens when it expires. F149:
+wrote the renewal without asking whether renewal was possible. Each time the code was careful
+about the half already in hand and silent about the half it depended on.
+
+**Fixed with what the provider can actually do.** Ending the Easy Auth session and letting the
+app's own `unauthenticatedClientAction: RedirectToLoginPage` run the login flow again needs no
+credential; Entra answers it from the live browser SSO session, so it is normally a redirect
+rather than a password prompt, and it puts a new `id_token` in the token store. The error now
+carries a `signInUrl` and the tab renders **a link the user clicks** - never an automatic
+navigation, which is how one bad token becomes a redirect loop. The link is present ONLY for an
+expired sign-in: a 500 offers none, because signing in again would not fix the deployment.
+
+`/.auth/refresh` is kept but is no longer load-bearing - a fork that configures a client secret
+gets silent renewal from it for free - and its comment now states the precondition instead of
+assuming it. Mutation-tested: removing the recovery URL fails the test. 118 passing.
+
+**Checked at the same time, because the sponsor asked whether the two tabs trade off:** they do
+not. `data-api` over the last 24 h shows `GET /feeds/:name` **200 x 98** and **304 x 21**, latest
+17:12 UTC, with the last **502 at 15:19 UTC** and none since - the F139/F140 cost-cache work
+holding. Ops and Ask are independent subsystems that happen to share a page; nothing about
+fixing one has ever broken the other.
+
 ### F147 — the eval looked for the Direct Line secret under a name nothing creates *(fixed 2026-09-02)*
 
 L8's eval job has reported, on every run:

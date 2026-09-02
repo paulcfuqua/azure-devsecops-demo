@@ -48,9 +48,17 @@ const SECRET_SHAPED_KEYS = [
 ];
 
 export class DirectLineTokenError extends Error {
-  constructor(message: string) {
+  /**
+   * Where the user can recover, when recovery is a thing they can do (F149).
+   * Present only for an expired sign-in; absent for every other failure, so the
+   * UI cannot offer a sign-in link for a problem signing in would not fix.
+   */
+  readonly signInUrl?: string;
+
+  constructor(message: string, options?: { signInUrl?: string }) {
     super(message);
     this.name = "DirectLineTokenError";
+    if (options?.signInUrl) this.signInUrl = options.signInUrl;
   }
 }
 
@@ -174,6 +182,14 @@ async function readEasyAuthToken(doFetch: typeof globalThis.fetch): Promise<stri
  * 401 that read like an outage. Proven by an Incognito window: a fresh sign-in
  * answered immediately.
  *
+ * ITS PRECONDITION IS NOT MET ON THIS DEPLOYMENT, AND F142 DID NOT CHECK (F149).
+ * Redeeming a refresh token is a confidential-client grant: it needs a client
+ * secret AND an `offline_access` scope, and this app's Easy Auth registration
+ * has neither, so no refresh token is ever issued and this call can only fail.
+ * It is kept because a fork that DOES configure a secret gets a silent renewal
+ * from it for free — but it is no longer load-bearing, and
+ * `easyAuthSignInAgainUrl` below is the path that works with no credential.
+ *
  * Returns true when a refresh plausibly succeeded. NO NAVIGATION happens here on
  * purpose: redirecting to a login endpoint automatically is how a bad session
  * becomes a redirect loop, and a loop is a worse failure than the one being
@@ -186,6 +202,38 @@ async function refreshEasyAuthSession(doFetch: typeof globalThis.fetch): Promise
   } catch {
     return false;
   }
+}
+
+/**
+ * Where to send someone whose sign-in has expired (F149).
+ *
+ * `/.auth/refresh` CANNOT WORK ON THIS APP, and F142 shipped a retry that
+ * depended on it. Redeeming a refresh token is a confidential-client grant, so
+ * it needs two things this deployment deliberately does not have:
+ *
+ *   az containerapp auth show ... identityProviders.azureActiveDirectory
+ *     registration.clientSecretSettingName : (none)
+ *     login (scopes)                       : (none - so no offline_access)
+ *
+ * No client secret and no `offline_access` means no refresh token is ever
+ * issued, so there is nothing for `/.auth/refresh` to redeem. The retry could
+ * never have succeeded on any run.
+ *
+ * Reloading does not help either, and the old message said it did: the session
+ * cookie is still valid, so Easy Auth serves the SAME stored token rather than
+ * re-authenticating. That is why an Incognito window worked and F5 did not.
+ *
+ * What does work without adding a credential is to end the Easy Auth session
+ * and let the app's own `unauthenticatedClientAction: RedirectToLoginPage` run
+ * the login flow again. Entra answers it from the still-live browser SSO
+ * session, so it is normally a redirect and not a password prompt, and it puts
+ * a brand new id_token in the token store.
+ *
+ * Exported so the UI renders it as a link the user CLICKS. Navigating
+ * automatically on a 401 is what turns one bad token into a redirect loop.
+ */
+export function easyAuthSignInAgainUrl(currentPath = "/"): string {
+  return `/.auth/logout?post_logout_redirect_uri=${encodeURIComponent(currentPath)}`;
 }
 
 export function createTokenFetcher(
@@ -227,9 +275,13 @@ export function createTokenFetcher(
     }
 
     if (res.status === 401) {
+      // Not "reload the page" (F149): a reload sends the same valid session
+      // cookie and Easy Auth hands back the same expired token. Ending the
+      // session is the part that actually changes anything.
       throw new DirectLineTokenError(
         "This sign-in has expired, so the Ask tab cannot prove who is asking. " +
-          "Reload the page to sign in again — the agent itself is fine.",
+          "Sign in again to continue — the agent itself is fine.",
+        { signInUrl: easyAuthSignInAgainUrl(globalThis.location?.pathname ?? "/") },
       );
     }
     if (!res.ok) {
