@@ -108,6 +108,56 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F138 — the agent answered a different question and kept the original question's words *(open)*
+
+Asked *"How much have we spent to date in our tenant subscription"*, the Ask tab replied:
+
+> Total spend to date in the tenant subscription is **$23,561,191.14999999 USD**, based on the
+> full history in the `cost_daily` dataset. Source: aggregated from the `cost_daily` table in
+> the Meridian operations lakehouse. I also attempted to retrieve the spend history from the
+> Azure Cost Management feed, but that request was **rate-limited (HTTP 429)**, so the total
+> above comes from the lakehouse cost records instead.
+
+**Two of the three things here are the agent behaving well.** It has the right tool
+(`get_cost_series`), it tried it, it was throttled by Azure's Cost Management API — a known,
+external, minutes-long rate limit where retrying deepens the throttle — and it **said so**
+rather than presenting a number as though nothing had gone wrong. That is the honesty property
+working.
+
+**The third is a real defect, and it is not the 429.** `cost_daily` is *Meridian's fictional
+business ledger*:
+
+    columns: cost_id, date, cost_center, amount_usd, budget_usd, currency
+    row:     CST-00001, 2024-01-01, "Propulsion", 9435.57, 8610, USD
+
+Cost centres like "Propulsion", dated 2024. It is **not Azure spend**. The real subscription
+has consumed roughly **$1.40**. So the fallback was not a fallback: **it answered a different
+question and kept the original question's framing**, opening with "Total spend to date in the
+tenant subscription is $23,561,191". A reader who stopped at the first clause — which is what
+a reader does — would carry away a number that is wrong by seven orders of magnitude, about a
+thing the dataset does not measure.
+
+Citing the source does not repair this. "Based on the `cost_daily` dataset" is true and does
+not tell a reader that `cost_daily` has nothing to do with their subscription.
+
+**Why it matters here more than elsewhere.** This estate spends its verification budget on
+refusing to overstate itself, and the outbrief's sharpest argument is that it catches its own
+false claims. An agent that substitutes a synthetic business ledger for a cloud bill, and
+narrates the substitution accurately while mislabelling the result, is the failure mode that
+argument exists to rule out.
+
+**Not fixed, and not a one-liner.** The 429 is external and cannot be engineered away — the
+right response to it is exactly what the agent did. What needs changing is the **substitution
+rule**, and it lives in the agent's instructions rather than in code: `cost_daily` answers
+"what does the launch business spend", `get_cost_series` answers "what does this Azure
+subscription cost", and **neither may stand in for the other**. When the right tool is
+unavailable the honest answer is "I could not retrieve that", not a different number wearing
+the question's words. That is a Copilot Studio instruction change plus a sharper tool
+description in `apps/mcp-tools`, and it must be made in the solution rather than the portal or
+the next import will revert it (F131).
+
+Minor, while in there: `$23,561,191.14999999` should be rounded at the presentation layer.
+
 ### F136 — the Functions host owns the preflight *(fixed 2026-09-02)*
 
 "Failed to fetch", with DevTools showing:
