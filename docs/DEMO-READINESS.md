@@ -39,7 +39,7 @@ on 2026-09-01, with the evidence beside it.
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
 | **4** | **Compliance platform** — NIST 800-171 | ✅ **working** | **Independently audited for the first time, 2026-09-01.** `verification/layer-12-audit.ps1` runs as `mls-verifier` and reports **4 PASS + 2 SKIP**: the shipped artifact is complete against the catalog and carries no score, the honesty invariant holds in the file rather than only in the derivation, Easy Auth refuses anonymous callers, and the collection history is a git history. The two SKIPs name their owners rather than being gaps |
-| **1** | **Copilot service** — Ask tab over Direct Line | ✅ **working** | **2026-09-02: the agent answers from real lakehouse data.** Asked which weekday has the most launches it replied *"Saturday, with 309 launches recorded in the launches table"*, citing its source — and the number was **independently re-derived** through the MCP server rather than taken on trust (Saturday 309, Sunday 181, Tuesday 162 …), an exact match. Eight findings between "not configured" and this: F122, F124, F128, F129, F130, F131, F133, F134 — all fixed **in the repo**, so a rebuild reproduces the working state rather than reverting to it |
+| **1** | **Copilot service** — Ask tab over Direct Line | ✅ **DEMONSTRATED** | **2026-09-02, observed in a browser by a signed-in human** — not inferred from a green run. Asked *"what day of the week had the most launches"* the tab answered **"Saturday had the most launches, with 309 launches recorded in the launches table"**, citing its source. The figure was **independently re-derived** through the MCP server (Saturday 309, Sunday 181, Tuesday 162 …), an exact match. Ten findings between "not configured" and this: F122, F124, F128, F129, F130, F131, F133, F134, F135, F136 — all fixed **in the repo**, so a rebuild reproduces the working state. **And it is not open**: the endpoint 401s an anonymous caller; the page forwards its Easy Auth token and the Function verifies signature, issuer, audience and expiry before the Direct Line secret is touched |
 | **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | **The token half is DONE and proven** (2026-09-01): `SELF_HEAL_TOKEN` is a repository secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the Dependabot lane runs instead of skipping. What is missing is a **subject**: Dependabot opens no security PR for the three seeded CVEs, so the lane has nothing to adopt (**F126**, cause unresolved, deferred). This is the ONLY showpiece with an open engineering blocker |
 
 ### The twelve layers — 8 verified, 2 partial, 2 not done
@@ -107,6 +107,55 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F136 — the Functions host owns the preflight *(fixed 2026-09-02)*
+
+"Failed to fetch", with DevTools showing:
+
+    me      200          fetch       <- /.auth/me works; the token store is fine
+    token   CORS error   fetch
+    token   204          preflight   <- 204 with no CORS headers
+
+A POST **without** the `Authorization` header returned `Access-Control-Allow-Origin`
+correctly, so the function's own CORS handling was never broken. Forwarding the caller's
+token added an `Authorization` header, which makes the request **preflighted for the first
+time** — and the Functions host answers `OPTIONS` *itself*, before any function code runs.
+With no platform CORS list it replied 204 with no headers, while the function's own correct
+allow-list sat one layer below, never consulted.
+
+**CORS worked for every request except the one the browser had to ask permission for first.**
+
+The old comment — *"configuring the platform CORS list as well would give two places to be
+wrong and one of them silent"* — was right when written, and held for exactly as long as
+every request was **simple**. Both layers now read the same derived origin: the platform for
+the preflight it owns, the function for the response it owns.
+
+### F135 — the token store was off, so /.auth/me had no token to forward *(fixed 2026-09-02)*
+
+The Ask tab reported, against a correctly signed-in user: *"Could not read this session's
+Entra token from /.auth/me."* `login.tokenStore.enabled` was **false**, and Container Apps has
+no built-in store — without one `/.auth/me` returns **claims and no raw token**.
+
+**The verification was shipped without checking that the token it verifies could be
+obtained.** The Function-side work was careful — real key pairs, twelve negative cases — and
+none of it tested the browser's ability to get a token at all.
+
+**The design had already named this condition.** The block read *"No downstream API is ever
+called on the signed-in user's behalf, so no provider token is worth persisting"* — true of
+three static dashboards, and false the moment the Ask tab began calling the directline-token
+Function on the signed-in user's behalf. Enabling the store is that premise being met, not an
+override of it. Still no client secret: the store persists the id_token issued at sign-in, and
+the blob path authenticates with a managed identity.
+
+Infrastructure: a user-assigned identity for the control tower (**it had none**), one
+Standard_LRS account with one private container, shared-key access disabled, and Storage Blob
+Data Contributor scoped to that account.
+
+**`workload-rbac.Tests.ps1` failed on the fourth role GUID** — this layer's documented set was
+read-only and Easy Auth writes. That is the check working: a new role appearing silently is
+either an undocumented grant or an escalation. It is now argued for where it is defined, and
+the test's name no longer claims *read-only*, because a name that lied would be the failure
+that suite exists to prevent.
 
 ### F134 — mcp-tools had no Fabric role at all *(fixed 2026-09-02)*
 
