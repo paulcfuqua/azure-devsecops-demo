@@ -172,6 +172,24 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   hand and silent about the half it depended on. A guard has a precondition; test the
   precondition, or the guard is a well-tested branch that never executes.
 
+- **File CONTENT is written with a file tool, never through a shell heredoc.** Content sent
+  through a heredoc crosses two escaping layers - the shell, then the Python or PowerShell
+  string literal inside it - and backslash sequences are silently transformed on the way. In
+  one session this produced a regex of `/<0x08>429<0x08>/` where `\b` was meant (a literal
+  BACKSPACE character, matching nothing, in a security-relevant throttle check), a `printf
+  '%s
+'` split across two lines, a swallowed shell line-continuation, and a commit message
+  with two command names missing because backticks were executed. The damage is invisible in
+  review: the file looks right in a diff, the code compiles, and a comment carrying it passes
+  every test.
+  Use Write or Edit for content. Keep the shell for commands. When a programmatic edit is
+  genuinely the right tool - a repeated substitution across many files - write the script to
+  a file first and run the file, so the content is escaped once rather than twice. Then
+  **verify the bytes, not the rendering**: `python -c "print(repr(open(p).read()[i:j]))"` or a
+  grep for the literal you expected. A backslash you cannot see is the whole failure mode.
+  `verification/tests/failure-classes.Tests.ps1` sweeps the repository for the control
+  characters this produces, because the class is cheap to check and expensive to find.
+
 - **A test harness runs in the language mode of the script it tests.** No
   `Set-StrictMode -Off` in `*.Tests.ps1`, and no test that supplies the answer it is
   checking - a wrapper, a helper default, or a fixture that re-wraps a return value is not a

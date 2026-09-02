@@ -66,6 +66,12 @@ export interface CloudConfig {
    * throttle rather than serving a stale figure.
    */
   readonly costCacheContainerUri: string;
+  /**
+   * How long to stop asking Cost Management after it answers 429 (F140). Every
+   * page load is a retry, and each refusal lengthens the upstream's window, so a
+   * reader pressing refresh on a 502 was extending the outage.
+   */
+  readonly costThrottleCooldownSeconds: number;
   readonly armBase: string;
   /** Log Analytics workspace *customer id* (GUID), not the ARM resource id. */
   readonly logAnalyticsWorkspaceId: string;
@@ -289,6 +295,7 @@ function loadCloud(env: NodeJS.ProcessEnv): CloudConfig {
     // buys nothing and risks the whole feed. See CloudFeedsBackend.azureCost.
     costCacheSeconds: int(env, "MLS_COST_CACHE_SECONDS", 3600, 60, 86_400),
     costCacheContainerUri: (env.MLS_COST_CACHE_CONTAINER_URI ?? "").trim(),
+    costThrottleCooldownSeconds: int(env, "MLS_COST_THROTTLE_COOLDOWN_SECONDS", 300, 30, 3600),
     armBase: str(env, "MLS_ARM_BASE") ?? "https://management.azure.com",
     logAnalyticsWorkspaceId: workspaceId,
     logAnalyticsBase: str(env, "MLS_LOG_ANALYTICS_BASE") ?? "https://api.loganalytics.io",

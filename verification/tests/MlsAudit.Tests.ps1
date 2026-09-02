@@ -815,7 +815,7 @@ Describe 'collection helpers are re-wrapped at every call site' {
         @{ Helper = 'Get-ManifestUserPrincipalName' }
         @{ Helper = 'Get-MlsLabel' }
     ) {
-        #  matters: without it 'Get-MlsLabel' also matches Get-MlsLabelPolicy, which
+        # \b matters: without it 'Get-MlsLabel' also matches Get-MlsLabelPolicy, which
         # returns a single object and is null-checked by its caller - wrapping that in
         # @() would break the check this guard is supposed to protect.
         $pattern = '\$\w+\s*=\s*' + [regex]::Escape($Helper) + '\b'

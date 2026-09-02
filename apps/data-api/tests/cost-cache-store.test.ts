@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { BlobCostCacheStore, noopCostCacheStore } from "../src/backends/costCacheStore.js";
+import { CloudFeedsBackend } from "../src/backends/cloud.js";
 import type { AzureCostFeed } from "../src/contract/feeds.js";
 
 const CONTAINER = "https://acct.blob.core.windows.net/cost-cache";
@@ -123,5 +124,66 @@ describe("BlobCostCacheStore", () => {
   it("the noop store is a working store that holds nothing", async () => {
     expect(await noopCostCacheStore.read()).toBeUndefined();
     await expect(noopCostCacheStore.write(feed)).resolves.toBeUndefined();
+  });
+});
+
+describe("cost throttle cooldown (F140)", () => {
+  // Every page load is a retry. Cost Management throttles per principal and each
+  // refusal lengthens the window, so a reader pressing refresh on a 502 was
+  // extending the outage they were trying to end. These assert that the feed
+  // stops asking, and starts again on its own.
+  const config = {
+    costCacheSeconds: 3600,
+    costThrottleCooldownSeconds: 300,
+    costTimeframe: "MonthToDate",
+    costSubscriptionId: "sub",
+    armBase: "https://management.azure.com",
+    upstreamTimeoutMs: 5000,
+  };
+
+  function backendWith(fetchImpl: typeof fetch, store?: { read: () => Promise<unknown>; write: () => Promise<void> }) {
+    return new CloudFeedsBackend({
+      config: config as never,
+      tokens: { getToken: async () => "t" },
+      fetchImpl: fetchImpl as never,
+      ...(store ? { costCacheStore: store as never } : {}),
+    } as never);
+  }
+
+  const throttled = (async () =>
+    new Response(JSON.stringify({ error: { code: "429", message: "Too many requests." } }), {
+      status: 429,
+    })) as unknown as typeof fetch;
+
+  it("stops calling the upstream after a 429", async () => {
+    let calls = 0;
+    const counting = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: { code: "429" } }), { status: 429 });
+    }) as unknown as typeof fetch;
+    const backend = backendWith(counting);
+
+    const first = await backend.getFeed("azure-cost" as never).catch((e: unknown) => e);
+    // Surface what the feed actually threw, so a mismatch in throttle detection
+    // shows here rather than as an opaque call count.
+    const detail = (first as { detail?: string }).detail ?? (first as Error).message;
+    expect(String(detail)).toMatch(/429/);
+    const afterFirst = calls;
+    await expect(backend.getFeed("azure-cost" as never)).rejects.toThrow();
+
+    // The second request must not have reached Cost Management at all.
+    expect(calls).toBe(afterFirst);
+  });
+
+  it("serves the persisted answer as stale during the cooldown", async () => {
+    const store = { read: async () => feed, write: async () => undefined };
+    const backend = backendWith(throttled, store);
+
+    await expect(backend.getFeed("azure-cost" as never)).resolves.toMatchObject({ stale: true });
+    // Still inside the cooldown, still answered, still marked stale.
+    await expect(backend.getFeed("azure-cost" as never)).resolves.toMatchObject({
+      stale: true,
+      total: 1.4,
+    });
   });
 });

@@ -312,7 +312,7 @@ export function normaliseExport(table: CsvTable, config: NormaliseConfig = {}): 
   const groupMap = config.resourceGroupCostCenters ?? {};
 
   const rejected: RejectedRow[] = [];
-  // Accumulate at the target grain. Keyed by `${date} ${costCenter}`.
+  // Accumulate at the target grain. Keyed by `${date}\u0000${costCenter}`.
   const totals = new Map<
     string,
     { date: string; costCenter: string; amount: number; currency: string }
@@ -340,7 +340,7 @@ export function normaliseExport(table: CsvTable, config: NormaliseConfig = {}): 
       (currencyColumn ? (record[currencyColumn] ?? "").trim().toUpperCase() : "") ||
       defaultCurrency;
 
-    const key = `${date} ${costCenter}`;
+    const key = `${date}\u0000${costCenter}`;
     const existing = totals.get(key);
     if (existing) {
       existing.amount += amount;

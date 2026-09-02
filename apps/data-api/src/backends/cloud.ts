@@ -91,11 +91,52 @@ export interface CloudFeedsDeps {
   readonly costCacheStore?: CostCacheStore;
 }
 
+/**
+ * Was this failure the upstream telling us to slow down?
+ *
+ * READ `detail`, NOT ONLY `message`. ApiError's message is the sanitised sentence
+ * a caller sees - "The Cost Management upstream did not answer successfully" -
+ * and the status lives in `detail`, which is server-side only. The first version
+ * of this checked `message` alone, so the cooldown never opened and the feed kept
+ * hammering a throttled upstream; the test below caught it.
+ *
+ * Deliberately narrow: a 429 is self-inflicted and must open the cooldown, while
+ * a 500 from Cost Management is the upstream's problem and should be re-asked
+ * normally. Treating every failure as a throttle would turn one bad minute into a
+ * cooldown-long outage.
+ */
+function isThrottled(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const detail = err instanceof ApiError ? (err.detail ?? "") : "";
+  // "HTTP 429" verbatim, not a bare 429: `detail` carries the upstream RESPONSE
+  // BODY, and a cost figure or an id containing those digits must not open a
+  // five-minute cooldown. fetchJson formats every status this way.
+  return err.message.includes("HTTP 429") || detail.includes("HTTP 429");
+}
+
 export class CloudFeedsBackend implements FeedsBackend {
   readonly kind: BackendKind = "cloud";
 
   /** Last answered cost query, retained against the upstream's throttle. */
   private costCache: AzureCostFeed | undefined;
+
+  /**
+   * Epoch ms before which this feed will NOT call Cost Management again (F140).
+   *
+   * `retries: 0` stopped one request from hammering the upstream, and the comment
+   * beside it said "retrying is what this feed does across requests, not within
+   * one". That was the defect: EVERY PAGE LOAD IS A RETRY. Cost Management
+   * throttles per principal and each refusal lengthens the window, so a reader
+   * looking at a 502 and pressing refresh - the single most likely thing a human
+   * does - was extending the outage they were trying to end. Observed live: the
+   * identity stayed throttled across four deploys and a dozen reloads while an
+   * unthrottled principal got 200 from the same API in the same minute.
+   *
+   * So the feed now declines to ask at all for a cooldown after a refusal, and
+   * answers from cache instead. That is not giving up: it is the only way the
+   * window is ever allowed to close.
+   */
+  private costUpstreamBlockedUntil = 0;
 
   constructor(private readonly deps: CloudFeedsDeps) {}
 
@@ -230,6 +271,17 @@ export class CloudFeedsBackend implements FeedsBackend {
       return cached;
     }
 
+    // Inside a cooldown after a 429: answer from whatever is retained, and do not
+    // touch the upstream. Asking is what keeps the window open (F140).
+    if (Date.now() < this.costUpstreamBlockedUntil) {
+      const retained = cached ?? (await this.deps.costCacheStore?.read());
+      if (retained) return { ...retained, stale: true };
+      throw ApiError.upstream(
+        "Cost Management",
+        "refused recently (429); this feed is in a cooldown before asking again and has nothing retained to serve",
+      );
+    }
+
     const timeframe = this.deps.config.costTimeframe;
     try {
       const token = await this.deps.tokens.getToken(SCOPE_ARM);
@@ -284,6 +336,11 @@ export class CloudFeedsBackend implements FeedsBackend {
       void this.deps.costCacheStore?.write(projected);
       return projected;
     } catch (err) {
+      // Open the cooldown on a throttle specifically. Other upstream failures are
+      // not self-inflicted and should be re-asked normally.
+      if (isThrottled(err)) {
+        this.costUpstreamBlockedUntil = Date.now() + this.deps.config.costThrottleCooldownSeconds * 1000;
+      }
       if (cached) {
         return { ...cached, stale: true };
       }
