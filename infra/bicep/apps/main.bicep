@@ -234,7 +234,7 @@ param fabricSqlEndpoint string = ''
 @description('Lakehouse name exposed as a database on that endpoint.')
 param fabricDatabase string = 'mls_operations'
 
-@description('Backend set mcp-tools serves. Defaults to "local" so the mode is always an explicit deployment decision rather than an omission — the other half of F2 was that MLS_TOOL_BACKENDS was never set anywhere in infra/ or .github/, so the configuration the enforcement gate\'s own doc comments described was never the one actually shipped.')
+@description('Backend set mcp-tools serves. EMPTY means decide from what L5 handed us - cloud when there is a Fabric SQL analytics endpoint, local otherwise - which is exactly how dataApiBackendMode behaves, and the two should not disagree about the same lakehouse. An explicit local or cloud still wins. It previously defaulted to the literal local so the mode would be an explicit decision rather than an omission (F2), but that made explicit and defaulted indistinguishable, and the estate shipped mcp-tools reading data/generated - a directory absent from the image - while data-api read the lakehouse correctly from this same template (F133).')
 @allowed(['local', 'cloud'])
 param mcpToolsBackendMode string = 'local'
 
@@ -906,13 +906,63 @@ module controlTowerApp 'br/public:avm/res/app/container-app:0.23.0' = {
 // the token itself never crosses into this template, demo.bicepparam, ARM
 // deployment history or a what-if log. See the "MCP INBOUND AUTH TOKEN"
 // header block for the full exposure analysis.
-var mcpToolsSecrets = [
-  {
-    name: 'mcp-auth-token'
-    keyVaultUrl: '${platformKv.properties.vaultUri}secrets/mcp-auth-token'
-    identity: mcpToolsIdentity.outputs.resourceId
-  }
-]
+// SAME DERIVATION AS data-api, and F133 is why it is no longer a bare 'local'.
+// mcp-tools shipped in LOCAL mode, which reads data/generated - a directory that
+// is not in the image. The Copilot agent therefore reached its tool, invoked it,
+// and got back "Generated data not found at /repo/data/generated": the whole
+// chain working and the answer empty, which is the exact shape section D was
+// written about. data-api has read the lakehouse correctly all along, from this
+// same template, so the two now decide their backend identically.
+//
+// NEVER silently cloud without the endpoint: apps/mcp-tools/src/config.ts fails at
+// BOOT naming every missing variable at once, which crash-loops the revision
+// rather than answering one tool call wrongly. That is the behaviour to preserve.
+var mcpToolsMode = empty(mcpToolsBackendMode) ? (empty(fabricSqlEndpoint) ? 'local' : 'cloud') : mcpToolsBackendMode
+
+// Cloud settings for mcp-tools. Names come from apps/mcp-tools/src/config.ts's
+// REQUIRED_CLOUD_VARS, not from data-api's - they overlap but are not identical,
+// and copying the wrong six would fail at boot with a list of the right ones.
+var mcpToolsCloudEnv = mcpToolsMode != 'cloud'
+  ? []
+  : [
+      { name: 'MLS_FABRIC_SQL_ENDPOINT', value: fabricSqlEndpoint }
+      { name: 'MLS_FABRIC_DATABASE', value: fabricDatabase }
+      { name: 'MLS_LOG_ANALYTICS_WORKSPACE_ID', value: logAnalytics.properties.customerId }
+      { name: 'MLS_GITHUB_REPO', value: githubRepository }
+      // config.ts reads AZURE_SUBSCRIPTION_ID, not data-api's MLS_COST_SUBSCRIPTION_ID.
+      { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+    ]
+
+// The one credential-shaped input, and only when a secret name was supplied.
+// config.ts accepts GITHUB_TOKEN or MLS_GITHUB_TOKEN; the latter matches data-api,
+// so the same Key Vault secret serves both and no seventh credential appears.
+var mcpToolsGitHubEnv = empty(githubTokenSecretName) || mcpToolsMode != 'cloud'
+  ? []
+  : [
+      {
+        name: 'MLS_GITHUB_TOKEN'
+        secretRef: githubTokenSecretName
+      }
+    ]
+
+var mcpToolsSecrets = concat(
+  [
+    {
+      name: 'mcp-auth-token'
+      keyVaultUrl: '${platformKv.properties.vaultUri}secrets/mcp-auth-token'
+      identity: mcpToolsIdentity.outputs.resourceId
+    }
+  ],
+  empty(githubTokenSecretName) || mcpToolsMode != 'cloud'
+    ? []
+    : [
+        {
+          name: githubTokenSecretName
+          keyVaultUrl: '${platformKv.properties.vaultUri}secrets/${githubTokenSecretName}'
+          identity: mcpToolsIdentity.outputs.resourceId
+        }
+      ]
+)
 
 module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
   name: 'l7-ca-mcp-tools'
@@ -980,9 +1030,11 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
               // not an absence. apps/mcp-tools/src/config.ts reads this and
               // defaults to 'local' itself if it is ever unset again.
               name: 'MLS_TOOL_BACKENDS'
-              value: mcpToolsBackendMode
+              value: mcpToolsMode
             }
-          ]
+          ],
+          mcpToolsCloudEnv,
+          mcpToolsGitHubEnv
         )
       }
     ]
@@ -1191,6 +1243,9 @@ output dataApiOrigin string = 'https://${dataApiApp.outputs.fqdn}'
 
 @description('Backend set data-api will actually serve. "local" means the Fabric SQL analytics endpoint was not supplied, and every table route will answer 503 because data/generated is not in the image.')
 output dataApiBackendModeResolved string = dataApiMode
+
+@description('Backend mode mcp-tools actually resolved to. Emitted for the same reason the data-api one is: the mode is derived, so the only honest way to know which one shipped is to ask the template that decided. F133 shipped local silently and the Copilot agent answered with a missing-data error through a chain that was otherwise working end to end.')
+output mcpToolsBackendModeResolved string = mcpToolsMode
 
 @description('Client ID of the data-api user-assigned identity — the principal that needs the SQL contained-database user, the Fabric workspace Viewer role, Log Analytics Reader and Security Reader.')
 output dataApiIdentityClientId string = dataApiIdentity.outputs.clientId
