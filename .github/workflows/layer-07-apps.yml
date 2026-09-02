@@ -1033,13 +1033,38 @@ jobs:
           # They are the same artifacts L5 would have created, so this is recoverable
           # rather than divergent, but L7 provisioning L5's artifacts is surprising
           # and is called out in docs/runbooks/layers/L07.md.
+          # mcp-tools is granted in the SAME pass, and belongs here rather than in a
+          # step of its own: both identities live in RG_APPS, both are READERS taking
+          # the identical Viewer role, and this step already holds the Fabric token.
+          # A separate step would duplicate the resolve, the token and the error
+          # handling to say the same thing twice.
+          #
+          # It is resolved SEPARATELY and tolerated as absent, because the two are not
+          # the same lifecycle: an estate can legitimately deploy data-api without
+          # mcp-tools. An empty value makes provision-workspace.ps1 skip that grant.
+          $mcpPrincipalId = ''
+          $mcpIds = az identity list --resource-group $env:RG_APPS --query "[?contains(name, 'mcp')].{name:name, principalId:principalId}" -o json | ConvertFrom-Json
+          if ($mcpIds.Count -eq 1) {
+            $mcpPrincipalId = $mcpIds[0].principalId
+            Write-Host "Resolved mcp-tools identity '$($mcpIds[0].name)' -> principal $mcpPrincipalId."
+          }
+          elseif ($mcpIds.Count -eq 0) {
+            Write-Host "::warning title=No mcp-tools identity to grant::Found no identity matching 'mcp' in $env:RG_APPS, so the Copilot tool server gets no Fabric Viewer role. In cloud mode its lakehouse queries will fail with 'Could not login because the authentication failed' - inside a Copilot answer, nowhere near this step (F134)."
+          }
+          else {
+            Write-Host "::error title=Ambiguous mcp-tools identity::Found $($mcpIds.Count) identities matching 'mcp' in $env:RG_APPS. Refusing to grant workspace access to an arbitrary one."
+            exit 1
+          }
+
           ./infra/fabric/provision-workspace.ps1 `
             -Token $token `
             -CapacityId $env:FABRIC_CAPACITY_ID `
             -DataApiPrincipalId $principalId `
+            -McpToolsPrincipalId $mcpPrincipalId `
             -Confirm:$false
 
           Write-Host "F24: data-api holds the Fabric workspace Viewer role."
+          if ($mcpPrincipalId) { Write-Host "F134: mcp-tools holds the Fabric workspace Viewer role." }
 
       - name: Report a failed F24 grant pass
         if: ${{ !inputs.dry_run && steps.f24_grant.outcome == 'failure' }}

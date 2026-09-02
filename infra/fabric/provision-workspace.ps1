@@ -87,7 +87,22 @@ param(
     #
     # THIS IS THE ONE PRINCIPAL HERE THAT DOES NOT GET Viewer. The reason is in
     # Invoke-Main's grant table below; read it before changing this.
-    [string]$CostIngestPrincipalId = ''
+    [string]$CostIngestPrincipalId = '',
+
+    # F134: object ID of the mcp-tools user-assigned identity
+    # (infra/bicep/apps/main.bicep's mcpToolsIdentity.outputs.principalId). Empty by
+    # default like its three siblings, so a caller that passes nothing is unaffected.
+    #
+    # WHY IT WAS MISSING FOR SO LONG. mcp-tools shipped in LOCAL backend mode, reading
+    # data/generated rather than the lakehouse, so it never asked Fabric for anything
+    # and the absent grant cost nothing visible. Switching it to cloud (F133) turned a
+    # dormant gap into "Could not login because the authentication failed", surfacing
+    # inside a Copilot answer rather than anywhere near this file.
+    #
+    # VIEWER, like data-api and mls-verifier: mcp-tools READS. Its six tools are
+    # read-only by contract (query_lakehouse_sql runs one SELECT), and cost-ingest
+    # remains the single Contributor because it is the only writer.
+    [string]$McpToolsPrincipalId = ''
 )
 
 Set-StrictMode -Version Latest
@@ -137,7 +152,8 @@ function Invoke-Main {
         [Parameter(Mandatory)][string]$LakehouseName,
         [string]$DataApiPrincipalId = '',
         [string]$VerifierPrincipalId = '',
-        [string]$CostIngestPrincipalId = ''
+        [string]$CostIngestPrincipalId = '',
+        [string]$McpToolsPrincipalId = ''
     )
     # ---- workspace -----------------------------------------------------------------
     $workspace = Get-FabricWorkspace -Token $Token -Name $WorkspaceName
@@ -223,6 +239,7 @@ function Invoke-Main {
             [pscustomobject]@{ Label = 'data-api identity'; PrincipalId = $DataApiPrincipalId; Role = 'Viewer' }
             [pscustomobject]@{ Label = 'mls-verifier'; PrincipalId = $VerifierPrincipalId; Role = 'Viewer' }
             [pscustomobject]@{ Label = 'cost-ingest identity'; PrincipalId = $CostIngestPrincipalId; Role = 'Contributor' }
+            [pscustomobject]@{ Label = 'mcp-tools identity'; PrincipalId = $McpToolsPrincipalId; Role = 'Viewer' }
         )) {
         if ([string]::IsNullOrWhiteSpace($grant.PrincipalId)) { continue }
         $existing = Get-FabricWorkspaceRoleAssignment -Token $Token -WorkspaceId $workspace.id -PrincipalId $grant.PrincipalId
@@ -244,5 +261,5 @@ if (-not $env:MLS_SKIP_MAIN) {
     Import-Module (Join-Path $PSScriptRoot 'fabric-api.psm1') -Force
     Invoke-Main -Token $Token -CapacityId $CapacityId -WorkspaceName $WorkspaceName -LakehouseName $LakehouseName `
         -DataApiPrincipalId $DataApiPrincipalId -VerifierPrincipalId $VerifierPrincipalId `
-        -CostIngestPrincipalId $CostIngestPrincipalId
+        -CostIngestPrincipalId $CostIngestPrincipalId -McpToolsPrincipalId $McpToolsPrincipalId
 }
