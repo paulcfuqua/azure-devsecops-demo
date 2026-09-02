@@ -39,7 +39,7 @@ on 2026-09-01, with the evidence beside it.
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
 | **4** | **Compliance platform** — NIST 800-171 | ✅ **working** | **Independently audited for the first time, 2026-09-01.** `verification/layer-12-audit.ps1` runs as `mls-verifier` and reports **4 PASS + 2 SKIP**: the shipped artifact is complete against the catalog and carries no score, the honesty invariant holds in the file rather than only in the derivation, Easy Auth refuses anonymous callers, and the collection history is a git history. The two SKIPs name their owners rather than being gaps |
-| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **connects; agent refuses on one setting** | **Observed by a human, 2026-09-01**: the tab minted a token, connected Direct Line, opened a conversation and the agent answered — with `IntegratedAuthenticationNotSupportedInChannel`. So F122/F124 are confirmed end to end and the plumbing is done. The agent is set to "Authenticate with Microsoft" (`authenticationmode 2`), which Direct Line does not support. Fix is one UI change to **No authentication** plus a publish — correct here because the user-auth requirement serves the **paid-F2 Fabric data agent**, which is not in use; the deployed path is MCP with its own API key (**F128**) |
+| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **agent answers; its tool reads the wrong backend** | **Proven end to end 2026-09-01**: Direct Line connects, the agent invokes the MCP tool, the tool responds, and the agent reasons about the result in plain language. F122, F124, F128, F129, F130 and F131 all closed to get here. What it cannot yet do is answer FROM DATA: `mls-mcp-demo-ca` is deployed with `MLS_TOOL_BACKENDS=local`, so it looks for `/repo/data/generated` instead of querying Fabric. `data-api` already runs `cloud` in the same template with every setting needed, and the MCP identity already holds the grants — the gap is six env vars |
 | **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | **The token half is DONE and proven** (2026-09-01): `SELF_HEAL_TOKEN` is a repository secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the Dependabot lane runs instead of skipping. What is missing is a **subject**: Dependabot opens no security PR for the three seeded CVEs, so the lane has nothing to adopt (**F126**, cause unresolved, deferred). This is the ONLY showpiece with an open engineering blocker |
 
 ### The twelve layers — 8 verified, 2 partial, 2 not done
@@ -106,6 +106,71 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F131 — the committed solution carried the settings that break Direct Line *(fixed 2026-09-01)*
+
+**Caused by me, and the finding is bigger than the mistake.** The agent had been fixed by
+hand — Settings → Security → Authentication → "No authentication" — and published. Re-importing
+the solution to fix F129's connector host **silently reverted it**, because the committed
+`bot.xml` carried:
+
+    <authenticationmode>2</authenticationmode>       "Authenticate with Microsoft"
+    <authenticationtrigger>1</authenticationtrigger>  require users to sign in
+
+The next publish made that live and the agent went straight back to
+`IntegratedAuthenticationNotSupportedInChannel`, costing a full round trip.
+
+**`agent-definition.md` §7.1 was wrong about this, and the wrongness is the danger.** It said
+*"after a solution import the auth settings are blank and must be reconfigured by hand"*. They
+are not blank — they are **restored from the solution**, which is worse: reconfiguring by hand
+produces a working agent that the next import quietly undoes, and nothing reports it. In a
+repository whose claim is *the repo is the product*, the repo was carrying a configuration that
+cannot work on the channel this demo uses.
+
+**The enum is now OBSERVED rather than guessed**, which is what makes editing it legitimate
+where this register earlier said it would not be: with the UI showing "No authentication",
+Dataverse read `authenticationmode 1`; the committed `2` reproduced the channel error. So
+1 = No authentication, 2 = Authenticate with Microsoft — measured, not remembered.
+
+Fixed in the source: mode `2 → 1`, trigger `1 → 0`, and the tool's
+`connectionProperties.mode` from `Invoker` to `Maker` — end-user credentials being the other
+half of the contradiction, since an agent that authenticates nobody has no end user to run a
+tool as. All three now survive an import.
+
+### F130 — a green import that deployed nothing, because the check is version-keyed *(fixed 2026-09-01)*
+
+The first L8 re-import after F129's fix reported `import the Copilot Studio solution = success`
+and changed nothing. `import-agent.ps1` is idempotent on the solution **VERSION** — it compares
+the online version with the committed source and skips when they match — and the fix changed
+*content* (the connector host) without changing the version. Dataverse still read the dead host
+after a green run.
+
+The version is a **proxy** for "has the content changed", and it failed in exactly that way —
+the estate's own recurring shape, this time in the deploy path rather than a verification. A
+version bump is the honest remedy rather than `-Force`, because the content really did change.
+
+**What did NOT catch it:** V8.1 compares the deployed component list against the committed one,
+and it is red for an unrelated reason (16 platform-generated topics). A real content drift
+arrived while the criterion that would have named it was already failing for something else — a
+red check is not a working check.
+
+### F132 — L8 has not genuinely deployed in a long time *(open)*
+
+Every L8 run on 2026-09-01 failed, and the ones whose import job read `success` had **skipped**
+(F130). The first run that actually packed produced:
+
+    Error: Solution package type did not match requested type.
+    Pack 'MeridianLaunchCopilot' as Managed failed
+
+`layer-08-copilot-studio.yml` defaults `deploy_as_managed: true`, but the committed source is
+`<Managed>0</Managed>` and the installed solution reports `ismanaged: False`. So the default has
+never been satisfiable, and every import either skipped or failed. It only succeeded once
+dispatched with `deploy_as_managed=false`.
+
+**Left open deliberately**: the right fix is a decision, not a flag. Either the source is
+exported managed (matching `import-agent.ps1`'s own "DEPLOYS MANAGED" ALM rationale) or the
+default changes to match the artifact that exists. Choosing the first silently while a demo is
+being assembled would break the working path again.
 
 ### F129 — the copilot connector points at an environment that no longer exists *(fixed 2026-09-01)*
 
