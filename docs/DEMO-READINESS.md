@@ -137,6 +137,15 @@ to PowerShell, 401 to curl, same app, same minute. Pinning 401 fails a working c
 User-Agent of whoever ran the audit. A **2xx still fails**, which is the SPA-fallback state
 the criterion was written for (F110).
 
+**Confirmed against the live estate 2026-09-01**: a filtered re-run
+(`only_criterion: V7.7`) reports **PASS** in **4 minutes** rather than the ~55 a full L7
+costs, because V7.5 alone waits up to 30 for scale-in. The run exits 3 - `DIAGNOSTIC -
+filtered run; no verdict, and no layer can be signed off from it` - which is correct and is
+why the job shows red. **L7's verdict is therefore still 6/7 on the record.** The evidence
+for 7/7 is strong but spans two runs: a full run that reached 6/7 with V7.7 failing on this
+bug, plus a filtered run showing V7.7 now passes. A single unfiltered run is what would make
+it a sign-off, and it has not been paid for yet.
+
 **A note on the test, because it is the more useful lesson.** The first version of the
 regression test *passed with the defect reintroduced* — a mirror, not a test. It captured the
 probe's argument into a `$script:` variable that did not survive Pester's scoping, so the
