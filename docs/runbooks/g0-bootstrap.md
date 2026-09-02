@@ -604,10 +604,16 @@ it is still about sign-in risk and auto-labeling, nothing else.
 8. ⚠ **Direct Line channel for the embedded surface** (blocks L8's Ask tab). After the
    L8 pipeline first publishes the agent, in Copilot Studio open **Settings → Security →
    Web channel security**, turn **Require secured access** on, and copy one of the two
-   Direct Line secrets. Store it in the L6 Key Vault as `directline-secret`:
+   Direct Line secrets. Store it in the L6 Key Vault under the name the `demo`
+   environment variable **`MLS_DIRECTLINE_SECRET_NAME`** carries - `mls-directline-secret`
+   in this estate. That variable is the one source: L6 passes it to the Bicep, the
+   Function's Key Vault reference resolves it, and L8's eval reads it. This runbook used
+   to say `directline-secret`, which nothing creates and nothing reads, and L8 spent days
+   reporting "holds no 'directline-secret'" over a secret that was sitting in the vault
+   (F147):
 
    ```
-   az keyvault secret set --vault-name <kv> --name directline-secret --value <secret>
+   az keyvault secret set --vault-name <kv> --name "$MLS_DIRECTLINE_SECRET_NAME" --value <secret>
    ```
 
    `apps/directline-token` reads it through a Key Vault reference and exchanges it for

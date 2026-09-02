@@ -117,6 +117,28 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F151 — the closed credential list was not closed *(open — needs a decision)*
+
+CLAUDE.md rule 5 states "the complete list of long-lived credentials" and names two Key Vault
+entries. **The vault holds four.** Alongside the Direct Line secret and `mcp-auth-token` it
+carries `mls-github-token` and `mls-data-api-github-token`, which are referenced **nowhere** in
+`infra/`, `.github/` or `apps/`.
+
+The list is closed precisely so this cannot happen, and it happened anyway. The cost is not
+hypothetical: `gitleaks.yml`'s incident text is the rotation runbook, and it agreed with
+CLAUDE.md rather than with the vault — so a leak would have rotated four credentials and left
+two behind, unnoticed, because nothing named them.
+
+**Contained, not resolved.** Both are now in the rotation table and CLAUDE.md records the
+discrepancy. What is still owed is the decision: establish whether anything reads them by a name
+built at runtime, then either rotate-and-delete them as orphans or promote them into the list
+with a written reason. **Do not delete on the strength of a grep** — F147 is a fresh reminder
+that a value can be read under a name no static search will match.
+
+Found by taking a census rather than by a check, which is itself the finding: nothing asserts
+that the vault's contents match the documented inventory. That is a cheap check nobody has
+written.
+
 ### F150 — my recovery link signed the user out and left no way back *(fixed 2026-09-02)*
 
 F149 shipped a "Sign in again" link. The sponsor clicked it, chose their account, **was signed
