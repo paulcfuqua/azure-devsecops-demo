@@ -425,6 +425,27 @@ export function buildSecSpec(
 
 /* ---------------------------------------------------------------- Ops tab */
 
+/**
+ * Donut slices that still sum to the whole (F156).
+ *
+ * Charting only the top N and discarding the tail makes the ring disagree with
+ * the total printed directly above it, and makes a small line disappear
+ * entirely - which is exactly what would happen to a newly enabled Defender
+ * plan billing cents beside a database billing dollars. The tail is grouped and
+ * labelled with its own count instead, so nothing is dropped without saying so.
+ */
+export function donutWithRemainder(
+  services: readonly { name: string; cost: number }[],
+  top: number,
+  money: (n: number) => number,
+): { label: string; value: number }[] {
+  const named = services.slice(0, top).map((sv) => ({ label: sv.name, value: money(sv.cost) }));
+  const rest = services.slice(top);
+  if (rest.length === 0) return named;
+  const remainder = rest.reduce((sum, sv) => sum + sv.cost, 0);
+  return [...named, { label: `Other (${rest.length} services)`, value: money(remainder) }];
+}
+
 export function buildOpsSpec(
   cost: AzureCostFeed | null,
   outages: readonly FeedOutage[] = [],
@@ -494,10 +515,14 @@ export function buildOpsSpec(
       type: "donutChart",
       title: "Cost by Azure service",
       description:
-        "Where the money actually goes: container apps, the SQL database, the lakehouse and Log Analytics.",
-      data: cost.byService
-        .slice(0, 8)
-        .map((sv) => ({ label: sv.name, value: money(sv.cost) })),
+        `Every service billing, ${cost.timeframe}. The eight largest are named; ` +
+        "the rest are grouped so the ring still totals the whole bill.",
+      // A DONUT THAT DROPS SLICES DOES NOT ADD UP. This took the top 8 and
+      // discarded the tail silently, so the ring totalled less than the KPI
+      // beside it and a small line - a newly enabled Defender plan, say - simply
+      // vanished from the chart. Grouping the tail keeps the ring reconcilable
+      // with the total, which is the one property a cost chart has to have.
+      data: donutWithRemainder(cost.byService, 8, money),
       unit: cost.currency,
     });
   }

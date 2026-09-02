@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveDataMode } from "../src/providers";
 import { ApiProvider } from "../src/providers/ApiProvider";
 import { localFixtures, LocalProvider } from "../src/providers/LocalProvider";
-import { buildDevSpec, buildOpsSpec, buildSecSpec } from "../src/providers/specs";
+import { donutWithRemainder, buildDevSpec, buildOpsSpec, buildSecSpec } from "../src/providers/specs";
 import { sampleAzureCost, stubLoader } from "./sampleData";
 
 describe("buildDevSpec (Dev pillar)", () => {
@@ -473,5 +473,46 @@ describe("F116: ApiProvider degrades per feed", () => {
     // panel is a better answer than a grid of empty tiles.
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 502 })));
     await expect(new ApiProvider().getDevSpec()).rejects.toThrow(/responded 502/);
+  });
+});
+
+
+describe("donutWithRemainder (F156)", () => {
+  const money = (x: number): number => Math.round(x * 100) / 100;
+  const services = Array.from({ length: 12 }, (_, i) => ({
+    name: `svc-${i}`,
+    cost: 12 - i,
+  }));
+
+  it("keeps every dollar, so the ring reconciles with the total beside it", () => {
+    // The defect: the donut charted the top 8 and DROPPED the tail, so the ring
+    // totalled less than the KPI directly above it. A cost chart that does not
+    // add up is worse than no chart.
+    const total = services.reduce((sum, s) => sum + s.cost, 0);
+    const slices = donutWithRemainder(services, 8, money);
+    expect(slices.reduce((sum, s) => sum + s.value, 0)).toBe(total);
+  });
+
+  it("says how many services it grouped rather than hiding them", () => {
+    const slices = donutWithRemainder(services, 8, money);
+    expect(slices).toHaveLength(9);
+    expect(slices[8]?.label).toBe("Other (4 services)");
+  });
+
+  it("adds no remainder slice when nothing was dropped", () => {
+    const few = services.slice(0, 3);
+    const slices = donutWithRemainder(few, 8, money);
+    expect(slices).toHaveLength(3);
+    expect(slices.some((s) => s.label.startsWith("Other"))).toBe(false);
+  });
+
+  it("keeps a cent-sized service visible in the total - a newly enabled Defender plan", () => {
+    // The case that prompted this: five Defender plans were just enabled. Each
+    // bills a trivial amount next to the database, so each would have fallen off
+    // the top 8 and out of the ring entirely.
+    const withTiny = [...services, { name: "Microsoft Defender for Cloud", cost: 0.02 }];
+    const total = withTiny.reduce((sum, s) => sum + s.cost, 0);
+    const slices = donutWithRemainder(withTiny, 8, money);
+    expect(slices.reduce((sum, s) => sum + s.value, 0)).toBeCloseTo(total, 2);
   });
 });
