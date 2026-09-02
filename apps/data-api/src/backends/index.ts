@@ -4,6 +4,7 @@
  * call the same two methods either way.
  */
 import type { DataApiConfig } from "../config.js";
+import { BlobCostCacheStore, noopCostCacheStore, type CostCacheStore } from "./costCacheStore.js";
 import type { TableStore } from "../contract/allowlist.js";
 import { CloudFeedsBackend, CloudTablesBackend } from "./cloud.js";
 import { AzureTokenProvider, createCredential } from "./azureAuth.js";
@@ -60,7 +61,17 @@ export function createCloudBackends(config: DataApiConfig): Backends {
   };
 
   const tables = new CloudTablesBackend(clients);
-  const feeds = new CloudFeedsBackend({ config: cloud, tokens });
+  // Durable last-good store for the cost feed (F139). Absent container URI keeps
+  // the previous in-memory-only behaviour rather than failing to start: a cache
+  // is an optimisation, and a missing one must not take the API down.
+  const costCacheStore: CostCacheStore = cloud.costCacheContainerUri
+    ? new BlobCostCacheStore({
+        containerUri: cloud.costCacheContainerUri,
+        tokens,
+        onError: (message) => console.warn(`[data-api] ${message}`),
+      })
+    : noopCostCacheStore;
+  const feeds = new CloudFeedsBackend({ config: cloud, tokens, costCacheStore });
 
   return {
     kind: "cloud",

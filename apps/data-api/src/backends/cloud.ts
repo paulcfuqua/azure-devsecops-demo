@@ -16,6 +16,7 @@
  * redacted and never serialized to a caller.
  */
 import type { FeedName, TableName, TableStore } from "../contract/allowlist.js";
+import type { CostCacheStore } from "./costCacheStore.js";
 import { TABLE_STORE } from "../contract/allowlist.js";
 import type {
   AzureCostFeed,
@@ -82,6 +83,12 @@ export interface CloudFeedsDeps {
   readonly config: CloudConfig;
   readonly tokens: TokenProvider;
   readonly fetchImpl?: FetchLike;
+  /**
+   * Durable last-good store for the azure-cost feed (F139). Optional: when it is
+   * absent the feed behaves exactly as it did before, falling back to the
+   * in-memory cache alone.
+   */
+  readonly costCacheStore?: CostCacheStore;
 }
 
 export class CloudFeedsBackend implements FeedsBackend {
@@ -258,18 +265,39 @@ export class CloudFeedsBackend implements FeedsBackend {
         //
         // after probing had exhausted the budget, and every retry made the window longer.
         //
-        // Failing on the first refusal is not giving up: the hour-long cache above is the
-        // real fallback, and a 429 with something cached is served STALE rather than as an
+        // Failing on the first refusal is not giving up: the cache is the real
+        // fallback, and a 429 with something cached is served STALE rather than as an
         // error. Retrying is what this feed does across requests, not within one.
+        //
+        // CORRECTED (F139): this comment used to say "the hour-long cache above",
+        // meaning the in-memory field - which is empty after every scale-to-zero and
+        // every deploy, so it was not a fallback at all at the one moment it was
+        // needed. The durable store in the catch below is what makes the sentence
+        // true; without it this reasoning was sound and its premise was false.
         retries: 0,
         ...(this.deps.fetchImpl ? { fetchImpl: this.deps.fetchImpl } : {}),
       });
       const projected = projectAzureCost(raw, timeframe);
       this.costCache = projected;
+      // Fire and forget: a cache write must never delay or fail the answer it is
+      // caching. The store swallows its own errors.
+      void this.deps.costCacheStore?.write(projected);
       return projected;
     } catch (err) {
       if (cached) {
         return { ...cached, stale: true };
+      }
+      // THE DURABLE FALLBACK, and the reason F139 existed. `cached` above is an
+      // in-memory field on a container that scales to zero, so after a restart it
+      // is empty exactly when it is needed - a cold container's first request is
+      // a cold cache, and Cost Management's throttle lasts minutes. The last good
+      // answer survives the process here.
+      //
+      // Served STALE, like the in-memory one: a retained figure presented as
+      // current is the same defect as an empty list presented as zero.
+      const persisted = await this.deps.costCacheStore?.read();
+      if (persisted) {
+        return { ...persisted, stale: true };
       }
       throw err;
     }

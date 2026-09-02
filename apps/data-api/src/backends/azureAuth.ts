@@ -20,6 +20,8 @@ export const SCOPE_SQL = "https://database.windows.net/.default";
 export const SCOPE_ARM = "https://management.azure.com/.default";
 /** Azure Monitor Log Analytics query API. */
 export const SCOPE_LOG_ANALYTICS = "https://api.loganalytics.io/.default";
+/** Blob storage — the durable last-good store for the azure-cost feed (F139). */
+export const SCOPE_STORAGE = "https://storage.azure.com/.default";
 
 export interface TokenProvider {
   /** Bearer token for `scope`. Throws a typed ApiError on failure. */

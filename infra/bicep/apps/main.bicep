@@ -376,6 +376,13 @@ var dataApiCloudEnv = dataApiMode != 'cloud'
       // are not the same CONCEPT, and an estate that later bills across two
       // subscriptions should not discover the coupling then.
       { name: 'MLS_COST_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+      // F139: where the last good cost answer survives a restart. Empty would keep
+      // the in-memory-only behaviour, which on a scale-to-zero container means the
+      // stale-serving fallback is empty exactly when it is needed.
+      {
+        name: 'MLS_COST_CACHE_CONTAINER_URI'
+        value: '${tokenStoreStorage.properties.primaryEndpoints.blob}${costCacheContainerName}'
+      }
     ]
 
 // Scale-to-zero settings shared by all three apps.
@@ -709,6 +716,13 @@ func entraEasyAuthConfig(clientId string, issuer string, excludedPaths array, to
 // nothing else can. A public blob container here would be a credential leak.
 var tokenStoreContainerName = 'easyauth-tokens'
 
+// The cost feed's durable last-good answer (F139). A SECOND CONTAINER in the same
+// account rather than a second account: one storage account is enough, and the two
+// grants below are CONTAINER-scoped so neither identity can read the other's data.
+// That matters here specifically - `easyauth-tokens` holds Entra session tokens for
+// signed-in users, and data-api has no business reading them to cache a cost total.
+var costCacheContainerName = 'cost-cache'
+
 module controlTowerIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0' = {
   name: 'l7-control-tower-uami'
   params: {
@@ -744,6 +758,13 @@ resource tokenStoreStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
         publicAccess: 'None'
       }
     }
+
+    resource costCache 'containers@2023-05-01' = {
+      name: costCacheContainerName
+      properties: {
+        publicAccess: 'None'
+      }
+    }
   }
 }
 
@@ -756,13 +777,26 @@ resource tokenStoreStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 // guid() over an identity's OUTPUT principalId is not - the first attempt failed with
 // BCP120. Passing the principal as a module PARAMETER resolves it before the nested
 // deployment begins, which is why every other grant in this file is a module too.
-module tokenStoreGrant 'modules/storage-account-role.bicep' = {
+module tokenStoreGrant 'modules/blob-container-role.bicep' = {
   name: 'l7-token-store-grant'
   params: {
     storageAccountName: tokenStoreStorage.name
+    containerName: tokenStoreContainerName
     principalId: controlTowerIdentity.outputs.principalId
     // 'Storage Blob Data Contributor' (built-in, stable GUID; verified against
     // learn.microsoft.com/azure/role-based-access-control/built-in-roles/storage).
+    roleDefinitionId: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+  }
+}
+
+// data-api writes the last good cost answer here and reads it back after a
+// restart (F139). CONTAINER-scoped, so this identity cannot see easyauth-tokens.
+module costCacheGrant 'modules/blob-container-role.bicep' = {
+  name: 'l7-cost-cache-grant'
+  params: {
+    storageAccountName: tokenStoreStorage.name
+    containerName: costCacheContainerName
+    principalId: dataApiIdentity.outputs.principalId
     roleDefinitionId: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
   }
 }

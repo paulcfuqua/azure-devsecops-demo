@@ -59,6 +59,13 @@ export interface CloudConfig {
   readonly costTimeframe: string;
   /** How long an answered cost query is retained before re-asking. */
   readonly costCacheSeconds: number;
+  /**
+   * Blob container URI holding the last good cost answer, so it survives a
+   * restart (F139). EMPTY IS SUPPORTED and means in-memory only, which is the
+   * behaviour that existed before - the feed degrades to 502 during an upstream
+   * throttle rather than serving a stale figure.
+   */
+  readonly costCacheContainerUri: string;
   readonly armBase: string;
   /** Log Analytics workspace *customer id* (GUID), not the ARM resource id. */
   readonly logAnalyticsWorkspaceId: string;
@@ -281,6 +288,7 @@ function loadCloud(env: NodeJS.ProcessEnv): CloudConfig {
     // returned 429 - and cost figures move once a day, so asking more often
     // buys nothing and risks the whole feed. See CloudFeedsBackend.azureCost.
     costCacheSeconds: int(env, "MLS_COST_CACHE_SECONDS", 3600, 60, 86_400),
+    costCacheContainerUri: (env.MLS_COST_CACHE_CONTAINER_URI ?? "").trim(),
     armBase: str(env, "MLS_ARM_BASE") ?? "https://management.azure.com",
     logAnalyticsWorkspaceId: workspaceId,
     logAnalyticsBase: str(env, "MLS_LOG_ANALYTICS_BASE") ?? "https://api.loganalytics.io",
