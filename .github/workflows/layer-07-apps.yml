@@ -678,6 +678,7 @@ jobs:
           jq '.properties.outputs' l7-outputs.json > l7-manifest.json
 
           data_api_mode="$(jq -r '.dataApiBackendModeResolved.value // "unknown"' l7-manifest.json)"
+          mcp_tools_mode="$(jq -r '.mcpToolsBackendModeResolved.value // "unknown"' l7-manifest.json)"
           # F4 (compliance/findings/2026-08-26-prepublication-review.md#f4,
           # Task 8): the full manifest carries container app resource IDs (each
           # embedding the subscription ID) and data-api's internal-only origin
@@ -710,7 +711,12 @@ jobs:
             fi
             echo
             echo "data-api backend mode: \`${data_api_mode}\`"
+            echo "mcp-tools backend mode: \`${mcp_tools_mode}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${mcp_tools_mode}" != "cloud" ]; then
+            echo "::warning title=mcp-tools is not in cloud mode::The template resolved MLS_TOOL_BACKENDS='${mcp_tools_mode}'. LOCAL mode reads data/generated, which is not in the image, so every Copilot tool call answers 'Generated data not found at /repo/data/generated' - the agent, Direct Line and the connector all working and the answer empty (F133). Set MLS_SQL_ENDPOINT on the demo environment so the mode derives to cloud, or set MLS_TOOL_BACKENDS explicitly."
+          fi
 
           if [ "${data_api_mode}" != "cloud" ]; then
             echo "::warning title=data-api is not in cloud mode::The template resolved MLS_DATA_BACKENDS='${data_api_mode}' because MLS_SQL_ENDPOINT is not set on the demo environment. LOCAL mode reads data/generated, which is not in the image, so every /api/tables route will answer 503 and both dashboards will render empty. Set MLS_SQL_ENDPOINT to the lakehouse SQL analytics endpoint (the L5 lakehouse metadata's sqlEndpointProperties.connectionString) and re-run."

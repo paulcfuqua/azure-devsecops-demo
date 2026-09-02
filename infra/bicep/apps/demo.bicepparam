@@ -121,7 +121,12 @@ param mcpEndpointPath = readEnvironmentVariable('MCP_ENDPOINT_PATH', '/mcp')
 // deploys — see docs/runbooks/g0-bootstrap.md item C11.
 //
 // The backend set mcp-tools serves IS still a deploy parameter:
-param mcpToolsBackendMode = readEnvironmentVariable('MLS_TOOL_BACKENDS', 'local')
+// EMPTY, not 'local'. A literal default made "explicitly local" and "nobody said"
+// indistinguishable, so the template could not derive the mode the way it does for
+// data-api - and mcp-tools shipped reading data/generated, which is not in the image
+// (F133). Empty lets main.bicep decide from the Fabric endpoint; an explicit
+// MLS_TOOL_BACKENDS still wins either way.
+param mcpToolsBackendMode = readEnvironmentVariable('MLS_TOOL_BACKENDS', '')
 
 // There is no ingress parameter: mcp-tools is external + HTTPS-only by
 // requirement, not by configuration (Copilot Studio calls it from outside Azure).
