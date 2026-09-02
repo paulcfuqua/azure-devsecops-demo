@@ -191,8 +191,15 @@ jobs:
           # absent, classify() sees the login redirect, and the endpoint is
           # reported `auth-wall` exactly as before - never scanned-and-passed on
           # a redirect. Authentication failing costs coverage, never honesty.
+          # THE BARE CLIENT ID, exactly as V7.3 does it (F161). Easy Auth
+          # validates that a token's audience matches the app's CLIENT ID, and
+          # `--resource <clientId>` produces precisely that. Asking for
+          # `api://<clientId>` instead produces a different audience, needs an
+          # Application ID URI on the registration to exist at all, and then
+          # needs that audience adding to allowedAudiences - three moving parts
+          # to reach a place the repo already had a one-line route to.
           token_for() {
-            az account get-access-token --resource "api://$1" --query accessToken -o tsv 2>/dev/null || true
+            az account get-access-token --resource "$1" --query accessToken -o tsv 2>/dev/null || true
           }
 
           # classify() writes the Easy Auth resource id here when it finds one.
@@ -390,6 +397,21 @@ jobs:
 
       - name: Run the ZAP baseline scan
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        # THE ACTION'S OWN AUTH CHANNEL (F160). It already forwards
+        # ZAP_AUTH_HEADER, ZAP_AUTH_HEADER_VALUE and ZAP_AUTH_HEADER_SITE into
+        # the container - visible in its own `docker run -e ...` line - so the
+        # bearer travels as an environment variable rather than through the
+        # command line. That fixes the parse failure AND keeps the token off the
+        # argv that gets echoed into the log, where it appeared as `***` only
+        # because masking caught it.
+        #
+        # Empty when there is no token: the scan then runs anonymously, the
+        # target was already classified `auth-wall`, and it is reported rather
+        # than passed.
+        env:
+          ZAP_AUTH_HEADER: Authorization
+          ZAP_AUTH_HEADER_VALUE: ${{ steps.probe.outputs.token && format('Bearer {0}', steps.probe.outputs.token) || '' }}
+          ZAP_AUTH_HEADER_SITE: ${{ steps.probe.outputs.token && matrix.target.name || '' }}
         with:
           target: ${{ matrix.target.url }}
           # -a includes alpha passive rules. `-J` is DELIBERATELY ABSENT (F102).
@@ -410,12 +432,20 @@ jobs:
           # reason of its own.
           #
           # Let the action write its own file, then normalise the name below.
-          # `-a` adds alpha passive rules. When a probe token exists, ZAP's
-          # replacer injects it on every request so the crawl reaches the
-          # application rather than its login redirect. `-J` stays absent (F102).
-          cmd_options: >-
-            -a
-            ${{ steps.probe.outputs.token && format('-config replacer.full_list(0).description=probe -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Authorization -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement="Bearer {0}"', steps.probe.outputs.token) || '' }}
+          # `-a` adds alpha passive rules. `-J` stays absent (F102).
+          #
+          # NO `-config` HERE (F160). Passing ZAP daemon options through
+          # cmd_options does not work: zap-baseline.py owns `-c` for its own
+          # config FILE, so `-config ...` is parsed as `-c onfig` and the scan
+          # dies before it starts -
+          #
+          #   FileNotFoundError: '/zap/wrk/onfig'
+          #
+          # producing no report at all. The empty-report gate caught it (F102's
+          # fix earning its keep), but a whole run was spent learning it. The
+          # authorization header goes through the action's OWN supported channel
+          # instead - see the env block below.
+          cmd_options: '-a'
           # The gate below owns pass/fail so the report is always archived.
           fail_action: false
           allow_issue_writing: false

@@ -663,28 +663,6 @@ func entraEasyAuthConfig(clientId string, issuer string, excludedPaths array, to
         clientId: clientId
         openIdIssuer: issuer
       }
-      // WHY AN AUDIENCE LIST AT ALL (F159). A browser sign-in produces a token
-      // whose `aud` is the bare client id, and Easy Auth accepts that by default
-      // without this block. A CLIENT-CREDENTIALS token - the one the DAST uses to
-      // get past this wall and scan the application rather than its login page -
-      // is requested by resource URI and carries `aud: api://<clientId>`, which
-      // the default does NOT accept. Without this the scanner authenticates
-      // successfully and is still refused at the door.
-      //
-      // DERIVED, NEVER LISTED. Interpolated from the same `clientId` this config
-      // already binds, so it cannot drift from it and a rebrand or a rebuild
-      // carries it automatically. It was first applied by hand to the running
-      // apps, which is precisely the mistake this repository keeps paying for:
-      // configuration that exists only in the estate does not survive the
-      // teardown-and-rebuild the demo exists to show (F129, F144, F155).
-      //
-      // Additive, not restrictive: naming an audience here does not stop the
-      // default one being accepted, so interactive sign-in is untouched.
-      validation: {
-        allowedAudiences: [
-          'api://${clientId}'
-        ]
-      }
     }
   }
   login: {
