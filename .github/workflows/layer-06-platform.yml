@@ -268,6 +268,13 @@ jobs:
           # secret's name and an origin list are not sensitive. Unset means the Ask
           # tab stays dark with a typed error, which is a supported deployment.
           MLS_DIRECTLINE_SECRET_NAME: ${{ vars.MLS_DIRECTLINE_SECRET_NAME }}
+          # NOT PASSED ANY MORE, and deliberately absent rather than empty-by-accident:
+          # the control tower origin is DERIVED inside main.bicep from the Container
+          # Apps environment domain, which L6 itself creates. It used to be a GitHub
+          # variable containing a full FQDN, so it named a dead host the moment the
+          # estate was rebuilt - F129's defect, living in configuration where no
+          # repository test could see it. Set MLS_DIRECTLINE_ALLOWED_ORIGINS only to
+          # override with a custom domain.
           MLS_DIRECTLINE_ALLOWED_ORIGINS: ${{ vars.MLS_DIRECTLINE_ALLOWED_ORIGINS }}
           # Who the token endpoint will accept. The tenant is the estate's own;
           # the audience is the control tower's Easy Auth client id, because the
