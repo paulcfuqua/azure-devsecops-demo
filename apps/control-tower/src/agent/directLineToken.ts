@@ -164,6 +164,30 @@ async function readEasyAuthToken(doFetch: typeof globalThis.fetch): Promise<stri
   }
 }
 
+/**
+ * Ask Easy Auth to mint a fresh token for this session.
+ *
+ * THE ID TOKEN EXPIRES AND NOTHING WAS RENEWING IT (F142). It is issued at
+ * sign-in with roughly an hour's life, the token store persists exactly what was
+ * issued, and the Function verifies expiry - correctly. So the Ask tab worked for
+ * an hour after sign-in and then locked the user out of their own agent, with a
+ * 401 that read like an outage. Proven by an Incognito window: a fresh sign-in
+ * answered immediately.
+ *
+ * Returns true when a refresh plausibly succeeded. NO NAVIGATION happens here on
+ * purpose: redirecting to a login endpoint automatically is how a bad session
+ * becomes a redirect loop, and a loop is a worse failure than the one being
+ * fixed. When this cannot help, the caller says so in words and offers a link.
+ */
+async function refreshEasyAuthSession(doFetch: typeof globalThis.fetch): Promise<boolean> {
+  try {
+    const res = await doFetch("/.auth/refresh", { headers: { accept: "application/json" } });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function createTokenFetcher(
   tokenUrl: string,
   { fetchImpl }: TokenFetcherOptions = {},
@@ -179,13 +203,35 @@ export function createTokenFetcher(
           "the token endpoint will refuse the request.",
       );
     }
-    const res = await doFetch(tokenUrl, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${idToken}`,
-      },
-    });
+    const request = (bearer: string): Promise<Response> =>
+      doFetch(tokenUrl, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${bearer}`,
+        },
+      });
+
+    let res = await request(idToken);
+
+    // A 401 here means the token was read but not accepted, and by far the most
+    // likely reason is that it expired (F142). One refresh, one retry - never a
+    // loop: if the second attempt also fails the caller gets a sentence telling
+    // them to sign in again, which is true and actionable, rather than a retry
+    // that cannot succeed.
+    if (res.status === 401 && (await refreshEasyAuthSession(doFetch))) {
+      const renewed = await readEasyAuthToken(doFetch);
+      if (renewed && renewed !== idToken) {
+        res = await request(renewed);
+      }
+    }
+
+    if (res.status === 401) {
+      throw new DirectLineTokenError(
+        "This sign-in has expired, so the Ask tab cannot prove who is asking. " +
+          "Reload the page to sign in again — the agent itself is fine.",
+      );
+    }
     if (!res.ok) {
       throw new DirectLineTokenError(
         `The Direct Line token endpoint (${tokenUrl}) responded ${res.status}. ` +

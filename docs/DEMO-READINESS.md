@@ -31,7 +31,7 @@ conversation that has been compacted, should be able to read only this and the b
 below and know what to do next.*
 
 `docs/BRIEF.md` commits to **four showpieces** and **twelve layers**. This is what is true
-on 2026-09-01, with the evidence beside it.
+on 2026-09-02, with the evidence beside it.
 
 ### The four showpieces — 3 working, 1 waiting on Dependabot
 
@@ -39,7 +39,7 @@ on 2026-09-01, with the evidence beside it.
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
 | **4** | **Compliance platform** — NIST 800-171 | ✅ **working** | **Independently audited for the first time, 2026-09-01.** `verification/layer-12-audit.ps1` runs as `mls-verifier` and reports **4 PASS + 2 SKIP**: the shipped artifact is complete against the catalog and carries no score, the honesty invariant holds in the file rather than only in the derivation, Easy Auth refuses anonymous callers, and the collection history is a git history. The two SKIPs name their owners rather than being gaps |
-| **1** | **Copilot service** — Ask tab over Direct Line | ✅ **DEMONSTRATED** | **2026-09-02, observed in a browser by a signed-in human** — not inferred from a green run. Asked *"what day of the week had the most launches"* the tab answered **"Saturday had the most launches, with 309 launches recorded in the launches table"**, citing its source. The figure was **independently re-derived** through the MCP server (Saturday 309, Sunday 181, Tuesday 162 …), an exact match. Ten findings between "not configured" and this: F122, F124, F128, F129, F130, F131, F133, F134, F135, F136 — all fixed **in the repo**, so a rebuild reproduces the working state. **And it is not open**: the endpoint 401s an anonymous caller; the page forwards its Easy Auth token and the Function verifies signature, issuer, audience and expiry before the Direct Line secret is touched |
+| **1** | **Copilot service** — Ask tab over Direct Line | ✅ **DEMONSTRATED** | **2026-09-02, observed in a browser by a signed-in human** — not inferred from a green run. Asked *"what day of the week had the most launches"* the tab answered **"Saturday had the most launches, with 309 launches recorded in the launches table"**, citing its source. The figure was **independently re-derived** through the MCP server (Saturday 309, Sunday 181, Tuesday 162 …), an exact match. Ten findings between "not configured" and this: F122, F124, F128, F129, F130, F131, F133, F134, F135, F136 — all fixed **in the repo**, so a rebuild reproduces the working state. **And it is not open**: the endpoint 401s an anonymous caller; the page forwards its Easy Auth token and the Function verifies signature, issuer, audience and expiry before the Direct Line secret is touched. That control shipped with a bug of its own (**F142**): the `id_token` expires after about an hour and nothing renewed it, so the tab worked and then locked its user out. Fixed - one refresh, one retry, and a sentence when that fails |
 | **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | **The token half is DONE and proven** (2026-09-01): `SELF_HEAL_TOKEN` is a repository secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the Dependabot lane runs instead of skipping. What is missing is a **subject**: Dependabot opens no security PR for the three seeded CVEs, so the lane has nothing to adopt (**F126**, cause unresolved, deferred). This is the ONLY showpiece with an open engineering blocker |
 
 ### The twelve layers — 8 verified, 2 partial, 2 not done
@@ -85,9 +85,13 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   F129 and F131 were both configurations that could not have survived the teardown-and-rebuild
   this demo exists to showcase.
 
-  **One thing is NOT closed and is tracked separately:** the Ask tab still reaches the agent
-  without authenticating the human. The fix — the page forwards its Easy Auth token and the
-  Function verifies it — is merged and waiting on an L6 + L7 deploy.
+  **The authentication half closed on 2026-09-02.** The page forwards its Easy Auth token
+  and the Function verifies signature, issuer, audience and expiry before touching the Direct
+  Line secret; both are deployed, and an anonymous caller gets 401. Two findings came out of
+  shipping it: **F135** (the token store was off, so there was no token to forward - I had
+  verified a token without checking one could be *obtained*) and **F142** (it expires after an
+  hour and nothing renewed it - I verified expiry without asking what happens when it
+  *expires*). Same shape twice: the check was right and the lifecycle around it was not.
 
 - **BLOCKER-4: the token half is DONE and proven.** `SELF_HEAL_TOKEN` is now a repository
   secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the
@@ -108,7 +112,62 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
-### F139 — an in-memory cache on a scale-to-zero container is not a fallback *(open)*
+### F142 — the sign-in expires after an hour and nothing renewed it *(fixed 2026-09-02)*
+
+The Ask tab answered at 11:00 and returned 401 by 15:30, with:
+
+> `{"error":"A valid Entra user token is required to request a Direct Line token."}`
+
+Tenant and audience were provably correct - the Function expects `c3571944…` / `88106f53…` and
+Easy Auth issues for exactly those - and `/.auth/me` succeeded, so the page had a token and sent
+it. The failure was **expiry**, the fourth thing the Function verifies.
+
+**The `id_token` is issued at sign-in with about an hour's life, and nothing renewed it.** The
+token store persists what Easy Auth received; refreshing needs a client secret, which this design
+deliberately does not have. So the control worked for an hour after sign-in and then locked the
+user out of their own agent, with a 401 that reads like an outage.
+
+**Confirmed before fixing, not assumed:** a fresh Incognito sign-in answered immediately.
+
+This is **F135's shape a second time**. There I verified a token without checking one could be
+*obtained*; here I verified its expiry without asking what happens when it *expires*. Both times
+the check was correct and the lifecycle around it was not.
+
+**Fixed:** a 401 from the token endpoint triggers one `/.auth/refresh`, re-reads `/.auth/me`, and
+retries once. **No navigation happens automatically** - redirecting to a login endpoint on failure
+is how a bad session becomes a redirect loop, and a loop is worse than the bug. When the retry
+also fails the tab says *"This sign-in has expired… Reload the page to sign in again - the agent
+itself is fine"*, which is true, actionable, and distinguishes a session problem from an outage.
+Mutation-tested: disabling the refresh fails both new tests.
+
+### F141 — nothing validated Bicep, so a typo cost a twenty-minute deploy *(fixed 2026-09-02)*
+
+A malformed params file reached a deployment and failed there rather than in CI. The reason the
+existing check missed it is worth keeping: **`az bicep build` on a template passes while its
+params file is invalid** - only `build-params` reads the params file at all. A validation step
+that names the thing it does not read is the same defect class as an audit that cannot see what
+it reports on.
+
+**Fixed:** `.github/workflows/lint-ci.yml` gained a `bicep` job that builds every template **and**
+every params file, so the twenty-minute failure is now a sixty-second one.
+
+### F140 — every page load was a retry, and so was the diagnosis *(fixed 2026-09-02)*
+
+Cost Management throttles **per principal**, and each refusal lengthens the window. The Ops tab
+had no cooldown: a reader pressing refresh on a 502 was extending the outage they were trying to
+end. **I did it to myself during the diagnosis** - throttling my own admin identity by retrying
+the query, which is precisely the mistake the code was making.
+
+**Fixed:** `cloud.ts` records `costUpstreamBlockedUntil` on a 429 and serves the persisted answer
+as `stale: true` until it passes, without calling upstream.
+
+**Two bugs in my own fix, both caught by tests before deploy.** `isThrottled` read only
+`err.message` when the status is in `detail`; and the detection regex was `/\x08429\x08/` -
+`\b` had been corrupted into a literal backspace byte on its way through a heredoc. The second is
+why `verification/tests/control-characters.Tests.ps1` now sweeps the repository for control
+characters, and why CLAUDE.md carries a rule about how these files get edited.
+
+### F139 — an in-memory cache on a scale-to-zero container is not a fallback *(fixed 2026-09-02)*
 
 The Ops tab showed:
 
@@ -144,7 +203,20 @@ demo time by construction — a cold container's first request is exactly when a
    but it is a **G2 spend increase** and it treats a caching problem with money.
 
 (1) is the better answer; (2) is what to reach for only if idle cost is not a constraint.
-Neither is done.
+
+**Fixed with (1), and the sponsor chose it explicitly.** `apps/data-api/src/backends/costCacheStore.ts`
+persists the last good answer to a blob written by data-api's existing identity, with two
+properties that matter more than the caching: **nothing in it may fail a request** (every method
+swallows its errors and reports "no value", because a cache is an optimisation), and it always
+writes `stale: false` - whether a reader should call a figure stale depends on when it is *read*,
+which is `cloud.ts`'s decision, not the writer's. Idle cost is unchanged; `minReplicas: 0` stands.
+
+**One thing needed a human to break a deadlock.** data-api's identity was already throttled by
+Cost Management, so it could never complete the query that would populate its own cache. Seeded
+once from an unthrottled admin identity, using the same API, subscription, query shape and
+document shape the service writes itself - **$7.70 MTD**, of which **SQL Database is $7.65, 99%
+of all spend**, which is worth a look given V6.4 asserts auto-pause. The grant was removed after
+seeding.
 
 ### F138 — the agent answered a different question and kept the original question's words *(open)*
 

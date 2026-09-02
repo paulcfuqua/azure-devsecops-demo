@@ -183,6 +183,63 @@ describe("the token seam never lets a secret reach the app", () => {
     expect(init.credentials).toBeUndefined();
   });
 
+  it("refreshes once and retries when the endpoint says the token expired (F142)", async () => {
+    // The id_token is issued at sign-in with about an hour's life and NOTHING was
+    // renewing it, so the Ask tab worked for an hour and then locked the user out
+    // of their own agent with a 401 that read like an outage.
+    let token = "expired-token";
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      seen.push(u);
+      if (u === "/.auth/me") {
+        return new Response(JSON.stringify([{ id_token: token }]), { status: 200 });
+      }
+      if (u === "/.auth/refresh") {
+        token = "fresh-token";
+        return new Response(null, { status: 200 });
+      }
+      const bearer = (init?.headers as Record<string, string>).authorization;
+      return bearer === "Bearer fresh-token"
+        ? new Response(JSON.stringify({ token: "t", expires_in: 1800, userId: "dl_x" }), {
+            status: 200,
+          })
+        : new Response("nope", { status: 401 });
+    });
+
+    const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(fetchToken()).resolves.toMatchObject({ token: "t" });
+    expect(seen).toContain("/.auth/refresh");
+  });
+
+  it("gives up after ONE refresh rather than looping", async () => {
+    // A retry that cannot succeed is worse than a clear sentence: the whole point
+    // of not navigating to a login endpoint is that a bad session must not become
+    // a redirect loop.
+    let refreshes = 0;
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u === "/.auth/me") {
+        return new Response(JSON.stringify([{ id_token: "stale" }]), { status: 200 });
+      }
+      if (u === "/.auth/refresh") {
+        refreshes += 1;
+        return new Response(null, { status: 200 });
+      }
+      return new Response("nope", { status: 401 });
+    });
+
+    const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(fetchToken()).rejects.toThrow(/sign-in has expired/);
+    expect(refreshes).toBe(1);
+  });
+
   it("refuses to call the endpoint at all when Easy Auth yields no token", async () => {
     // Served without Easy Auth in front of it - a local `npm run dev`, or a
     // misconfigured revision - /.auth/me is absent. The tab must say so, not
