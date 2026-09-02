@@ -127,6 +127,16 @@ export function App({ provider, agent }: AppProps): JSX.Element {
 
   // Persist the CHOICE, not the resolved theme: someone who has never touched the
   // switch keeps following their machine, including when it changes at sunset.
+  // Paint the PAGE, not just the app. FluentProvider themes its own subtree; the
+  // document behind it keeps the browser default, which showed as a light frame
+  // around a dark app - and as a light overscroll area, and light scrollbars.
+  // `color-scheme` is what tells the browser to render its own furniture to match.
+  useEffect(() => {
+    const dark = theme === "dark";
+    document.documentElement.style.colorScheme = dark ? "dark" : "light";
+    document.body.style.backgroundColor = dark ? "#141414" : "#f5f5f5";
+  }, [theme]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);

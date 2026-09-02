@@ -9,6 +9,27 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%9B%B0%3C/text%3E%3C/svg%3E"
     />
     <title>Control Tower — Meridian Launch Systems</title>
+    <style>
+      /* THE WHITE FRAME IN DARK MODE WAS THE BROWSER'S OWN DEFAULT. `body` carries
+         an 8px margin unless something says otherwise, and FluentProvider themes
+         its own subtree only - so the app painted dark inside a light border that
+         looked like part of the design. Zeroing it here rather than in a component
+         because the margin exists before React renders. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      /* Set before first paint so the very first frame is not a white flash for
+         someone whose OS is dark; App.tsx keeps it in step with the toggle after
+         that. */
+      @media (prefers-color-scheme: dark) {
+        html {
+          color-scheme: dark;
+          background-color: #141414;
+        }
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
