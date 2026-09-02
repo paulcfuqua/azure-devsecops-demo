@@ -488,8 +488,19 @@ absolute no-stored-secrets position.
 > **Entra ID V2 with certificates** before **with client secrets**, and record the
 > deviation.
 
-**Authentication changes take effect only after publishing**, and after a solution import
-the auth settings are blank (§6) and must be reconfigured by hand.
+**Authentication changes take effect only after publishing.**
+
+> **CORRECTED 2026-09-01 (F131).** This sentence used to continue: *"and after a solution
+> import the auth settings are blank (§6) and must be reconfigured by hand."* **They are not
+> blank — they are RESTORED FROM THE SOLUTION**, which is worse in a specific way: configuring
+> them by hand produces a working agent that the next import quietly undoes, with nothing
+> reporting the reversion. That is exactly what happened while fixing F129 - a hand-applied
+> "No authentication" was overwritten by an import carrying `authenticationmode 2`, and the
+> next publish put the broken value live.
+>
+> The committed solution now carries the working values (`authenticationmode 1`,
+> `authenticationtrigger 0`, and `mode: Maker` on the tool), so an import reinforces the fix
+> instead of reverting it. **Change them in the solution, not only in the portal.**
 
 > ### DECIDED 2026-09-01: use **No authentication** while the agent is tools-only (F128)
 >

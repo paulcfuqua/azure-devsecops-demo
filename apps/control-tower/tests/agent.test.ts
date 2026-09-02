@@ -149,32 +149,61 @@ describe("the token seam never lets a secret reach the app", () => {
     expect(() => parseTokenResponse("nope")).toThrow(/JSON object/);
   });
 
-  it("calls the token endpoint with no Authorization header and no credentials", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ token: "t", expires_in: 1800, userId: "dl_x" }), {
-          status: 200,
-        }),
-    );
+  it("forwards this session's Easy Auth token to the endpoint", async () => {
+    // INVERTED DELIBERATELY. This assertion used to be `not.toContain
+    // ("authorization")`: the endpoint was anonymous, guarded only by an Origin
+    // allow-list, which stops a browser on another site and no direct caller at
+    // all. The page now forwards the Entra token it already holds, and the
+    // Function verifies it before exchanging the Direct Line secret.
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (String(url) === "/.auth/me") {
+        return new Response(JSON.stringify([{ id_token: "easy-auth-id-token" }]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ token: "t", expires_in: 1800, userId: "dl_x" }), {
+        status: 200,
+      });
+    });
     const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     await fetchToken();
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("https://fn.example/api/directline/token");
+    const calls = fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>;
+    const tokenCall = calls.find(
+      (call) => String(call[0]) === "https://fn.example/api/directline/token",
+    );
+    expect(tokenCall).toBeDefined();
+    const init = tokenCall![1];
     expect(init.method).toBe("POST");
     const headers = init.headers as Record<string, string>;
-    expect(Object.keys(headers).map((k) => k.toLowerCase())).not.toContain("authorization");
+    expect(headers.authorization).toBe("Bearer easy-auth-id-token");
+    // Still no secret and no cookie: the forwarded token is the only credential.
     expect(init.body).toBeUndefined();
     expect(init.credentials).toBeUndefined();
   });
 
+  it("refuses to call the endpoint at all when Easy Auth yields no token", async () => {
+    // Served without Easy Auth in front of it - a local `npm run dev`, or a
+    // misconfigured revision - /.auth/me is absent. The tab must say so, not
+    // call the token endpoint anonymously and report its 401 as a bot outage.
+    const fetchImpl = vi.fn(async () => new Response("nope", { status: 404 }));
+    const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(fetchToken()).rejects.toThrow(/cannot prove who is asking/);
+    const attempted = (fetchImpl.mock.calls as unknown as Array<[string]>).some(
+      (call) => String(call[0]) === "https://fn.example/api/directline/token",
+    );
+    expect(attempted).toBe(false);
+  });
+
   it("explains that the Ask tab needs the deployed environment when the endpoint 404s", async () => {
     const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
-      fetchImpl: (async () => new Response("nope", { status: 404 })) as typeof fetch,
+      fetchImpl: (async (url: string) =>
+        String(url) === "/.auth/me"
+          ? new Response(JSON.stringify([{ id_token: "easy-auth-id-token" }]), { status: 200 })
+          : new Response("nope", { status: 404 })) as unknown as typeof fetch,
     });
     await expect(fetchToken()).rejects.toThrow(/deployed environment/);
   });

@@ -113,8 +113,14 @@ param functionDeploymentContainerName string = 'deployment-package'
 @description('Name of the Key Vault secret holding the Copilot Studio DIRECT LINE SECRET, which the directline-token Function exchanges server-side for a short-lived conversation token. EMPTY IS A SUPPORTED DEPLOYMENT and is the default: the Function still deploys and still answers, with a typed error saying the channel is not configured, which is the honest state before the agent is published. The value never enters this template - it is resolved from Key Vault at runtime by the Function\'s own managed identity.')
 param directlineSecretName string = ''
 
-@description('Origins the directline-token Function will mint a token for, comma-separated. These become the Direct Line `trustedOrigins` and the CORS allow-list, so a token minted for this estate cannot be replayed from someone else\'s page. Empty means the Function refuses every origin, which is the correct default for an endpoint that is public and anonymous by design.')
+@description('Origins the directline-token Function will mint a token for, comma-separated. These become the Direct Line trustedOrigins and the CORS allow-list, so a token minted for this estate cannot be replayed from someone else page. LEAVE IT EMPTY: the control tower origin is DERIVED from the Container Apps environment domain and the naming module, so it cannot go stale when the estate is rebuilt (F129). Set it only to add a custom domain or a second origin, and include the control tower itself when you do, because this REPLACES the derived value rather than adding to it. The previous text called this endpoint public and anonymous by design; it is no longer anonymous - it now verifies the caller Easy Auth token before minting.')
 param directlineAllowedOrigins string = ''
+
+@description('Entra tenant whose user tokens the directline-token Function accepts. The Function verifies the caller Easy Auth token before exchanging the Direct Line secret, so the copilot inherits the identity of the control tower instead of sitting open beside it. EMPTY MEANS THE FUNCTION REFUSES EVERY REQUEST (500) rather than falling back to anonymous - an optional security control is one nobody turns on.')
+param directlineUserTenantId string = ''
+
+@description('The Easy Auth application (client) id of the control tower. The Function checks this as the token AUDIENCE: a signature from the right tenant proves only that SOME Entra app issued the token, and one minted for a different application is not permission to use this one. Empty has the same effect as an empty tenant id - the Function refuses.')
+param directlineUserAudience string = ''
 
 @description('[derived] Node runtime major version for the cost-ingest Function (Flex Consumption `functionAppConfig.runtime`). 22 matches apps/cost-ingest/package.json\'s `engines.node: >=22`. Not a free choice: Flex Consumption accepts only the runtime versions it publishes, and one it does not offer fails the deployment rather than degrading.')
 param costIngestNodeVersion string = '22'
@@ -182,6 +188,23 @@ var tagsSqlDb = naming.requiredTags(env, naming.appKeys.launchOps, costCenter, o
 var tagsCostStorage = naming.requiredTags(env, 'cost', costCenter, owner, dataClassification)
 var tagsCostIngest = naming.requiredTags(env, naming.appKeys.costIngest, costCenter, owner, dataClassification)
 var tagsDirectline = naming.requiredTags(env, naming.appKeys.directlineToken, costCenter, owner, dataClassification)
+
+// THE CONTROL TOWER ORIGIN IS DERIVED, NOT STORED, and F129 is why. A Container Apps
+// FQDN embeds the ENVIRONMENT's randomly-assigned domain, and Azure picks a new one
+// every time the environment is recreated. This value was previously carried in a
+// GitHub variable, which meant it named a dead host from the moment the estate was
+// rebuilt - the same defect as the Copilot connector's hardcoded host, living in
+// configuration instead of a file, where no repository test can see it.
+//
+// Both halves are already in this template: L6 creates the environment (so it knows
+// the domain) and naming.bicep owns the app name. Deriving costs nothing and cannot
+// go stale, so the variable is no longer read.
+//
+// An explicit `directlineAllowedOrigins` still wins, for the case of an extra origin
+// or a custom domain. It is additive to nothing - it REPLACES - so a caller setting it
+// must include the control tower itself.
+var controlTowerOrigin = 'https://${naming.containerAppName(companyPrefix, naming.appKeys.controlTower, env)}.${containerAppsEnvironment.outputs.defaultDomain}'
+var directlineOrigins = empty(directlineAllowedOrigins) ? controlTowerOrigin : directlineAllowedOrigins
 
 // ------------------------------------------------------------------ resource groups (all four — single owner of RG creation)
 
@@ -1054,7 +1077,9 @@ module directlineFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
             AzureWebJobsStorage__credential: 'managedidentity'
             AzureWebJobsStorage__clientId: directlineIdentity.outputs.clientId
             AZURE_CLIENT_ID: directlineIdentity.outputs.clientId
-            DIRECTLINE_ALLOWED_ORIGINS: directlineAllowedOrigins
+            DIRECTLINE_ALLOWED_ORIGINS: directlineOrigins
+            DIRECTLINE_USER_TENANT_ID: directlineUserTenantId
+            DIRECTLINE_USER_AUDIENCE: directlineUserAudience
           },
           // A Key Vault REFERENCE, not a value: the secret is resolved by the
           // platform at start-up using this app's identity, so it never becomes

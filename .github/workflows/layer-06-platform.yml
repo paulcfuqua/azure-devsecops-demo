@@ -268,7 +268,21 @@ jobs:
           # secret's name and an origin list are not sensitive. Unset means the Ask
           # tab stays dark with a typed error, which is a supported deployment.
           MLS_DIRECTLINE_SECRET_NAME: ${{ vars.MLS_DIRECTLINE_SECRET_NAME }}
+          # NOT PASSED ANY MORE, and deliberately absent rather than empty-by-accident:
+          # the control tower origin is DERIVED inside main.bicep from the Container
+          # Apps environment domain, which L6 itself creates. It used to be a GitHub
+          # variable containing a full FQDN, so it named a dead host the moment the
+          # estate was rebuilt - F129's defect, living in configuration where no
+          # repository test could see it. Set MLS_DIRECTLINE_ALLOWED_ORIGINS only to
+          # override with a custom domain.
           MLS_DIRECTLINE_ALLOWED_ORIGINS: ${{ vars.MLS_DIRECTLINE_ALLOWED_ORIGINS }}
+          # Who the token endpoint will accept. The tenant is the estate's own;
+          # the audience is the control tower's Easy Auth client id, because the
+          # page forwards ITS token and a token for another app is not permission
+          # to use this one. Both empty means the Function refuses every request
+          # rather than reverting to anonymous.
+          MLS_DIRECTLINE_USER_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          MLS_DIRECTLINE_USER_AUDIENCE: ${{ vars.MLS_DIRECTLINE_USER_AUDIENCE }}
           # A deliberately-set repository variable still wins; otherwise take what the
           # kvmode step decided by inspecting the tenant.
           KEY_VAULT_CREATE_MODE: ${{ vars.KEY_VAULT_CREATE_MODE || steps.kvmode.outputs.mode || 'default' }}

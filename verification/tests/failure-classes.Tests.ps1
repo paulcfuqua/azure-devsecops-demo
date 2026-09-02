@@ -1150,6 +1150,62 @@ Describe 'a PowerShell file with non-ASCII content carries its BOM' {
     }
 }
 
+Describe 'no committed artifact hardcodes a rebuild-scoped hostname' {
+    # F129. The Copilot Studio connector definition carried
+    #
+    #   "host":"mls-mcp-demo-ca.thankfulisland-7f9b1aba.centralus.azurecontainerapps.io"
+    #
+    # and the live estate answers on `happymeadow-9e15a087`. `thankfulisland-7f9b1aba` is a
+    # Container Apps environment that no longer exists: AZURE ASSIGNS THAT DOMAIN SEGMENT
+    # RANDOMLY, once per environment, and a teardown/rebuild gets a new one. So the literal
+    # was guaranteed to be wrong after the very kill-and-rebuild this demo exists to
+    # showcase - and it broke the copilot silently, surfacing as "Connector request failed"
+    # inside Copilot Studio with nothing anywhere naming a hostname.
+    #
+    # This is F90's class exactly: a name from another system, written into a committed
+    # artifact, that survives the change it should have tracked. F90 was Entra names
+    # surviving a rebrand; CLAUDE.md's answer there was to tokenise `infra/entra/manifest.json`
+    # with ${prefix}/${env} and resolve it in the one place that reads it. Same answer here:
+    # the connector keeps `${mcpHost}` and import-agent.ps1 resolves it at pack time.
+    #
+    # SCOPED TO THE REBUILD-VARIABLE PART. A hostname is not banned - `azurewebsites.net`
+    # names are stable across rebuilds, and documentation quoting a real FQDN as evidence is
+    # honest. What must never be committed as configuration is the RANDOM environment
+    # domain, because nothing regenerates it.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+    }
+
+    It 'keeps no Container Apps environment domain in any deployable artifact' {
+        # Deployable = things that are packed, imported or applied. Docs and evidence may
+        # quote a live FQDN; they are records of an observation, not configuration.
+        $searchRoot = @('infra', 'apps', '.github', 'scripts', 'compliance') |
+            ForEach-Object { Join-Path $script:Root $_ } | Where-Object { Test-Path $_ }
+        $files = @(Get-ChildItem -Path $searchRoot -Recurse -File -Include '*.json', '*.xml', '*.yml', '*.yaml', '*.bicep' |
+                Where-Object { $_.FullName -notlike '*node_modules*' -and $_.FullName -notlike '*package-lock.json' })
+
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+        # <app>.<word>-<8 hex>.<region>.azurecontainerapps.io - the random middle segment is
+        # the part that cannot survive a rebuild.
+        $pattern = '[a-z0-9-]+\.[a-z]+-[0-9a-f]{8}\.[a-z]+\.azurecontainerapps\.io'
+        foreach ($file in $files) {
+            $scanned++
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ([string]::IsNullOrEmpty($text)) { continue }
+            foreach ($m in [regex]::Matches($text, $pattern)) {
+                $offender.Add("$($file.FullName.Substring($script:Root.Length + 1)): $($m.Value)")
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 50 `
+            -Because 'if the sweep reads almost nothing, its globs are wrong and it asserts nothing'
+        $offender -join ' | ' | Should -BeNullOrEmpty `
+            -Because 'the middle segment of a Container Apps FQDN is assigned randomly per environment, so a committed literal is wrong the moment the estate is rebuilt - tokenise it and resolve it where it is used (F129)'
+    }
+}
+
 Describe 'a job-level condition never gates on a value it cannot see' {
     # F125, and the FOURTH instance of one shape in a single session - this one introduced
     # by the very commit that closed BLOCKER-5, which is the point: the class is easy to
