@@ -1474,3 +1474,80 @@ cannot disagree, because the disagreement is unsatisfiable rather than merely un
         }
     }
 }
+
+Describe 'a stored hostname never outranks the live estate' {
+    # F144, which is F129's class and F90's before it. `vars.STAGING_URL` held
+    #
+    #   https://mls-launch-ops-demo-ca.thankfulisland-7f9b1aba.centralus.azurecontainerapps.io
+    #
+    # while the live app answered on `...happymeadow-9e15a087...`. A Container Apps
+    # environment domain is assigned at CREATION and changes on every rebuild - the one
+    # thing this demo exists to do - so a hostname kept in a GitHub variable is correct
+    # until the first teardown and wrong forever after. DNS did not resolve, the ZAP scan
+    # reached nothing, and the only reason that was not a silent green is the empty-report
+    # gate (F102's fix, working).
+    #
+    # The repository already forbids a rebuild-scoped hostname in a committed artifact
+    # (see the Describe above). It could not see this one, because a GitHub variable is
+    # not an artifact - and an absent or stale variable is a well-formed string, never an
+    # error. So the check has to be made against the WORKFLOW: a job that reads a stored
+    # host must also derive the live one, in the same job, where the two can be compared.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:WorkflowDir = Join-Path $script:Root '.github/workflows'
+
+        # Variables that carry a hostname of something this estate deploys. A name ending
+        # in _URL is not enough on its own: MLS_DIRECTLINE_TOKEN_URL is an azurewebsites
+        # name, which is stable across rebuilds because the Function App keeps its name.
+        $script:StoredHostVars = @('STAGING_URL')
+
+        # What "derived" looks like: the live ingress read back from Azure.
+        $script:DerivePattern = 'ingress\.fqdn'
+    }
+
+    It 'finds the workflow directory, so the sweep is not vacuous' {
+        $script:WorkflowDir | Should -Exist
+        @(Get-ChildItem -Path $script:WorkflowDir -Filter '*.yml' -File).Count |
+            Should -BeGreaterThan 5
+    }
+
+    It 'derives the live FQDN in every workflow that reads a stored estate hostname' {
+        $offenders = [System.Collections.Generic.List[string]]::new()
+        $readers = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($workflow in (Get-ChildItem -Path $script:WorkflowDir -Filter '*.yml' -File)) {
+            $text = Get-Content -LiteralPath $workflow.FullName -Raw
+            foreach ($varName in $script:StoredHostVars) {
+                # The EXPRESSION, not prose that mentions the variable. A workflow whose
+                # input description says "empty falls back to vars.STAGING_URL" is
+                # documenting a delegate's behaviour, not reading a hostname.
+                if ($text -notmatch ('\$\{\{\s*vars\.' + [regex]::Escape($varName) + '\s*\}\}')) { continue }
+                $readers.Add("$($workflow.Name) reads $varName")
+                if ($text -notmatch $script:DerivePattern) {
+                    $offenders.Add("$($workflow.Name) reads vars.$varName and never asks Azure for the live ingress FQDN")
+                }
+            }
+        }
+
+        # If nobody reads these variables any more the inventory is stale, and a check
+        # that asserts nothing is worse than no check: it reports green forever.
+        $readers.Count | Should -BeGreaterThan 0 -Because 'StoredHostVars must name variables something actually reads'
+
+        $offenders -join "`n" | Should -BeNullOrEmpty -Because @"
+A Container Apps environment domain changes on every rebuild, so a stored hostname is
+correct exactly until the first teardown. Read the live ingress in the same job
+(az containerapp show --query properties.configuration.ingress.fqdn) and prefer it over
+the stored value, reporting the stored one as stale when they disagree.
+"@
+    }
+
+    It 'checks that the scan target resolves before scanning it' {
+        # F135's rule, F144's bill: well-formed and reachable are different properties,
+        # and asserting only the first turns a stale hostname into `docker failed with
+        # exit code 3` deep inside a third-party action - the symptom, never the cause.
+        $zap = Join-Path $script:WorkflowDir 'zap.yml'
+        $zap | Should -Exist
+        Get-Content -LiteralPath $zap -Raw | Should -Match 'getent hosts'
+    }
+}
