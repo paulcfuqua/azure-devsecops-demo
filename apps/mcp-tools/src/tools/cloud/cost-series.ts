@@ -38,7 +38,7 @@ import {
 } from "../http.js";
 import { SCOPES, type TokenProvider } from "../auth.js";
 import { MAX_RESULT_ROWS } from "../sql-dialect.js";
-import type { CostSeriesBackend, CostSeriesParams, CostSeriesResult } from "../backends.js";
+import type { CostSeriesBackend, CostSeriesParams, CostSeriesResult, CostSource } from "../backends.js";
 
 export const DEFAULT_ARM_ENDPOINT = "https://management.azure.com";
 export const COST_QUERY_API_VERSION = "2023-03-01";
@@ -127,6 +127,7 @@ export function budgetPerDay(budget: BudgetRecord, isoDate: string): number {
 }
 
 export class AzureCostSeriesBackend implements CostSeriesBackend {
+  readonly source: CostSource = "azure-cost-management";
   readonly scope: string;
   private readonly armEndpoint: string;
   private readonly costCenterTag: string;

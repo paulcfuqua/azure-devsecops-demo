@@ -56,7 +56,7 @@ on 2026-09-02, with the evidence beside it.
 | L9 DevSecOps chain | 🟡 partial | 4/5 — V9.2-V9.5 PASS (negative CVE test, SBOM, ZAP, Defender toggle). **V9.1 fails reading its own evidence, not the estate**: `secret_scanning=''`, `push_protection=''`, and "Dependabot alerts are off" when `gh api .../vulnerability-alerts` returns **204** as admin. That is F103's shape again — admin-only endpoints read by `mls-verifier`. Last run 2026-09-01T00:52, before several fixes landed; **re-run before diagnosing** |
 | L12 compliance | ✅ verified | **The last layer to get an audit, 2026-09-01.** 4 PASS + 2 SKIP; wired into `compliance.yml` as a `verify` job after every collection. `MlsAudit` capped `Layer` at 11 until now - the module could not represent layer 12 even if someone had written the script |
 | L4 Purview labels | ✅ verified | **DONE 2026-09-01, the first time ever.** `verify L4 (mls-verifier)` PASSED. Four sensitivity labels now exist in the tenant - `mls-public`, `mls-internal`, `mls-confidential`, `mls-export-controlled` - where there had been none. The label POLICY failed (F121, fixed, re-run in flight) and the audit has not signed off yet |
-| L8 Copilot Studio | 🟡 partial | **Solution IMPORTED and agent PUBLISHED, 2026-09-01 — both firsts.** Publishing is a separate, human, Copilot Studio step (`import-agent.ps1`: "--publish-changes publishes solution CUSTOMIZATIONS. That is NOT the same thing as publishing the agent"), now done. V8.1 still fails on a Verifier Dataverse read permission; V8.2-V8.5 wait on F122's fix reaching the Function |
+| L8 Copilot Studio | 🟡 partial | **Solution IMPORTED and agent PUBLISHED, 2026-09-01 — both firsts.** Publishing is a separate, human, Copilot Studio step (`import-agent.ps1`: "--publish-changes publishes solution CUSTOMIZATIONS. That is NOT the same thing as publishing the agent"), now done. V8.1 still fails on a Verifier Dataverse read permission; V8.2-V8.5 wait on F122's fix reaching the Function. **F132 is fixed** (2026-09-02): the workflow no longer defaults to a package type the source has never contained, so a plain dispatch imports rather than failing |
 | L10 self-healing | ❌ chain never executed | Not for want of a subject: four Dependabot alerts are open. The chain cannot READ them (**F123**). V10.3 now fails on that rather than skipping quietly |
 
 ### The mission itself
@@ -218,7 +218,7 @@ document shape the service writes itself - **$7.70 MTD**, of which **SQL Databas
 of all spend**, which is worth a look given V6.4 asserts auto-pause. The grant was removed after
 seeding.
 
-### F138 — the agent answered a different question and kept the original question's words *(open)*
+### F138 — the agent answered a different question, because its tools told it to *(fixed 2026-09-02)*
 
 Asked *"How much have we spent to date in our tenant subscription"*, the Ask tab replied:
 
@@ -256,17 +256,40 @@ false claims. An agent that substitutes a synthetic business ledger for a cloud 
 narrates the substitution accurately while mislabelling the result, is the failure mode that
 argument exists to rule out.
 
-**Not fixed, and not a one-liner.** The 429 is external and cannot be engineered away — the
-right response to it is exactly what the agent did. What needs changing is the **substitution
-rule**, and it lives in the agent's instructions rather than in code: `cost_daily` answers
-"what does the launch business spend", `get_cost_series` answers "what does this Azure
-subscription cost", and **neither may stand in for the other**. When the right tool is
-unavailable the honest answer is "I could not retrieve that", not a different number wearing
-the question's words. That is a Copilot Studio instruction change plus a sharper tool
-description in `apps/mcp-tools`, and it must be made in the solution rather than the portal or
-the next import will revert it (F131).
+**The diagnosis above was wrong about whose defect this is, and the correction is the
+useful part.** I recorded it as an agent that substituted a dataset. It did not choose to.
+Reading its actual contract - the only thing an orchestrator reasons over when picking a tool -
+the substitution was **written down as guidance**:
 
-Minor, while in there: `$23,561,191.14999999` should be rounded at the presentation layer.
+    get_cost_series      "Fetch the daily Azure spend series … The five cost centers are
+                          'Propulsion', 'Avionics' … for whole-history aggregates query the
+                          cost_daily table with query_lakehouse_sql instead."
+    query_lakehouse_sql  "Use this for … daily cloud spend …"
+
+Every clause there is false in cloud mode. `cost_daily` is the fictional ledger; cloud-mode cost
+centres are `costCenter` **tag** values, not "Propulsion"; and the recommended fallback is the
+exact wrong answer. **The agent followed its instructions precisely.** Blaming the model for a
+contract we wrote is the comfortable reading and it would have sent the fix to the wrong place.
+
+**This is the `strftime` defect again** - a description written for one backend and shipped with
+another. That one told the agent to write `strftime('%w', actual_date)` against T-SQL, which has
+no such function; it was fixed by generating the description from the active backend's declared
+dialect. Same fix here: `CostSeriesBackend` now declares its `source`
+(`lakehouse-ledger` | `azure-cost-management`) and `get_cost_series`'s description is **built,
+not written**, so it cannot promise Azure spend while reading a synthetic ledger, cannot
+advertise cost centres that exist only in the other mode, and states the non-substitution rule
+in the direction that applies. `query_lakehouse_sql` no longer offers itself for "daily cloud
+spend", and the schema listing labels `cost_daily` as the business ledger where a model actually
+reads column names.
+
+The agent instructions gained the rule too - **one dataset never stands in for another** - made
+in the solution rather than the portal, because the next import reverts a portal edit (F131), and
+version-bumped to 1.0.3.0, because the import is idempotent on version rather than content
+(F130). Currency now presents to two decimals: `$23,561,191.14999999` was floating-point residue,
+not precision the data has.
+
+**Eleven tests, and the eval suite still passes 10/10.** The 429 remains external and correct
+to report - what changed is that being unable to answer is now the answer.
 
 ### F136 — the Functions host owns the preflight *(fixed 2026-09-02)*
 
@@ -408,7 +431,7 @@ and it is red for an unrelated reason (16 platform-generated topics). A real con
 arrived while the criterion that would have named it was already failing for something else — a
 red check is not a working check.
 
-### F132 — L8 has not genuinely deployed in a long time *(open)*
+### F132 — L8 has not genuinely deployed in a long time *(fixed 2026-09-02)*
 
 Every L8 run on 2026-09-01 failed, and the ones whose import job read `success` had **skipped**
 (F130). The first run that actually packed produced:
@@ -421,10 +444,26 @@ Every L8 run on 2026-09-01 failed, and the ones whose import job read `success` 
 never been satisfiable, and every import either skipped or failed. It only succeeded once
 dispatched with `deploy_as_managed=false`.
 
-**Left open deliberately**: the right fix is a decision, not a flag. Either the source is
-exported managed (matching `import-agent.ps1`'s own "DEPLOYS MANAGED" ALM rationale) or the
-default changes to match the artifact that exists. Choosing the first silently while a demo is
-being assembled would break the working path again.
+**The decision, taken 2026-09-02: the default changes to match the artifact.** Microsoft's
+"deploy managed" guidance assumes a **separate authoring environment**. This demo has ONE Power
+Platform environment, which is both the maker environment and the deployment target, so unmanaged
+source is correct and the managed default was the misconfiguration. Deploying managed would need
+a managed export from a second environment - a change to the ALM topology, not a flag, and not
+one a $0 developer plan supports.
+
+Three changes, because a flag flip alone would leave the trap armed:
+
+- The default is `false`, **in both trigger declarations** - F132 survived in both copies, so a
+  check reading only the first would have passed.
+- `import-agent.ps1` asserts the requested package type against the committed `Solution.xml` **in
+  preflight, before any tenant write**, and names which way to resolve the disagreement. This is
+  the "constant that names something in another system" rule pointed inward: the other system is
+  the solution tree, and it is right there to read.
+- `verification/tests/failure-classes.Tests.ps1` encodes the class. Mutation-tested: restoring
+  `default: true` fails it in **31 ms**, against a full L8 run to learn the same thing.
+
+The unmanaged-import `::warning` is gone. It fired on the correct path, and a warning that is
+right by default trains people to ignore warnings.
 
 ### F129 — the copilot connector points at an environment that no longer exists *(fixed 2026-09-01)*
 

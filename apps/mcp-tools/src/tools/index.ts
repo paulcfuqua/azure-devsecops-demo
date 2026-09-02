@@ -23,7 +23,7 @@
  * See src/tools/sql-dialect.ts for the full reasoning.
  */
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { Backends, ComplianceQueryParams, CostSeriesParams } from "./backends.js";
+import type { Backends, ComplianceQueryParams, CostSeriesParams, CostSource } from "./backends.js";
 import { DIALECTS, MAX_RESULT_ROWS, type DialectProfile, type SqlDialect } from "./sql-dialect.js";
 
 export const ALLOWED_TOOL_NAMES = [
@@ -63,7 +63,8 @@ const LAKEHOUSE_SCHEMA =
   "quality_rating, active); " +
   "work_orders(work_order_id, part_id, vehicle_id, launch_id, opened_date, closed_date, " +
   "status IN ('open','in_progress','closed'), disposition, priority, labor_hours, technician); " +
-  "cost_daily(cost_id, date, cost_center, amount_usd, budget_usd, currency); " +
+  "cost_daily(cost_id, date, cost_center, amount_usd, budget_usd, currency) — the launch " +
+  "BUSINESS ledger, not cloud spend; " +
   "findings_history(finding_id, source, severity IN ('critical','high','medium','low'), title, " +
   "component, cve_id, opened_date, closed_date, status IN ('open','resolved','risk_accepted'), " +
   "assignee, sla_days).";
@@ -76,8 +77,12 @@ function lakehouseSqlTool(profile: DialectProfile): Tool {
       `Run one read-only SQL query (${profile.displayName}) against the Meridian Launch Systems ` +
       "operations lakehouse and return columns and rows. Use this for any question about " +
       "launch history, scrubs, the vehicle fleet, pads, telemetry, parts, suppliers, work " +
-      "orders, daily cloud spend or security-finding history — counts, rates, rankings, " +
-      "trends and joins across those tables. Schema: " +
+      "orders, the launch business's own cost ledger, or security-finding history — counts, " +
+      "rates, rankings, trends and joins across those tables. NOT for what this Azure " +
+      "subscription costs: `cost_daily` is Meridian's internal business ledger (cost centres " +
+      "and budgets for the launch business, in the millions), it is NOT a cloud bill, and it " +
+      "must never be used to answer a question about Azure, tenant or subscription spend — " +
+      "get_cost_series is the only tool that reads that. Schema: " +
       LAKEHOUSE_SCHEMA +
       " " +
       profile.idioms +
@@ -101,7 +106,7 @@ function lakehouseSqlTool(profile: DialectProfile): Tool {
   };
 }
 
-/** The five tools whose description does not vary with the SQL dialect. */
+/** The four tools whose description does not vary with the backend behind them. */
 const STATIC_TOOLS: Tool[] = [
   {
     name: "query_log_analytics",
@@ -189,43 +194,6 @@ const STATIC_TOOLS: Tool[] = [
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   {
-    name: "get_cost_series",
-    title: "Get daily cloud cost series",
-    description:
-      "Fetch the daily Azure spend series for the Meridian demo subscription, optionally " +
-      "filtered by date range and cost center, in the Azure Cost Management query response " +
-      "shape. Use this for questions about cloud spend over time, burn rate, budget " +
-      "consumption, or how one cost center compares against its budget. The five cost centers " +
-      "are 'Propulsion', 'Avionics', 'Range Operations', 'Facilities' and 'Cloud & IT'. " +
-      "Returns { id, name, type, properties: { columns, rows } } where each row is " +
-      "[date (ISO YYYY-MM-DD), cost_center, amount_usd, budget_usd], one row per date per cost " +
-      `center, ordered by date ascending — sum across rows for a total. At most ${MAX_RESULT_ROWS} ` +
-      "rows come back, so narrow the date range or filter by cost center for long windows; for " +
-      "whole-history aggregates query the cost_daily table with query_lakehouse_sql instead. " +
-      "Omit every argument for the unfiltered series from its earliest date.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        start_date: {
-          type: "string",
-          description: "Inclusive lower bound as an ISO date, e.g. 2026-01-01.",
-        },
-        end_date: {
-          type: "string",
-          description: "Inclusive upper bound as an ISO date, e.g. 2026-01-31.",
-        },
-        cost_center: {
-          type: "string",
-          description:
-            "Exact cost-center name filter: Propulsion, Avionics, Range Operations, " +
-            "Facilities or Cloud & IT.",
-        },
-      },
-      additionalProperties: false,
-    },
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-  },
-  {
     name: "query_compliance",
     title: "Query NIST SP 800-171 compliance state",
     description:
@@ -289,15 +257,111 @@ const STATIC_TOOLS: Tool[] = [
   },
 ];
 
+
 /**
- * The six MCP tool definitions for a given SQL dialect. Order is stable and
- * `query_lakehouse_sql` is first — `tools/list` order is what an orchestrator
- * sees first, and the lakehouse tool answers most questions.
+ * `get_cost_series`, described for the backend actually behind it (F138).
+ *
+ * BUILT, NOT WRITTEN, for the same reason `query_lakehouse_sql` is. A single
+ * hardcoded description is wrong in one of the two modes, and it was: it
+ * promised "the daily Azure spend series", then named the five FICTIONAL cost
+ * centres of the lakehouse ledger, then instructed the agent to fall back to
+ * `cost_daily` for whole-history aggregates. In cloud mode all three were
+ * false. Asked what the tenant had spent to date, the agent did exactly as
+ * instructed and answered $23,561,191 - Meridian's imaginary business ledger,
+ * wearing the question's words, against a real bill of about $1.40.
+ *
+ * The defect was never the agent's judgement. It followed its tool contract,
+ * and the tool contract was wrong.
  */
-export function buildToolDefinitions(dialect: SqlDialect): Tool[] {
+function costSeriesTool(source: CostSource): Tool {
+  const cloud = source === "azure-cost-management";
+
+  const what = cloud
+    ? "Fetch REAL daily Azure consumption for the Meridian demo subscription from the Azure " +
+      "Cost Management query API, grouped by the costCenter tag on each resource group. This " +
+      "is the actual cloud bill - the only tool that knows what this subscription costs."
+    : "Fetch the daily series from Meridian's SYNTHETIC business cost ledger (the cost_daily " +
+      "table), not from Azure. This backend is the local development one; it does not know " +
+      "what any Azure subscription costs.";
+
+  const centres = cloud
+    ? "Cost centres are whatever costCenter tag values the estate's resource groups carry, so " +
+      "read them from the rows rather than assuming a fixed list."
+    : "The five cost centres are 'Propulsion', 'Avionics', 'Range Operations', 'Facilities' " +
+      "and 'Cloud & IT'.";
+
+  // The rule that F138 broke, stated in the direction that matters for THIS
+  // backend. An unavailable tool is answered with "I could not retrieve it",
+  // never with a different dataset's number.
+  const substitution = cloud
+    ? "NEVER substitute the lakehouse `cost_daily` table for this tool. That table is " +
+      "Meridian's fictional business ledger - cost centres, budgets, figures in the millions " +
+      "- and has nothing to do with this subscription, whose lifetime spend is a few dollars. " +
+      "If this tool fails or is rate-limited (Cost Management throttles per principal and a " +
+      "retry deepens the throttle), say that you could not retrieve the cloud spend and stop. " +
+      "A number from a different dataset presented in the question's words is a wrong answer, " +
+      "not a fallback."
+    : "This is not Azure spend. If asked what an Azure subscription, tenant or resource group " +
+      "costs, say that this deployment has no cloud-cost source rather than answering from " +
+      "the business ledger.";
+
+  return {
+    name: "get_cost_series",
+    title: cloud ? "Get daily Azure cloud spend" : "Get daily business cost ledger",
+    description:
+      `${what} Optionally filtered by date range and cost center, in the Azure Cost ` +
+      `Management query response shape. ${centres} Returns ` +
+      "{ id, name, type, properties: { columns, rows } } where each row is " +
+      "[date (ISO YYYY-MM-DD), cost_center, amount_usd, budget_usd], one row per date per cost " +
+      `center, ordered by date ascending — sum across rows for a total. At most ${MAX_RESULT_ROWS} ` +
+      "rows come back, so narrow the date range or filter by cost center for long windows. " +
+      `Omit every argument for the unfiltered series from its earliest date. ${substitution}`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        start_date: {
+          type: "string",
+          description: "Inclusive lower bound as an ISO date, e.g. 2026-01-01.",
+        },
+        end_date: {
+          type: "string",
+          description: "Inclusive upper bound as an ISO date, e.g. 2026-01-31.",
+        },
+        cost_center: {
+          type: "string",
+          description: cloud
+            ? "Exact costCenter tag value to filter on, as it appears in the returned rows."
+            : "Exact cost-center name filter: Propulsion, Avionics, Range Operations, " +
+              "Facilities or Cloud & IT.",
+        },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  };
+}
+
+/**
+ * The six MCP tool definitions for a given SQL dialect and cost backend. Order
+ * is stable and `query_lakehouse_sql` is first — `tools/list` order is what an
+ * orchestrator sees first, and the lakehouse tool answers most questions.
+ *
+ * `costSource` defaults to the local ledger so existing callers keep the
+ * behaviour they had; the live set an agent sees comes from ToolRegistry, which
+ * passes what the active backend declares.
+ */
+export function buildToolDefinitions(
+  dialect: SqlDialect,
+  costSource: CostSource = "lakehouse-ledger",
+): Tool[] {
   const profile = DIALECTS[dialect];
   if (!profile) throw new Error(`unknown SQL dialect: ${dialect}`);
-  return [lakehouseSqlTool(profile), ...STATIC_TOOLS];
+  const tools = [lakehouseSqlTool(profile), ...STATIC_TOOLS];
+  // get_cost_series was fifth before it became backend-aware, and tools/list order
+  // is agent-facing surface. Restore that position, so this change alters what the
+  // description SAYS and nothing else about what the orchestrator sees.
+  tools.splice(4, 0, costSeriesTool(costSource));
+  return tools;
 }
 
 /**
@@ -361,7 +425,7 @@ export class ToolRegistry {
 
   constructor(private readonly backends: Backends) {
     this.dialect = backends.lakehouseSql.dialect;
-    this.cachedDefinitions = buildToolDefinitions(this.dialect);
+    this.cachedDefinitions = buildToolDefinitions(this.dialect, backends.costSeries.source);
   }
 
   /** What `tools/list` returns: six tools, described for the ACTIVE backend. */

@@ -27,10 +27,15 @@
     front. Nothing mutating runs until every check passes, so a missing prerequisite can
     never leave the demo environment half-imported.
 
-    DEPLOYS MANAGED. Microsoft's ALM guidance: "Export and deploy solutions as managed,
-    unless setting up a development environment." A managed solution cannot be exported,
-    which is why the repo holds unmanaged source and the managed build is produced here.
-    -Unmanaged overrides for troubleshooting.
+    PACKAGE TYPE MATCHES THE SOURCE, AND IS ASSERTED (F132). Microsoft's ALM guidance is
+    "export and deploy solutions as managed, unless setting up a development environment" -
+    and that guidance assumes a separate authoring environment. This demo has ONE Power
+    Platform environment, which is both the maker environment and the deployment target, so
+    the committed source is unmanaged and so is the import. Callers may still ask for
+    managed, but a request that the source cannot satisfy now fails in PREFLIGHT with the
+    reason, rather than inside `pac solution pack` with "Solution package type did not match
+    requested type" - which is where it failed for a week while the workflow's own default
+    asked for a package the repo has never contained.
 
 .NOTES
     `--publish-changes` publishes solution CUSTOMIZATIONS. That is NOT the same thing as
@@ -205,6 +210,66 @@ invent a solution or fall back to whatever is already deployed.
 Fix by exporting first:
     ./export-agent.ps1 -EnvironmentUrl <authoring env url>
 then commit the resulting tree under infra/copilot-studio/solution/$SolutionName/.
+
+The demo environment was NOT contacted and nothing was changed.
+"@
+}
+
+function Assert-PackageTypeMatchesSource {
+    <#
+    .SYNOPSIS
+        Refuse a package type the committed source cannot produce (F132).
+    .DESCRIPTION
+        `pac solution pack --packagetype Managed` over a tree whose Solution.xml says
+        <Managed>0</Managed> fails with "Solution package type did not match requested
+        type" - a message that names the symptom and not the cause. The workflow default
+        asked for Managed against unmanaged source, so every L8 import either skipped or
+        failed, and the failure looked like a `pac` problem rather than a configuration
+        one. This asserts the constant against the system that owns it, before any write.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$SolutionXmlPath,
+        [Parameter(Mandatory)][ValidateSet('Managed', 'Unmanaged')][string]$PackageType
+    )
+
+    # An unreadable flag is not a failure: pack will produce the real error, and refusing
+    # to import over a parse problem in our own precondition would be worse than the bug.
+    $sourceIsManaged = $null
+    try {
+        $node = ([xml](Get-Content -LiteralPath $SolutionXmlPath -Raw)).SelectSingleNode('//Managed')
+        if ($node) { $sourceIsManaged = ($node.InnerText.Trim() -eq '1') }
+    } catch {
+        Write-Status "Could not read the source's Managed flag: $($_.Exception.Message)" -Color Yellow
+        return
+    }
+    if ($null -eq $sourceIsManaged) { return }
+
+    $sourceType = if ($sourceIsManaged) { 'Managed' } else { 'Unmanaged' }
+    if ($sourceType -eq $PackageType) {
+        Write-Status "Package type $PackageType matches the committed source." -Color Green
+        return
+    }
+
+    throw @"
+Cannot pack '$PackageType' from $sourceType source.
+
+$SolutionXmlPath says <Managed>$(if ($sourceIsManaged) { '1' } else { '0' })</Managed>, and
+pac will refuse the pack with "Solution package type did not match requested type".
+
+$(if ($PackageType -eq 'Managed') {
+@'
+This demo has ONE Power Platform environment - it is both the maker environment and the
+deployment target - so the source is committed unmanaged on purpose. Re-run with
+-Unmanaged (the workflow's deploy_as_managed=false, which is now its default). Deploying
+managed needs a managed export from a separate authoring environment first; that is a
+decision about the ALM topology, not a flag.
+'@
+} else {
+@'
+The source has been exported managed. Import it managed (drop -Unmanaged), or export
+unmanaged source if this environment is meant to be the authoring one.
+'@
+})
 
 The demo environment was NOT contacted and nothing was changed.
 "@
@@ -393,6 +458,7 @@ function Invoke-Main {
     $solutionXml = Assert-SolutionSource -SolutionFolder $solutionFolder -SolutionName $SolutionName
     $localVersion = Get-SolutionVersion -SolutionXmlPath $solutionXml
     Write-Status "Committed source version: $(if ($localVersion) { $localVersion } else { '(unreadable)' })" -Color Green
+    Assert-PackageTypeMatchesSource -SolutionXmlPath $solutionXml -PackageType $packageType
 
     $zipPath = Join-Path $ArtifactPath "$SolutionName`_$packageType.zip"
 
