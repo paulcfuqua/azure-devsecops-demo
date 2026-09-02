@@ -169,16 +169,18 @@ describe("the token seam never lets a secret reach the app", () => {
 
     await fetchToken();
 
-    const tokenCall = fetchImpl.mock.calls.find(
-      ([url]) => String(url) === "https://fn.example/api/directline/token",
-    ) as unknown as [string, RequestInit];
+    const calls = fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>;
+    const tokenCall = calls.find(
+      (call) => String(call[0]) === "https://fn.example/api/directline/token",
+    );
     expect(tokenCall).toBeDefined();
-    expect(tokenCall[1].method).toBe("POST");
-    const headers = tokenCall[1].headers as Record<string, string>;
+    const init = tokenCall![1];
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer easy-auth-id-token");
     // Still no secret and no cookie: the forwarded token is the only credential.
-    expect(tokenCall[1].body).toBeUndefined();
-    expect(tokenCall[1].credentials).toBeUndefined();
+    expect(init.body).toBeUndefined();
+    expect(init.credentials).toBeUndefined();
   });
 
   it("refuses to call the endpoint at all when Easy Auth yields no token", async () => {
@@ -190,11 +192,10 @@ describe("the token seam never lets a secret reach the app", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     await expect(fetchToken()).rejects.toThrow(/cannot prove who is asking/);
-    expect(
-      fetchImpl.mock.calls.some(
-        ([url]) => String(url) === "https://fn.example/api/directline/token",
-      ),
-    ).toBe(false);
+    const attempted = (fetchImpl.mock.calls as unknown as Array<[string]>).some(
+      (call) => String(call[0]) === "https://fn.example/api/directline/token",
+    );
+    expect(attempted).toBe(false);
   });
 
   it("explains that the Ask tab needs the deployed environment when the endpoint 404s", async () => {

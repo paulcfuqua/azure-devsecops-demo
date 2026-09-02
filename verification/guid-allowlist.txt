@@ -95,3 +95,10 @@ f9d5432e-6b1a-4f02-9c47-8a3d21e6b7c4  # apps/control-tower/src/fixtures/defender
 # whose ids are stripped cannot be imported. Reviewed 2026-09-01.
 41d42054-d4cb-4e90-b922-2b16b37fe379  # infra/copilot-studio/solution - bot component id
 80a15a23-00bc-4232-9ebf-5780fb7eff89  # infra/copilot-studio/solution - MCP connector RootComponent id
+
+# Synthetic placeholder audience for the directline-token user-token tests. It is a
+# deliberately unmistakable a-b-c-d-e pattern, not a tenant object id: the suite mints its
+# own RSA key pair and signs tokens locally, so no real Entra application is involved and
+# none could be. Its sibling 11111111-2222-... (the fake tenant) is already listed above
+# for the same reason. Reviewed 2026-09-01.
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee  # apps/directline-token/tests - fake Easy Auth audience
