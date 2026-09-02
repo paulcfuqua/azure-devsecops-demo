@@ -56,7 +56,7 @@ on 2026-09-02, with the evidence beside it.
 | L9 DevSecOps chain | 🟡 partial | 4/5 — V9.2-V9.5 PASS (negative CVE test, SBOM, ZAP, Defender toggle). **V9.1 now PASSES** (re-run 2026-09-02 as a filtered diagnostic): F103's fix works, and the criterion reads *"GHAS features the Verifier can observe are enabled"* rather than reporting an admin-only field's absence as a disabled control. The same run turned up **F144** - ZAP has been scanning a hostname from an environment that no longer exists, caught by the empty-report gate rather than passed over. A full unfiltered L9 is still owed for a verdict |
 | L12 compliance | ✅ verified | **The last layer to get an audit, 2026-09-01.** 4 PASS + 2 SKIP; wired into `compliance.yml` as a `verify` job after every collection. `MlsAudit` capped `Layer` at 11 until now - the module could not represent layer 12 even if someone had written the script |
 | L4 Purview labels | ✅ verified | **DONE 2026-09-01, the first time ever.** `verify L4 (mls-verifier)` PASSED. Four sensitivity labels now exist in the tenant - `mls-public`, `mls-internal`, `mls-confidential`, `mls-export-controlled` - where there had been none. The label POLICY failed (F121, fixed, re-run in flight) and the audit has not signed off yet |
-| L8 Copilot Studio | 🟡 partial | **Solution IMPORTED and agent PUBLISHED, 2026-09-01 — both firsts.** Publishing is a separate, human, Copilot Studio step (`import-agent.ps1`: "--publish-changes publishes solution CUSTOMIZATIONS. That is NOT the same thing as publishing the agent"), now done. V8.1 still fails on a Verifier Dataverse read permission; V8.2-V8.5 wait on F122's fix reaching the Function. **F132 is fixed** (2026-09-02): the workflow no longer defaults to a package type the source has never contained, so a plain dispatch imports rather than failing |
+| L8 Copilot Studio | 🟡 partial | **Solution IMPORTED and agent PUBLISHED, 2026-09-01 — both firsts.** Publishing is a separate, human, Copilot Studio step (`import-agent.ps1`: "--publish-changes publishes solution CUSTOMIZATIONS. That is NOT the same thing as publishing the agent"), now done. **F132 is fixed** and proven end to end (2026-09-02): a plain dispatch imported 1.0.2.0 -> 1.0.3.0, the new preflight reported *"Package type Unmanaged matches the committed source"*, and the Direct Line golden-question eval passed afterwards. **F145 is fixed**: V8.1 had never been able to pass - it compared one committed component against the seventeen Dataverse reports - and the recorded cause (a Verifier permission) was wrong. V8.2-V8.5 still wait on an eval artifact and a resumed capacity |
 | L10 self-healing | ❌ chain never executed | Not for want of a subject: four Dependabot alerts are open. The chain cannot READ them (**F123**). V10.3 now fails on that rather than skipping quietly |
 
 ### The mission itself
@@ -116,6 +116,64 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F145 — V8.1 could never have passed, and the recorded reason was wrong *(fixed 2026-09-02)*
+
+The L8 run that imported solution 1.0.3.0 reported:
+
+    [FAIL] V8.1  Deployed agent's solution ... match the committed solution exactly
+           observed: components missing [] extra [Conversation Start, Conversational
+           boosting, End of Conversation, Escalate, Fallback, Goodbye, Greeting,
+           Meridian Launch Copilot, Meridian Ops Tools, mls_MeridianLaunchCopilot.
+           shared_..., Multiple Topics Matched, On Error, Reset Conversation,
+           Sign in , Start Over, Thank you]
+
+**Sixteen confident, specific, wrong names.** Every one is a legitimate component of the agent,
+committed to this repository, and a reader would have gone hunting for drift that does not
+exist.
+
+**The register's recorded cause - "V8.1 still fails on a Verifier Dataverse read permission" -
+was wrong.** The read succeeded on every run; that is where the sixteen names came from. This is
+why CLAUDE.md says to check a blocker's evidence yourself before acting on it.
+
+**The real defect: the expected set was built from one of three files.** `Other/Solution.xml`
+lists *root* components - one, the connector - while `msdyn_solutioncomponentsummaries` reports
+*every* component, because a Copilot Studio agent's topics belong to the solution without being
+roots of it. Set equality between those two vocabularies could never hold. **A criterion that
+cannot pass is not a strict criterion, it is a broken one**, and it hid the question it existed
+to ask.
+
+**The committed side is fully enumerable, so the fix makes the check stronger, not weaker:**
+
+    Other/Solution.xml                  RootComponent/@schemaName                     1
+    botcomponents/*/botcomponent.xml    <name>                                       15
+    Assets/botcomponent_connection...   @connectionreferenceid.…logicalname           1
+                                                                                 -----
+                                                                                    17
+
+which is exactly what Dataverse reported. `<name>` is returned verbatim in `msdyn_name` - down
+to the trailing space in `'Sign in '` - so the comparison stays exact rather than normalised; a
+helper that trimmed there would hide a real rename behind a cosmetic one. V8.1 now compares
+seventeen components where it compared one.
+
+**Unobservable, never absent.** If the component files cannot be enumerated the criterion says
+so. A truncated expected set turns every deployed component into an "extra", which is precisely
+how this produced sixteen false names rather than one honest "I could not read the expected
+list".
+
+**A second defect fell out of the first, and it is the more instructive one.** V8.3 counted
+"tool/connector components" by filtering the *same* list for `connector|connection|tool|agent`.
+Enriching that list for V8.1 silently widened V8.3: a topic whose display name is
+**"Meridian Ops Tools"** would have counted as a tool, and V8.3 would have failed on a correct
+solution - trading one broken criterion for another. Widening one check's input widened a
+different check's meaning. Roots and connection references are now their own fields: two
+questions, two lists.
+
+**The fixture was part of the problem.** It wrote a lone `Solution.xml` into a temp directory,
+so it exercised a parse the production code no longer performs and would have stayed green
+while the thing it stands for was broken. It is now a real solution tree.
+
+Twenty L8 tests pass, four of them new.
 
 ### F144 — the ZAP scan has been pointed at a host that does not exist *(fixed 2026-09-02)*
 
