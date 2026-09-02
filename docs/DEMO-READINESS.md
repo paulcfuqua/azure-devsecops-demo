@@ -145,12 +145,38 @@ a compromise for this configuration — it is the correct setting**, and it side
 entirely. If the estate ever moves to paid F2 and attaches the Fabric data agent, §7.1's
 manual mode becomes necessary again *and* F106 must be closed first.
 
+**AND THE AUTH MODE WAS ONLY HALF OF IT.** With "No authentication" saved and published -
+Copilot Studio's own Agent status confirms it: *"Anyone can view this agent's content because
+it doesn't require users to sign in"*, state **Draft, Published** - the agent still answered
+`AuthenticationNotConfigured`. The remaining half is the tool, read live from Dataverse:
+
+    component: Meridian Ops Tools
+    connectionProperties:
+      mode: Invoker
+
+**`Invoker` means the MCP connection runs as the INVOKING USER.** With no authentication
+there is no invoking user, so the connection cannot be established. The two settings
+contradicted each other, and fixing one without the other just moved the error.
+
+This is §3.3's *"User authentication or Agent author authentication"* choice, and the same
+reasoning applies as to the auth mode: user authentication exists so Fabric can enforce
+per-user permissions on the **connected Fabric data agent**. On the deployed path there is no
+Fabric data agent - the MCP server answers everyone with **one API key** - so running the
+connection as the invoker buys no segregation and costs the whole feature. **Agent author /
+Maker mode is correct here**, for exactly the reason "No authentication" is.
+
+Both revert together the day the estate moves to paid F2 and attaches the Fabric data agent,
+and F106 must be closed before either can.
+
 **The change is a human one, and deliberately not automated.** Auth settings are blank after
 a solution import (§6) and take effect only on publish, both of which are Copilot Studio UI
 steps:
 
     Copilot Studio -> the agent -> Settings -> Security -> Authentication
-      -> "No authentication"  -> Save -> Publish
+      -> "No authentication"  -> Save                                   [done]
+    Copilot Studio -> Tools -> "Meridian Ops Tools" -> connection
+      -> run as AGENT AUTHOR (Maker), not the invoking user             [required]
+    -> Publish
 
 Afterwards run `infra/copilot-studio/export-agent.ps1` so the committed solution captures the
 real value rather than anyone guessing the option-set integer — the repo's own round-trip,
