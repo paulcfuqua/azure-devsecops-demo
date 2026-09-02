@@ -76,6 +76,10 @@ jobs:
     outputs:
       url: ${{ steps.resolve.outputs.url }}
       ready: ${{ steps.resolve.outputs.ready }}
+      # What an anonymous caller sees at the scanned URL: content | auth-wall |
+      # unreachable. The gate refuses to call a redirect-only scan a pass (F152).
+      classification: ${{ steps.resolve.outputs.classification }}
+      app_url: ${{ steps.resolve.outputs.app_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -102,6 +106,7 @@ jobs:
         continue-on-error: true
         env:
           APP: ${{ steps.naming.outputs.ca-launch-ops }}
+          MCP: ${{ steps.naming.outputs.ca-mcp }}
           RG: ${{ steps.naming.outputs.rg-apps }}
         run: |
           set -uo pipefail
@@ -114,11 +119,20 @@ jobs:
             echo "::notice title=No live ingress::${APP} in ${RG} reported no ingress FQDN."
           fi
 
+          # The API surface, read the same way. It matters because launch-ops sits
+          # behind Easy Auth and an unauthenticated scanner never gets past the
+          # login redirect - see the classification step below (F152).
+          mcp="$(az containerapp show -n "${MCP}" -g "${RG}" \
+                    --query 'properties.configuration.ingress.fqdn' -o tsv 2>/dev/null || true)"
+          echo "mcp_fqdn=${mcp}" >> "${GITHUB_OUTPUT}"
+          [ -n "${mcp}" ] && echo "Live API ingress: ${mcp}"
+
       - name: Resolve target URL
         id: resolve
         env:
           INPUT_URL: ${{ inputs.target_url }}
           LIVE_FQDN: ${{ steps.live.outputs.fqdn }}
+          MCP_FQDN: ${{ steps.live.outputs.mcp_fqdn }}
           STAGING_URL: ${{ vars.STAGING_URL }}
         run: |
           set -euo pipefail
@@ -166,8 +180,49 @@ jobs:
             exit 1
           fi
 
-          echo "ready=true" >> "${GITHUB_OUTPUT}"
-          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+          # ---------------------------------------------------------------
+          # WHAT DOES AN ANONYMOUS CALLER ACTUALLY SEE (F152)
+          #
+          # launch-ops runs behind Container Apps Easy Auth with
+          # unauthenticatedClientAction: RedirectToLoginPage. An unauthenticated
+          # baseline scan therefore reaches a 302 to login.microsoftonline.com
+          # with a zero-length body - and ZAP dutifully reports "0 High", which
+          # is a true statement about a login redirect and says NOTHING about the
+          # application. The last run scanned exactly three URLs (/, /robots.txt,
+          # /sitemap.xml) and every alert it raised described the redirect's own
+          # headers and Easy Auth's cookies.
+          #
+          # So classify the target before scanning it, and scan the surface an
+          # unauthenticated attacker can actually reach.
+          # ---------------------------------------------------------------
+          classify() {
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1" || echo 000)"
+            loc="$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 30 "$1" || true)"
+            case "${loc}" in
+              *login.microsoftonline.com*) echo "auth-wall" ;;
+              *) [ "${code}" = "000" ] && echo "unreachable" || echo "content" ;;
+            esac
+          }
+
+          app_class="$(classify "${url}")"
+          echo "Anonymous view of ${url}: ${app_class}"
+          scanned="${url}"
+
+          if [ "${app_class}" = "auth-wall" ]; then
+            echo "::warning title=Target is behind Easy Auth::${url} answers an anonymous request with a redirect to Entra, so an unauthenticated baseline cannot assess the application - only its login redirect. Scanning the public API surface instead, which is what an unauthenticated attacker actually reaches (F152)."
+            if [ -n "${MCP_FQDN}" ]; then
+              scanned="https://${MCP_FQDN}"
+              app_class="$(classify "${scanned}")"
+              echo "Anonymous view of ${scanned}: ${app_class}"
+            fi
+          fi
+
+          {
+            echo "classification=${app_class}"
+            echo "app_url=${url}"
+            echo "ready=true"
+            echo "url=${scanned}"
+          } >> "${GITHUB_OUTPUT}"
 
   baseline:
     name: ZAP baseline scan
@@ -245,12 +300,45 @@ jobs:
         if: ${{ always() }}
         env:
           TARGET_URL: ${{ needs.target.outputs.url }}
+          CLASSIFICATION: ${{ needs.target.outputs.classification }}
+          APP_URL: ${{ needs.target.outputs.app_url }}
         run: |
           set -euo pipefail
           if [ ! -s report.json ]; then
             echo "::error title=ZAP produced no report::The scan of ${TARGET_URL} produced no report.json. An unreachable target is a FAILURE, not a pass (L09 V9.4)."
             exit 1
           fi
+
+          # A SCAN THAT NEVER REACHED THE APPLICATION IS NOT A PASS (F152).
+          #
+          # "Zero High-risk alerts" against a 302 to login.microsoftonline.com is
+          # a true statement about a login redirect and tells nobody anything
+          # about the software. The previous run scanned three URLs - /,
+          # /robots.txt, /sitemap.xml - and every alert described the redirect's
+          # own headers and Easy Auth's cookies. It passed.
+          #
+          # This is the third time this criterion has reported a verdict it had
+          # not earned: F102 (the gate was skipped and the failure read as a
+          # security failure), F144 (the target hostname was from a dead
+          # environment), and now a scan of the door rather than the building.
+          # UNOBSERVABLE, never a pass.
+          if [ "${CLASSIFICATION}" != "content" ]; then
+            {
+              echo "## ZAP baseline — UNOBSERVABLE"
+              echo
+              echo "The scan target answered an anonymous request with \`${CLASSIFICATION}\`,"
+              echo "so no application content was assessed. A \"0 High\" result here would"
+              echo "describe a login redirect, not the app."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=ZAP assessed nothing::${TARGET_URL} is '${CLASSIFICATION}' to an anonymous caller (the app at ${APP_URL} sits behind Easy Auth). An unauthenticated baseline cannot assess it, and reporting zero High-risk alerts would be a verdict this scan never earned (F152)."
+            exit 1
+          fi
+
+          # URLs the scan actually touched. Three of them means /, /robots.txt and
+          # /sitemap.xml - the crawler's own guesses, not the application.
+          scanned_urls="$(jq '[.site[]?.alerts[]?.instances[]?.uri] | unique | length' report.json)"
+          echo "Distinct URLs appearing in alerts: ${scanned_urls}"
+
           high="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("High"))] | length' report.json)"
           medium="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("Medium"))] | length' report.json)"
           low="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("Low"))] | length' report.json)"

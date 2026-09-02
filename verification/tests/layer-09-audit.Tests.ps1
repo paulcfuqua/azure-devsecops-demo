@@ -124,10 +124,22 @@ Describe 'layer-09-audit' {
             throw "unexpected gh call: $joined"
         }
 
+        # Default: Defender IS producing posture. Individual tests override.
+        $script:SecureScores = [pscustomobject]@{ value = @([pscustomobject]@{ name = 'ascScore' }) }
+        $script:Assessments = [pscustomobject]@{ value = @([pscustomobject]@{ name = 'a1' }) }
+        $script:PolicySummary = [pscustomobject]@{ results = [pscustomobject]@{ nonCompliantResources = 6 } }
+
         Mock Invoke-MlsAz {
             $joined = $Argument -join ' '
             if ($joined -like 'security pricing show*') { return [pscustomobject]@{ tier = $script:PricingTier } }
             if ($joined -like 'monitor activity-log list*') { return $script:PricingEvents }
+            # V9.6 reads the two Defender posture surfaces over `az rest`. The
+            # fixture answers with whatever the test set, so "Defender produces
+            # posture", "Defender produces nothing" and "the endpoint did not
+            # answer" are three distinct, settable states rather than one throw.
+            if ($joined -like '*secureScores*') { return $script:SecureScores }
+            if ($joined -like '*assessments*') { return $script:Assessments }
+            if ($joined -like 'policy state summarize*') { return $script:PolicySummary }
             throw "unexpected az call: $joined"
         }
     }
@@ -135,7 +147,7 @@ Describe 'layer-09-audit' {
     Context 'all criteria pass' {
         It 'records V9.1-V9.5 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V9.1', 'V9.2', 'V9.3', 'V9.4', 'V9.5')
+            @($context.Criterion).Id | Should -Be @('V9.1', 'V9.2', 'V9.3', 'V9.4', 'V9.5', 'V9.6')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -297,11 +309,62 @@ Describe 'layer-09-audit' {
         }
     }
 
+
+    Context 'V9.6 - Defender posture (F153)' {
+        It 'PASSES when Defender produces a secure score' {
+            (Get-Row -Context (Invoke-AuditForTest) -Id 'V9.6').Status | Should -Be 'PASS'
+        }
+
+        It 'PASSES on assessments alone, when no secure score has been computed yet' {
+            # The two surfaces populate independently. Requiring both would fail an
+            # estate that is genuinely being assessed.
+            $script:SecureScores = [pscustomobject]@{ value = @() }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V9.6'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*assessments=1*'
+        }
+
+        It 'FAILS when Defender produces nothing, and names what IS working' {
+            # The trap this criterion exists for: ASC Default is assigned and Azure
+            # Policy evaluates happily, so an operator checking "is the initiative
+            # assigned?" concludes Defender works. Assessments are a different
+            # pipeline. The failure must say so or it sends the reader in a circle.
+            $script:SecureScores = [pscustomobject]@{ value = @() }
+            $script:Assessments = [pscustomobject]@{ value = @() }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V9.6'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*secure scores=0 assessments=0*'
+            $row.Observed | Should -BeLike '*Azure Policy IS evaluating: 6*'
+            $row.Detail | Should -BeLike '*DIFFERENT pipeline*'
+        }
+
+        It 'reports UNOBSERVABLE, never "absent", when neither endpoint answers' {
+            # An audit that cannot see a thing says so. Reporting "Defender produces
+            # no posture" because the Verifier lacked a role would be a confident,
+            # specific, wrong answer - the class this repository pays most for.
+            $script:SecureScores = $null
+            $script:Assessments = $null
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V9.6'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike 'UNOBSERVABLE*'
+            $row.Detail | Should -BeLike '*not evidence that Defender produces nothing*'
+        }
+
+        It 'does not spend a retry window on a pipeline measured in hours' {
+            # Both failure paths are -Final. Defender's assessment surface fills over
+            # hours; a five-minute poll cannot change the verdict, so it must not
+            # spend the wall clock reaching the same one.
+            $script:SecureScores = [pscustomobject]@{ value = @() }
+            $script:Assessments = [pscustomobject]@{ value = @() }
+            (Get-Row -Context (Invoke-AuditForTest) -Id 'V9.6').Attempt | Should -Be 1
+        }
+    }
+
     Context 'a check that throws' {
         It 'records V9.5 as FAIL when the Defender read errors, and still evaluates the rest' {
             Mock Invoke-MlsAz { throw "az security pricing show failed with exit code 1 (AuthorizationFailed)." }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 5
+            @($context.Criterion).Count | Should -Be 6
             (Get-Row -Context $context -Id 'V9.5').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V9.5').Observed | Should -BeLike '*AuthorizationFailed*'
             (Get-Row -Context $context -Id 'V9.1').Status | Should -Be 'PASS'
