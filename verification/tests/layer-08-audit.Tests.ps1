@@ -9,7 +9,15 @@ BeforeAll {
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l08-$([guid]::NewGuid().ToString('n'))"
     New-Item -ItemType Directory -Path $script:ReportRoot -Force | Out-Null
-    $script:SolutionPath = Join-Path -Path $script:ReportRoot -ChildPath 'Solution.xml'
+    # A REAL SOLUTION TREE, not a lone manifest (F145). V8.1's expected component set
+    # comes from three files - the manifest's RootComponents, every botcomponent's
+    # <name>, and the connection-reference logical names - so a flat fixture would
+    # exercise a parse the production code no longer performs, and would keep passing
+    # while the thing it stands for was broken.
+    $script:SolutionRoot = Join-Path -Path $script:ReportRoot -ChildPath 'mlsopsagent'
+    New-Item -ItemType Directory -Path (Join-Path $script:SolutionRoot 'Other') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $script:SolutionRoot 'Assets') -Force | Out-Null
+    $script:SolutionPath = Join-Path -Path $script:SolutionRoot -ChildPath 'Other' -AdditionalChildPath 'Solution.xml'
     Set-Content -LiteralPath $script:SolutionPath -Encoding utf8 -Value @'
 <?xml version="1.0" encoding="utf-8"?>
 <ImportExportXml>
@@ -18,10 +26,33 @@ BeforeAll {
     <Version>1.0.0.7</Version>
     <RootComponents>
       <RootComponent type="10001" schemaName="mls_opsagent" />
-      <RootComponent type="10373" schemaName="mls_mcpconnection" />
     </RootComponents>
   </SolutionManifest>
 </ImportExportXml>
+'@
+
+    # 'Sign in ' carries a trailing space in Dataverse and in the committed file. The
+    # comparison is exact, so the fixture keeps it: a helper that trimmed here would be
+    # supplying the answer it is checking.
+    foreach ($component in @(
+            @{ Schema = 'mls_opsagent.topic.Greeting'; Name = 'Greeting' },
+            @{ Schema = 'mls_opsagent.topic.Signin'; Name = 'Sign in ' })) {
+        $dir = Join-Path -Path $script:SolutionRoot -ChildPath 'botcomponents' -AdditionalChildPath $component.Schema
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dir 'botcomponent.xml') -Encoding utf8 -Value @"
+<botcomponent schemaname="$($component.Schema)">
+  <componenttype>9</componenttype>
+  <name>$($component.Name)</name>
+</botcomponent>
+"@
+    }
+
+    Set-Content -LiteralPath (Join-Path $script:SolutionRoot 'Assets' 'botcomponent_connectionreferenceset.xml') -Encoding utf8 -Value @'
+<botcomponent_connectionreferenceset>
+  <botcomponent_connectionreference botcomponentid.schemaname="mls_opsagent.topic.Tools" connectionreferenceid.connectionreferencelogicalname="mls_opsagent.shared_mcp.abc123">
+    <iscustomizable>1</iscustomizable>
+  </botcomponent_connectionreference>
+</botcomponent_connectionreferenceset>
 '@
 
     $script:AllowedTool = @('query_lakehouse_sql', 'query_log_analytics', 'get_github_security',
@@ -106,7 +137,11 @@ Describe 'layer-08-audit' {
         New-EvalArtifact -Passing 10
 
         $script:DeployedVersion = '1.0.0.7'
-        $script:DeployedComponent = @('mls_opsagent', 'mls_mcpconnection')
+    # What Dataverse reports: the two roots, the two topics BY DISPLAY NAME, and the
+    # connection reference. V8.1 used to compare this against the two roots alone and
+    # call the other three drift.
+    $script:DeployedComponent = @('mls_opsagent', 'Greeting', 'Sign in ',
+        'mls_opsagent.shared_mcp.abc123')
         $script:UnmanagedLayer = $false
         $script:AdvertisedTool = $script:AllowedTool
 
@@ -290,5 +325,68 @@ Describe 'layer-08-audit' {
             $row.Status | Should -Be 'SKIP'
             $row.Detail | Should -BeLike '*re-derive*'
         }
+    }
+}
+
+Describe 'V8.1 builds its expected set from the whole solution tree (F145)' {
+    # V8.1 built the expected component set from Other/Solution.xml's RootComponents
+    # alone. That file lists the roots - one, in the real solution - while Dataverse
+    # reports every component summary, including all fifteen topics. Set equality between
+    # those two lists could never hold, so V8.1 failed on a correct deployment with
+    #
+    #     components missing [] extra [Conversation Start, Fallback, Greeting, ...]
+    #
+    # naming sixteen legitimate components as though they were drift. The register
+    # recorded the cause as a missing Verifier permission; the read had succeeded every
+    # time. A criterion that cannot pass is not a strict criterion, it is a broken one -
+    # and it hid the real question, which is whether the deployment matches the repo.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:RealSolution = Join-Path $script:Root 'infra/copilot-studio/solution/MeridianLaunchCopilot/Other/Solution.xml'
+    }
+
+    It 'reads names from all three committed sources, not RootComponents alone' {
+        $committed = Get-CommittedSolution -Path $script:RealSolution
+        $committed.ComponentReadable | Should -BeTrue
+
+        # One root component, and it is the only thing the old parse could see.
+        $committed.Component | Should -Contain 'mls_5Fmeridian-20ops-20tools'
+        # A topic: only reachable through botcomponents/*/botcomponent.xml.
+        $committed.Component | Should -Contain 'Greeting'
+        # The connection reference: only reachable through Assets/.
+        ($committed.Component | Where-Object { $_ -like 'mls_MeridianLaunchCopilot.shared_*' }) |
+            Should -Not -BeNullOrEmpty
+
+        # Seventeen is what Dataverse reported for this solution on 2026-09-02. A change
+        # here is a real change to the agent and should be seen, not absorbed.
+        @($committed.Component).Count | Should -Be 17
+    }
+
+    It 'does not trim a name, because Dataverse does not' {
+        # 'Sign in ' has a trailing space at both ends of the comparison. Normalising it
+        # here would hide a genuine rename behind a cosmetic one.
+        (Get-CommittedSolution -Path $script:RealSolution).Component | Should -Contain 'Sign in '
+    }
+
+    It 'reports UNOBSERVABLE rather than inventing an empty expected set' {
+        # THE POINT OF THE WHOLE FIX. With no botcomponents directory the expected set is
+        # short, and a short expected set turns every deployed component into an "extra".
+        # An audit that cannot see a thing says so; it never reports the thing as absent,
+        # and it never reports what it could not enumerate as unexpected.
+        $bare = Join-Path ([IO.Path]::GetTempPath()) "mls-f145-$([guid]::NewGuid().ToString('n'))"
+        New-Item -ItemType Directory -Path (Join-Path $bare 'Other') -Force | Out-Null
+        try {
+            Copy-Item -LiteralPath $script:RealSolution -Destination (Join-Path $bare 'Other' 'Solution.xml')
+            $committed = Get-CommittedSolution -Path (Join-Path $bare 'Other' 'Solution.xml')
+            $committed.ComponentReadable | Should -BeFalse -Because 'there are no component files to enumerate'
+        } finally {
+            Remove-Item -LiteralPath $bare -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'returns $null when the manifest itself is absent' {
+        Get-CommittedSolution -Path (Join-Path ([IO.Path]::GetTempPath()) 'no-such-solution.xml') |
+            Should -BeNullOrEmpty
     }
 }

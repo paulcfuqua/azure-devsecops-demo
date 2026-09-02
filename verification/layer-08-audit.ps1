@@ -75,7 +75,42 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path -Path $PSScriptRoot -ChildPath 'MlsAudit.psm1') -Force
 
 function Get-CommittedSolution {
-    <# The unpacked solution in the repo: infra/copilot-studio/solution/<SolutionName>/Other/Solution.xml #>
+    <#
+    .SYNOPSIS
+        The unpacked solution in the repo, read as the THREE files that between them
+        name every component Dataverse will report (F145).
+
+    .DESCRIPTION
+        V8.1 used to build its expected set from `Other/Solution.xml`'s RootComponents
+        alone. That file lists ONE component - the connector - while Dataverse's
+        msdyn_solutioncomponentsummaries reports seventeen, because a Copilot Studio
+        agent's topics are components of the solution without being roots of it. Set
+        equality between those two lists could never hold, so V8.1 reported
+
+            components missing [] extra [Conversation Start, Fallback, Greeting, ...]
+
+        on a perfectly correct deployment: sixteen confident, specific, WRONG names a
+        reader would go hunting for. The register recorded the cause as a missing
+        Verifier permission, which it never was - the read succeeded every time.
+
+        The committed side is fully enumerable, and this is where it lives:
+
+          Other/Solution.xml                          RootComponent/@schemaName  (1)
+          botcomponents/<x>/botcomponent.xml          <name>                     (15)
+          Assets/botcomponent_connectionreferenceset.xml
+                                    @connectionreferenceid.connectionreferencelogicalname (1)
+
+        `<name>` is the display name Dataverse returns verbatim in msdyn_name - down to
+        the trailing space in 'Sign in ' - so the comparison is exact rather than
+        normalised. Reading all three makes the check STRONGER than it was ever able to
+        be: it now covers all fifteen topics and the connection reference, where before
+        it covered the connector and nothing else.
+
+        Returns $null when the manifest is absent. `ComponentReadable` is $false when the
+        manifest parsed but the component files could not be enumerated - the caller must
+        report that as unobservable rather than comparing against a short list, because
+        a truncated expected set turns every deployed component into an "extra".
+    #>
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     [xml]$document = Get-Content -LiteralPath $Path -Raw
@@ -83,15 +118,72 @@ function Get-CommittedSolution {
     # and Set-StrictMode turns a missing property into a terminating error.
     $uniqueNameNode = $document.SelectSingleNode('//SolutionManifest/UniqueName')
     $versionNode = $document.SelectSingleNode('//SolutionManifest/Version')
-    $component = @($document.SelectNodes('//SolutionManifest/RootComponents/RootComponent') | ForEach-Object {
-            $name = $_.GetAttribute('schemaName')
-            if ([string]::IsNullOrWhiteSpace($name)) { $name = $_.GetAttribute('id') }
-            $name
-        } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $component = [System.Collections.Generic.List[string]]::new()
+    $rootComponent = [System.Collections.Generic.List[string]]::new()
+    foreach ($node in $document.SelectNodes('//SolutionManifest/RootComponents/RootComponent')) {
+        $name = $node.GetAttribute('schemaName')
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $node.GetAttribute('id') }
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+            $component.Add($name)
+            $rootComponent.Add($name)
+        }
+    }
+    $connectionReference = [System.Collections.Generic.List[string]]::new()
+
+    # Other/Solution.xml -> the solution folder that contains it.
+    $solutionFolder = Split-Path -Parent (Split-Path -Parent $Path)
+    $readable = $true
+
+    $botComponentDir = Join-Path -Path $solutionFolder -ChildPath 'botcomponents'
+    if (Test-Path -LiteralPath $botComponentDir) {
+        $files = @(Get-ChildItem -LiteralPath $botComponentDir -Filter 'botcomponent.xml' -Recurse -File)
+        if ($files.Count -eq 0) { $readable = $false }
+        foreach ($file in $files) {
+            try {
+                [xml]$bot = Get-Content -LiteralPath $file.FullName -Raw
+                $nameNode = $bot.SelectSingleNode('//botcomponent/name')
+                # InnerText, NOT a trim: Dataverse returns 'Sign in ' with its trailing
+                # space and the comparison is exact. Normalising here would hide a real
+                # rename behind a cosmetic one.
+                if ($nameNode -and -not [string]::IsNullOrWhiteSpace($nameNode.InnerText)) {
+                    $component.Add($nameNode.InnerText)
+                }
+            } catch {
+                $readable = $false
+            }
+        }
+    } else {
+        $readable = $false
+    }
+
+    $connectionFile = Join-Path -Path $solutionFolder -ChildPath 'Assets' -AdditionalChildPath 'botcomponent_connectionreferenceset.xml'
+    if (Test-Path -LiteralPath $connectionFile) {
+        try {
+            [xml]$connections = Get-Content -LiteralPath $connectionFile -Raw
+            foreach ($node in $connections.SelectNodes('//botcomponent_connectionreference')) {
+                $logical = $node.GetAttribute('connectionreferenceid.connectionreferencelogicalname')
+                if (-not [string]::IsNullOrWhiteSpace($logical)) {
+                    $component.Add($logical)
+                    $connectionReference.Add($logical)
+                }
+            }
+        } catch {
+            $readable = $false
+        }
+    }
+
     return [pscustomobject]@{
-        UniqueName = $(if ($uniqueNameNode) { $uniqueNameNode.InnerText } else { '' })
-        Version    = $(if ($versionNode) { $versionNode.InnerText } else { '' })
-        Component  = $component
+        UniqueName          = $(if ($uniqueNameNode) { $uniqueNameNode.InnerText } else { '' })
+        Version             = $(if ($versionNode) { $versionNode.InnerText } else { '' })
+        # Everything, for V8.1's set equality against what Dataverse reports.
+        Component           = @($component)
+        # The EXTERNAL ATTACHMENTS, for V8.3. Kept separate on purpose: V8.3 asks how many
+        # connectors and agents the solution declares, and once Component carried topic
+        # DISPLAY names a topic called 'Meridian Ops Tools' counted as a tool. Widening one
+        # check's input silently widened another's - the two questions need two lists.
+        RootComponent       = @($rootComponent)
+        ConnectionReference = @($connectionReference)
+        ComponentReadable   = $readable
     }
 }
 
@@ -136,7 +228,16 @@ function Test-DeployedSolution {
         })
     $problem = [System.Collections.Generic.List[string]]::new()
     if ($deployedVersion -ne $Committed.Version) { $problem.Add("version deployed=$deployedVersion committed=$($Committed.Version)") }
-    if (@($Committed.Component).Count -gt 0) {
+
+    # AN AUDIT THAT CANNOT SEE A THING SAYS SO; it never reports the thing as absent, and
+    # it never reports what it could not enumerate as unexpected. A truncated expected set
+    # makes every deployed component an "extra" - which is exactly how V8.1 spent a week
+    # naming sixteen legitimate topics as though they were drift (F145).
+    if (-not $Committed.ComponentReadable) {
+        $problem.Add('UNOBSERVABLE: the committed component files could not be enumerated, so the deployed set cannot be compared against anything')
+    } elseif (@($Committed.Component).Count -eq 0) {
+        $problem.Add('UNOBSERVABLE: the committed solution declares no components, which is not a state this solution can legitimately be in')
+    } else {
         $comparison = Test-MlsSetEquality -Actual $deployedComponent -Expected @($Committed.Component)
         if (-not $comparison.Equal) {
             $problem.Add("components missing [$($comparison.Missing -join ', ')] extra [$($comparison.Extra -join ', ')]")
@@ -294,7 +395,10 @@ function Test-ToolAllowlist {
 
     if ($null -ne $Committed) {
         $checked++
-        $toolComponent = @($Committed.Component | Where-Object { $_ -match '(?i)connector|connection|tool|agent' })
+        # Roots and connection references only - NOT the full component set, which
+        # carries every topic's display name (F145).
+        $toolComponent = @(@($Committed.RootComponent) + @($Committed.ConnectionReference) |
+                Where-Object { $_ -match '(?i)connector|connection|tool|agent' })
         $observed.Add("solution declares $($toolComponent.Count) tool/connector component(s)")
         if ($toolComponent.Count -gt 2) {
             $problem.Add("the solution declares $($toolComponent.Count) tool/connector/agent components; expected the one MCP connection and, on the Fabric path, the single connected data agent")
@@ -468,8 +572,8 @@ function Invoke-Main {
 
     Invoke-MlsCriterion -Context $context -Id 'V8.1' -Control @('3.4.1', '3.4.3') `
         -Description "Deployed agent's solution unique name + version + component list match the committed solution exactly, and its published state is current" `
-        -Command "GET <envUrl>/api/data/v9.2/solutions?`$filter=uniquename eq '<name>'`nGET <envUrl>/api/data/v9.2/msdyn_solutioncomponentsummaries?`$filter=msdyn_solutionid eq <id>`nSelect-Xml -Path $solutionFile -XPath '//Version','//UniqueName'" `
-        -Expected 'unique name and version identical; component set equal (set equality); no unmanaged layer on the agent component' `
+        -Command "GET <envUrl>/api/data/v9.2/solutions?`$filter=uniquename eq '<name>'`nGET <envUrl>/api/data/v9.2/msdyn_solutioncomponentsummaries?`$filter=msdyn_solutionid eq <id>`nSelect-Xml -Path $solutionFile -XPath '//Version','//UniqueName'`nthe committed component set: Solution.xml RootComponents + every botcomponents/*/botcomponent.xml <name> + Assets/botcomponent_connectionreferenceset.xml logical names" `
+        -Expected 'unique name and version identical; component set equal against ALL THREE committed sources, not RootComponents alone (F145); no unmanaged layer on the agent component' `
         -RetryWindowMinutes 5 `
         -Test { Test-DeployedSolution -Committed $committed -EnvironmentUrl $environment -Header $header } | Out-Null
 
