@@ -117,6 +117,50 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F155 — the attack surface was written by hand, so two internet-facing apps were never scanned *(fixed 2026-09-02)*
+
+F152, earlier the same day, enumerated the estate's external surface and listed **four** entries.
+The sponsor's reaction — *"I think we have more than 3 container apps, our documentation is
+probably out of date"* — was right, and understated it. Read live:
+
+    mls-control-tower-demo-ca   external   Easy Auth
+    mls-launch-ops-demo-ca      external   Easy Auth
+    mls-compliance-demo-ca      external   Easy Auth
+    mls-mcp-demo-ca             external   app-level bearer only
+    mls-data-api-demo-ca        INTERNAL   -
+    mls-vuln-lab-demo-ca        no ingress -
+    mls-cost-ingest-demo-func   external   NONE  -> HTTP 200 anonymous
+    mls-directline-demo-func    external   NONE  -> HTTP 200 anonymous
+
+**Two Function Apps, internet-facing, answering 200 to an anonymous caller with no platform
+auth, that no scan had ever touched** — and that F152's own list omitted, because that list was
+written by hand and stopped at container apps. They are not even in the same resource group
+(`mls-rg-ops`, not `mls-rg-apps`), which is exactly the sort of detail a hand-written inventory
+loses.
+
+**The class:** a surface written down is a surface that goes stale the next time someone
+deploys. F144 taught the same lesson about one hostname; this is the same defect applied to the
+*set* rather than to a member of it. An inventory that is not derived is a guess with a
+timestamp.
+
+**Fixed by enumerating instead of listing.** `zap.yml` now asks Azure every run which Container
+Apps have `ingress.external` and which Function Apps are running, classifies each anonymously
+(`content` / `auth-wall` / `unreachable`), and scans every one that answers with content. The
+scan is a **matrix**, `fail-fast: false` — a run is an expensive observation and returns
+everything it saw, so one endpoint's High-risk alert must not cancel five other scans.
+
+**The audit contract is untouched.** A merge job combines the per-target reports into the single
+`zap-baseline-report` artifact V9.4 already downloads by name, so the criterion now asserts zero
+High across **every reachable endpoint** rather than across one, with no change to
+`layer-09-audit.ps1`. The merge runs on `always()`, because a target that failed its own gate
+still produced a report and hiding it would hide the findings worth having.
+
+**Still open:** the three Easy Auth apps remain unscannable by an unauthenticated baseline, and
+are correctly reported as `auth-wall` rather than passed. An Application ID URI was added to
+`mls-launch-ops-demo-app` to make an authenticated scan possible; minting a token then failed
+`AADSTS65001 consent_required`, so it needs an app-role assignment for the CI service principal.
+That work is not done, and the criterion says so rather than implying coverage it does not have.
+
 ### F154 — the security board understated severity, trebled the work, and counted a fixture as exposure *(fixed 2026-09-02)*
 
 Three defects on one panel, found by looking at it rather than by a check.
