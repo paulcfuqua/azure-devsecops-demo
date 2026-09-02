@@ -1,4 +1,4 @@
-# Pester tests for verification/layer-07-audit.ps1 - az, HTTP, gh and npm are all mocked;
+﻿# Pester tests for verification/layer-07-audit.ps1 - az, HTTP, gh and npm are all mocked;
 # zero cloud calls and no live endpoints.
 
 BeforeAll {
@@ -131,9 +131,14 @@ Describe 'layer-07-audit' {
         $script:IdTokenIssuance = 'true'
         $script:AuthStatus = 401
         $script:AuthMiddlewareId = 'abc-123'
+        $script:AuthMaxRedirection = $null
         Mock Invoke-MlsHttp {
             Register-ProbeTrace -Header $Header
             if ("$Uri" -like '*/.auth/me') {
+                # Captured so a test can assert the probe REFUSES to follow the redirect.
+                # Following it is F127: the 302 leads to login.microsoftonline.com, whose
+                # 200 was then reported as this app's answer.
+                $script:AuthMaxRedirection = $MaximumRedirection
                 $h = @{}
                 if ($script:AuthMiddlewareId) { $h['x-ms-middleware-request-id'] = $script:AuthMiddlewareId }
                 return [pscustomobject]@{ StatusCode = $script:AuthStatus; Content = ''; Headers = $h; Error = $null }
@@ -475,6 +480,44 @@ Describe 'layer-07-audit' {
             # the two apart.
             $script:AuthStatus = 200
             $script:AuthMiddlewareId = ''
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V7.7'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'Easy Auth is not handling'
+        }
+
+        It 'PASSES V7.7 on a 302, because Easy Auth picks its refusal by the caller (F127)' {
+            # NOT a widening for convenience. The live endpoint answers 302 to PowerShell
+            # and 401 to curl, on the same app in the same minute - the same
+            # client-dependent shape the compliance board shows V12.4. Pinning 401 failed
+            # a working control on the User-Agent of whoever ran the audit.
+            $script:AuthStatus = 302
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V7.7').Status | Should -Be 'PASS'
+        }
+
+        It 'does not follow the redirect, or it measures Microsoft''s login page (F127)' {
+            # THE BUG THIS ENCODES. With redirects followed, a HEALTHY estate produced:
+            #     GET /.auth/me -> 302 to login.microsoftonline.com -> 200 from Entra
+            # and the criterion reported "answered 200 with no x-ms-middleware-request-id -
+            # Easy Auth is not handling /.auth". It was measuring Microsoft's sign-in page
+            # and attributing the answer to our container. Both frontends failed on it.
+            $null = Invoke-AuditForTest -NoRetry
+            # Phrased as "no probe follows redirects" rather than a call count, so it stays
+            # true whatever the estate's frontend count is - two today.
+            Should -Invoke Invoke-MlsHttp -Times 0 -Exactly -ParameterFilter {
+                $Uri -like '*/.auth/me' -and $MaximumRedirection -ne 0
+            } -Because 'only the FIRST response carries the verdict; anything after it belongs to another origin'
+            Should -Invoke Invoke-MlsHttp -ParameterFilter {
+                $Uri -like '*/.auth/me' -and $MaximumRedirection -eq 0
+            } -Because 'and the probe must actually have run, or the assertion above is vacuous'
+        }
+
+        It 'still FAILS V7.7 on a 2xx, which is the SPA fallback answering' {
+            # The state the criterion was written for (F110) must stay caught: nginx
+            # serving index.html for /.auth means the callback has nowhere to land.
+            $script:AuthStatus = 200
+            $script:AuthMiddlewareId = 'abc-123'
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V7.7'
             $row.Status | Should -Be 'FAIL'
