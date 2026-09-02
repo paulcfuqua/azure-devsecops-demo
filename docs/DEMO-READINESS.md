@@ -33,13 +33,13 @@ below and know what to do next.*
 `docs/BRIEF.md` commits to **four showpieces** and **twelve layers**. This is what is true
 on 2026-09-01, with the evidence beside it.
 
-### The four showpieces — 2 working, 1 ready but unobserved, 1 blocked
+### The four showpieces — 3 working, 1 waiting on Dependabot
 
 | # | Showpiece | Status | Evidence |
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
 | **4** | **Compliance platform** — NIST 800-171 | ✅ **working** | **Independently audited for the first time, 2026-09-01.** `verification/layer-12-audit.ps1` runs as `mls-verifier` and reports **4 PASS + 2 SKIP**: the shipped artifact is complete against the catalog and carries no score, the honesty invariant holds in the file rather than only in the derivation, Easy Auth refuses anonymous callers, and the collection history is a git history. The two SKIPs name their owners rather than being gaps |
-| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **agent answers; its tool reads the wrong backend** | **Proven end to end 2026-09-01**: Direct Line connects, the agent invokes the MCP tool, the tool responds, and the agent reasons about the result in plain language. F122, F124, F128, F129, F130 and F131 all closed to get here. What it cannot yet do is answer FROM DATA: `mls-mcp-demo-ca` is deployed with `MLS_TOOL_BACKENDS=local`, so it looks for `/repo/data/generated` instead of querying Fabric. `data-api` already runs `cloud` in the same template with every setting needed, and the MCP identity already holds the grants — the gap is six env vars |
+| **1** | **Copilot service** — Ask tab over Direct Line | ✅ **working** | **2026-09-02: the agent answers from real lakehouse data.** Asked which weekday has the most launches it replied *"Saturday, with 309 launches recorded in the launches table"*, citing its source — and the number was **independently re-derived** through the MCP server rather than taken on trust (Saturday 309, Sunday 181, Tuesday 162 …), an exact match. Eight findings between "not configured" and this: F122, F124, F128, F129, F130, F131, F133, F134 — all fixed **in the repo**, so a rebuild reproduces the working state rather than reverting to it |
 | **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | **The token half is DONE and proven** (2026-09-01): `SELF_HEAL_TOKEN` is a repository secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the Dependabot lane runs instead of skipping. What is missing is a **subject**: Dependabot opens no security PR for the three seeded CVEs, so the lane has nothing to adopt (**F126**, cause unresolved, deferred). This is the ONLY showpiece with an open engineering blocker |
 
 ### The twelve layers — 8 verified, 2 partial, 2 not done
@@ -75,19 +75,20 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 
 **BLOCKER-1 and BLOCKER-2 are both CLOSED as of 2026-09-01.** What is left:
 
-- **BLOCKER-3 is CLOSED on every link that can be checked without a browser sign-in**
-  (2026-09-01). Each was verified against the running system, not inferred from a green run:
-  the agent is published; the secret is in Key Vault; the Key Vault reference reports
-  `Resolved` (F122 fixed, and **V6.8 confirms it in CI**); the token endpoint returns
-  **HTTP 200 with a real, origin-scoped Direct Line token**; and the deployed bundle -
-  pulled from GHCR and grepped layer by layer - now contains
-  `https://mls-directline-demo-func.azurewebsites.net/api/directline/token` (F124 fixed).
-  Revision `--0000010` carries 100% of traffic.
+- **BLOCKER-3 is FULLY CLOSED (2026-09-02): the agent answers from real data.** Asked which
+  weekday has the most launches it replied *"Saturday, with 309 launches recorded in the
+  launches table"*, citing its source — and the figure was **independently re-derived** through
+  the MCP server rather than taken on trust (Saturday 309, Sunday 181, Tuesday 162 …), an exact
+  match. Eight findings stood between the tab saying "not configured" and that answer: F122,
+  F124, F128, F129, F130, F131, F133, F134. **All are fixed in the repo**, not by hand, so a
+  rebuild reproduces the working state rather than reverting to it — which matters, because
+  F129 and F131 were both configurations that could not have survived the teardown-and-rebuild
+  this demo exists to showcase.
 
-  **What is NOT verified: nobody has watched the Ask tab render a conversation.** Control
-  Tower sits behind Easy Auth, so that last step needs a human signed in. Every link in the
-  chain is confirmed; the chain has not been observed end to end. Treat it as *ready to
-  demonstrate*, not *demonstrated*, until someone opens it.
+  **One thing is NOT closed and is tracked separately:** the Ask tab still reaches the agent
+  without authenticating the human. The fix — the page forwards its Easy Auth token and the
+  Function verifies it — is merged and waiting on an L6 + L7 deploy.
+
 - **BLOCKER-4: the token half is DONE and proven.** `SELF_HEAL_TOKEN` is now a repository
   secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the
   Dependabot lane runs instead of skipping. Both recorded problems are closed: the chain can
@@ -106,6 +107,50 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F134 — mcp-tools had no Fabric role at all *(fixed 2026-09-02)*
+
+With the tool server finally in cloud mode, the agent issued a real lakehouse query and got:
+
+    "The data source returned: 'Could not login because the authentication failed.'"
+
+`infra/fabric/provision-workspace.ps1` grants workspace roles **per principal** — `data-api`
+and `mls-verifier` as Viewer, `cost-ingest` as Contributor — and there was **no entry for
+`mcp-tools`**. Its identity held no role on the workspace whatsoever.
+
+**Why it stayed hidden for the life of the project:** mcp-tools ran in local backend mode
+(F133), so it never asked Fabric for anything and the missing grant cost nothing observable.
+F133 turned a dormant gap into a live failure — and the failure surfaced **inside a Copilot
+answer**, three systems away from the file that decides workspace roles, phrased as
+*authentication* when it was *authorisation*.
+
+Granted Viewer, matching the other readers, in the existing F24 pass rather than a step of its
+own: both identities live in `RG_APPS`, both take the identical role, and that step already
+holds the Fabric token. An absent mcp-tools identity now emits a **warning naming the exact
+error it would otherwise produce**.
+
+### F133 — the MCP server read data/generated, so the agent worked and answered nothing *(fixed 2026-09-02)*
+
+The Copilot chain reached end-to-end for the first time, and the answer was:
+
+    "I couldn't determine which day of the week has the most launches because the
+     launch-history query failed. The lakehouse tool returned: 'Generated data not
+     found at /repo/data/generated.'"
+
+`mls-mcp-demo-ca` shipped with `MLS_TOOL_BACKENDS=local`, reading a directory that is not in
+the image, while the lakehouse it should query holds 1,200 rows. **Section D's exact shape:
+every layer working and the answer empty.**
+
+`data-api` has read the lakehouse correctly all along **from the same template**, deriving its
+mode from whether L5 handed over a Fabric SQL endpoint. mcp-tools did not, for a reason that
+reads well and was wrong: its parameter defaulted to the literal `'local'` so the mode would
+always be *"an explicit deployment decision rather than an omission"* (F2). **That made
+explicit-local and nobody-said indistinguishable**, so the template could not derive — and the
+omission it was guarding against arrived anyway, wearing the default as a disguise.
+
+Empty now means derive; an explicit value still wins. L7 prints the resolved mode and warns
+when it is not cloud — the treatment data-api already had, and whose absence is why nobody
+noticed.
 
 ### F131 — the committed solution carried the settings that break Direct Line *(fixed 2026-09-01)*
 
