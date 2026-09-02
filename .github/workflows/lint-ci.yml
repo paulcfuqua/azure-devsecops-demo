@@ -49,6 +49,60 @@ env:
   ACTIONLINT_VERSION: 1.7.12
 
 jobs:
+  bicep:
+    name: bicep (templates + parameter files)
+    runs-on: ubuntu-latest
+    # Bounded for the same reason every other job here is (F81).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # NOTHING VALIDATED BICEP UNTIL NOW, and a deploy is an expensive place to
+      # find a typo (F141). An L7 deploy failed 20 minutes in with
+      #
+      #   demo.bicepparam(129,29) : BCP033: Expected a value of type
+      #   "'cloud' | 'local'" but the provided value is of type ''
+      #
+      # which this job answers in seconds.
+      #
+      # BOTH COMMANDS, and that distinction is the finding. `az bicep build` on a
+      # TEMPLATE passes while its parameter file is invalid, because a parameter's
+      # own default is legal in isolation - the violation only exists once the
+      # .bicepparam supplies a value, and only `build-params` reads that file. The
+      # template was validated locally and the deploy still failed: a green check
+      # that did not cover the thing that broke.
+      - name: Build every Bicep template and parameter file
+        run: |
+          set -euo pipefail
+          az bicep install
+          az bicep version
+
+          failed=0
+          # Parameter files first: they are the half that was never checked, and a
+          # reader scanning the log should see that half succeed or fail plainly.
+          while IFS= read -r f; do
+            echo "::group::build-params $f"
+            # --stdout, not --outfile /dev/null: the latter is rejected on Windows as a
+            # DOS device path, and this loop should behave the same wherever it is run.
+            az bicep build-params --file "$f" --stdout > /dev/null || failed=1
+            echo '::endgroup::'
+          done < <(find infra -name '*.bicepparam' | sort)
+
+          while IFS= read -r f; do
+            # A module is compiled by whatever references it; building each one
+            # standalone is still correct and catches an unreferenced module that
+            # would otherwise rot unnoticed.
+            echo "::group::build $f"
+            az bicep build --file "$f" --stdout > /dev/null || failed=1
+            echo '::endgroup::'
+          done < <(find infra -name '*.bicep' | sort)
+
+          if [ "$failed" -ne 0 ]; then
+            echo '::error title=Bicep did not compile::At least one template or parameter file failed to build. The grouped output above names which.'
+            exit 1
+          fi
+          echo 'Bicep: every template and parameter file compiles.'
+
   actionlint:
     name: actionlint (workflows)
     runs-on: ubuntu-latest
