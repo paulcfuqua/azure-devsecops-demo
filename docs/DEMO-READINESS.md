@@ -117,6 +117,30 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F146 — I broke L9's startup with F144's own fix *(fixed 2026-09-02)*
+
+The full L9 run dispatched to **prove** F144's fix reported:
+
+    conclusion: startup_failure     jobs: []
+
+No jobs, no logs, no annotation naming the cause. A reusable workflow cannot ask for a
+permission its **caller** has not granted, and `zap.yml` had just started needing
+`id-token: write` to read the live ingress FQDN. `layer-09-devsecops.yml`'s `zap:` job granted
+`contents: read` and nothing else, so the whole workflow refused to start - not the one job at
+fault, the whole thing.
+
+**The diagnostic is the finding.** Every other failure in this repository leaves a log to read;
+this one leaves an empty array. That makes it exactly the shape worth spending a check on, and
+`verification/tests/failure-classes.Tests.ps1` now unions every `write` permission any job in a
+called workflow declares and asserts the calling job grants each one. Deliberately over-strict:
+it does not reason about which callee jobs actually run, because a caller granting slightly more
+than one run needs is a far cheaper mistake than a workflow that cannot start. Mutation-tested -
+removing the grant fails it, naming the job, the callee and the permission.
+
+Worth stating plainly: **the check that would have caught this did not exist because I wrote the
+defect and the fix in the same change.** F144 was verified as YAML that parses; nothing asked
+whether the caller could satisfy what the callee now asked for.
+
 ### F145 — V8.1 could never have passed, and the recorded reason was wrong *(fixed 2026-09-02)*
 
 The L8 run that imported solution 1.0.3.0 reported:

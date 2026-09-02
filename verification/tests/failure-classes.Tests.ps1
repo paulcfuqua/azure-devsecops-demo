@@ -1551,3 +1551,98 @@ the stored value, reporting the stored one as stale when they disagree.
         Get-Content -LiteralPath $zap -Raw | Should -Match 'getent hosts'
     }
 }
+
+Describe 'a caller grants every permission the reusable workflow it calls asks for' {
+    # A reusable workflow cannot ask for a permission its CALLER has not granted. When it
+    # does, the run fails at STARTUP:
+    #
+    #   conclusion: startup_failure     jobs: []
+    #
+    # No jobs, no logs, no annotation naming the permission - the worst diagnostic GitHub
+    # produces, and it lands on the whole workflow rather than the one job at fault.
+    #
+    # Paid for while fixing F144: zap.yml began deriving its scan target from the live
+    # Container App instead of a stored FQDN, which needs `id-token: write`, and
+    # layer-09-devsecops.yml's `zap:` job granted `contents: read` alone. The L9 run that
+    # was meant to PROVE the F144 fix never started.
+    #
+    # Deliberately over-strict: it unions every write permission any job in the callee
+    # declares, without reasoning about which jobs run. A caller granting slightly more
+    # than one run needs is a far cheaper mistake than a workflow that cannot start.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:WorkflowDir = Join-Path $script:Root '.github/workflows'
+
+        function Get-WritePermission {
+            <# Every `<name>: write` under any `permissions:` block in a file. #>
+            param([Parameter(Mandatory)][string]$Path)
+            $found = [System.Collections.Generic.HashSet[string]]::new()
+            foreach ($line in (Get-Content -LiteralPath $Path)) {
+                if ($line -match '^\s+([a-z-]+):\s*write\s*$') { [void]$found.Add($Matches[1]) }
+            }
+            return $found
+        }
+
+        function Get-JobBlock {
+            <# Job name -> its lines. Jobs are the two-space keys under `jobs:`. #>
+            param([Parameter(Mandatory)][string]$Path)
+            $blocks = @{}
+            $current = $null
+            foreach ($line in (Get-Content -LiteralPath $Path)) {
+                if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') {
+                    $current = $Matches[1]
+                    $blocks[$current] = [System.Collections.Generic.List[string]]::new()
+                    continue
+                }
+                # A top-level key ends the job section.
+                if ($line -match '^[A-Za-z]' ) { $current = $null; continue }
+                if ($null -ne $current) { $blocks[$current].Add($line) }
+            }
+            return $blocks
+        }
+    }
+
+    It 'finds at least one local reusable-workflow call, so the sweep is not vacuous' {
+        $calls = @(Get-ChildItem -Path $script:WorkflowDir -Filter '*.yml' -File |
+                Select-String -Pattern 'uses:\s*\./\.github/workflows/' -SimpleMatch:$false)
+        $calls.Count | Should -BeGreaterThan 0
+    }
+
+    It 'grants every write permission the callee declares' {
+        $offenders = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($caller in (Get-ChildItem -Path $script:WorkflowDir -Filter '*.yml' -File)) {
+            foreach ($entry in (Get-JobBlock -Path $caller.FullName).GetEnumerator()) {
+                $body = $entry.Value -join "`n"
+                if ($body -notmatch 'uses:\s*\./\.github/workflows/([A-Za-z0-9_.-]+\.yml)') { continue }
+                $calleeName = $Matches[1]
+                $calleePath = Join-Path $script:WorkflowDir $calleeName
+                if (-not (Test-Path -LiteralPath $calleePath)) {
+                    $offenders.Add("$($caller.Name) job '$($entry.Key)' calls $calleeName, which does not exist")
+                    continue
+                }
+
+                # Only the permissions in THIS job's block count; a sibling job's grant
+                # does nothing for this call, and a file-level one is overridden by the
+                # job's own block the moment it declares one.
+                $jobGranted = [System.Collections.Generic.HashSet[string]]::new()
+                foreach ($line in $entry.Value) {
+                    if ($line -match '^\s+([a-z-]+):\s*write\s*$') { [void]$jobGranted.Add($Matches[1]) }
+                }
+
+                foreach ($needed in (Get-WritePermission -Path $calleePath)) {
+                    if (-not $jobGranted.Contains($needed)) {
+                        $offenders.Add("$($caller.Name) job '$($entry.Key)' calls $calleeName, which needs '${needed}: write', and grants it no such permission")
+                    }
+                }
+            }
+        }
+
+        $offenders -join "`n" | Should -BeNullOrEmpty -Because @"
+A reusable workflow cannot ask for a permission its caller has not granted: the run ends
+as startup_failure with no jobs and no logs. Add the permission to the CALLING job's
+permissions block.
+"@
+    }
+}
