@@ -3,7 +3,13 @@
     "number": 17,
     "state": "open",
     "created_at": "2026-08-19T06:22:10Z",
-    "dependency": { "package": { "ecosystem": "npm", "name": "lodash" } },
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "lodash"
+      },
+      "manifest_path": "apps/vuln-lab/package-lock.json"
+    },
     "security_advisory": {
       "ghsa_id": "GHSA-35jh-r3h4-6jhm",
       "cve_id": "CVE-2021-23337",
@@ -15,7 +21,13 @@
     "number": 16,
     "state": "open",
     "created_at": "2026-08-15T06:20:47Z",
-    "dependency": { "package": { "ecosystem": "npm", "name": "minimist" } },
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "minimist"
+      },
+      "manifest_path": "package-lock.json"
+    },
     "security_advisory": {
       "ghsa_id": "GHSA-xvch-5gv4-984h",
       "cve_id": "CVE-2021-44906",
@@ -27,7 +39,13 @@
     "number": 14,
     "state": "open",
     "created_at": "2026-08-10T06:19:03Z",
-    "dependency": { "package": { "ecosystem": "pip", "name": "requests" } },
+    "dependency": {
+      "package": {
+        "ecosystem": "pip",
+        "name": "requests"
+      },
+      "manifest_path": "package-lock.json"
+    },
     "security_advisory": {
       "ghsa_id": "GHSA-9wx4-h78v-vm56",
       "cve_id": "CVE-2024-35195",
@@ -39,7 +57,13 @@
     "number": 12,
     "state": "fixed",
     "created_at": "2026-08-04T06:18:22Z",
-    "dependency": { "package": { "ecosystem": "npm", "name": "axios" } },
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "axios"
+      },
+      "manifest_path": "package-lock.json"
+    },
     "security_advisory": {
       "ghsa_id": "GHSA-wf5p-g6vw-rhxx",
       "cve_id": "CVE-2023-45857",
@@ -51,7 +75,13 @@
     "number": 11,
     "state": "open",
     "created_at": "2026-08-01T06:17:40Z",
-    "dependency": { "package": { "ecosystem": "npm", "name": "semver" } },
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "semver"
+      },
+      "manifest_path": "package-lock.json"
+    },
     "security_advisory": {
       "ghsa_id": "GHSA-c2qf-rxjj-qqgw",
       "cve_id": "CVE-2022-25883",
@@ -63,7 +93,13 @@
     "number": 9,
     "state": "dismissed",
     "created_at": "2026-07-27T06:15:58Z",
-    "dependency": { "package": { "ecosystem": "pip", "name": "jinja2" } },
+    "dependency": {
+      "package": {
+        "ecosystem": "pip",
+        "name": "jinja2"
+      },
+      "manifest_path": "package-lock.json"
+    },
     "security_advisory": {
       "ghsa_id": "GHSA-h5c8-rqwp-cp95",
       "cve_id": "CVE-2024-22195",
@@ -75,7 +111,13 @@
     "number": 8,
     "state": "open",
     "created_at": "2026-07-25T06:15:12Z",
-    "dependency": { "package": { "ecosystem": "npm", "name": "word-wrap" } },
+    "dependency": {
+      "package": {
+        "ecosystem": "npm",
+        "name": "word-wrap"
+      },
+      "manifest_path": "package-lock.json"
+    },
     "security_advisory": {
       "ghsa_id": "GHSA-j8xg-fqg3-53r7",
       "cve_id": "CVE-2023-26115",

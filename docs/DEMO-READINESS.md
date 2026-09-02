@@ -117,6 +117,54 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F154 — the security board understated severity, trebled the work, and counted a fixture as exposure *(fixed 2026-09-02)*
+
+Three defects on one panel, found by looking at it rather than by a check.
+
+**1. High rendered GREEN.** The bar chart set no colour, so the chart library assigned from a
+*categorical* palette by index: Critical blue, **High green**, Medium and Low pink. Green is the
+one colour that reads as "fine", sitting on the second-most serious bar on a security board.
+Colour was working against the reader. Severity colour is now explicit, ranked and semantic, and
+a test asserts every bar carries one.
+
+**2. "88 open alerts" is 30 distinct findings.** The container scan raises the same base-image
+CVE once per image, so three images treble every finding. The count was true and overstated the
+real work roughly threefold — in a repository whose entire argument is that it does not overstate
+itself. The board now leads with **distinct findings** and reports **alert instances** beside it,
+and the chart's own subtitle says how many collapsed into how few.
+
+*(An earlier note in this session put the distinct count at "about 6", reasoning from the top-6
+rule IDs. It is 30. Counting beats inferring.)*
+
+**3. One of the two open criticals is a deliberate fixture.** `CVE-2021-44906` is seeded in
+`apps/vuln-lab` for L9's negative test — V9.2 exists to prove CI fails on it. The board could not
+tell it from real exposure, because **`manifest_path` was dropped by the data-api's projection**,
+so the only field that distinguishes them never reached the browser. It is now carried, seeded
+alerts are counted separately as **"Seeded for the demo"**, and they are **labelled, never
+hidden** — removing them would be the mirror-image lie.
+
+The sharpest evidence is in the test fixture: **High falls from 2 to 1**, because its only
+high-severity dependency alert is a seed. Mutation-tested both ways — counting seeds as real
+fails three tests, dropping the colours fails a fourth.
+
+**Two things this turned up on the way:**
+
+- **The feed contract is declared twice** — `apps/data-api/src/contract/feeds.ts` and
+  `apps/control-tower/src/providers/types.ts` — with nothing keeping them in step. A field added
+  to one and not the other arrives `undefined` at runtime, with no error and no test. Both now
+  carry a note; the drift risk deserves its own check.
+- **`dependabot/alerts?state=all` returns an empty list.** No state parameter returns 10, and
+  `state=open` returns 8 — but `state=all`, which is valid for *code scanning*, is not valid here
+  and GitHub answers it with `[]` rather than an error. Anyone writing the obvious query gets
+  zero Dependabot alerts and no indication anything is wrong. It was checked before the trend
+  chart was built on it.
+
+**Deferred deliberately:** the opened/closed-over-time chart the sponsor asked about. The data
+supports it — 411 code-scanning alerts, every closure dated — but 390 of the opens and all 323
+closures fall on **2026-08-29**, the day CodeQL first swept every image. The chart would be one
+column and two slivers: true, and a picture of a single scan rather than a working find-and-fix
+cycle. It gets built when the rebuild gives it a second data point.
+
 ### F153 — Defender has never assessed this subscription, and nothing noticed *(criterion added 2026-09-02)*
 
 The sponsor direction's phase 3 promises **"Defender scans producing real posture"**. There is

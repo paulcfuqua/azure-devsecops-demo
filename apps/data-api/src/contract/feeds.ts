@@ -55,7 +55,16 @@ export interface DependabotAlert {
   number: number;
   state: string; // open | fixed | dismissed | auto_dismissed
   created_at: string;
-  dependency: { package: { ecosystem: string; name: string } };
+  dependency: {
+    package: { ecosystem: string; name: string };
+    /**
+     * Which manifest declares the vulnerable package. Carried because it is the
+     * only thing that distinguishes an alert DELIBERATELY seeded for the demo
+     * (apps/vuln-lab) from one that represents real exposure - and one of the two
+     * open criticals is a seed (F154).
+     */
+    manifest_path: string | null;
+  };
   security_advisory: {
     ghsa_id: string;
     cve_id: string | null;

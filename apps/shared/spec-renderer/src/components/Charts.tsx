@@ -47,7 +47,10 @@ export function BarChartView({ spec }: { spec: BarChartSpec }): ReactNode {
   return (
     <Section title={spec.title} description={spec.description}>
       <VerticalBarChart
-        data={spec.data.map((p) => ({ x: p.x, y: p.y }))}
+        // `color` only when the spec sets one; otherwise the library keeps its
+        // categorical palette. Spreading an undefined colour makes Fluent fall
+        // back to black rather than to its own palette.
+        data={spec.data.map((p) => (p.color ? { x: p.x, y: p.y, color: p.color } : { x: p.x, y: p.y }))}
         height={CHART_HEIGHT}
         hideLegend
         yAxisTickFormat={(value: number | string) =>

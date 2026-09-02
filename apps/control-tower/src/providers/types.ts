@@ -75,7 +75,17 @@ export interface DependabotAlert {
   number: number;
   state: string; // open | fixed | dismissed | auto_dismissed
   created_at: string;
-  dependency: { package: { ecosystem: string; name: string } };
+  dependency: {
+    package: { ecosystem: string; name: string };
+    /**
+     * The only field that distinguishes a DELIBERATELY seeded alert
+     * (apps/vuln-lab) from real exposure - one of the two open criticals is a
+     * seed (F154). Kept in step with apps/data-api/src/contract/feeds.ts, which
+     * is the same shape declared twice; a mismatch here is silent until a field
+     * the board reads arrives undefined.
+     */
+    manifest_path: string | null;
+  };
   security_advisory: {
     ghsa_id: string;
     cve_id: string | null;

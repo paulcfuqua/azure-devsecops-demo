@@ -216,6 +216,34 @@ export function buildDevSpec(
 
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
 
+/**
+ * SEVERITY COLOUR IS SEMANTIC, NOT CATEGORICAL (F154).
+ *
+ * Without these the chart library assigns from a categorical palette by index,
+ * and the security board rendered Critical blue, **High green**, Medium and Low
+ * pink. Green is the one colour that reads as "fine", sitting on the second-most
+ * serious bar on the page. Colour was actively working against the reader.
+ *
+ * Chosen to stay legible on the dark ground the board renders on, and to keep an
+ * order a reader can rank without the labels.
+ */
+const SEVERITY_COLOR: Record<string, string> = {
+  critical: "#b3261e",
+  high: "#d97706",
+  medium: "#b8a326",
+  low: "#6b7f99",
+};
+
+/**
+ * Alerts deliberately planted for the demo live in `apps/vuln-lab` (L9's negative
+ * test seeds them and V9.2 proves CI fails on them). Three of the eight open
+ * Dependabot alerts are seeds, INCLUDING one of the two criticals - so a board
+ * that does not separate them reports a fixture as posture.
+ *
+ * They are labelled, never hidden: removing them would be the mirror-image lie.
+ */
+const SEEDED_PATH_PREFIX = "apps/vuln-lab/";
+
 /** GitHub Dependabot uses "moderate" where code scanning uses "medium". */
 function normalizeSeverity(value: string | undefined): string {
   const v = (value ?? "").toLowerCase();
@@ -237,16 +265,37 @@ export function buildSecSpec(
   const openCode = (codeAlerts ?? []).filter((a) => a.state === "open");
   const openDep = (depAlerts ?? []).filter((a) => a.state === "open");
 
-  const severityCounts = new Map<string, number>(SEVERITY_ORDER.map((s) => [s, 0]));
+  const isSeeded = (a: DependabotAlert): boolean =>
+    (a.dependency.manifest_path ?? "").startsWith(SEEDED_PATH_PREFIX);
+  const seededDep = openDep.filter(isSeeded);
+  const realDep = openDep.filter((a) => !isSeeded(a));
+
+  // COUNT DISTINCT ISSUES, NOT ALERT INSTANCES (F154).
+  //
+  // 88 open code-scanning alerts are 30 distinct rules: the container scan raises
+  // the same base-image CVE once per image, so three images inflate every finding
+  // threefold. "88 open alerts" is a true number that overstates the work by 3x,
+  // and this repository's whole argument is that it does not overstate itself.
+  // Instances are still reported - as instances, beside the issue count.
+  const codeKey = (a: CodeScanningAlert): string => a.rule.id;
+  const depKey = (a: DependabotAlert): string =>
+    a.security_advisory.cve_id ?? a.security_advisory.ghsa_id;
+
+  const distinct = new Map<string, string>();
   for (const a of openCode) {
-    const s = normalizeSeverity(a.rule.security_severity_level);
-    severityCounts.set(s, (severityCounts.get(s) ?? 0) + 1);
+    distinct.set(`code:${codeKey(a)}`, normalizeSeverity(a.rule.security_severity_level));
   }
-  for (const a of openDep) {
-    const s = normalizeSeverity(a.security_advisory.severity);
-    severityCounts.set(s, (severityCounts.get(s) ?? 0) + 1);
+  for (const a of realDep) {
+    distinct.set(`dep:${depKey(a)}`, normalizeSeverity(a.security_advisory.severity));
+  }
+  const seededDistinct = new Set(seededDep.map((a) => `dep:${depKey(a)}`));
+
+  const severityCounts = new Map<string, number>(SEVERITY_ORDER.map((s) => [s, 0]));
+  for (const sev of distinct.values()) {
+    severityCounts.set(sev, (severityCounts.get(sev) ?? 0) + 1);
   }
   const criticalOpen = severityCounts.get("critical") ?? 0;
+  const instanceCount = openCode.length + realDep.length;
 
   // AN UNREPORTED SECURE SCORE IS NOT A SCORE OF ZERO.
   //
@@ -306,12 +355,15 @@ export function buildSecSpec(
         // most reassuring thing this dashboard can say, and saying it because
         // the endpoint returned 503 is the exact failure the working agreement
         // on absence-vs-denial exists to stop.
-        codeAlerts === null
-          ? { label: "Open code scanning alerts", value: "not reported" }
-          : { label: "Open code scanning alerts", value: openCode.length },
+        codeAlerts === null || depAlerts === null
+          ? { label: "Open findings (distinct)", value: "not reported" }
+          : { label: "Open findings (distinct)", value: distinct.size },
+        codeAlerts === null || depAlerts === null
+          ? { label: "Alert instances", value: "not reported" }
+          : { label: "Alert instances", value: instanceCount },
         depAlerts === null
-          ? { label: "Open dependency alerts", value: "not reported" }
-          : { label: "Open dependency alerts", value: openDep.length },
+          ? { label: "Seeded for the demo", value: "not reported" }
+          : { label: "Seeded for the demo", value: seededDistinct.size },
         codeAlerts === null || depAlerts === null
           ? { label: "Critical (open)", value: "not reported" }
           : {
@@ -326,11 +378,15 @@ export function buildSecSpec(
     },
     {
       type: "barChart",
-      title: "Open alerts by severity",
-      description: "Code scanning + Dependabot, open alerts only.",
+      title: "Open findings by severity",
+      description:
+        `Distinct issues, open only — ${instanceCount} alert instances collapse to ` +
+        `${distinct.size} findings, because a base-image CVE is raised once per image. ` +
+        `Excludes ${seededDistinct.size} deliberately seeded in apps/vuln-lab.`,
       data: SEVERITY_ORDER.map((s) => ({
         x: severityLabel(s),
         y: severityCounts.get(s) ?? 0,
+        color: SEVERITY_COLOR[s] ?? SEVERITY_COLOR.low,
       })),
     },
   );

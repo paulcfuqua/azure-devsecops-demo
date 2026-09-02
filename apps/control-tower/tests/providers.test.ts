@@ -67,28 +67,66 @@ describe("buildSecSpec (Sec pillar)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("counts only open alerts and reads the Defender secure score", () => {
+  it("counts DISTINCT findings, reports instances separately, and splits the seeds", () => {
+    // The live board read "88 open alerts". Those 88 are 30 distinct rules - the
+    // container scan raises the same base-image CVE once per image, so three
+    // images treble every finding. And one of the two open criticals was a CVE
+    // deliberately seeded in apps/vuln-lab for L9's negative test. A fixture
+    // counted as posture, and real work overstated threefold (F154).
     const kpi = spec.components.find((c) => c.type === "kpiRow");
     if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
-    expect(kpi.items.find((i) => i.label === "Open code scanning alerts")?.value).toBe(6);
-    expect(kpi.items.find((i) => i.label === "Open dependency alerts")?.value).toBe(5);
+    expect(kpi.items.find((i) => i.label === "Open findings (distinct)")?.value).toBe(10);
+    expect(kpi.items.find((i) => i.label === "Alert instances")?.value).toBe(10);
+    expect(kpi.items.find((i) => i.label === "Seeded for the demo")?.value).toBe(1);
     expect(kpi.items.find((i) => i.label === "Critical (open)")?.value).toBe(2);
     expect(kpi.items.find((i) => i.label === "Defender secure score")?.value).toBe(71.6);
   });
 
+  it("excludes seeded alerts from the severity counts, and says how many it excluded", () => {
+    // THE ASSERTION THAT MATTERS. The fixture's only HIGH dependency alert is the
+    // seeded one, so High must fall from 2 to 1. If this ever reads 2 again, the
+    // board is reporting a deliberate fixture as exposure.
+    const chart = spec.components.find(
+      (c) => c.type === "barChart" && c.title === "Open findings by severity",
+    );
+    if (chart?.type !== "barChart") throw new Error("no severity barChart");
+    expect(chart.data.find((p) => p.x === "High")?.y).toBe(1);
+    expect(chart.description).toContain("1 deliberately seeded");
+  });
+
+  it("colours severity semantically - High is never green", () => {
+    // Without an explicit colour the chart library assigns from a categorical
+    // palette by index, and the live board rendered Critical blue, HIGH GREEN,
+    // Medium and Low pink. Green is the one colour that reads as "fine", on the
+    // second-most serious bar on the page.
+    const chart = spec.components.find(
+      (c) => c.type === "barChart" && c.title === "Open findings by severity",
+    );
+    if (chart?.type !== "barChart") throw new Error("no severity barChart");
+    for (const point of chart.data) {
+      expect(point.color, `${String(point.x)} has no explicit colour`).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+    // Ranked, so a reader can order them without reading the labels.
+    const colorOf = (x: string): string | undefined => chart.data.find((p) => p.x === x)?.color;
+    expect(colorOf("Critical")).not.toBe(colorOf("High"));
+    expect(colorOf("High")).not.toBe(colorOf("Medium"));
+    expect(colorOf("Medium")).not.toBe(colorOf("Low"));
+  });
+
   it("normalizes Dependabot 'moderate' onto the medium severity bucket", () => {
     const bySeverity = spec.components.find(
-      (c) => c.type === "barChart" && c.title === "Open alerts by severity",
+      (c) => c.type === "barChart" && c.title === "Open findings by severity",
     );
     if (bySeverity?.type !== "barChart") throw new Error("no severity barChart");
-    expect(bySeverity.data).toEqual([
+    expect(bySeverity.data.map((p) => ({ x: p.x, y: p.y }))).toEqual([
       { x: "Critical", y: 2 },
-      { x: "High", y: 2 },
+      { x: "High", y: 1 },
       { x: "Medium", y: 4 },
       { x: "Low", y: 3 },
     ]);
-    // 11 open alerts across both feeds, severity buckets sum to the same total.
-    expect(bySeverity.data.reduce((sum, p) => sum + p.y, 0)).toBe(11);
+    // 10 distinct findings once the seeded alert is split out; the buckets still
+    // sum to the whole, so nothing is lost between the KPI and the chart.
+    expect(bySeverity.data.reduce((sum, p) => sum + p.y, 0)).toBe(10);
   });
 
   it("lists open alerts from both feeds, highest severity first", () => {
@@ -336,8 +374,8 @@ describe("F116: partial data renders, absence is never zero", () => {
     // can say. Saying it because the endpoint refused is the failure the
     // absence-vs-denial agreement exists to stop.
     const spec = buildSecSpec(null, null, localFixtures.secureScore, localFixtures.secureScoreControls);
-    expect(kpiOf(spec, "Open code scanning alerts")).toBe("not reported");
-    expect(kpiOf(spec, "Open dependency alerts")).toBe("not reported");
+    expect(kpiOf(spec, "Open findings (distinct)")).toBe("not reported");
+    expect(kpiOf(spec, "Alert instances")).toBe("not reported");
     expect(kpiOf(spec, "Critical (open)")).toBe("not reported");
     expect(validateSpec(spec).ok).toBe(true);
   });
@@ -350,7 +388,7 @@ describe("F116: partial data renders, absence is never zero", () => {
       localFixtures.secureScore,
       localFixtures.secureScoreControls,
     );
-    expect(typeof kpiOf(spec, "Open code scanning alerts")).toBe("number");
+    expect(typeof kpiOf(spec, "Open findings (distinct)")).toBe("number");
     expect(typeof kpiOf(spec, "Defender secure score")).toBe("number");
   });
 
