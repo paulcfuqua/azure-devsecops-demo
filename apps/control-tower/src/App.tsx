@@ -6,11 +6,13 @@ import {
   Text,
   Title2,
   tokens,
+  webDarkTheme,
   webLightTheme,
+  Switch,
   type SelectTabData,
   type SelectTabEvent,
 } from "@fluentui/react-components";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AgentProvider } from "./agent/types";
 import { AskPanel } from "./AskPanel";
 import { OfflineAgentProvider } from "./agent/providers";
@@ -18,10 +20,44 @@ import { SpecPanel } from "./SpecPanel";
 import type { DataProvider } from "./providers/types";
 import type { JSX } from "react";
 
+type ThemeChoice = "light" | "dark";
+
+const THEME_STORAGE_KEY = "mls-control-tower-theme";
+
+/**
+ * The starting theme: a previous explicit choice, else the operating system's.
+ *
+ * Reading localStorage is wrapped because it THROWS rather than returning null
+ * in a browser configured to block site data, which would take the whole app
+ * down for a preference. Falling back to the OS preference is the better default
+ * anyway - someone working at night has usually already told their machine.
+ */
+function initialTheme(): ThemeChoice {
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "light" || stored === "dark") return stored;
+  } catch {
+    // Ignore: fall through to the OS preference.
+  }
+  try {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
 const useStyles = makeStyles({
   shell: {
     minHeight: "100vh",
     backgroundColor: tokens.colorNeutralBackground2,
+  },
+  headerRow: {
+    display: "flex",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "0.75rem",
   },
   header: {
     display: "flex",
@@ -87,11 +123,32 @@ export function App({ provider, agent }: AppProps): JSX.Element {
     setTab(data.value as TabId);
   };
 
+  const [theme, setTheme] = useState<ThemeChoice>(initialTheme);
+
+  // Persist the CHOICE, not the resolved theme: someone who has never touched the
+  // switch keeps following their machine, including when it changes at sunset.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // A browser blocking site data still gets the toggle; it just will not
+      // remember. Failing the render over a preference would be worse.
+    }
+  }, [theme]);
+
   return (
-    <FluentProvider theme={webLightTheme}>
+    <FluentProvider theme={theme === "dark" ? webDarkTheme : webLightTheme}>
       <div className={styles.shell}>
         <header className={styles.header}>
-          <Title2>Meridian Launch Systems — Control Tower</Title2>
+          <div className={styles.headerRow}>
+            <Title2>Meridian Launch Systems — Control Tower</Title2>
+            <Switch
+              checked={theme === "dark"}
+              onChange={(_, data) => setTheme(data.checked ? "dark" : "light")}
+              label="Dark mode"
+              aria-label="Dark mode"
+            />
+          </div>
           <Text>
             Dev / Sec / Ops posture on Well-Architected pillars, and Ask — the
             Copilot Studio agent.
