@@ -7,6 +7,7 @@ export {
   assertNoSecretMaterial,
   createTokenFetcher,
   DirectLineTokenError,
+  easyAuthSignInAgainUrl,
   parseTokenResponse,
 } from "./directLineToken";
 export { DirectLineAgentProvider, OfflineAgentProvider } from "./providers";

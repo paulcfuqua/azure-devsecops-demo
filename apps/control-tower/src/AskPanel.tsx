@@ -62,7 +62,7 @@ type ConnectionState =
   | { status: "offline"; reason: string }
   | { status: "connecting" }
   | { status: "ready"; connection: AgentConnection }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; signInUrl?: string };
 
 /**
  * The Ask tab. Structurally the same shape as `SpecPanel`: a small state
@@ -124,9 +124,17 @@ export function AskPanel({ provider }: AskPanelProps): JSX.Element {
       },
       (error: unknown) => {
         if (cancelled) return;
+        // An expired sign-in carries somewhere to go (F149). Everything else
+        // carries nothing, so the UI cannot offer a sign-in link for a problem
+        // that signing in would not fix.
+        const signInUrl =
+          typeof (error as { signInUrl?: unknown })?.signInUrl === "string"
+            ? (error as { signInUrl: string }).signInUrl
+            : undefined;
         setState({
           status: "error",
           message: error instanceof Error ? error.message : String(error),
+          ...(signInUrl ? { signInUrl } : {}),
         });
       },
     );
@@ -209,6 +217,18 @@ export function AskPanel({ provider }: AskPanelProps): JSX.Element {
       <MessageBar intent="error">
         <MessageBarBody>
           <MessageBarTitle>Agent unavailable</MessageBarTitle> {state.message}
+          {state.signInUrl ? (
+            <>
+              {" "}
+              {/* A LINK, not an automatic redirect: navigating on a 401 is how one
+                  bad token becomes a redirect loop. One click, and Entra answers
+                  it from the existing browser session. */}
+              <a href={state.signInUrl} data-testid="ask-signin-again">
+                Sign in again
+              </a>
+              .
+            </>
+          ) : null}
         </MessageBarBody>
       </MessageBar>
     );
