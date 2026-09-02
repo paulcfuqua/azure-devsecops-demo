@@ -1729,3 +1729,42 @@ different fixes and must not produce the same message.
 "@
     }
 }
+
+Describe 'a credential minted in two places is minted the same way' {
+    # F163. zap.yml mints a probe token TWICE - the classifier needs one to decide
+    # whether an endpoint is an auth wall, the scanner needs one to scan through it.
+    # F161 corrected the audience in the first and missed the second, and the run
+    # still looked partly fine because ONE app had an Application ID URI added by
+    # hand during testing, so the wrong form resolved there and nowhere else.
+    #
+    # One app masked the bug in the other two, which is the reason this is a check
+    # rather than a fixed line: the next divergence will be just as quiet.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:Zap = Join-Path $script:Root '.github/workflows/zap.yml'
+    }
+
+    It 'finds the workflow, so the sweep is not vacuous' {
+        $script:Zap | Should -Exist
+        (Get-Content -LiteralPath $script:Zap -Raw) | Should -Match 'get-access-token'
+    }
+
+    It 'requests the same audience shape everywhere it mints a probe token' {
+        $mints = @(Get-Content -LiteralPath $script:Zap |
+                Where-Object { $_ -match 'get-access-token' })
+
+        $mints.Count | Should -BeGreaterThan 1 -Because 'the token is minted in both the resolve and the scan job; if this drops to one, this check is reading the wrong thing'
+
+        # Easy Auth validates a token's audience against the app's CLIENT ID, and
+        # `--resource <clientId>` produces exactly that. `api://<clientId>` is a
+        # different audience that additionally requires an Application ID URI on
+        # the registration - which is the accident that made one app work.
+        $wrong = @($mints | Where-Object { $_ -match 'resource\s+"api://' })
+        $wrong -join "`n" | Should -BeNullOrEmpty -Because @"
+Easy Auth matches a bearer token's audience against the app's client id, so the
+probe token must be requested with the bare id. Initialize-VerifierProbeRole's
+docstring says so, and V7.3 has always done it that way.
+"@
+    }
+}

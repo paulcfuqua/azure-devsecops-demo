@@ -386,7 +386,14 @@ jobs:
           rg="${RG_APPS:-mls-rg-apps}"
           cid="$(az containerapp auth show -n "${APP}" -g "${rg}"                    --query 'identityProviders.azureActiveDirectory.registration.clientId'                    -o tsv 2>/dev/null || true)"
           token=""
-          [ -n "${cid}" ] && token="$(az account get-access-token --resource "api://${cid}" --query accessToken -o tsv 2>/dev/null || true)"
+          # THE BARE CLIENT ID, matching token_for() in the resolve job (F163).
+          # F161 fixed that one and missed this one, because the token is minted
+          # in TWO places - the classifier needs it to decide, the scanner needs
+          # it to scan - and only the first was searched. launch-ops kept working
+          # because it had an Application ID URI added by hand during testing, so
+          # api:// still resolved there and nowhere else: one app masking a bug
+          # in the other two.
+          [ -n "${cid}" ] && token="$(az account get-access-token --resource "${cid}" --query accessToken -o tsv 2>/dev/null || true)"
           if [ -n "${token}" ]; then
             echo "::add-mask::${token}"
             echo "token=${token}" >> "${GITHUB_OUTPUT}"
