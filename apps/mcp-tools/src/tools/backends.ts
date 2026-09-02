@@ -168,12 +168,35 @@ export interface CostSeriesParams {
   cost_center?: string;
 }
 
+/**
+ * WHICH BILL IS THIS (F138). The two cost backends answer two different
+ * questions in the same envelope, and the agent-facing description has to say
+ * which one is behind it - it cannot be written once and be true in both modes.
+ *
+ *   lakehouse-ledger      Meridian's FICTIONAL business ledger. Cost centres
+ *                         like "Propulsion", budgets, dated 2024. Not a cloud
+ *                         bill and not this subscription.
+ *   azure-cost-management Real Azure consumption for the demo subscription,
+ *                         grouped by the costCenter tag.
+ *
+ * The description used to promise "Azure spend" and then name the fictional
+ * cost centres, and it told the agent to fall back to `cost_daily` for
+ * whole-history totals. Asked what the tenant had spent, the agent followed
+ * that instruction exactly and reported $23,561,191 against a real bill of
+ * about $1.40 - correct behaviour over a description that was wrong.
+ */
+export type CostSource = "lakehouse-ledger" | "azure-cost-management";
+
 export interface CostSeriesBackend {
+  /** Which bill this backend reads. Drives the tool description the agent sees. */
+  readonly source: CostSource;
   getSeries(params: CostSeriesParams): Promise<CostSeriesResult>;
 }
 
 /** LOCAL: reads cost_daily from the generated lakehouse data (real filtering). */
 export class LocalCostSeriesBackend implements CostSeriesBackend {
+  readonly source: CostSource = "lakehouse-ledger";
+
   async getSeries(params: CostSeriesParams): Promise<CostSeriesResult> {
     const clauses: string[] = [];
     const esc = (v: string) => v.replaceAll("'", "''");
