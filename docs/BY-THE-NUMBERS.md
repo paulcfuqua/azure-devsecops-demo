@@ -1,5 +1,39 @@
 # By the Numbers
 
+> ## Two measurements, four days apart
+>
+> This file was written on **2026-08-28**, when the repository existed and **the tenant did
+> not**. Its headline claim — *zero cloud writes* — was the point: an entire enterprise estate
+> authored, tested and made auditable before a single resource was created.
+>
+> **That is no longer the state of the world, and the original text is kept anyway**, because
+> a measurement is only worth anything if it stays what it was. The estate has since been
+> deployed, torn down, rebuilt and independently audited. The table immediately below is the
+> **2026-09-02** re-measurement against the live tenant; everything after it is the untouched
+> 2026-08-28 record.
+>
+> | | 2026-08-28 · pre-tenant | 2026-09-02 · deployed |
+> |---|---|---|
+> | Authored lines | 118,314 | **142,405** |
+> | Tracked files | 567 | **599** |
+> | Automated tests | 2,342 | **2,443** (0 failing) |
+> | Verification criteria | 45 + 6 | **56**, all as deployed-state audits |
+> | Commits | 162 | **334** · 183 PRs |
+> | Cloud writes | **0** | 30 resources · 4 resource groups · 1 region |
+> | Azure spend | — | **$7.70** of a $200 ceiling |
+> | Live data rows | 0 | **8,957** across 10 lakehouse tables |
+> | Showpieces working | 0 of 4 | **3 of 4** |
+> | NIST 800-171 requirements | 110 rendered, 0 COMPLIANT | 110 · 15 PARTIAL · 1 GAP · 94 NOT_ASSESSED |
+>
+> Two caveats a reader should carry, because omitting them would be the exact failure this
+> repository spends its budget preventing. The compliance row was **collected 2026-08-29 and is
+> stale** — a fresh collection is owed before that number is quoted. And the 2026-09-02 figures
+> were measured with live Azure, Graph, Fabric and GitHub APIs, so unlike the 2026-08-28 column
+> they are *not* reproducible from a checkout alone.
+
+
+## The 2026-08-28 record, unchanged
+
 What it took to make an enterprise Azure environment reproducible — and auditable against
 a federal standard — from an empty directory. Re-measured on the
 `feat/remediation-and-compliance` tree, **2026-08-28**, on the working tree that became

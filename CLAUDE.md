@@ -60,10 +60,22 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
    app X.509 certificates — Security & Compliance PowerShell has no federated path),
    `SELF_HEAL_TOKEN` (a PAT with `repo` write, because a `GITHUB_TOKEN` push does not
    trigger workflows) and `MLS_VERIFIER_GH_TOKEN`. Two more live in **Key Vault**: the
-   **Direct Line secret**, exchanged server-side for a short-lived token and never
-   reaching a browser, and `mcp-auth-token`. Adding a seventh needs a written reason;
+   **Direct Line secret** — held under the name `MLS_DIRECTLINE_SECRET_NAME` carries, which
+   is `mls-directline-secret` and *not* the `directline-secret` the G0 runbook used to say
+   (F147) — exchanged server-side for a short-lived token and never reaching a browser, and
+   `mcp-auth-token`. Adding a seventh needs a written reason;
    `.github/workflows/gitleaks.yml`'s incident text is the rotation list and must stay
    in sync with this one.
+
+   **UNRECONCILED, 2026-09-02.** The vault actually holds **four** secrets. Besides the two
+   above it carries `mls-github-token` and `mls-data-api-github-token`, which are referenced
+   nowhere in `infra/`, `.github/` or `apps/`. A closed list exists so exactly this cannot
+   happen, and it did: for however long they have been there, a leak would not have rotated
+   them because nothing named them. They are listed in the rotation table for now — treat
+   that as containment, not resolution. Establish whether anything reads them by a name built
+   at runtime; if nothing does, rotate them out and delete them, and if something does,
+   promote them into the list above with a written reason. Do not delete on the strength of a
+   grep alone.
 
 ## How we work
 

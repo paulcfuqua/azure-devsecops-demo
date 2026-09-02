@@ -85,8 +85,10 @@ jobs:
             echo "   | \`MLS_VERIFIER_CERT_BASE64\` / \`MLS_VERIFIER_CERT_PASSWORD\` | \`verify\` environment secret | Same, on the \`mls-verifier\` app registration |"
             echo "   | \`SELF_HEAL_TOKEN\` | repository secret — a PAT with \`repo\` **write** | Revoke the PAT in GitHub settings, mint a new one, re-set the secret |"
             echo "   | \`MLS_VERIFIER_GH_TOKEN\` | \`verify\` environment secret | Same |"
-            echo "   | Direct Line secret | the platform **Key Vault** | Rotate in the agent's channel settings, then re-set the vault secret |"
+            echo "   | Direct Line secret (\`mls-directline-secret\`) | the platform **Key Vault** | Rotate in the agent's channel settings, then re-set the vault secret |"
             echo "   | \`mcp-auth-token\` | the platform **Key Vault** | Generate a new token, set the vault secret, restart the MCP container app |"
+            echo "   | \`mls-github-token\` | the platform **Key Vault** | **Unreconciled (F151)** — nothing in \`infra/\`, \`.github/\` or \`apps/\` reads it. Rotate it anyway; then establish whether it is an orphan and delete it, or document what needs it |"
+            echo "   | \`mls-data-api-github-token\` | the platform **Key Vault** | **Unreconciled (F151)** — same. Rotate first, decide after |"
             echo
             echo "   \`SELF_HEAL_TOKEN\` is the most damaging of these: it can write to this"
             echo "   repository. Rotate it first if you cannot tell what leaked."
