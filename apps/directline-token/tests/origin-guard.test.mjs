@@ -92,14 +92,55 @@ describe("directLineToken origin guard", () => {
     assert.match(res.jsonBody.error, /not configured/i);
   });
 
-  it("still mints for a configured origin", async () => {
+  it("an allowed origin ALONE no longer mints - it reaches the user-token guard", async () => {
+    // CHANGED DELIBERATELY, and the old assertion was the whole problem. This
+    // used to assert 200: an allow-listed Origin was sufficient to mint a Direct
+    // Line token. An `Origin` header is a string any direct caller can send, so
+    // that made the endpoint an open faucet to everything except a browser on
+    // another site - demonstrated with one `curl -H "Origin: <control tower>"`.
+    //
+    // A correct origin now gets a caller PAST the origin guard and no further:
+    // the request is refused 401 by the user-token guard until it carries a
+    // verified Entra token. That the status is 401 rather than 403 is the proof
+    // the origin guard passed it through.
     process.env.DIRECTLINE_ALLOWED_ORIGINS = "https://ct.example";
+    process.env.DIRECTLINE_USER_TENANT_ID = "11111111-2222-3333-4444-555555555555";
+    process.env.DIRECTLINE_USER_AUDIENCE = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     stubSuccessfulFetch();
     const res = await handler(
       makeRequest({ headers: { origin: "https://ct.example" } }),
       ctx,
     );
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 401);
+  });
+
+  it("FAILS CLOSED with 500 when the user-token settings are missing", async () => {
+    // Absent configuration must never degrade to the old anonymous behaviour.
+    // 500, not 401: the deployment is wrong, not the caller - the same shape as
+    // the allow-list guard above, which also refuses rather than minting unbound.
+    process.env.DIRECTLINE_ALLOWED_ORIGINS = "https://ct.example";
+    delete process.env.DIRECTLINE_USER_TENANT_ID;
+    delete process.env.DIRECTLINE_USER_AUDIENCE;
+    stubSuccessfulFetch();
+    const res = await handler(
+      makeRequest({ headers: { origin: "https://ct.example" } }),
+      ctx,
+    );
+    assert.equal(res.status, 500);
+  });
+
+  it("advertises the Authorization header on the preflight, or the browser cannot send one", async () => {
+    // The page forwards its Easy Auth token as `Authorization`. A CORS preflight
+    // that does not list that header makes the browser drop it, and every request
+    // would arrive unauthenticated - the control working perfectly and the app
+    // never able to satisfy it.
+    process.env.DIRECTLINE_ALLOWED_ORIGINS = "https://ct.example";
+    const res = await handler(
+      makeRequest({ method: "OPTIONS", headers: { origin: "https://ct.example" } }),
+      ctx,
+    );
+    assert.equal(res.status, 204);
+    assert.match(res.headers["access-control-allow-headers"], /authorization/i);
   });
 
   it("still refuses a non-allow-listed origin when the allow-list is configured", async () => {

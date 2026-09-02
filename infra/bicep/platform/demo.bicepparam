@@ -66,3 +66,5 @@ param directlineSecretName = readEnvironmentVariable('MLS_DIRECTLINE_SECRET_NAME
 // estate cannot be replayed from someone else's page. Empty means every origin
 // is refused, which is the right default for a public anonymous endpoint.
 param directlineAllowedOrigins = readEnvironmentVariable('MLS_DIRECTLINE_ALLOWED_ORIGINS', '')
+param directlineUserTenantId = readEnvironmentVariable('MLS_DIRECTLINE_USER_TENANT_ID', '')
+param directlineUserAudience = readEnvironmentVariable('MLS_DIRECTLINE_USER_AUDIENCE', '')

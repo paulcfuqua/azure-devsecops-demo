@@ -116,6 +116,12 @@ param directlineSecretName string = ''
 @description('Origins the directline-token Function will mint a token for, comma-separated. These become the Direct Line `trustedOrigins` and the CORS allow-list, so a token minted for this estate cannot be replayed from someone else\'s page. Empty means the Function refuses every origin, which is the correct default for an endpoint that is public and anonymous by design.')
 param directlineAllowedOrigins string = ''
 
+@description('Entra tenant whose user tokens the directline-token Function accepts. The Function verifies the caller Easy Auth token before exchanging the Direct Line secret, so the copilot inherits the identity of the control tower instead of sitting open beside it. EMPTY MEANS THE FUNCTION REFUSES EVERY REQUEST (500) rather than falling back to anonymous - an optional security control is one nobody turns on.')
+param directlineUserTenantId string = ''
+
+@description('The Easy Auth application (client) id of the control tower. The Function checks this as the token AUDIENCE: a signature from the right tenant proves only that SOME Entra app issued the token, and one minted for a different application is not permission to use this one. Empty has the same effect as an empty tenant id - the Function refuses.')
+param directlineUserAudience string = ''
+
 @description('[derived] Node runtime major version for the cost-ingest Function (Flex Consumption `functionAppConfig.runtime`). 22 matches apps/cost-ingest/package.json\'s `engines.node: >=22`. Not a free choice: Flex Consumption accepts only the runtime versions it publishes, and one it does not offer fails the deployment rather than degrading.')
 param costIngestNodeVersion string = '22'
 
@@ -1055,6 +1061,8 @@ module directlineFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
             AzureWebJobsStorage__clientId: directlineIdentity.outputs.clientId
             AZURE_CLIENT_ID: directlineIdentity.outputs.clientId
             DIRECTLINE_ALLOWED_ORIGINS: directlineAllowedOrigins
+            DIRECTLINE_USER_TENANT_ID: directlineUserTenantId
+            DIRECTLINE_USER_AUDIENCE: directlineUserAudience
           },
           // A Key Vault REFERENCE, not a value: the secret is resolved by the
           // platform at start-up using this app's identity, so it never becomes

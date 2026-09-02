@@ -129,21 +129,62 @@ export interface TokenFetcherOptions {
 /**
  * Builds the `TokenFetcher` the Direct Line provider uses.
  *
- * Note what is *absent*: no `Authorization` header, no credentials, no secret.
- * The browser authenticates to nothing here — the token endpoint is anonymous
- * by design (it is the thing that holds the credential) and is expected to be
- * rate-limited and origin-restricted server-side. See
- * `apps/directline-token/README.md`.
+ * THE BROWSER FORWARDS ITS OWN IDENTITY. This comment used to say the opposite -
+ * "no `Authorization` header, no credentials... the browser authenticates to
+ * nothing here" - because the endpoint was anonymous, guarded only by an Origin
+ * allow-list. An `Origin` header is a string any direct caller can send, so that
+ * guard stopped a browser on another site and nothing else.
+ *
+ * The control tower already sits behind Container Apps Easy Auth, so this page
+ * cannot have loaded without a completed Entra sign-in. `/.auth/me` hands the
+ * page that token; it is forwarded here and verified server-side before the
+ * Direct Line secret is exchanged. The copilot inherits the identity of the app
+ * rather than sitting open beside it, and the user signs in exactly once.
  */
+/**
+ * This session's Entra id token, from Easy Auth's own endpoint.
+ *
+ * `/.auth/me` is served by the Easy Auth middleware in front of the container,
+ * same-origin and cookie-authenticated, so the page needs no client id, no
+ * secret and no MSAL. It returns null rather than throwing when the endpoint is
+ * absent or unauthenticated - a local `npm run dev` has no Easy Auth in front of
+ * it, and that should surface as the typed error above rather than a stack trace.
+ */
+async function readEasyAuthToken(doFetch: typeof globalThis.fetch): Promise<string | null> {
+  try {
+    const res = await doFetch("/.auth/me", { headers: { accept: "application/json" } });
+    if (!res.ok) return null;
+    const body: unknown = await res.json();
+    // Easy Auth returns a single-element array of principals.
+    const first = Array.isArray(body) ? body[0] : undefined;
+    const token = (first as { id_token?: unknown } | undefined)?.id_token;
+    return typeof token === "string" && token !== "" ? token : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createTokenFetcher(
   tokenUrl: string,
   { fetchImpl }: TokenFetcherOptions = {},
 ): TokenFetcher {
   return async function fetchDirectLineToken(): Promise<DirectLineToken> {
     const doFetch = fetchImpl ?? globalThis.fetch;
+    const idToken = await readEasyAuthToken(doFetch);
+    if (!idToken) {
+      throw new DirectLineTokenError(
+        "Could not read this session's Entra token from /.auth/me, so the Ask tab " +
+          "cannot prove who is asking. The control tower is expected to run behind " +
+          "Container Apps Easy Auth; served without it, /.auth/me does not exist and " +
+          "the token endpoint will refuse the request.",
+      );
+    }
     const res = await doFetch(tokenUrl, {
       method: "POST",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${idToken}`,
+      },
     });
     if (!res.ok) {
       throw new DirectLineTokenError(
