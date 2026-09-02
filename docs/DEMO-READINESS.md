@@ -117,6 +117,42 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F159 — the audience the scanner needs existed only on the running apps *(fixed 2026-09-02)*
+
+F158 fixed the classifier, and the next run told the truth: the three Easy Auth apps reported
+`auth-wall`, and launch-ops logged
+
+    mls-launch-ops-demo-ca: authenticated as the deployer via Telemetry.Probe -> auth-wall
+
+A token was minted, injected, and **refused**. Easy Auth accepts an audience of the bare client
+id by default — what a browser sign-in produces — while a client-credentials token requested by
+resource URI carries `aud: api://<clientId>`, which the default does not accept. Coverage was
+therefore an honest 3 of 6 rather than a fictional 6.
+
+**The fix was one line of configuration, and I applied it in the worst possible place first.** I
+patched `allowedAudiences` onto the three live apps from a hardcoded list in a terminal. Two
+defects in one action:
+
+1. **`validation` appeared ZERO times in `infra/bicep/apps/main.bicep`.** The setting existed only
+   in the estate, so the next teardown-and-rebuild would have erased it and the authenticated scan
+   would have silently stopped working. That is F129's class, F144's class and F155's class — and
+   I was committing it *while* fixing that same class elsewhere.
+2. **`az containerapp auth update --set` stored the quotes literally** — `'api://7820c65c…'`, 44
+   characters including them. It rendered correctly in the formatted output and would never have
+   matched a token. Caught only by printing the raw value and its length.
+
+The sponsor's question — *"Are you hardcoding the values to scan?"* — is what surfaced it. The
+scan targets were not hardcoded; the fix I was hand-applying to enable them was.
+
+**Now derived, in the template:** `allowedAudiences: [ 'api://${clientId}' ]` on the shared
+`authConfig`, interpolated from the same `clientId` the config already binds, so it cannot drift
+from it and a rebrand or rebuild carries it automatically. Additive rather than restrictive —
+naming an audience does not stop the default being accepted, and interactive sign-in was verified
+unchanged (302 to Entra on all three apps, with the same client used before and after).
+
+**The rule this keeps re-teaching:** a change that makes something work is not finished when the
+thing works. It is finished when a rebuild reproduces it.
+
 ### F158 — the auth-wall detector never fired, because I tested it with the wrong client *(fixed 2026-09-02)*
 
 The first authenticated multi-target ZAP run went green: six targets, six scans, zero High. The
