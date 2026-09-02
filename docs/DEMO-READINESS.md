@@ -117,6 +117,54 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F160/F161 — two bugs in the authenticated scan, and F159's diagnosis was wrong *(fixed 2026-09-02)*
+
+With the audience applied, launch-ops finally classified `content` and entered the scan matrix -
+authentication worked. Then its scan **failed with no report at all**:
+
+    FileNotFoundError: [Errno 2] No such file or directory: '/zap/wrk/onfig'
+
+**F160.** `zap-baseline.py` owns `-c` for its own config file, so the `-config ...` options I
+passed through `cmd_options` were parsed as `-c onfig` and the scan died before starting. The
+empty-report gate caught it and failed the job - F102's fix earning its keep again - but a whole
+run bought one fact. The action already forwards `ZAP_AUTH_HEADER`, `ZAP_AUTH_HEADER_VALUE` and
+`ZAP_AUTH_HEADER_SITE` into the container, visible in its own `docker run -e ...` line. The
+bearer now travels that way: no quoting to lose, and the token never reaches an argv that gets
+echoed into the log at all.
+
+**F161, and this is the one worth reading. F159's diagnosis was wrong.** I concluded Easy Auth
+refused the token because its audience was not on the allowed list, and put
+`allowedAudiences: ['api://${clientId}']` into the Bicep. The real cause was that I asked for the
+wrong audience. `Initialize-VerifierProbeRole`'s own docstring says it plainly -
+
+> Easy Auth validates only that a bearer token's audience matches the app's **client id**
+
+- and V7.3 has been minting exactly that token for months:
+
+    az account get-access-token --resource $clientId      # bare id, not api://
+
+`--resource api://<id>` produces a different audience, which then needs an Application ID URI on
+the registration to be requestable at all, which then needs that audience adding to
+`allowedAudiences`. **Three moving parts to reach somewhere the repository already had a one-line
+route to** - and launch-ops only appeared to work because I had hand-added an `identifierUris` to
+it while testing, which the other two never got.
+
+The Bicep change is reverted. It was unnecessary, and it carried a risk I had not established:
+whether `allowedAudiences` REPLACES the default client-id audience rather than adding to it. If
+it replaces, every interactive sign-in breaks. L7's V7.3 probes with precisely that audience, so
+its verdict settles the question - which is the right way round: the estate's own criterion
+answers it, not my recollection of the documentation.
+
+**Residual drift, recorded rather than hidden:** the three live apps still carry the hand-applied
+`allowedAudiences`. ARM's PATCH will not remove an array with either `[]` or `null`, so clearing
+them needs a full authConfig PUT or the next L7 deploy from the reverted template. They are
+harmless if the setting is additive and breaking if it is not, which is exactly why V7.3's result
+matters before anything else is built on top.
+
+**The lesson, which is the same one three times today:** the answer was already in the
+repository, written down in the docstring of the function that creates the role. I read the code
+that assigns the role and not the paragraph explaining why it exists.
+
 ### F159 — the audience the scanner needs existed only on the running apps *(fixed 2026-09-02)*
 
 F158 fixed the classifier, and the next run told the truth: the three Easy Auth apps reported
