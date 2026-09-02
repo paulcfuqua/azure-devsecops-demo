@@ -117,6 +117,39 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F157 — the DAST now gets past the login page *(2026-09-02)*
+
+F155 made ZAP scan every *reachable* endpoint. Three remained unreachable by construction: the
+Easy Auth apps, correctly reported `auth-wall` rather than passed. This closes that.
+
+**The mechanism already existed and nobody had connected it.** `infra/entra/manifest.json`
+declares `verifierProbeRole: Telemetry.Probe` on all three apps — launch-ops, control-tower and
+compliance — and `mls-verifier` already held it. The estate had a designed way for a trusted
+identity to probe past Easy Auth, and the scanner simply was not using it.
+
+**As the deployer, NOT the Verifier.** `mls-verifier` holds the same role and CI has its
+credentials, which makes it the tempting choice. CLAUDE.md says the Verifier runs only code in
+`verification/`, and `zap.yml` is not that; blurring it to save one role assignment would trade a
+stated architectural boundary for convenience. Granting `mls-github-deployer` a read-only probe
+role on apps it created itself is no escalation.
+
+**Degrades safely, which is the property that matters.** A target is classified anonymously
+first — that is what an internet attacker sees, and for the Functions and the MCP server it is
+the whole story. Only an `auth-wall` is retried with a token. If no token can be minted the
+endpoint stays `auth-wall` and is reported, never scanned-and-passed on a redirect.
+**Authentication failing costs coverage, never honesty.**
+
+**A secret nearly went into the logs.** The first version carried the bearer token in the matrix
+entry. Matrix values appear in the job name, the run summary and the logs, so that would have
+published a token for every scanned app. Only the boolean `auth` travels now; the scanning job
+mints its own token and `::add-mask::`s it before use. Worth recording because it was caught by
+re-reading rather than by any check — nothing in this repository would have failed.
+
+**Verified before wiring:** the role assignments landed on all three apps. **Not verified
+locally:** the client-credentials token exchange, which needs a federated credential only CI
+holds. CI is the test, and the safe-degradation design is what makes that acceptable — a failure
+reports `auth-wall`, which is exactly what the register already says today.
+
 ### F156 — the cost donut dropped services silently, so new spend could vanish *(fixed 2026-09-02)*
 
 Asked to make sure newly enabled Defender spend reaches the Ops tab, the plumbing checked out:

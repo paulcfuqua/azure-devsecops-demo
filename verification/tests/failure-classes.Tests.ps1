@@ -820,14 +820,30 @@ Describe 'a step that owns the verdict actually runs' {
     It 'never passes -J to the ZAP action, which already supplies its own' {
         # The specific collision, kept as its own check because the general rule above
         # would not have caught it - the gate was correct, the step before it was not.
-        $zap = Get-Content -LiteralPath (Join-Path $script:Root '.github/workflows/zap.yml') -Raw
+        # READS BOTH SHAPES, AND STILL REFUSES TO GUESS. cmd_options started as a
+        # single-quoted scalar; authenticating the scan (F157) made it a folded
+        # block, and this check THREW rather than passing over a form it could not
+        # parse - which is the behaviour it should have, and is why it is being
+        # taught the new shape rather than loosened.
+        $zapPath = Join-Path $script:Root '.github/workflows/zap.yml'
+        $zap = Get-Content -LiteralPath $zapPath -Raw
+        $options = $null
+
         if ($zap -match "cmd_options:\s*'([^']*)'") {
-            $Matches[1] | Should -Not -Match '(^|\s)-J(\s|$)' `
-                -Because 'zaproxy/action-baseline already passes -J report_json.json; a second -J silently redirects the output and the action then fails on a file it never wrote'
+            $options = $Matches[1]
         }
-        else {
-            throw 'cmd_options not found in zap.yml - this check no longer reads what it thinks it reads'
+        elseif ($zap -match "cmd_options:\s*[>|][-+]?\s*\r?\n((?:\s+\S.*\r?\n?)+)") {
+            # A folded/literal block: every indented line until the indentation drops.
+            $options = ($Matches[1] -split '\r?\n' | ForEach-Object { $_.Trim() }) -join ' '
         }
+
+        if ($null -eq $options) {
+            throw "cmd_options not found in zap.yml - this check no longer reads what it thinks it reads"
+        }
+        $options | Should -Not -BeNullOrEmpty -Because 'an empty parse is the same blindness as no parse'
+        $options | Should -Match '(^|\s)-a(\s|$)' -Because 'the alpha passive rules are the reason cmd_options exists; if this is gone the parse is wrong'
+        $options | Should -Not -Match '(^|\s)-J(\s|$)' `
+            -Because 'zaproxy/action-baseline already passes -J report_json.json; a second -J silently redirects the output and the action then fails on a file it never wrote'
     }
 }
 
