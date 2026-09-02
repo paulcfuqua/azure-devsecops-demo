@@ -39,7 +39,7 @@ on 2026-09-01, with the evidence beside it.
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working** | All three tabs render live data: 2,587 workflow runs, 76 open code-scanning alerts, 4 Dependabot alerts, 4,515 cost rows, 1,200 telemetry rows. Screenshots with provenance in `docs/evidence/` |
 | **4** | **Compliance platform** — NIST 800-171 | ✅ **working** | **Independently audited for the first time, 2026-09-01.** `verification/layer-12-audit.ps1` runs as `mls-verifier` and reports **4 PASS + 2 SKIP**: the shipped artifact is complete against the catalog and carries no score, the honesty invariant holds in the file rather than only in the derivation, Easy Auth refuses anonymous callers, and the collection history is a git history. The two SKIPs name their owners rather than being gaps |
-| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **ready, unobserved** | Every link verified against the running system: agent **published**, secret in Key Vault, Key Vault reference `Resolved` (F122 fixed, V6.8 confirms), token endpoint returns **HTTP 200 with a real token**, and the deployed bundle now carries the endpoint (F124 fixed — confirmed by grepping the GHCR image layers). **Not yet seen answering:** Control Tower is behind Easy Auth, so a human must sign in and open the tab. Ready to demonstrate, not demonstrated |
+| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **connects; agent refuses on one setting** | **Observed by a human, 2026-09-01**: the tab minted a token, connected Direct Line, opened a conversation and the agent answered — with `IntegratedAuthenticationNotSupportedInChannel`. So F122/F124 are confirmed end to end and the plumbing is done. The agent is set to "Authenticate with Microsoft" (`authenticationmode 2`), which Direct Line does not support. Fix is one UI change to **No authentication** plus a publish — correct here because the user-auth requirement serves the **paid-F2 Fabric data agent**, which is not in use; the deployed path is MCP with its own API key (**F128**) |
 | **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | **The token half is DONE and proven** (2026-09-01): `SELF_HEAL_TOKEN` is a repository secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the Dependabot lane runs instead of skipping. What is missing is a **subject**: Dependabot opens no security PR for the three seeded CVEs, so the lane has nothing to adopt (**F126**, cause unresolved, deferred). This is the ONLY showpiece with an open engineering blocker |
 
 ### The twelve layers — 8 verified, 2 partial, 2 not done
@@ -106,6 +106,55 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F128 — the Ask tab connects, and the agent refuses on an auth mode it cannot use *(2026-09-01)*
+
+**The entire chain works.** Opened by a signed-in human, the Ask tab minted a token,
+connected Direct Line, created conversation `7BwKu2KdUX8BKPJKFrcsIk-us`, sent *"Which day of
+the week has the most launches"* — and the agent replied:
+
+    Sorry, something unexpected happened. Error code:
+    IntegratedAuthenticationNotSupportedInChannel
+
+Every link F122 and F124 fixed is confirmed by this: the secret resolves, the Function mints
+tokens, the bundle carries the endpoint, Web Chat initialises, and the agent is reachable and
+answering. **What fails is one setting on the agent itself.**
+
+**Confirmed from our own committed artifact, not from the error text.**
+`infra/copilot-studio/solution/.../bots/mls_MeridianLaunchCopilot/bot.xml` carries
+`<authenticationmode>2</authenticationmode>` — "Authenticate with Microsoft" (integrated),
+which Direct Line does not support. `agent-definition.md` §7.1 already flagged this on
+2026-08-31: *"Current state is NOT this. `settings.mcs.yml` reads
+`authenticationMode: Integrated` — that is 'Authenticate with Microsoft', the option this
+section rejects."* It was a known deviation waiting for a channel to prove it.
+
+**The design's own fix is the wrong one here, and §3 says why.** §7.1 prescribes
+*Authenticate manually* with Entra ID V2, which needs the `mls-copilot-auth` and
+`mls-copilot-canvas` registrations — **neither declared in `infra/entra/manifest.json`**
+(F106), so neither will ever exist. But that whole requirement descends from §3.3, whose
+purpose is to obtain a `User.AccessToken` for the **connected Fabric data agent** — and §3
+opens by stating that path is the **paid-F2 upgrade**, G2-gated, explicitly not the default:
+
+> *"Fabric data agents require a paid F2+ capacity… During the trial phase this agent runs
+> **tools-only via MCP**, answering lakehouse questions through the MCP server against the
+> SQL analytics endpoint."*
+
+The MCP server authenticates with **its own API key** (`mcp-auth-token`, Key Vault). No user
+token is involved in the data path that is actually deployed. So **"No authentication" is not
+a compromise for this configuration — it is the correct setting**, and it sidesteps F106
+entirely. If the estate ever moves to paid F2 and attaches the Fabric data agent, §7.1's
+manual mode becomes necessary again *and* F106 must be closed first.
+
+**The change is a human one, and deliberately not automated.** Auth settings are blank after
+a solution import (§6) and take effect only on publish, both of which are Copilot Studio UI
+steps:
+
+    Copilot Studio -> the agent -> Settings -> Security -> Authentication
+      -> "No authentication"  -> Save -> Publish
+
+Afterwards run `infra/copilot-studio/export-agent.ps1` so the committed solution captures the
+real value rather than anyone guessing the option-set integer — the repo's own round-trip,
+and the reason not to hand-edit `bot.xml` to a number nobody has verified.
 
 ### F127 — V7.7 measured Microsoft's login page and blamed our app *(fixed 2026-09-01)*
 
