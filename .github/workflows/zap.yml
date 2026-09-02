@@ -74,12 +74,11 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      url: ${{ steps.resolve.outputs.url }}
+      # A JSON array of {name, url, classification}. The estate exposes six
+      # internet-facing endpoints and this scanned exactly one of them (F155).
+      targets: ${{ steps.resolve.outputs.targets }}
       ready: ${{ steps.resolve.outputs.ready }}
-      # What an anonymous caller sees at the scanned URL: content | auth-wall |
-      # unreachable. The gate refuses to call a redirect-only scan a pass (F152).
-      classification: ${{ steps.resolve.outputs.classification }}
-      app_url: ${{ steps.resolve.outputs.app_url }}
+      summary: ${{ steps.resolve.outputs.summary }}
     steps:
       - uses: actions/checkout@v4
 
@@ -100,135 +99,163 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Read the live ingress FQDN
+      # ENUMERATE THE SURFACE, DO NOT LIST IT (F155). This step used to name one
+      # container app. The estate exposes SIX internet-facing endpoints - three
+      # Easy Auth apps, the MCP server, and two Function Apps that answer 200 to
+      # an anonymous caller with no platform auth at all. The Function Apps had
+      # never been scanned and were not even in the register's own list of the
+      # attack surface, because that list was written by hand.
+      #
+      # So ask Azure which things are externally reachable, every run. A surface
+      # written down is a surface that goes stale the next time someone deploys.
+      - name: Discover every externally reachable endpoint
         id: live
         if: ${{ steps.login.outcome == 'success' }}
         continue-on-error: true
         env:
-          APP: ${{ steps.naming.outputs.ca-launch-ops }}
-          MCP: ${{ steps.naming.outputs.ca-mcp }}
-          RG: ${{ steps.naming.outputs.rg-apps }}
+          RG_APPS: ${{ steps.naming.outputs.rg-apps }}
         run: |
           set -uo pipefail
-          fqdn="$(az containerapp show -n "${APP}" -g "${RG}" \
-                    --query 'properties.configuration.ingress.fqdn' -o tsv 2>/dev/null || true)"
-          echo "fqdn=${fqdn}" >> "${GITHUB_OUTPUT}"
-          if [ -n "${fqdn}" ]; then
-            echo "Live ingress: ${fqdn}"
-          else
-            echo "::notice title=No live ingress::${APP} in ${RG} reported no ingress FQDN."
-          fi
+          hosts=""
 
-          # The API surface, read the same way. It matters because launch-ops sits
-          # behind Easy Auth and an unauthenticated scanner never gets past the
-          # login redirect - see the classification step below (F152).
-          mcp="$(az containerapp show -n "${MCP}" -g "${RG}" \
-                    --query 'properties.configuration.ingress.fqdn' -o tsv 2>/dev/null || true)"
-          echo "mcp_fqdn=${mcp}" >> "${GITHUB_OUTPUT}"
-          [ -n "${mcp}" ] && echo "Live API ingress: ${mcp}"
+          # Container Apps with EXTERNAL ingress. `external == true` is the
+          # property that decides internet reachability; an internal-only app
+          # (data-api) and one with no ingress at all (vuln-lab) are correctly
+          # absent rather than filtered by name.
+          while read -r name fqdn; do
+            [ -z "${name}" ] && continue
+            hosts="${hosts} ${name}=https://${fqdn}"
+          done <<< "$(az containerapp list -g "${RG_APPS}" \
+              --query "[?properties.configuration.ingress.external].[name,properties.configuration.ingress.fqdn]" \
+              -o tsv 2>/dev/null || true)"
 
-      - name: Resolve target URL
+          # Function Apps. Public by default and easy to forget precisely because
+          # they are not Container Apps - which is how two of them stayed off the
+          # scan list entirely.
+          while read -r name fqdn; do
+            [ -z "${name}" ] && continue
+            hosts="${hosts} ${name}=https://${fqdn}"
+          done <<< "$(az functionapp list \
+              --query "[?state=='Running'].[name,defaultHostName]" -o tsv 2>/dev/null || true)"
+
+          echo "hosts=${hosts}" >> "${GITHUB_OUTPUT}"
+          echo "Discovered:${hosts}"
+
+      - name: Build the scan target list
         id: resolve
         env:
           INPUT_URL: ${{ inputs.target_url }}
-          LIVE_FQDN: ${{ steps.live.outputs.fqdn }}
-          MCP_FQDN: ${{ steps.live.outputs.mcp_fqdn }}
+          HOSTS: ${{ steps.live.outputs.hosts }}
           STAGING_URL: ${{ vars.STAGING_URL }}
         run: |
           set -euo pipefail
-          derived=""
-          [ -n "${LIVE_FQDN}" ] && derived="https://${LIVE_FQDN}"
 
-          # An explicit input wins; otherwise the live estate beats the stored value.
-          url="${INPUT_URL:-${derived:-${STAGING_URL}}}"
-
-          # A stored value that disagrees with the live one is a trap for the next
-          # reader, not just for this run: say so where someone will see it.
-          if [ -n "${derived}" ] && [ -n "${STAGING_URL}" ] && [ "${derived}" != "${STAGING_URL}" ]; then
-            echo "::warning title=STAGING_URL is stale::The demo variable says ${STAGING_URL}; the live app answers on ${derived}. Scanning the live one. Update or delete the variable — a Container Apps environment domain changes on every rebuild (F144)."
+          # An explicit input still wins - an operator scanning one thing on
+          # purpose. Otherwise scan everything the discovery step found.
+          candidates=""
+          if [ -n "${INPUT_URL}" ]; then
+            candidates="operator-supplied=${INPUT_URL}"
+          elif [ -n "${HOSTS}" ]; then
+            candidates="${HOSTS}"
+          elif [ -n "${STAGING_URL}" ]; then
+            candidates="staging=${STAGING_URL}"
           fi
 
-          if [ -z "${url}" ]; then
-            echo "ready=false" >> "${GITHUB_OUTPUT}"
-            echo "url=" >> "${GITHUB_OUTPUT}"
-            echo "::notice title=No staging URL::No live ingress, no target_url input and no STAGING_URL. ZAP is a post-L7 check; skipping cleanly."
+          if [ -z "${candidates}" ]; then
             {
-              echo "## ZAP baseline: skipped"
-              echo
-              echo "No staging URL yet. This is the expected state until L7 deploys"
-              echo "launch-ops and the apps resource group has an ingress to read."
-            } >> "${GITHUB_STEP_SUMMARY}"
+              echo "ready=false"
+              echo "targets=[]"
+              echo "summary=no reachable endpoint"
+            } >> "${GITHUB_OUTPUT}"
+            echo "::notice title=Nothing to scan::No externally reachable endpoint, no target_url input and no STAGING_URL. ZAP is a post-L7 check; skipping cleanly."
             exit 0
           fi
-          case "${url}" in
-            https://*) ;;
-            *)
-              echo "::error title=Invalid staging URL::The scan target must be an https:// URL."
-              exit 1
-              ;;
-          esac
 
-          # VERIFY THE TARGET CAN BE REACHED BEFORE DECLARING IT VALID (F135's rule,
-          # F144's cost). Well-formed and resolvable are different properties, and
-          # the old check asserted only the first: the failure surfaced as
-          # `docker failed with exit code 3` deep inside the action, which names
-          # the symptom and not the cause.
-          host="${url#https://}"
-          host="${host%%/*}"
-          if ! getent hosts "${host}" >/dev/null 2>&1; then
-            echo "::error title=Scan target does not resolve::${host} has no DNS record, so ZAP would scan nothing. An unreachable target is a FAILURE, not a pass (L09 V9.4). If this is a Container Apps FQDN from a previous estate, the environment domain changed on rebuild (F144)."
-            exit 1
-          fi
-
-          # ---------------------------------------------------------------
-          # WHAT DOES AN ANONYMOUS CALLER ACTUALLY SEE (F152)
-          #
-          # launch-ops runs behind Container Apps Easy Auth with
-          # unauthenticatedClientAction: RedirectToLoginPage. An unauthenticated
-          # baseline scan therefore reaches a 302 to login.microsoftonline.com
-          # with a zero-length body - and ZAP dutifully reports "0 High", which
-          # is a true statement about a login redirect and says NOTHING about the
-          # application. The last run scanned exactly three URLs (/, /robots.txt,
-          # /sitemap.xml) and every alert it raised described the redirect's own
-          # headers and Easy Auth's cookies.
-          #
-          # So classify the target before scanning it, and scan the surface an
-          # unauthenticated attacker can actually reach.
-          # ---------------------------------------------------------------
+          # CLASSIFY EACH TARGET BEFORE SCANNING IT (F152). An Easy Auth app
+          # answers an anonymous request with a 302 to Entra and a zero-length
+          # body; ZAP would report "0 High" about a login redirect. That is not a
+          # security result, and the gate below refuses to record it as one.
           classify() {
+            local code loc
             code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1" || echo 000)"
             loc="$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 30 "$1" || true)"
             case "${loc}" in
               *login.microsoftonline.com*) echo "auth-wall" ;;
-              *) [ "${code}" = "000" ] && echo "unreachable" || echo "content" ;;
+              *) if [ "${code}" = "000" ]; then echo "unreachable"; else echo "content"; fi ;;
             esac
           }
 
-          app_class="$(classify "${url}")"
-          echo "Anonymous view of ${url}: ${app_class}"
-          scanned="${url}"
+          json="["
+          first=1
+          scannable=0
+          summary=""
+          for entry in ${candidates}; do
+            name="${entry%%=*}"
+            url="${entry#*=}"
+            case "${url}" in
+              https://*) ;;
+              *) echo "::warning title=Skipping non-https target::${name} -> ${url}"; continue ;;
+            esac
 
-          if [ "${app_class}" = "auth-wall" ]; then
-            echo "::warning title=Target is behind Easy Auth::${url} answers an anonymous request with a redirect to Entra, so an unauthenticated baseline cannot assess the application - only its login redirect. Scanning the public API surface instead, which is what an unauthenticated attacker actually reaches (F152)."
-            if [ -n "${MCP_FQDN}" ]; then
-              scanned="https://${MCP_FQDN}"
-              app_class="$(classify "${scanned}")"
-              echo "Anonymous view of ${scanned}: ${app_class}"
+            host="${url#https://}"; host="${host%%/*}"
+            if ! getent hosts "${host}" >/dev/null 2>&1; then
+              echo "::warning title=Target does not resolve::${name} (${host}) has no DNS record and cannot be scanned."
+              summary="${summary} ${name}:unresolvable"
+              continue
             fi
-          fi
+
+            class="$(classify "${url}")"
+            summary="${summary} ${name}:${class}"
+            echo "${name} -> ${url} [${class}]"
+
+            # Only reachable content is worth a scan slot. An auth wall is
+            # REPORTED, not scanned - scanning it produces a report about Entra.
+            if [ "${class}" = "content" ]; then
+              scannable=$((scannable + 1))
+              [ "${first}" -eq 0 ] && json="${json},"
+              json="${json}{\"name\":\"${name}\",\"url\":\"${url}\"}"
+              first=0
+            fi
+          done
+          json="${json}]"
 
           {
-            echo "classification=${app_class}"
-            echo "app_url=${url}"
-            echo "ready=true"
-            echo "url=${scanned}"
+            echo "targets=${json}"
+            echo "summary=${summary# }"
+            echo "ready=$( [ "${scannable}" -gt 0 ] && echo true || echo false )"
           } >> "${GITHUB_OUTPUT}"
 
+          {
+            echo "## ZAP targets"
+            echo
+            echo "| Endpoint | Anonymous view |"
+            echo "|---|---|"
+            for pair in ${summary}; do
+              echo "| ${pair%%:*} | ${pair#*:} |"
+            done
+            echo
+            echo "Scanning ${scannable} endpoint(s). \`auth-wall\` entries are behind Easy Auth:"
+            echo "an unauthenticated baseline cannot assess them, and a \"0 High\" over a login"
+            echo "redirect would be a verdict this scan never earned (F152)."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${scannable}" -eq 0 ]; then
+            echo "::error title=Nothing reachable to scan::Every discovered endpoint is behind an auth wall or unresolvable. ZAP assessed nothing, which is UNOBSERVABLE rather than a pass (F152)."
+            exit 1
+          fi
+
   baseline:
-    name: ZAP baseline scan
+    name: ZAP baseline (${{ matrix.target.name }})
     needs: target
     if: ${{ needs.target.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
+    strategy:
+      # fail-fast OFF: a run is an expensive observation and it returns everything
+      # it saw. One endpoint's High-risk alert must not cancel the scan of five
+      # others - that is how a diagnosis rate ends up equal to a deploy rate.
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.target.outputs.targets) }}
     # Bounded: talks to a cloud API and may legitimately be slow. An unbounded job inherits GitHub's six-hour
     # default, which is how a hung what-if consumed a whole run (F81).
     timeout-minutes: 45
@@ -240,7 +267,7 @@ jobs:
       - name: Run the ZAP baseline scan
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         with:
-          target: ${{ needs.target.outputs.url }}
+          target: ${{ matrix.target.url }}
           # -a includes alpha passive rules. `-J` is DELIBERATELY ABSENT (F102).
           #
           # This used to read '-a -J report.json', which looks harmless and is not:
@@ -263,7 +290,7 @@ jobs:
           # The gate below owns pass/fail so the report is always archived.
           fail_action: false
           allow_issue_writing: false
-          artifact_name: zap-scan-raw
+          artifact_name: zap-scan-raw-${{ matrix.target.name }}
 
       # The action writes report_json.json; the artifact contract V9.4 reads is
       # report.json (layer-09-audit.ps1 Test-ZapReport). Renaming here keeps one
@@ -281,8 +308,11 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          # Artifact name is load-bearing: V9.4 downloads `zap-baseline-report`.
-          name: zap-baseline-report
+          # One per target; the merge job below combines them into the single
+          # `zap-baseline-report` artifact V9.4 downloads by name, so the audit
+          # contract is unchanged while the coverage goes from one endpoint to
+          # every reachable one.
+          name: zap-baseline-report-${{ matrix.target.name }}
           path: |
             report.json
             report_html.html
@@ -299,9 +329,8 @@ jobs:
       - name: Gate on High-risk alerts
         if: ${{ always() }}
         env:
-          TARGET_URL: ${{ needs.target.outputs.url }}
-          CLASSIFICATION: ${{ needs.target.outputs.classification }}
-          APP_URL: ${{ needs.target.outputs.app_url }}
+          TARGET_URL: ${{ matrix.target.url }}
+          TARGET_NAME: ${{ matrix.target.name }}
         run: |
           set -euo pipefail
           if [ ! -s report.json ]; then
@@ -309,41 +338,21 @@ jobs:
             exit 1
           fi
 
-          # A SCAN THAT NEVER REACHED THE APPLICATION IS NOT A PASS (F152).
-          #
-          # "Zero High-risk alerts" against a 302 to login.microsoftonline.com is
-          # a true statement about a login redirect and tells nobody anything
-          # about the software. The previous run scanned three URLs - /,
-          # /robots.txt, /sitemap.xml - and every alert described the redirect's
-          # own headers and Easy Auth's cookies. It passed.
-          #
-          # This is the third time this criterion has reported a verdict it had
-          # not earned: F102 (the gate was skipped and the failure read as a
-          # security failure), F144 (the target hostname was from a dead
-          # environment), and now a scan of the door rather than the building.
-          # UNOBSERVABLE, never a pass.
-          if [ "${CLASSIFICATION}" != "content" ]; then
-            {
-              echo "## ZAP baseline — UNOBSERVABLE"
-              echo
-              echo "The scan target answered an anonymous request with \`${CLASSIFICATION}\`,"
-              echo "so no application content was assessed. A \"0 High\" result here would"
-              echo "describe a login redirect, not the app."
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "::error title=ZAP assessed nothing::${TARGET_URL} is '${CLASSIFICATION}' to an anonymous caller (the app at ${APP_URL} sits behind Easy Auth). An unauthenticated baseline cannot assess it, and reporting zero High-risk alerts would be a verdict this scan never earned (F152)."
-            exit 1
-          fi
-
-          # URLs the scan actually touched. Three of them means /, /robots.txt and
-          # /sitemap.xml - the crawler's own guesses, not the application.
+          # URLs the scan actually touched. The target job has already refused to
+          # queue anything that answers with a login redirect (F152), so a scan
+          # that got here reached real content - this records HOW MUCH, because
+          # three URLs means /, /robots.txt and /sitemap.xml: the crawler's own
+          # guesses rather than the application.
           scanned_urls="$(jq '[.site[]?.alerts[]?.instances[]?.uri] | unique | length' report.json)"
-          echo "Distinct URLs appearing in alerts: ${scanned_urls}"
+          echo "${TARGET_NAME}: distinct URLs appearing in alerts: ${scanned_urls}"
 
           high="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("High"))] | length' report.json)"
           medium="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("Medium"))] | length' report.json)"
           low="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("Low"))] | length' report.json)"
           {
-            echo "## ZAP baseline — ${TARGET_URL}"
+            echo "## ZAP baseline — ${TARGET_NAME}"
+            echo
+            echo "\`${TARGET_URL}\` · ${scanned_urls} distinct URL(s) reached"
             echo
             echo "| Risk | Alerts |"
             echo "|---|---|"
@@ -357,3 +366,64 @@ jobs:
             exit 1
           fi
           echo "Zero High-risk alerts."
+
+  # ---------------------------------------------------------------------------
+  # V9.4 downloads an artifact called `zap-baseline-report` and asserts zero
+  # High-risk alerts in it. Rather than teach the audit about a matrix, merge the
+  # per-target reports into that one name: the criterion is then asserting zero
+  # High across EVERY reachable endpoint instead of across one, with no change to
+  # the audit at all.
+  #
+  # `always()`, because a target that failed its own gate still produced a report
+  # and the audit must see it. A merge that only runs on success would hide
+  # exactly the findings worth having.
+  # ---------------------------------------------------------------------------
+  merge:
+    name: merge the per-target reports
+    needs: [target, baseline]
+    if: ${{ always() && needs.target.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Download every per-target report
+        uses: actions/download-artifact@v8
+        with:
+          pattern: zap-baseline-report-*
+          path: reports
+
+      - name: Merge into the single artifact V9.4 reads
+        run: |
+          set -euo pipefail
+          found="$(find reports -name report.json | wc -l)"
+          echo "per-target reports found: ${found}"
+          if [ "${found}" -eq 0 ]; then
+            echo "::error title=No ZAP reports to merge::The matrix produced no report.json. An absent report is a FAILURE, not a pass (L09 V9.4)."
+            exit 1
+          fi
+
+          # ZAP's report is { "@version": ..., "site": [ ... ] }. Merging is
+          # concatenating the site arrays: each entry already carries its own
+          # @name, so a reader can still tell the endpoints apart.
+          #
+          # Built into merged.json and moved, because the inputs are themselves
+          # called report.json - writing the output into the same pipeline that
+          # reads them is SC2094 and, worse than a lint, a real race.
+          find reports -name report.json -print0 \
+            | xargs -0 jq -s '{"@version": "merged", "@generated": (now | todate), site: (map(.site // []) | add)}' \
+            > merged.json
+          mv merged.json report.json
+
+          sites="$(jq '[.site[]?."@name"] | length' report.json)"
+          high="$(jq '[.site[]?.alerts[]? | select(.riskdesc | startswith("High"))] | length' report.json)"
+          echo "merged ${found} report(s) covering ${sites} site(s); High-risk alerts: ${high}"
+          jq -r '.site[]? | "  \(."@name")"' report.json
+
+      - name: Publish the merged report artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: zap-baseline-report
+          path: report.json
+          if-no-files-found: error
+          retention-days: 30
