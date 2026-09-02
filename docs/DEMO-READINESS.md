@@ -107,6 +107,51 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F129 — the copilot connector points at an environment that no longer exists *(fixed 2026-09-01)*
+
+Chasing F128's `AuthenticationNotConfigured` into the tool's own panel produced the real
+cause, and it is not an auth problem at all:
+
+    Connector request failed
+    "The remote name could not be resolved:
+     'mls-mcp-demo-ca.thankfulisland-7f9b1aba.centralus.azurecontainerapps.io'"
+
+The live server is `mls-mcp-demo-ca.**happymeadow-9e15a087**.centralus.azurecontainerapps.io`.
+The committed connector definition hardcoded the old one:
+
+    "host":"mls-mcp-demo-ca.thankfulisland-7f9b1aba.centralus.azurecontainerapps.io"
+
+**`thankfulisland-7f9b1aba` is a Container Apps environment that no longer exists.** Azure
+assigns that domain segment randomly, once per environment, and a teardown/rebuild gets a new
+one. So the literal was **guaranteed to be wrong after the very kill-and-rebuild this demo
+exists to showcase** — and it broke the copilot silently, surfacing three layers away as
+"Connector request failed" with nothing anywhere naming a hostname.
+
+**This is F90's class exactly**: a name from another system, written into a committed
+artifact, surviving the change it should have tracked. F90 was 22 Entra names surviving a
+rebrand; the answer there was to tokenise `infra/entra/manifest.json` with `${prefix}`/`${env}`
+and resolve it in the one place that reads it. Same answer here.
+
+**Fixed** in three parts:
+
+- The connector definition keeps **`"host":"${mcpHost}"`** — no environment-shaped literal in
+  the repository.
+- `import-agent.ps1` resolves the live FQDN (`-McpHost`, `MLS_MCP_HOST`, or an `az` lookup),
+  copies the source to a staging tree, substitutes, and packs **from the copy** — so the
+  package carries real values and the repo keeps the token. It **fails loudly** when it cannot
+  resolve one, rather than importing a connector aimed at a dead host.
+- `verification/tests/failure-classes.Tests.ps1` rejects any deployable artifact containing a
+  Container Apps environment domain. Mutation-tested. Scoped deliberately: documentation
+  quoting a live FQDN as evidence is honest; **configuration** carrying a random segment
+  nothing regenerates is not.
+
+**A red herring worth recording, because it is a real demo risk on its own.** The MCP server
+runs at `minReplicas: 0` for the $0-idle guarantee and takes **26 seconds** to cold-start, which
+also produces "Connector request failed" when Copilot Studio's connector times out first. That
+was the first hypothesis and it was wrong here — but it will bite the **first question of any
+live demo**. Holding one replica warm costs **~$14.04 / 30 days (0.25 vCPU, 0.5 GiB, after the
+free grant)** and is a **G2 decision**, deliberately left to the sponsor.
+
 ### F128 — the Ask tab connects, and the agent refuses on an auth mode it cannot use *(2026-09-01)*
 
 **The entire chain works.** Opened by a signed-in human, the Ask tab minted a token,

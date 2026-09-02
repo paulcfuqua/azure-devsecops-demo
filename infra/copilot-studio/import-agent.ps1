@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 <#
 .SYNOPSIS
     L8 - pack the committed Meridian Launch Copilot solution source and import it into
@@ -67,6 +67,18 @@ param(
     # references. Ignored (with a notice) when the path does not exist.
     [string]$SettingsFile,
 
+    # THE MCP SERVER'S LIVE HOSTNAME, and F129 is why this parameter exists. The connector
+    # definition in the committed solution is TOKENISED (`${mcpHost}`) because a Container
+    # Apps FQDN embeds the ENVIRONMENT's randomly-assigned domain - `happymeadow-9e15a087`
+    # today, `thankfulisland-7f9b1aba` before the last rebuild. Azure picks a new one every
+    # time the environment is recreated, so a literal host in a committed artifact is
+    # guaranteed to be wrong after the very teardown/rebuild this demo exists to show.
+    #
+    # Resolved from MLS_MCP_HOST, or from Azure when the CLI is available. NEVER defaulted
+    # to a literal: importing a connector that points at a dead host produces "Connector
+    # request failed" three layers away in Copilot Studio, with nothing naming the cause.
+    [string]$McpHost = $env:MLS_MCP_HOST,
+
     # Pack and import unmanaged instead of managed. Troubleshooting only.
     [switch]$Unmanaged,
 
@@ -80,6 +92,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Where the MCP server lives, for the -McpHost fallback lookup. Defaults only; a rebranded
+# estate passes -McpHost outright rather than relying on these.
+$script:McpAppName = if ($env:MLS_MCP_APP_NAME) { $env:MLS_MCP_APP_NAME } else { 'mls-mcp-demo-ca' }
+$script:McpResourceGroup = if ($env:MLS_MCP_RESOURCE_GROUP) { $env:MLS_MCP_RESOURCE_GROUP } else { 'mls-rg-apps' }
 
 function Write-Status {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
@@ -193,6 +210,69 @@ The demo environment was NOT contacted and nothing was changed.
 "@
 }
 
+function Resolve-McpHost {
+    <#
+        The live MCP FQDN, or a hard failure naming what to do. Never a stale literal.
+    #>
+    param([string]$Candidate)
+    if (-not [string]::IsNullOrWhiteSpace($Candidate)) { return $Candidate.Trim() }
+    $resolved = ''
+    if (Get-Command -Name az -CommandType Application -ErrorAction SilentlyContinue) {
+        try {
+            $resolved = (& az containerapp show --name $script:McpAppName --resource-group $script:McpResourceGroup `
+                    --query 'properties.configuration.ingress.fqdn' --output tsv 2>$null | Out-String).Trim()
+        }
+        catch { $resolved = '' }
+    }
+    if ([string]::IsNullOrWhiteSpace($resolved)) {
+        throw @"
+Cannot resolve the MCP server's hostname, and this import will not guess one (F129).
+
+The connector definition is tokenised with `${mcpHost}` on purpose: a Container Apps FQDN
+carries the environment's randomly-assigned domain, which changes on every rebuild. Importing
+a stale host produces "Connector request failed" inside Copilot Studio, three layers from the
+cause and naming none of it.
+
+Supply it either way:
+  -McpHost mls-mcp-demo-ca.<env-domain>.<region>.azurecontainerapps.io
+  `$env:MLS_MCP_HOST = '<same>'
+or sign in to Azure so this can read it:
+  az containerapp show -n $script:McpAppName -g $script:McpResourceGroup --query properties.configuration.ingress.fqdn -o tsv
+"@
+    }
+    return $resolved
+}
+
+function Get-TokenisedSolutionSource {
+    <#
+        Copy the committed source to a staging folder and resolve its tokens, so `pac
+        solution pack` packs a tree with real values while the REPOSITORY keeps the tokens.
+        The same shape as infra/entra/manifest.json's ${prefix}/${env} (F90): one estate-
+        specific value, one place that resolves it, and nothing environment-shaped committed.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$SolutionFolder,
+        [Parameter(Mandatory)][string]$StagingRoot,
+        [Parameter(Mandatory)][hashtable]$Token
+    )
+    if (Test-Path -LiteralPath $StagingRoot) { Remove-Item -LiteralPath $StagingRoot -Recurse -Force }
+    New-Item -ItemType Directory -Path $StagingRoot -Force | Out-Null
+    Copy-Item -LiteralPath $SolutionFolder -Destination $StagingRoot -Recurse -Force
+    $staged = Join-Path $StagingRoot (Split-Path -Leaf $SolutionFolder)
+
+    $replaced = 0
+    foreach ($file in (Get-ChildItem -LiteralPath $staged -Recurse -File)) {
+        $text = Get-Content -LiteralPath $file.FullName -Raw
+        $original = $text
+        foreach ($key in $Token.Keys) { $text = $text.Replace($key, [string]$Token[$key]) }
+        if ($text -ne $original) {
+            Set-Content -LiteralPath $file.FullName -Value $text -NoNewline
+            $replaced++
+        }
+    }
+    return [pscustomobject]@{ Path = $staged; FilesChanged = $replaced }
+}
+
 function Invoke-PacCommand {
     <#
     .SYNOPSIS
@@ -297,7 +377,8 @@ function Invoke-Main {
         [string]$SettingsFile,
         [switch]$Unmanaged,
         [switch]$Force,
-        [int]$MaxAsyncWaitMinutes = 60
+        [int]$MaxAsyncWaitMinutes = 60,
+        [string]$McpHost
     )
 
     # ---- preflight: everything that can fail, fails here, before any write ----------
@@ -358,11 +439,22 @@ function Invoke-Main {
         New-Item -ItemType Directory -Path $ArtifactPath -Force | Out-Null
     }
 
+    # ---- resolve tokens into a staging copy (F129) ---------------------------------------
+    # The repository keeps `${mcpHost}`; the PACKAGE gets the live FQDN. Resolved here, in
+    # preflight, so a missing host fails before anything is written rather than importing a
+    # connector that points at a hostname Azure retired on the last rebuild.
+    $resolvedMcpHost = Resolve-McpHost -Candidate $McpHost
+    Write-Status "MCP host for the connector: $resolvedMcpHost" -Color Green
+    $staging = Get-TokenisedSolutionSource -SolutionFolder $solutionFolder `
+        -StagingRoot (Join-Path $ArtifactPath 'staged-source') `
+        -Token @{ '${mcpHost}' = $resolvedMcpHost }
+    Write-Status "Resolved tokens in $($staging.FilesChanged) file(s); packing from the staging copy." -Color Green
+
     # ---- pack -------------------------------------------------------------------------
     Invoke-PacCommand -Intent "Pack '$SolutionName' as $packageType" -Arguments @(
         'solution', 'pack',
         '--zipfile', $zipPath,
-        '--folder', $solutionFolder,
+        '--folder', $staging.Path,
         '--packagetype', $packageType
     ) | Out-Null
 
@@ -409,5 +501,6 @@ function Invoke-Main {
 if (-not $env:MLS_SKIP_MAIN) {
     Invoke-Main -EnvironmentUrl $EnvironmentUrl -SolutionName $SolutionName `
         -SolutionRoot $SolutionRoot -ArtifactPath $ArtifactPath -SettingsFile $SettingsFile `
-        -Unmanaged:$Unmanaged -Force:$Force -MaxAsyncWaitMinutes $MaxAsyncWaitMinutes
+        -Unmanaged:$Unmanaged -Force:$Force -MaxAsyncWaitMinutes $MaxAsyncWaitMinutes `
+        -McpHost $McpHost
 }
