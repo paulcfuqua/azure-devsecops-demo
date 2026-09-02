@@ -1035,10 +1035,32 @@ module directlineFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
     siteConfig: {
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      // CORS is enforced in the function itself against
-      // DIRECTLINE_ALLOWED_ORIGINS, which is also what it sends Direct Line as
-      // `trustedOrigins`. Configuring the platform CORS list as well would give
-      // two places to be wrong and one of them silent.
+      // THE PLATFORM OWNS THE PREFLIGHT, AND THAT IS WHY THIS EXISTS NOW (F136).
+      //
+      // This block used to say: "CORS is enforced in the function itself against
+      // DIRECTLINE_ALLOWED_ORIGINS ... Configuring the platform CORS list as well
+      // would give two places to be wrong and one of them silent." That reasoning
+      // held for exactly as long as the request was a SIMPLE one - a POST with no
+      // custom headers never triggers a preflight, so the function's own handler
+      // saw every request and its CORS headers were the only ones that mattered.
+      //
+      // Forwarding the caller's Easy Auth token added an `Authorization` header,
+      // which makes the request PREFLIGHTED. The Functions host answers OPTIONS
+      // ITSELF, before any function code runs, and with no platform list it replies
+      // 204 with no CORS headers at all - so the browser rejected it with "Failed to
+      // fetch" while the function's own, correct, allow-list sat one layer below,
+      // never consulted. The POST underneath still returned the right headers, which
+      // is what made it confusing: CORS worked for every request except the one the
+      // browser had to ask permission for first.
+      //
+      // ONE SOURCE STILL. Both layers read the same derived origin - the platform
+      // for the preflight it owns, the function for the response it owns - so the
+      // "two places to be wrong" concern is met by making them the same value rather
+      // than by leaving one unset.
+      cors: {
+        allowedOrigins: split(directlineOrigins, ',')
+        supportCredentials: false
+      }
     }
     // PUBLIC BY NECESSITY, not by oversight: the caller is a browser on the
     // public internet. It is anonymous by design too - the endpoint mints a
