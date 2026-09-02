@@ -472,7 +472,10 @@ function Invoke-Main {
     # assessment. A plan that can be switched on but assesses nothing satisfies
     # neither, which is precisely why V9.5 alone was not enough.
     #
-    # BOTH FAILURE PATHS ARE -Final, so this criterion never retries. Defender's
+    # ZERO PATIENCE, DECLARED (not inherited - that is exactly the defect the
+    # run-budget suite catches, and it caught this: leaving the parameter off made
+    # V9.6 silently take the module's 5-minute default while the code claimed it
+    # never waited). Both failure paths are also -Final. Defender's
     # assessment pipeline materialises over HOURS after a subscription is
     # onboarded, so a five-minute poll cannot change the answer - it would only
     # spend the wall clock to reach the same verdict. Patience is opted into with
@@ -482,6 +485,7 @@ function Invoke-Main {
         -Description 'Defender for Cloud actually produces posture for this subscription' `
         -Command "GET /subscriptions/<sub>/providers/Microsoft.Security/secureScores?api-version=2020-01-01`nGET /subscriptions/<sub>/providers/Microsoft.Security/assessments?api-version=2021-06-01" `
         -Expected 'at least one secure score OR at least one assessment; an unanswered endpoint is UNOBSERVABLE, never "absent"' `
+        -RetryWindowMinutes 0 `
         -Test { Test-DefenderPosture -SubscriptionId $subscription } | Out-Null
 
     return $context
