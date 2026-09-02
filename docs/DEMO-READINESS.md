@@ -155,11 +155,21 @@ it replaces, every interactive sign-in breaks. L7's V7.3 probes with precisely t
 its verdict settles the question - which is the right way round: the estate's own criterion
 answers it, not my recollection of the documentation.
 
+**Settled by the estate's own criteria, not by recollection.** The L7 run after the change
+reported **7 of 7 PASS**, including the two that answer this directly:
+
+    [PASS] V7.3  OTel spans from a synthetic request visible in App Insights via KQL
+    [PASS] V7.7  A human can complete an interactive sign-in
+
+V7.3 probes with a token minted for the **client id** and passed with `allowedAudiences` set, so
+the list is **additive** rather than restrictive - the default audience still works, and V7.7
+confirms interactive sign-in is untouched. That also proves F161's route: a bare-client-id token
+does get past Easy Auth on these apps.
+
 **Residual drift, recorded rather than hidden:** the three live apps still carry the hand-applied
 `allowedAudiences`. ARM's PATCH will not remove an array with either `[]` or `null`, so clearing
-them needs a full authConfig PUT or the next L7 deploy from the reverted template. They are
-harmless if the setting is additive and breaking if it is not, which is exactly why V7.3's result
-matters before anything else is built on top.
+them needs a full authConfig PUT or the next L7 deploy from the reverted template. Demonstrably
+harmless, per V7.3 and V7.7 above - but still drift, and the template no longer produces it.
 
 **The lesson, which is the same one three times today:** the answer was already in the
 repository, written down in the docstring of the function that creates the role. I read the code
