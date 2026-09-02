@@ -163,6 +163,16 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   was a GitHub variable containing a Container Apps FQDN, which is a name that cannot survive
   the rebuild this demo exists to show (F129, F90's class in configuration).
 
+- **A list that feeds two checks answers two questions.** V8.1's expected component set was
+  built from one of the three files that declare components, so it could never match what
+  Dataverse reports and spent days naming sixteen legitimate topics as drift (F145). Fixing it
+  meant widening that list - and V8.3 filtered the SAME list for
+  `connector|connection|tool|agent`, so a topic whose display name is "Meridian Ops Tools" would
+  have started counting as a tool and V8.3 would have failed on a correct solution. One broken
+  criterion traded for another. Before widening an input, find every reader of it: a check whose
+  meaning changed because a different check needed more data is the hardest kind to spot,
+  because nothing about it was edited.
+
 - **Verify that the input can be obtained before verifying that it is valid.** The
   directline-token Function got a careful user-token verifier: signature, issuer, audience and
   expiry, twelve negative cases, real RSA key pairs, mutation-tested. It shipped and the Ask
