@@ -5,16 +5,20 @@ import type { AzureCostFeed } from "../src/contract/feeds.js";
 
 const CONTAINER = "https://acct.blob.core.windows.net/cost-cache";
 
+// NO CAST. The first version of this fixture used `as AzureCostFeed` over a
+// slightly wrong shape (`amount` where the contract says `cost`), and the cast
+// hid it - a fixture that does not match the contract tests nothing about the
+// contract. CI's typecheck caught it; the fix is the real shape, not a wider cast.
 const feed: AzureCostFeed = {
   asOf: "2026-09-02T12:00:00.000Z",
   stale: false,
   currency: "USD",
   total: 1.4,
   timeframe: "MonthToDate",
-  byService: [],
-  byResourceGroup: [],
-  daily: [{ date: "2026-09-01", amount: 1.4 }],
-} as AzureCostFeed;
+  byService: [{ name: "Azure Container Apps", cost: 1.1 }],
+  byResourceGroup: [{ name: "mls-rg-apps", cost: 1.1 }],
+  daily: [{ date: "2026-09-01", cost: 1.4 }],
+};
 
 const tokens = { getToken: async () => "a-token" };
 
