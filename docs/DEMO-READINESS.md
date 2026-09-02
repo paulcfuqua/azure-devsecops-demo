@@ -117,6 +117,40 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F162 — the scan could not tell a thin result from a blocked one *(fixed 2026-09-02)*
+
+The run after F161 authenticated all three Easy Auth apps and produced this:
+
+    mls-launch-ops-demo-ca      18 alerts   4 URLs    <- more than the anonymous scan saw
+    mls-control-tower-demo-ca   17 alerts   3 URLs    <- identical to the anonymous scan
+    mls-compliance-demo-ca      17 alerts   3 URLs    <- identical to the anonymous scan
+
+launch-ops demonstrably got further with a token than without one. The other two returned exactly
+what they had returned unauthenticated, down to the alert list - including
+`Session Management Response Identified` and Easy Auth's own `SameSite` cookie.
+
+**Two explanations fit that equally well, and the report cannot separate them:** an SPA with no
+further crawlable URLs, because ZAP's passive baseline does not execute JavaScript and
+client-side routes are invisible to it; or a scan still looking at the wall despite a token the
+classifier accepted. One is fine. The other is F152 all over again.
+
+**So stop inferring it from the report and record it at the source.** One authenticated request
+per target, before the scan, with its status and body size written into the log:
+
+    mls-control-tower-demo-ca: authenticated GET / -> HTTP 200, 1483 bytes
+
+A 200 with real bytes means the token opens the door, and a thin scan afterwards is the
+crawler's limit rather than the credential's. A 401 or a 302 means the classifier accepted a
+token the application refuses - which **fails the job** instead of being read as "zero High-risk
+alerts". A 200 under 200 bytes fails too: an empty page is not an application.
+
+**Why this is the right shape.** Every previous fix in this chain made the scan *do* more; this
+one makes the run *say* what it did. The distinction matters because three of the last four
+findings here were not wrong behaviour but unreadable evidence - F152 (a verdict about a login
+page), F158 (a classifier that never fired), F161 (a diagnosis built on the wrong cause). The
+scan was never going to become trustworthy by adding capability. It becomes trustworthy by
+recording what it actually reached.
+
 ### F160/F161 — two bugs in the authenticated scan, and F159's diagnosis was wrong *(fixed 2026-09-02)*
 
 With the audience applied, launch-ops finally classified `content` and entered the scan matrix -

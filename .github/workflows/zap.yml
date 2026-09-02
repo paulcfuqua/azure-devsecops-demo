@@ -395,6 +395,42 @@ jobs:
             echo "::warning title=No probe token::${APP} needs authentication and none could be minted; the scan will see its login page."
           fi
 
+      # PROVE THE DOOR IS OPEN BEFORE SCANNING THROUGH IT (F162).
+      #
+      # The previous run authenticated all three Easy Auth apps and two of them
+      # returned exactly what the UNAUTHENTICATED scan had returned - 17 alerts
+      # over 3 URLs. Two explanations fit that equally well: an SPA with nothing
+      # further to crawl, or a scan still looking at the wall. The report cannot
+      # tell them apart, so the evidence has to be captured here instead of
+      # inferred there.
+      #
+      # One authenticated request, its status and body size recorded in the log.
+      # A 200 with real bytes means the token opens the door and any thin result
+      # is the crawler's limit, not the credential's. A 401/302 means the token
+      # is being accepted by the classifier and refused by the app, which is a
+      # FAILURE rather than a thin scan - and it fails here, loudly, instead of
+      # being read as "zero High-risk alerts".
+      - name: Confirm the probe token actually opens the door
+        if: ${{ steps.probe.outputs.token }}
+        env:
+          URL: ${{ matrix.target.url }}
+          NAME: ${{ matrix.target.name }}
+          TOKEN: ${{ steps.probe.outputs.token }}
+        run: |
+          set -uo pipefail
+          code="$(curl -s -o page.html -w '%{http_code}' --max-time 45                     -H "Authorization: Bearer ${TOKEN}" "${URL}" || echo 000)"
+          bytes="$(wc -c < page.html 2>/dev/null || echo 0)"
+          echo "${NAME}: authenticated GET / -> HTTP ${code}, ${bytes} bytes"
+          rm -f page.html
+          if [ "${code}" != "200" ]; then
+            echo "::error title=Probe token does not open ${NAME}::The classifier accepted this token but the application answered HTTP ${code}. The scan that follows would describe the auth wall, not the app - which is the verdict F152 exists to refuse."
+            exit 1
+          fi
+          if [ "${bytes}" -lt 200 ]; then
+            echo "::error title=${NAME} returned an empty page::HTTP 200 with only ${bytes} bytes is not an application response. Scanning it would produce a report about nothing."
+            exit 1
+          fi
+
       - name: Run the ZAP baseline scan
         uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         # THE ACTION'S OWN AUTH CHANNEL (F160). It already forwards
