@@ -640,7 +640,7 @@ func isEntraClientIdConfigured(clientId string) bool => !empty(clientId) && clie
 var easyAuthIssuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
 
 @description('Container Apps built-in authentication (Microsoft.App/containerApps/authConfigs), one shape for all three human-facing apps. It sits IN FRONT of the container at the platform/ingress layer — an unauthenticated request never reaches nginx at all, which is the whole point: these are static SPAs with no server, nowhere to keep a secret and nowhere to enforce a policy of their own. NO CLIENT SECRET ANYWHERE (CLAUDE.md hard rule 5): neither a stored client-secret setting name nor a client-secret certificate thumbprint is configured. Those exist for a CONFIDENTIAL client that calls a downstream API on the signed-in user\'s behalf, or that persists provider tokens in Easy Auth\'s token store for reuse. These apps do neither — each asks exactly one question, "is this caller signed in to our tenant" — and Microsoft documents the Entra provider as fully usable without a client secret for precisely that scenario (learn.microsoft.com/azure/container-apps/authentication). unauthenticatedClientAction is a pinned literal: the platform must never fall through to serving an unauthenticated request. excludedPaths is the ONLY hole, and it is a caller-supplied allowlist rather than a default — see each call site for what it opens and why.')
-func entraEasyAuthConfig(clientId string, issuer string, excludedPaths array) object => {
+func entraEasyAuthConfig(clientId string, issuer string, excludedPaths array, tokenStoreContainerUri string, tokenStoreIdentityResourceId string) object => {
   platform: {
     enabled: true
   }
@@ -659,15 +659,111 @@ func entraEasyAuthConfig(clientId string, issuer string, excludedPaths array) ob
     }
   }
   login: {
-    // No downstream API is ever called on the signed-in user's behalf, so no
-    // provider token is worth persisting, and nothing here needs a
-    // storage-account-backed token store.
-    tokenStore: {
-      enabled: false
-    }
+    // THE PREMISE HERE CHANGED, AND THIS IS THE CONDITION IT NAMED (F135). This
+    // block read "No downstream API is ever called on the signed-in user's behalf,
+    // so no provider token is worth persisting, and nothing here needs a
+    // storage-account-backed token store." That was true of three static
+    // dashboards. It stopped being true when the Ask tab started calling the
+    // directline-token Function ON THE SIGNED-IN USER'S BEHALF: the page forwards
+    // this session's Entra token and the Function verifies it, so the copilot
+    // inherits the identity of the app rather than sitting open beside it.
+    //
+    // WITHOUT THE TOKEN STORE `/.auth/me` RETURNS CLAIMS AND NO RAW TOKEN, which is
+    // exactly how this was found: the tab reported "Could not read this session's
+    // Entra token from /.auth/me" against a correctly signed-in user.
+    //
+    // STILL NO CLIENT SECRET. The store persists the id_token issued at sign-in;
+    // a secret is needed to REFRESH provider tokens, which nothing here does - the
+    // token is read once per conversation and the session is re-established by
+    // signing in again. The paragraph above about confidential clients is
+    // unchanged and still holds.
+    //
+    // Empty container URI keeps it disabled, so an estate that has not deployed the
+    // store is unaffected rather than broken.
+    tokenStore: empty(tokenStoreContainerUri)
+      ? {
+          enabled: false
+        }
+      : {
+          enabled: true
+          azureBlobStorage: {
+            blobContainerUri: tokenStoreContainerUri
+            managedIdentityResourceId: tokenStoreIdentityResourceId
+          }
+        }
   }
   httpSettings: {
     requireHttps: true
+  }
+}
+
+// ---- Easy Auth token store for the control tower (F135) -------------------------
+//
+// Container Apps has no built-in token store; unlike App Service it needs a blob
+// container and an identity that can write to it. Only the control tower needs one
+// (see its authConfig call site), so this is deliberately small: one Standard_LRS
+// account holding one private container of short-lived session tokens.
+//
+// The container holds ENTRA TOKENS FOR SIGNED-IN USERS, so it is private, TLS-only,
+// and shared-key access is disabled - the identity below reaches it with RBAC and
+// nothing else can. A public blob container here would be a credential leak.
+var tokenStoreContainerName = 'easyauth-tokens'
+
+module controlTowerIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0' = {
+  name: 'l7-control-tower-uami'
+  params: {
+    name: naming.userAssignedIdentityName(companyPrefix, naming.appKeys.controlTower, env)
+    location: location
+    tags: tagsControlTower
+  }
+}
+
+resource tokenStoreStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: naming.storageAccountName(companyPrefix, 'tok', env)
+  location: location
+  tags: tagsControlTower
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    // RBAC ONLY. A shared key would be a second credential for the same data, and
+    // the identity below already has exactly the access Easy Auth needs.
+    allowSharedKeyAccess: false
+    allowBlobPublicAccess: false
+  }
+
+  resource blob 'blobServices@2023-05-01' = {
+    name: 'default'
+
+    resource tokens 'containers@2023-05-01' = {
+      name: tokenStoreContainerName
+      properties: {
+        publicAccess: 'None'
+      }
+    }
+  }
+}
+
+// Storage Blob Data Contributor: Easy Auth WRITES each session's token and reads it
+// back, so Reader is non-functional here. Scoped to the one storage account, not the
+// resource group.
+//
+// A MODULE, not a plain resource, and the reason is a Bicep rule worth knowing: a
+// roleAssignment's `name` must be computable at the START of the deployment, and a
+// guid() over an identity's OUTPUT principalId is not - the first attempt failed with
+// BCP120. Passing the principal as a module PARAMETER resolves it before the nested
+// deployment begins, which is why every other grant in this file is a module too.
+module tokenStoreGrant 'modules/storage-account-role.bicep' = {
+  name: 'l7-token-store-grant'
+  params: {
+    storageAccountName: tokenStoreStorage.name
+    principalId: controlTowerIdentity.outputs.principalId
+    // 'Storage Blob Data Contributor' (built-in, stable GUID; verified against
+    // learn.microsoft.com/azure/role-based-access-control/built-in-roles/storage).
+    roleDefinitionId: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
   }
 }
 
@@ -815,7 +911,7 @@ module launchOpsApp 'br/public:avm/res/app/container-app:0.23.0' = {
     // resource on `not(empty(authConfig))`, so null is how you say "no auth
     // config" — and it is only ever reachable together with internal ingress.
     authConfig: launchOpsAuthConfigured
-      ? entraEasyAuthConfig(launchOpsEntraClientId, easyAuthIssuer, easyAuthExcludedPaths)
+      ? entraEasyAuthConfig(launchOpsEntraClientId, easyAuthIssuer, easyAuthExcludedPaths, '', '')
       : null
     containers: [
       {
@@ -851,11 +947,23 @@ module launchOpsApp 'br/public:avm/res/app/container-app:0.23.0' = {
 
 module controlTowerApp 'br/public:avm/res/app/container-app:0.23.0' = {
   name: 'l7-ca-control-tower'
+  // Waits on the blob grant for the same reason the mcp-tools app waits on its Key
+  // Vault grant: Easy Auth resolves the token store with the identity's role AT THE
+  // TIME IT FIRST WRITES, and nothing in these params references the grant, so
+  // without this the first sign-ins after a fresh deploy race the role assignment.
+  dependsOn: [tokenStoreGrant]
   params: {
     name: controlTowerName
     location: location
     tags: tagsControlTower
     environmentResourceId: caeResourceId
+    // Easy Auth writes each session's token to the blob container with THIS
+    // identity, so it has to be assigned to the app - a managedIdentityResourceId
+    // in authConfig that the app does not hold resolves to nothing, silently, and
+    // /.auth/me goes back to returning claims with no token (F135).
+    managedIdentities: {
+      userAssignedResourceIds: [controlTowerIdentity.outputs.resourceId]
+    }
     // EXTERNAL ONLY WHEN EASY AUTH IS CONFIGURED (F25) — same guard as
     // authConfig below. This app is the one F25 was demonstrated against:
     // GET https://<fqdn>/api/feeds/secure-score returned the adopter's live
@@ -866,7 +974,17 @@ module controlTowerApp 'br/public:avm/res/app/container-app:0.23.0' = {
     ingressAllowInsecure: false
     scaleSettings: scaleToZero
     authConfig: controlTowerAuthConfigured
-      ? entraEasyAuthConfig(controlTowerEntraClientId, easyAuthIssuer, easyAuthExcludedPaths)
+      ? entraEasyAuthConfig(
+          controlTowerEntraClientId,
+          easyAuthIssuer,
+          easyAuthExcludedPaths,
+          // ONLY the control tower gets a token store: it is the only app that
+          // forwards this session's token to a downstream API. launch-ops and the
+          // compliance board ask one question each ("is this caller signed in")
+          // and persisting a token for them would be storage nobody reads.
+          '${tokenStoreStorage.properties.primaryEndpoints.blob}${tokenStoreContainerName}',
+          controlTowerIdentity.outputs.resourceId
+        )
       : null
     containers: [
       {
@@ -1111,7 +1229,7 @@ module complianceApp 'br/public:avm/res/app/container-app:0.23.0' = {
     // sweep (see complianceAppName below) but shares the shape so there is one
     // Easy Auth configuration in this template to review rather than three.
     authConfig: complianceAuthConfigured
-      ? entraEasyAuthConfig(complianceEntraClientId, easyAuthIssuer, easyAuthExcludedPaths)
+      ? entraEasyAuthConfig(complianceEntraClientId, easyAuthIssuer, easyAuthExcludedPaths, '', '')
       : null
     // No managed identity, no secrets: this app reads only what was baked
     // into its image at build time and needs no Azure data-plane credential.

@@ -160,7 +160,13 @@ Describe 'Task 13: compliance container app behind Easy Auth' {
             $block | Should -Not -Match 'clientSecretCertificateThumbprint'
         }
         $script:ComplianceModuleBlock | Should -Not -Match '(?m)^\s*secrets:'
-        $script:EasyAuthFuncCode | Should -Match 'tokenStore:\s*\{\s*enabled:\s*false'
+        # The compliance board asks one question - "is this caller signed in" - and
+        # forwards nothing downstream, so it passes NO token-store container and the
+        # store stays off for it. Asserted at the CALL SITE rather than in the shared
+        # builder, because the builder is now conditional: since F135 the control tower
+        # does supply one, and an assertion on the builder would either fail or have to
+        # be loosened into meaninglessness.
+        $script:ComplianceModuleCode | Should -Match "entraEasyAuthConfig\(complianceEntraClientId, easyAuthIssuer, easyAuthExcludedPaths, '', ''\)"
     }
 
     It 'passes the client ID as a parameter reference, never a literal GUID' {
