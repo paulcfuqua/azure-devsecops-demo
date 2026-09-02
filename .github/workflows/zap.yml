@@ -195,15 +195,50 @@ jobs:
             az account get-access-token --resource "api://$1" --query accessToken -o tsv 2>/dev/null || true
           }
 
+          # classify() writes the Easy Auth resource id here when it finds one.
+          CLIENT_ID_FILE="$(mktemp)"
+          export CLIENT_ID_FILE
+
+          # CLASSIFY FROM WHAT THE SERVER SAYS, NOT FROM A STATUS CODE (F158).
+          #
+          # The first two versions of this looked for a 302 to
+          # login.microsoftonline.com, and were validated with a browser-like
+          # client. `curl` sends no Accept header, and Easy Auth answers a
+          # non-browser caller with 401 - no redirect at all. So `redirect_url`
+          # was empty, 401 is not 000, and every Easy Auth app fell through to
+          # `content`, was scanned anonymously, and passed on a report about its
+          # own login wall. The protection F152 added never once fired in CI.
+          #
+          # Easy Auth identifies itself unambiguously in the challenge, and it
+          # names the audience to ask for:
+          #
+          #   www-authenticate: Bearer realm="..."
+          #     authorization_uri="https://login.microsoftonline.com/<tid>/oauth2/v2.0/authorize"
+          #     resource_id="<clientId>"
+          #
+          # A genuine application 401 does not carry authorization_uri - the MCP
+          # server answers `Bearer realm="mcp-tools"` and is real, reachable
+          # content that SHOULD be scanned. So the presence of authorization_uri
+          # is the signal, and resource_id removes the need to ask Azure which
+          # client id to request a token for.
+          #
+          # Writes the discovered resource id to ${CLIENT_ID_FILE} for the caller.
           classify() {
-            local code loc auth=()
+            local headers code auth=()
             [ -n "${2:-}" ] && auth=(-H "Authorization: Bearer $2")
-            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${auth[@]}" "$1" || echo 000)"
-            loc="$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 30 "${auth[@]}" "$1" || true)"
-            case "${loc}" in
-              *login.microsoftonline.com*) echo "auth-wall" ;;
-              *) if [ "${code}" = "000" ]; then echo "unreachable"; else echo "content"; fi ;;
-            esac
+            headers="$(curl -s -D - -o /dev/null --max-time 30 "${auth[@]}" "$1" 2>/dev/null || true)"
+            if [ -z "${headers}" ]; then echo "unreachable"; return; fi
+
+            if printf '%s' "${headers}" | grep -qi 'authorization_uri="https://login.microsoftonline.com'; then
+              printf '%s' "${headers}" \
+                | grep -oiE 'resource_id="[^"]+"' \
+                | head -1 | sed 's/.*="//; s/"$//' > "${CLIENT_ID_FILE}" || true
+              echo "auth-wall"
+              return
+            fi
+
+            code="$(printf '%s' "${headers}" | head -1 | grep -oE '[0-9]{3}' | head -1 || true)"
+            if [ -z "${code}" ]; then echo "unreachable"; else echo "content"; fi
           }
 
           # Container App name -> Easy Auth client id, read from the live app so a
@@ -240,7 +275,10 @@ jobs:
 
             # Only if it IS a wall is there anything for a credential to open.
             if [ "${class}" = "auth-wall" ]; then
-              cid="$(client_id_for "${name}")"
+              # The 401 challenge already named the audience (F158); fall back to
+              # asking Azure only if it somehow did not.
+              cid="$(cat "${CLIENT_ID_FILE}" 2>/dev/null || true)"
+              [ -z "${cid}" ] && cid="$(client_id_for "${name}")"
               if [ -n "${cid}" ]; then
                 token="$(token_for "${cid}")"
                 if [ -n "${token}" ]; then

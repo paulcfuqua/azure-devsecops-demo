@@ -117,6 +117,56 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F158 — the auth-wall detector never fired, because I tested it with the wrong client *(fixed 2026-09-02)*
+
+The first authenticated multi-target ZAP run went green: six targets, six scans, zero High. The
+merged report said otherwise.
+
+    mls-launch-ops-demo-ca      alerts=17  distinct URLs=3   <- the login-wall signature
+    mls-control-tower-demo-ca   alerts=17  distinct URLs=3
+    mls-compliance-demo-ca      alerts=17  distinct URLs=3
+    mls-mcp-demo-ca             alerts=9   distinct URLs=3
+
+Three URLs and seventeen alerts is exactly the F152 fingerprint - `/`, `/robots.txt`,
+`/sitemap.xml` and a report about Easy Auth's own cookies. And the run log contained **no
+"authenticated as the deployer" line at all**: the auth branch never ran, because every Easy Auth
+app had already been classified `content`.
+
+**Why: I validated the classifier with a different HTTP client than the one that runs it.** My
+probes used PowerShell's `Invoke-WebRequest`, which sends browser-like headers and gets a **302 to
+login.microsoftonline.com**. The workflow uses `curl`, which sends no `Accept` header — and Easy
+Auth answers a non-browser caller with **401 and no redirect at all**:
+
+    $ curl -s -o /dev/null -w '%{http_code}'   ...  ->  401
+    $ curl -s -o /dev/null -w '%{redirect_url}' ...  ->  (empty)
+
+So `redirect_url` never matched, 401 is not `000`, and every Easy Auth app fell through to
+`content`. **The protection F152 added has never once fired in CI**, and F157 built authentication
+on top of a gate that was already open.
+
+**The signal was in the response the whole time.** Easy Auth identifies itself, and names the
+audience to ask for:
+
+    www-authenticate: Bearer realm="..."
+      authorization_uri="https://login.microsoftonline.com/<tid>/oauth2/v2.0/authorize"
+      resource_id="7820c65c-2ac3-4242-a283-aedbc705e03f"
+
+A genuine application 401 carries no `authorization_uri` — the MCP server answers
+`Bearer realm="mcp-tools"` and is real content that *should* be scanned. So presence of
+`authorization_uri` is the classifier, and `resource_id` removes the `az containerapp auth show`
+lookup entirely: the challenge tells you which token to fetch.
+
+**Tested against every real case before shipping this time**, which is the whole lesson:
+
+    launch-ops    auth-wall  resource_id=7820c65c...   control-tower auth-wall  resource_id=88106f53...
+    compliance    auth-wall  resource_id=302b0835...   mcp           content    (genuine app 401)
+    directline-func  content                           cost-ingest-func content
+
+**The class, stated plainly:** *a probe must be made with the client that will make it.* Status
+codes are content-negotiated, and validating a check against a friendlier client than production
+uses is the same defect as F135 and F142 — verifying the half in hand and assuming the half that
+matters.
+
 ### F157 — the DAST now gets past the login page *(2026-09-02)*
 
 F155 made ZAP scan every *reachable* endpoint. Three remained unreachable by construction: the
