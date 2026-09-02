@@ -5,9 +5,24 @@ name: zap
 # Playbook: docs/runbooks/layers/L09.md (V9.4: report artifact
 # `zap-baseline-report` exists and contains zero High-risk alerts).
 #
-# GUARDED: a staging URL only exists after L7 deploys the apps. With neither a
-# `target_url` input nor a `STAGING_URL` demo-environment variable, this workflow
-# reports a notice and exits green — it never fails for want of a tenant.
+# THE TARGET IS DERIVED, NOT STORED (F144). `vars.STAGING_URL` held
+# `mls-launch-ops-demo-ca.thankfulisland-7f9b1aba…` while the live app answered on
+# `…happymeadow-9e15a087…`: a Container Apps environment domain is assigned at
+# creation and changes on every rebuild, which is the one thing this demo exists
+# to do. DNS did not resolve, the scan reached nothing, and the only reason that
+# was not a silent pass is the empty-report gate below (F102's fix, working).
+# This is F129's class and F90's before it — a rebuild-scoped hostname kept in a
+# place a rebuild does not update — so the fix is the same: ask Azure.
+#
+# Order of precedence: an explicit `target_url` input beats everything (an
+# operator scanning something specific), then the FQDN read from the live
+# Container App, then `vars.STAGING_URL` as a last resort for a checkout with no
+# Azure credentials. A stored value that disagrees with the live one is reported
+# as stale rather than silently preferred or silently ignored.
+#
+# GUARDED: a staging URL only exists after L7 deploys the apps. With no Azure
+# credentials, no `target_url` input and no `STAGING_URL`, this workflow reports a
+# notice and exits green — it never fails for want of a tenant.
 #
 # The action itself is run with `fail_action: false` and the High-risk gate is
 # applied here, so the report is always produced and archived even on a failing
@@ -55,27 +70,79 @@ jobs:
     # default, which is how a hung what-if consumed a whole run (F81).
     timeout-minutes: 45
     environment: demo
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       url: ${{ steps.resolve.outputs.url }}
       ready: ${{ steps.resolve.outputs.ready }}
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve estate naming
+        id: naming
+        uses: ./.github/actions/naming
+
+      # Step-level `if:`, never job-level: a job-level condition is evaluated
+      # BEFORE the environment resolves, so `vars.*` is always empty there and a
+      # guard meaning "skip when unconfigured" means "skip always" (F125).
+      - name: Azure login (OIDC, mls-github-deployer)
+        id: login
+        if: ${{ vars.AZURE_CLIENT_ID != '' }}
+        continue-on-error: true
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Read the live ingress FQDN
+        id: live
+        if: ${{ steps.login.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          APP: ${{ steps.naming.outputs.ca-launch-ops }}
+          RG: ${{ steps.naming.outputs.rg-apps }}
+        run: |
+          set -uo pipefail
+          fqdn="$(az containerapp show -n "${APP}" -g "${RG}" \
+                    --query 'properties.configuration.ingress.fqdn' -o tsv 2>/dev/null || true)"
+          echo "fqdn=${fqdn}" >> "${GITHUB_OUTPUT}"
+          if [ -n "${fqdn}" ]; then
+            echo "Live ingress: ${fqdn}"
+          else
+            echo "::notice title=No live ingress::${APP} in ${RG} reported no ingress FQDN."
+          fi
+
       - name: Resolve target URL
         id: resolve
         env:
           INPUT_URL: ${{ inputs.target_url }}
+          LIVE_FQDN: ${{ steps.live.outputs.fqdn }}
           STAGING_URL: ${{ vars.STAGING_URL }}
         run: |
           set -euo pipefail
-          url="${INPUT_URL:-${STAGING_URL}}"
+          derived=""
+          [ -n "${LIVE_FQDN}" ] && derived="https://${LIVE_FQDN}"
+
+          # An explicit input wins; otherwise the live estate beats the stored value.
+          url="${INPUT_URL:-${derived:-${STAGING_URL}}}"
+
+          # A stored value that disagrees with the live one is a trap for the next
+          # reader, not just for this run: say so where someone will see it.
+          if [ -n "${derived}" ] && [ -n "${STAGING_URL}" ] && [ "${derived}" != "${STAGING_URL}" ]; then
+            echo "::warning title=STAGING_URL is stale::The demo variable says ${STAGING_URL}; the live app answers on ${derived}. Scanning the live one. Update or delete the variable — a Container Apps environment domain changes on every rebuild (F144)."
+          fi
+
           if [ -z "${url}" ]; then
             echo "ready=false" >> "${GITHUB_OUTPUT}"
             echo "url=" >> "${GITHUB_OUTPUT}"
-            echo "::notice title=No staging URL::Neither the target_url input nor the demo variable STAGING_URL is set. ZAP is a post-L7 check; skipping cleanly."
+            echo "::notice title=No staging URL::No live ingress, no target_url input and no STAGING_URL. ZAP is a post-L7 check; skipping cleanly."
             {
               echo "## ZAP baseline: skipped"
               echo
               echo "No staging URL yet. This is the expected state until L7 deploys"
-              echo "launch-ops and the demo environment gains STAGING_URL."
+              echo "launch-ops and the apps resource group has an ingress to read."
             } >> "${GITHUB_STEP_SUMMARY}"
             exit 0
           fi
@@ -86,6 +153,19 @@ jobs:
               exit 1
               ;;
           esac
+
+          # VERIFY THE TARGET CAN BE REACHED BEFORE DECLARING IT VALID (F135's rule,
+          # F144's cost). Well-formed and resolvable are different properties, and
+          # the old check asserted only the first: the failure surfaced as
+          # `docker failed with exit code 3` deep inside the action, which names
+          # the symptom and not the cause.
+          host="${url#https://}"
+          host="${host%%/*}"
+          if ! getent hosts "${host}" >/dev/null 2>&1; then
+            echo "::error title=Scan target does not resolve::${host} has no DNS record, so ZAP would scan nothing. An unreachable target is a FAILURE, not a pass (L09 V9.4). If this is a Container Apps FQDN from a previous estate, the environment domain changed on rebuild (F144)."
+            exit 1
+          fi
+
           echo "ready=true" >> "${GITHUB_OUTPUT}"
           echo "url=${url}" >> "${GITHUB_OUTPUT}"
 

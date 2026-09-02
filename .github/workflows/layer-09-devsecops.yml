@@ -87,7 +87,7 @@ on:
         required: false
         default: ''
       zap_target_url:
-        description: Staging URL for the ZAP baseline. Empty falls back to vars.STAGING_URL.
+        description: Staging URL for the ZAP baseline. Empty derives it from the live launch-ops ingress (F144).
         type: string
         required: false
         default: ''
@@ -113,7 +113,7 @@ on:
         required: false
         default: ''
       zap_target_url:
-        description: Staging URL for the ZAP baseline (empty = vars.STAGING_URL).
+        description: Staging URL for the ZAP baseline (empty = derived from the live launch-ops ingress, F144).
         type: string
         required: false
         default: ''

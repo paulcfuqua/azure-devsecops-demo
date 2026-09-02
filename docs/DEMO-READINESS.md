@@ -53,7 +53,7 @@ on 2026-09-02, with the evidence beside it.
 | L11 teardown | ✅ verified (down half) | V11.1 PASS. Rebuild proven once. V11.2's blocker (BLOCKER-1) is **closed** — the up-half has simply not been re-run since, and doing so is the sponsor's phase-1 item |
 | L5 Fabric | 🟡 partial | Deployed and seeded (10 tables, `launches`=1,200). Its audit has not passed cleanly since F104/F105/F114 were fixed — **re-run it** |
 | L6 platform | ✅ verified | **5 PASS + 2 PENDING on 2026-09-01**, and both PENDINGs sign off by design (V6.3's cost export has a 24 h window, V6.4's SQL auto-pause a 75 min one — L06.md V6.3). Both Function Apps hold code (V6.7) and **V6.8 confirms the Key Vault reference actually resolves**, which is what F122 broke silently |
-| L9 DevSecOps chain | 🟡 partial | 4/5 — V9.2-V9.5 PASS (negative CVE test, SBOM, ZAP, Defender toggle). **V9.1 fails reading its own evidence, not the estate**: `secret_scanning=''`, `push_protection=''`, and "Dependabot alerts are off" when `gh api .../vulnerability-alerts` returns **204** as admin. That is F103's shape again — admin-only endpoints read by `mls-verifier`. Last run 2026-09-01T00:52, before several fixes landed; **re-run before diagnosing** |
+| L9 DevSecOps chain | 🟡 partial | 4/5 — V9.2-V9.5 PASS (negative CVE test, SBOM, ZAP, Defender toggle). **V9.1 now PASSES** (re-run 2026-09-02 as a filtered diagnostic): F103's fix works, and the criterion reads *"GHAS features the Verifier can observe are enabled"* rather than reporting an admin-only field's absence as a disabled control. The same run turned up **F144** - ZAP has been scanning a hostname from an environment that no longer exists, caught by the empty-report gate rather than passed over. A full unfiltered L9 is still owed for a verdict |
 | L12 compliance | ✅ verified | **The last layer to get an audit, 2026-09-01.** 4 PASS + 2 SKIP; wired into `compliance.yml` as a `verify` job after every collection. `MlsAudit` capped `Layer` at 11 until now - the module could not represent layer 12 even if someone had written the script |
 | L4 Purview labels | ✅ verified | **DONE 2026-09-01, the first time ever.** `verify L4 (mls-verifier)` PASSED. Four sensitivity labels now exist in the tenant - `mls-public`, `mls-internal`, `mls-confidential`, `mls-export-controlled` - where there had been none. The label POLICY failed (F121, fixed, re-run in flight) and the audit has not signed off yet |
 | L8 Copilot Studio | 🟡 partial | **Solution IMPORTED and agent PUBLISHED, 2026-09-01 — both firsts.** Publishing is a separate, human, Copilot Studio step (`import-agent.ps1`: "--publish-changes publishes solution CUSTOMIZATIONS. That is NOT the same thing as publishing the agent"), now done. V8.1 still fails on a Verifier Dataverse read permission; V8.2-V8.5 wait on F122's fix reaching the Function. **F132 is fixed** (2026-09-02): the workflow no longer defaults to a package type the source has never contained, so a plain dispatch imports rather than failing |
@@ -116,6 +116,46 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F144 — the ZAP scan has been pointed at a host that does not exist *(fixed 2026-09-02)*
+
+An L9 diagnostic run to re-check V9.1 turned this up on the way past:
+
+    Job spider failed to access URL
+    https://mls-launch-ops-demo-ca.thankfulisland-7f9b1aba.centralus.azurecontainerapps.io
+    check that it is valid : Name or service not known
+
+The live app answers on `...happymeadow-9e15a087...`. `vars.STAGING_URL` was set at
+2026-09-01T00:19Z and was correct then; the apps environment was recreated later that day
+while fixing F129, and **a Container Apps environment domain is assigned at creation and
+changes on every rebuild** - the one thing this demo exists to do. So every ZAP baseline since
+has scanned nothing.
+
+**This is F129's class and F90's before it**, in the one place the existing sweep cannot see: a
+GitHub variable is not a committed artifact, and an absent or stale variable is a well-formed
+string rather than an error.
+
+**The gate behaved correctly, and that is the good news.** The scan produced no report and the
+step said *"An unreachable target is a FAILURE, not a pass (L09 V9.4)"* rather than passing on an
+empty result. That is F102's fix working on a defect nobody had found yet.
+
+**Two things were wrong, not one.** The target was stored rather than derived; and the
+resolution step asserted the URL was well-*formed* without asking whether it was
+**reachable** - so the failure surfaced as `docker failed with exit code 3` inside a
+third-party action, which names the symptom and not the cause. That is F135's rule again:
+verify the input can be obtained before verifying that it is valid.
+
+**Fixed:** `zap.yml` reads the live ingress FQDN from Azure and prefers it; an explicit
+`target_url` input still wins; `vars.STAGING_URL` is a last resort for a checkout with no Azure
+credentials, and when it disagrees with the live value the run says so rather than silently
+preferring or silently ignoring it. The target must now resolve in DNS before the scan starts.
+The Azure-login guard is a **step-level** `if:`, because a job-level one is evaluated before the
+environment resolves and would mean "skip always" (F125).
+
+**Encoded as a class:** a job that reads a stored estate hostname must derive the live one in
+the same job. Mutation-tested - breaking the derive fails it. On its first run the sweep flagged
+`layer-09-devsecops.yml` too; that one was prose drift in an input description rather than a
+second hole, and the description was corrected.
 
 ### F143 — one idle database is 99% of the bill, and auto-pause is working correctly *(open, needs a decision)*
 
