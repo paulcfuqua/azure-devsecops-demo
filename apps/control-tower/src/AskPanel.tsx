@@ -43,6 +43,14 @@ const useStyles = makeStyles({
   composer: { display: "flex", flexDirection: "row", gap: "0.5rem", alignItems: "flex-end" },
   input: { flexGrow: 1 },
   status: { color: tokens.colorNeutralForeground3 },
+  pending: {
+    display: "flex",
+    flexDirection: "row",
+    gap: "0.5rem",
+    alignItems: "center",
+    padding: "0.5rem 0.75rem",
+    color: tokens.colorNeutralForeground3,
+  },
 });
 
 export interface AskPanelProps {
@@ -67,6 +75,13 @@ export function AskPanel({ provider }: AskPanelProps): JSX.Element {
   const [turns, setTurns] = useState<readonly AgentTurn[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  // AWAITING THE REPLY, WHICH IS NOT THE SAME AS SENDING, and conflating them is
+  // what made the tab look dead. `sending` covers the POST to Direct Line and
+  // that returns in about 200ms; the agent's answer arrives seconds later on the
+  // activity stream - a lakehouse query, and up to ~30s more when the tool
+  // server is cold. So the button re-enabled almost immediately and then nothing
+  // visible happened, which reads as "my question was dropped".
+  const [awaitingReply, setAwaitingReply] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const connectionRef = useRef<AgentConnection | null>(null);
 
@@ -93,9 +108,18 @@ export function AskPanel({ provider }: AskPanelProps): JSX.Element {
         connectionRef.current = connection;
         connection.onActivity((activity) => {
           const turn = activityToTurn(activity);
-          if (turn) setTurns((current) => appendTurn(current, turn));
+          if (turn) {
+            setTurns((current) => appendTurn(current, turn));
+            // Any activity FROM THE AGENT ends the wait - including an error
+            // message, which is still an answer and must not leave the
+            // indicator spinning forever.
+            if (turn.role !== "user") setAwaitingReply(false);
+          }
         });
-        connection.onError((error) => setSendError(error.message));
+        connection.onError((error) => {
+          setSendError(error.message);
+          setAwaitingReply(false);
+        });
         setState({ status: "ready", connection });
       },
       (error: unknown) => {
@@ -125,8 +149,11 @@ export function AskPanel({ provider }: AskPanelProps): JSX.Element {
       try {
         await connection.send(trimmed);
         setDraft("");
+        // Only after the send SUCCEEDS: a failed send has nothing to wait for.
+        setAwaitingReply(true);
       } catch (error: unknown) {
         setSendError(error instanceof Error ? error.message : String(error));
+        setAwaitingReply(false);
       } finally {
         setSending(false);
       }
@@ -218,6 +245,16 @@ export function AskPanel({ provider }: AskPanelProps): JSX.Element {
         )}
       </div>
 
+      {awaitingReply ? (
+        <div className={styles.pending} data-testid="ask-pending" role="status" aria-live="polite">
+          <Spinner size="tiny" />
+          <Text size={200}>
+            The agent is working. A lakehouse question takes a few seconds, and up to
+            about half a minute if the tool server was idle.
+          </Text>
+        </div>
+      ) : null}
+
       {sendError ? (
         <MessageBar intent="error">
           <MessageBarBody>
@@ -241,7 +278,11 @@ export function AskPanel({ provider }: AskPanelProps): JSX.Element {
           placeholder="Ask the agent…"
           onChange={(_, data) => setDraft(data.value)}
         />
-        <Button type="submit" appearance="primary" disabled={sending || draft.trim() === ""}>
+        <Button
+          type="submit"
+          appearance="primary"
+          disabled={sending || awaitingReply || draft.trim() === ""}
+        >
           Ask
         </Button>
       </form>
