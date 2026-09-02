@@ -302,7 +302,7 @@ export class AzureCostSeriesBackend implements CostSeriesBackend {
       const date = normalizeUsageDate(row[dateIndex]);
       const center = centerIndex >= 0 ? String(row[centerIndex] ?? "") : "";
       const amount = Number(row[costIndex] ?? 0);
-      const key = `${date} ${center}`;
+      const key = `${date}\u0000${center}`;
       const existing = totals.get(key);
       if (existing) existing.amount += amount;
       else totals.set(key, { date, center, amount });
