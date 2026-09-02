@@ -1,4 +1,4 @@
-Describe 'no source file carries a stray control character' {
+﻿Describe 'no source file carries a stray control character' {
     # THE DAMAGE IS INVISIBLE IN REVIEW, WHICH IS WHY THIS IS A TEST AND NOT A HABIT.
     #
     # Content written through a shell heredoc crosses two escaping layers - the shell,
@@ -30,18 +30,24 @@ Describe 'no source file carries a stray control character' {
             '*.bicepparam', '*.yml', '*.yaml', '*.md', '*.json')
         $files = @(Get-ChildItem -Path $script:Root -Include $extensions -Recurse -File |
                 Where-Object {
-                    $_.FullName -notlike '*node_modules*' -and
-                    $_.FullName -notlike '*\.git\*' -and
-                    $_.FullName -notlike '*\dist\*' -and
-                    $_.FullName -notlike '*package-lock.json' -and
+                    # NORMALISED TO FORWARD SLASHES FIRST. The exclusions below were
+                    # written with backslashes and matched nothing on ubuntu-latest,
+                    # so a path this test deliberately ignores failed CI while passing
+                    # on the dev host - a check that behaved differently in the place
+                    # that actually gates a merge.
+                    $path = $_.FullName.Replace([char]92, [char]47)
+                    $path -notlike '*node_modules*' -and
+                    $path -notlike '*/.git/*' -and
+                    $path -notlike '*/dist/*' -and
+                    $path -notlike '*package-lock.json' -and
                     # Superpowers plan and brief archives: a historical record of how
                     # work was executed, not maintained source. One of them carries a
                     # deliberate 0x01 inside an XSS test fixture, and rewriting an
                     # archive to satisfy a sweep would falsify the record it exists to
                     # keep. Excluded by path rather than by an allowlist of bytes, so
                     # the rule stays absolute everywhere it applies.
-                    $_.FullName -notlike '*\docs\superpowers\*' -and
-                    $_.FullName -notlike '*\.superpowers\*'
+                    $path -notlike '*/docs/superpowers/*' -and
+                    $path -notlike '*/.superpowers/*'
                 })
 
         $offender = [System.Collections.Generic.List[string]]::new()
