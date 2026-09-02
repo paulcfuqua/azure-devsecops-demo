@@ -235,8 +235,8 @@ param fabricSqlEndpoint string = ''
 param fabricDatabase string = 'mls_operations'
 
 @description('Backend set mcp-tools serves. EMPTY means decide from what L5 handed us - cloud when there is a Fabric SQL analytics endpoint, local otherwise - which is exactly how dataApiBackendMode behaves, and the two should not disagree about the same lakehouse. An explicit local or cloud still wins. It previously defaulted to the literal local so the mode would be an explicit decision rather than an omission (F2), but that made explicit and defaulted indistinguishable, and the estate shipped mcp-tools reading data/generated - a directory absent from the image - while data-api read the lakehouse correctly from this same template (F133).')
-@allowed(['local', 'cloud'])
-param mcpToolsBackendMode string = 'local'
+@allowed(['', 'local', 'cloud'])
+param mcpToolsBackendMode string = ''
 
 @description('owner/repo the data-api Dev/Sec feeds read through the GitHub API. No default on purpose: a public reference repo must not ship the upstream repo as a fallback. Supplied via MLS_GITHUB_REPO in demo.bicepparam; empty is valid and simply leaves the GitHub feeds unconfigured, which data-api reports at boot in cloud mode.')
 param githubRepository string = ''
