@@ -117,6 +117,39 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F163 — the token was minted in two places and only one was fixed *(fixed 2026-09-02)*
+
+F162's proof step worked immediately, by producing **one line where there should have been
+three**:
+
+    mls-launch-ops-demo-ca: authenticated GET / -> HTTP 200, 638 bytes
+
+launch-ops genuinely gets in - 200, real content. The other two never reached the proof at all,
+because their token was empty.
+
+**The cause: `zap.yml` mints a probe token in TWO places.** The classifier needs one to decide
+whether an endpoint is an auth wall; the scanner needs one to scan through it. F161 corrected the
+audience in the first and never looked for a second:
+
+    line 202  --resource "$1"            <- fixed by F161
+    line 389  --resource "api://${cid}"   <- missed
+
+**And one app hid it.** launch-ops had an `identifierUris` I added by hand while testing the
+approach, so `api://<clientId>` resolved *there and nowhere else*. A single app carrying a
+manual fix made a broken code path look partly working - the same shape as F151 (the vault
+holding two credentials the documented list did not) and F155 (a hand-written surface list
+missing two apps). **Two copies of one fact, with nothing keeping them equal.**
+
+**Encoded as a check**, because the next divergence will be just as quiet:
+`failure-classes.Tests.ps1` now asserts every `get-access-token` in `zap.yml` requests the same
+audience shape, and that there is more than one of them - so the check fails rather than passes
+if the sites are ever consolidated and it starts reading the wrong thing. Mutation-tested;
+reintroducing `api://` at either site fails it.
+
+**The drift is cleared too.** The hand-added `identifierUris` is removed from
+`mls-launch-ops-demo-app`, so the next run exercises the real path on all three apps with no
+accidental help from a value I typed in a terminal.
+
 ### F162 — the scan could not tell a thin result from a blocked one *(fixed 2026-09-02)*
 
 The run after F161 authenticated all three Easy Auth apps and produced this:
