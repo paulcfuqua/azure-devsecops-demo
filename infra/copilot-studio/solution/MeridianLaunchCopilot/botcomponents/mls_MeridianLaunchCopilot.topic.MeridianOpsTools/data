@@ -5,7 +5,7 @@ action:
   kind: InvokeExternalAgentTaskAction
   connectionReference: mls_MeridianLaunchCopilot.shared_mls-5fmeridian-20ops-20tools-5fa5da83b50654451e.4e31c01eeef94cd983fdae563909d611
   connectionProperties:
-    mode: Invoker
+    mode: Maker
 
   operationDetails:
     kind: ModelContextProtocolMetadata
