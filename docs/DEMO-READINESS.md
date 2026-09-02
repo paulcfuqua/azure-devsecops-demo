@@ -108,6 +108,44 @@ Spend to date is ~$1.40 against a $200 ceiling, so **money is not the constraint
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F139 — an in-memory cache on a scale-to-zero container is not a fallback *(open)*
+
+The Ops tab showed:
+
+> **Data unavailable.** API `/api/feeds/azure-cost` responded 502. The Cost Management
+> upstream did not answer successfully.
+
+**Cost Management really is throttled** — verified directly, `HTTP 429 "Too many requests"` —
+so this is an external rate limit, not a regression. And `cloud.ts` already handles it
+correctly: a 429 with something cached is served with **`stale: true`** rather than silently,
+because *"a retained figure presented as current is the same defect as an empty list presented
+as zero"*.
+
+**The problem is that the cache is almost never there to be served.**
+
+    private costCache: AzureCostFeed | undefined;   // in-memory instance field
+    mls-data-api-demo-ca  minReplicas: 0            // scales to zero
+
+The comment beside the retry logic says *"the hour-long cache above is the real fallback"* —
+and on a container that scales to zero, and is redeployed several times an hour during active
+work, that premise is false. The cache dies with the process. So the fallback exists, is
+correct, and is empty at precisely the moment it is needed: after a restart, when the first
+request must go upstream, into a throttle that lasts minutes.
+
+**Why it matters beyond today:** the Ops tab is half of showpiece 2, and this will recur at
+demo time by construction — a cold container's first request is exactly when a demo begins.
+
+**Two honest fixes, and they are not equivalent:**
+
+1. **Persist the last good answer** (blob, written by data-api's existing identity) so a
+   restart inherits it and the `stale: true` path can actually fire. Durable, ~45 minutes,
+   costs nothing meaningful, and keeps the $0-idle guarantee.
+2. **`minReplicas: 1` on data-api** — the cache survives because the process does. Simpler,
+   but it is a **G2 spend increase** and it treats a caching problem with money.
+
+(1) is the better answer; (2) is what to reach for only if idle cost is not a constraint.
+Neither is done.
+
 ### F138 — the agent answered a different question and kept the original question's words *(open)*
 
 Asked *"How much have we spent to date in our tenant subscription"*, the Ask tab replied:
