@@ -117,6 +117,87 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F153 — Defender has never assessed this subscription, and nothing noticed *(criterion added 2026-09-02)*
+
+The sponsor direction's phase 3 promises **"Defender scans producing real posture"**. There is
+none, and there never has been:
+
+    GET .../Microsoft.Security/secureScores?api-version=2020-01-01   -> empty
+    GET .../Microsoft.Security/secureScores/ascScore                 -> ResourceNotFound
+    GET .../Microsoft.Security/assessments?api-version=2021-06-01    -> empty
+
+Read at the REST layer, not through the CLI, so this is not a stale api-version artefact. The
+MCP server's `get_defender_posture` fails `404 Secure score 'ascScore' does not exist` for
+exactly this reason — the tool is right and the estate is empty.
+
+**Nothing asserted it.** V9.5 checks that the Defender plan can be toggled on and off. A plan
+that toggles perfectly and assesses nothing passes V9.5. That is the plumbing-without-water gap
+§ D describes, in the security layer.
+
+**The trap, and why the new criterion names it.** The Azure **Policy** half works:
+`ASC Default` (`SecurityCenterBuiltIn`) is assigned and evaluating — **6 non-compliant resources
+across 35 policies**. So an operator who asks "is the security initiative assigned?" gets *yes*
+and concludes Defender is healthy. Assessments and secure score are a **different pipeline**, and
+they are the one the demo reads. V9.6's failure message says this outright so the reader is not
+sent to re-check an assignment that is already there.
+
+**V9.6 added:** at least one secure score OR at least one assessment. Three outcomes, not two —
+an endpoint that does not answer is **UNOBSERVABLE**, never "Defender produces nothing", because
+reporting an absent control on the strength of a failed read is the class this repository pays
+most for. Both failure paths are `-Final`: Defender's assessment surface fills over hours, so a
+five-minute retry cannot change the verdict and must not spend the wall clock reaching the same
+one. Mutation-tested; 21 L9 audit tests pass.
+
+**Cause not established, deliberately.** `FoundationalCspm` and `Discovery` are `Standard`, the
+provider is registered, 30 resources exist and 1,302 assessment definitions are visible — yet no
+assessment has ever been produced. That is recorded as the observation it is rather than a
+diagnosis, per the register's own habit of distrusting confident first explanations.
+
+### F152 — the ZAP scan has been assessing a login redirect *(fixed 2026-09-02)*
+
+V9.4 passes. It asserts "ZAP report artifact exists with 0 High", and that is a true statement
+about **a door**.
+
+`launch-ops` runs behind Container Apps Easy Auth with
+`unauthenticatedClientAction: RedirectToLoginPage`. An anonymous request gets a **302 to
+login.microsoftonline.com with a zero-length body**, so an unauthenticated baseline scan never
+reaches the application. Pulled from the last run's own artifact:
+
+    sites scanned            : 1
+    distinct URLs in alerts  : 3   ->  /   /robots.txt   /sitemap.xml
+    alerts                   : 17  ->  all describing the REDIRECT
+
+Every finding is about Easy Auth's own response: "Cookie with SameSite Attribute None" (Easy
+Auth's cookies), "Session Management Response Identified" (the login flow), CSP and
+anti-clickjacking headers missing **on a 302**. Zero application URLs were assessed.
+
+**Third time this criterion has reported a verdict it never earned.** F102: the gate step was
+skipped and its failure read as a security failure. F144: the target was a hostname from an
+environment that no longer existed. Now: the target resolves, answers, and is a login wall.
+
+**Why it cannot simply be authenticated.** Checked before designing anything: the launch-ops app
+registration has **no `identifierUris` and no exposed OAuth2 scopes**, so no token can be minted
+for its audience — `az account get-access-token --resource api://<clientId>` returns
+`AADSTS500011: resource principal not found`. Easy Auth there is interactive sign-in only.
+Adding an API audience so a scanner can get in would widen a UI app's auth surface for the
+scanner's benefit, which is a poor trade; driving a real user login needs a stored password,
+which is a rule-5 credential.
+
+**Fixed by scanning what an unauthenticated attacker actually reaches, and by refusing to call
+the other thing a pass.** The estate's real external surface, enumerated:
+
+    mls-control-tower-demo-ca   external   Easy Auth (RedirectToLoginPage)
+    mls-launch-ops-demo-ca      external   Easy Auth (RedirectToLoginPage)
+    mls-compliance-demo-ca      external   Easy Auth (RedirectToLoginPage)
+    mls-mcp-demo-ca             external   NO platform auth - app-level bearer only
+    mls-data-api-demo-ca        INTERNAL   -
+    mls-vuln-lab-demo-ca        no ingress -
+
+`zap.yml` now classifies the target anonymously before scanning (`content` / `auth-wall` /
+`unreachable`), scans the **API surface** when the app is a wall, and the gate **fails as
+UNOBSERVABLE** when nothing but a redirect was assessed. A "0 High" that describes a login page
+can no longer be recorded as a pass.
+
 ### F151 — the closed credential list was not closed *(open — needs a decision)*
 
 CLAUDE.md rule 5 states "the complete list of long-lived credentials" and names two Key Vault

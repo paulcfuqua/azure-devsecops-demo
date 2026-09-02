@@ -12,6 +12,7 @@
       V9.3  SBOM artifact present + SPDX-valid.
       V9.4  ZAP report artifact exists with 0 High.
       V9.5  Defender plan toggles on -> off leaving state Off.
+      V9.6  Defender for Cloud actually produces posture for this subscription.
 
     GitHub is read with the Verifier's own read token (spec F8); Defender state is read
     with Reader. The Defender enable/disable round-trip itself is the deploy workflow's
@@ -292,6 +293,71 @@ function Test-ZapReport {
         -Detail 'Fix the finding in the app or its config via the normal PR path; only rule-tune via a committed zap.conf with justification - never by editing the report (L09 failure mode 3).'
 }
 
+function Test-DefenderPostureExists {
+    <#
+    .SYNOPSIS
+        V9.6 - Defender for Cloud produces assessable posture (F153).
+
+    .DESCRIPTION
+        THE GAP THIS EXISTS TO MAKE VISIBLE. V9.5 asserts the plan can be toggled
+        on and off. Nothing asserted that Defender produces anything, and it does
+        not: on 2026-09-02 the subscription had
+
+            secureScores (list)     empty
+            secureScores/ascScore   ResourceNotFound
+            assessments             empty
+
+        confirmed at the REST layer, not just through the CLI, so it is not a
+        stale api-version artefact. Meanwhile the MCP server's
+        `get_defender_posture` tool fails 404 for exactly this reason, and the
+        sponsor direction's phase 3 promises "Defender scans producing real
+        posture". A capability nothing measures is a capability nobody notices is
+        missing.
+
+        WHAT MAKES THIS SUBTLE, and why the failure message says so: the Azure
+        POLICY half works. `ASC Default` (SecurityCenterBuiltIn) is assigned and
+        evaluating - 6 non-compliant resources across 35 policies. So an operator
+        who checks "is the security initiative assigned?" gets yes, and concludes
+        Defender is working. The assessment and secure-score surfaces are a
+        different pipeline, and they are the ones the demo reads.
+
+        Reports the policy state alongside the verdict so the reader is not sent
+        hunting for an assignment that is already there.
+    #>
+    param([Parameter(Mandatory)][string]$SubscriptionId)
+
+    $scoreUri = "https://management.azure.com/subscriptions/$SubscriptionId/providers/Microsoft.Security/secureScores?api-version=2020-01-01"
+    $assessUri = "https://management.azure.com/subscriptions/$SubscriptionId/providers/Microsoft.Security/assessments?api-version=2021-06-01"
+
+    $scores = Invoke-MlsAz -AllowFailure -Argument @('rest', '--method', 'get', '--url', $scoreUri, '--output', 'json')
+    $assessments = Invoke-MlsAz -AllowFailure -Argument @('rest', '--method', 'get', '--url', $assessUri, '--output', 'json')
+
+    # A NULL RESPONSE IS NOT AN EMPTY ONE. The call failing (permissions, a dead
+    # api-version, throttling) means the Verifier could not see, and an audit that
+    # cannot see a thing says so rather than reporting the thing as absent.
+    if ($null -eq $scores -and $null -eq $assessments) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed 'UNOBSERVABLE: neither the secureScores nor the assessments endpoint answered' `
+            -Detail 'The Verifier reads these as Reader. A failed call is not evidence that Defender produces nothing - re-run, and check the identity can read Microsoft.Security on the subscription.'
+    }
+
+    $scoreCount = @(Get-MlsCollection -Response $scores).Count
+    $assessmentCount = @(Get-MlsCollection -Response $assessments).Count
+
+    if ($scoreCount -gt 0 -or $assessmentCount -gt 0) {
+        return New-MlsCheckResult -Passed $true `
+            -Observed "secure scores=$scoreCount assessments=$assessmentCount"
+    }
+
+    # Genuinely empty. Say what IS working so the reader does not re-check it.
+    $policy = Invoke-MlsAz -AllowFailure -Argument @('policy', 'state', 'summarize', '--output', 'json')
+    $nonCompliant = Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $policy -Name 'results') -Name 'nonCompliantResources'
+
+    return New-MlsCheckResult -Passed $false -Final `
+        -Observed "secure scores=0 assessments=0 (Azure Policy IS evaluating: $nonCompliant non-compliant resource(s))" `
+        -Detail 'Defender for Cloud has never produced posture for this subscription. The ASC Default policy initiative is assigned and evaluating, which is a DIFFERENT pipeline from assessments and secure score - so "the initiative is assigned" is not evidence this is fixed. get_defender_posture 404s for the same reason, and the outbrief cannot claim Defender posture until this returns rows.'
+}
+
 function Test-DefenderPlanState {
     <# V9.5 - current tier Free (the ARM representation of Off) AND the paired
        Standard-then-Free writes in the Activity Log, proving the toggle was exercised. #>
@@ -401,6 +467,22 @@ function Invoke-Main {
         -Expected 'pricingTier == "Free" AND the paired Standard-then-Free write events inside the layer window' `
         -RetryWindowMinutes 5 `
         -Test { Test-DefenderPlanState -PlanName $DefenderPlanName -ActivityLogOffset $ActivityLogOffset } | Out-Null
+
+    # -Control 3.11.2 / 3.12.1: vulnerability scanning and periodic security
+    # assessment. A plan that can be switched on but assesses nothing satisfies
+    # neither, which is precisely why V9.5 alone was not enough.
+    #
+    # BOTH FAILURE PATHS ARE -Final, so this criterion never retries. Defender's
+    # assessment pipeline materialises over HOURS after a subscription is
+    # onboarded, so a five-minute poll cannot change the answer - it would only
+    # spend the wall clock to reach the same verdict. Patience is opted into with
+    # a reason or not at all, and an absent posture is not a propagation delay any
+    # more than a permission failure is.
+    Invoke-MlsCriterion -Context $context -Id 'V9.6' -Control @('3.11.2', '3.12.1') `
+        -Description 'Defender for Cloud actually produces posture for this subscription' `
+        -Command "GET /subscriptions/<sub>/providers/Microsoft.Security/secureScores?api-version=2020-01-01`nGET /subscriptions/<sub>/providers/Microsoft.Security/assessments?api-version=2021-06-01" `
+        -Expected 'at least one secure score OR at least one assessment; an unanswered endpoint is UNOBSERVABLE, never "absent"' `
+        -Test { Test-DefenderPostureExists -SubscriptionId $subscription } | Out-Null
 
     return $context
 }
