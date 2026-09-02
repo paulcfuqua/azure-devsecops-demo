@@ -208,8 +208,11 @@ describe("the token seam never lets a secret reach the app", () => {
 
     const error = await fetchToken().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(DirectLineTokenError);
-    // The recovery is an ACTION, not an instruction to try the thing that fails.
-    expect((error as DirectLineTokenError).signInUrl).toMatch(/^\/\.auth\/logout\?/);
+    // The recovery is an ACTION, not an instruction to try the thing that fails -
+    // and it is a LOGIN. Pointing it at /.auth/logout (F150) signed the user out
+    // and left them on a cached page with no session and no way back in.
+    expect((error as DirectLineTokenError).signInUrl).toMatch(/^\/\.auth\/login\/aad\?/);
+    expect((error as DirectLineTokenError).signInUrl).not.toMatch(/logout/);
     expect((error as DirectLineTokenError).message).not.toMatch(/[Rr]eload/);
   });
 
@@ -234,14 +237,80 @@ describe("the token seam never lets a secret reach the app", () => {
     expect((error as DirectLineTokenError).signInUrl).toBeUndefined();
   });
 
-  it("ends the session rather than just visiting the login endpoint", async () => {
-    // Hitting /.auth/login while a valid session cookie exists can return the
-    // cached principal - the same stale token - which is the loop this whole
-    // finding is about. Logging out is the part that changes anything; the app's
-    // own unauthenticatedClientAction: RedirectToLoginPage does the rest.
+  it("re-runs the login rather than ending the session (F150)", async () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and it passed, because it encoded
+    // the same wrong assumption the code did. Sending a stuck user to
+    // /.auth/logout gave them an account picker, signed them OUT, and dropped
+    // them on a cached page with no session and no way back - strictly worse
+    // than the expired token it was meant to repair.
+    //
+    // /.auth/login/aad re-runs the authorization-code flow while keeping the
+    // session, and it is a server endpoint, so it cannot be served from the
+    // browser cache the way "/" can. Verified against the deployed app: it
+    // answers 302 to login.microsoftonline.com.
     const url = easyAuthSignInAgainUrl("/ask");
-    expect(url).toContain("/.auth/logout");
+    expect(url).toContain("/.auth/login/aad");
+    expect(url).not.toContain("logout");
     expect(url).toContain(encodeURIComponent("/ask"));
+  });
+
+  it("tells a signed-OUT reader they can sign in (F150)", async () => {
+    // /.auth/me answers an unauthenticated caller with a 302 to Entra. Followed,
+    // that lands on login.microsoftonline.com where CORS throws, and every
+    // failure looks identical - which is how being signed out came to produce
+    // "could not read this session's Entra token", true and useless.
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (String(url) === "/.auth/me") return new Response(null, { status: 302 });
+      return new Response("nope", { status: 401 });
+    });
+    const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const error = await fetchToken().catch((e: unknown) => e);
+    expect((error as DirectLineTokenError).message).toMatch(/not signed in/i);
+    expect((error as DirectLineTokenError).signInUrl).toMatch(/^\/\.auth\/login\/aad\?/);
+  });
+
+  it("offers NO sign-in link when the token store is the problem (F135)", async () => {
+    // Claims came back, so the session is fine; there is simply no raw token to
+    // forward because the token store is off. Signing in again does nothing for
+    // that, and offering it would send someone round a loop hiding a deployment
+    // fault.
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (String(url) === "/.auth/me") {
+        return new Response(JSON.stringify([{ user_id: "someone@example.com" }]), { status: 200 });
+      }
+      return new Response("nope", { status: 401 });
+    });
+    const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const error = await fetchToken().catch((e: unknown) => e);
+    expect((error as DirectLineTokenError).message).toMatch(/token store/i);
+    expect((error as DirectLineTokenError).signInUrl).toBeUndefined();
+  });
+
+  it("asks /.auth/me not to follow its own redirect", async () => {
+    // The precondition the three-way read depends on. Without redirect:"manual"
+    // the 302 is followed and the distinction is unobservable.
+    const seen: RequestInit[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url) === "/.auth/me") {
+        seen.push(init ?? {});
+        return new Response(JSON.stringify([{ id_token: "t" }]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ token: "x", expires_in: 1800, userId: "dl_1" }), {
+        status: 200,
+      });
+    });
+    const fetchToken = createTokenFetcher("https://fn.example/api/directline/token", {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await fetchToken();
+    expect(seen[0]?.redirect).toBe("manual");
   });
 
   it("refreshes once and retries when the endpoint says the token expired (F142)", async () => {

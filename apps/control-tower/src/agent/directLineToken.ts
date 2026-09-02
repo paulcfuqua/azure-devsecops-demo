@@ -158,17 +158,43 @@ export interface TokenFetcherOptions {
  * absent or unauthenticated - a local `npm run dev` has no Easy Auth in front of
  * it, and that should surface as the typed error above rather than a stack trace.
  */
-async function readEasyAuthToken(doFetch: typeof globalThis.fetch): Promise<string | null> {
+/**
+ * Three outcomes, not two (F150). "No token" collapsed a signed-OUT session and
+ * a signed-in session whose token store holds nothing into one null, and they
+ * need opposite advice: the first is fixed by signing in, the second is a
+ * deployment fault that signing in will not touch.
+ */
+type EasyAuthRead =
+  | { kind: "token"; token: string }
+  | { kind: "signed-out" }
+  | { kind: "no-token" };
+
+async function readEasyAuthToken(doFetch: typeof globalThis.fetch): Promise<EasyAuthRead> {
   try {
-    const res = await doFetch("/.auth/me", { headers: { accept: "application/json" } });
-    if (!res.ok) return null;
+    // `redirect: "manual"` because /.auth/me answers an unauthenticated caller
+    // with a 302 to Entra - verified against the deployed app. Following it
+    // lands on login.microsoftonline.com, where CORS throws and every failure
+    // looks identical. Held manually, the redirect IS the answer: not signed in.
+    const res = await doFetch("/.auth/me", {
+      headers: { accept: "application/json" },
+      redirect: "manual",
+    });
+    if (res.type === "opaqueredirect" || res.status === 0) return { kind: "signed-out" };
+    if (res.status === 401 || res.status === 403) return { kind: "signed-out" };
+    if (res.status >= 300 && res.status < 400) return { kind: "signed-out" };
+    if (!res.ok) return { kind: "no-token" };
+
     const body: unknown = await res.json();
     // Easy Auth returns a single-element array of principals.
     const first = Array.isArray(body) ? body[0] : undefined;
     const token = (first as { id_token?: unknown } | undefined)?.id_token;
-    return typeof token === "string" && token !== "" ? token : null;
+    if (typeof token === "string" && token !== "") return { kind: "token", token };
+    // Claims came back but no raw token: the token store is off (F135).
+    return { kind: "no-token" };
   } catch {
-    return null;
+    // A thrown fetch is a local `npm run dev` with no Easy Auth in front of it,
+    // or a network fault. Neither is a session problem.
+    return { kind: "no-token" };
   }
 }
 
@@ -223,17 +249,33 @@ async function refreshEasyAuthSession(doFetch: typeof globalThis.fetch): Promise
  * cookie is still valid, so Easy Auth serves the SAME stored token rather than
  * re-authenticating. That is why an Incognito window worked and F5 did not.
  *
- * What does work without adding a credential is to end the Easy Auth session
- * and let the app's own `unauthenticatedClientAction: RedirectToLoginPage` run
- * the login flow again. Entra answers it from the still-live browser SSO
- * session, so it is normally a redirect and not a password prompt, and it puts
- * a brand new id_token in the token store.
+ * LOG IN, DO NOT LOG OUT (F150). The first version of this pointed at
+ * `/.auth/logout`, on the theory that ending the session would let the app's own
+ * `unauthenticatedClientAction: RedirectToLoginPage` start a fresh flow. It made
+ * things strictly worse: the user got an account picker, signed OUT, and landed
+ * back on a cached copy of the page with no session and no way in - the error
+ * then read "could not read this session's Entra token", which is true and
+ * useless.
+ *
+ * `/.auth/login/aad` re-runs the authorization-code flow directly, keeping the
+ * session it already has. Verified against the deployed app rather than assumed
+ * - every one of these answers 302 to Entra's authorize endpoint:
+ *
+ *   GET /                                          302 -> login.microsoftonline.com
+ *   GET /.auth/me                                  302 -> login.microsoftonline.com
+ *   GET /.auth/login/aad?post_login_redirect_uri=/ 302 -> login.microsoftonline.com
+ *
+ * Because Entra normally still holds a live browser session, that round trip is
+ * a redirect rather than a password prompt, and it writes a brand new id_token
+ * into the token store. It is also a server endpoint, so it cannot be answered
+ * from the browser cache the way `/` can - which is the other half of what went
+ * wrong.
  *
  * Exported so the UI renders it as a link the user CLICKS. Navigating
  * automatically on a 401 is what turns one bad token into a redirect loop.
  */
 export function easyAuthSignInAgainUrl(currentPath = "/"): string {
-  return `/.auth/logout?post_logout_redirect_uri=${encodeURIComponent(currentPath)}`;
+  return `/.auth/login/aad?post_login_redirect_uri=${encodeURIComponent(currentPath)}`;
 }
 
 export function createTokenFetcher(
@@ -242,15 +284,27 @@ export function createTokenFetcher(
 ): TokenFetcher {
   return async function fetchDirectLineToken(): Promise<DirectLineToken> {
     const doFetch = fetchImpl ?? globalThis.fetch;
-    const idToken = await readEasyAuthToken(doFetch);
-    if (!idToken) {
+    const here = globalThis.location?.pathname ?? "/";
+    const read = await readEasyAuthToken(doFetch);
+
+    // Signed out is a state the reader can leave; say so and point at the door.
+    if (read.kind === "signed-out") {
       throw new DirectLineTokenError(
-        "Could not read this session's Entra token from /.auth/me, so the Ask tab " +
-          "cannot prove who is asking. The control tower is expected to run behind " +
-          "Container Apps Easy Auth; served without it, /.auth/me does not exist and " +
-          "the token endpoint will refuse the request.",
+        "You are not signed in, so the Ask tab cannot prove who is asking.",
+        { signInUrl: easyAuthSignInAgainUrl(here) },
       );
     }
+    // Signed in, but the token store handed back no raw token. Signing in again
+    // does nothing for this - it is the deployment, not the session (F135).
+    if (read.kind === "no-token") {
+      throw new DirectLineTokenError(
+        "Signed in, but Easy Auth returned no token for this session, so the Ask tab " +
+          "cannot prove who is asking. The control tower needs Easy Auth's token store " +
+          "enabled; without it /.auth/me returns claims and no id_token, and the token " +
+          "endpoint will refuse the request.",
+      );
+    }
+    const idToken = read.token;
     const request = (bearer: string): Promise<Response> =>
       doFetch(tokenUrl, {
         method: "POST",
@@ -269,19 +323,20 @@ export function createTokenFetcher(
     // that cannot succeed.
     if (res.status === 401 && (await refreshEasyAuthSession(doFetch))) {
       const renewed = await readEasyAuthToken(doFetch);
-      if (renewed && renewed !== idToken) {
-        res = await request(renewed);
+      if (renewed.kind === "token" && renewed.token !== idToken) {
+        res = await request(renewed.token);
       }
     }
 
     if (res.status === 401) {
       // Not "reload the page" (F149): a reload sends the same valid session
-      // cookie and Easy Auth hands back the same expired token. Ending the
-      // session is the part that actually changes anything.
+      // cookie and Easy Auth hands back the same expired token. Re-running the
+      // login flow is the part that actually changes anything (F150) - and it
+      // is a LOGIN, not a logout, which only removed the way back in.
       throw new DirectLineTokenError(
         "This sign-in has expired, so the Ask tab cannot prove who is asking. " +
           "Sign in again to continue — the agent itself is fine.",
-        { signInUrl: easyAuthSignInAgainUrl(globalThis.location?.pathname ?? "/") },
+        { signInUrl: easyAuthSignInAgainUrl(here) },
       );
     }
     if (!res.ok) {

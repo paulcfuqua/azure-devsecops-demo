@@ -117,6 +117,51 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F150 — my recovery link signed the user out and left no way back *(fixed 2026-09-02)*
+
+F149 shipped a "Sign in again" link. The sponsor clicked it, chose their account, **was signed
+out**, and landed on:
+
+> **Agent unavailable** Could not read this session's Entra token from /.auth/me...
+
+Worse than the expired token it was meant to repair, and the message offered nothing.
+
+**Two mistakes, one in each half.**
+
+**The link pointed at `/.auth/logout`.** The reasoning was that ending the session would let the
+app's own `unauthenticatedClientAction: RedirectToLoginPage` start a fresh flow. It does not
+reliably: the post-logout redirect lands on `/`, which the browser can answer **from its own
+cache** - the SPA shell was already loaded - so the page renders with no session and never
+reaches the middleware that would have redirected it. `/.auth/login/aad` re-runs the
+authorization-code flow *keeping* the session, and is a server endpoint that cannot be cached.
+
+**Verified against the deployed app this time rather than reasoned about:**
+
+    GET /                                           302 -> login.microsoftonline.com
+    GET /.auth/me                                   302 -> login.microsoftonline.com
+    GET /.auth/login/aad?post_login_redirect_uri=/  302 -> login.microsoftonline.com
+    GET /.auth/logout?post_logout_redirect_uri=/    302 -> login.microsoftonline.com
+
+**And `readEasyAuthToken` could not tell "signed out" from "no token".** `/.auth/me` answers an
+unauthenticated caller with a **302**, and a default `fetch` follows it to
+login.microsoftonline.com where CORS throws - so both states collapsed into one null and one
+message. It now reads with `redirect: "manual"` and returns three outcomes: a token, **signed
+out** (offer the link), or **signed in with no token in the store** (F135's case - offer nothing,
+because signing in again cannot fix a deployment).
+
+**The test that should have caught it asserted the defect.** `it("ends the session rather than
+just visiting the login endpoint")` passed, because it encoded exactly the same wrong assumption
+as the code. A test written from the same mistaken premise as the implementation is not
+independent evidence - it is the premise, restated. It is now inverted and says why.
+
+Mutation-tested both ways: restoring the logout URL fails three tests, removing
+`redirect: "manual"` fails a fourth. 121 passing.
+
+**Standing limitation, not a defect:** the link is the correct FALLBACK, but it should be rare
+rather than hourly. It is hourly because Easy Auth here has no client secret and no
+`offline_access`, so no refresh token exists. Configuring both makes renewal silent - at the cost
+of a long-lived credential, which is a rule-5 decision and not one to take quietly.
+
 ### F149 — I fixed the expiry with a refresh the provider cannot perform *(fixed 2026-09-02)*
 
 F142's fix reached the browser and produced exactly the message it was written to produce:
