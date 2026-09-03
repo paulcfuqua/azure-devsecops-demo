@@ -128,6 +128,11 @@ The last two are the differentiator. Most demo repositories answer the first thr
 > Read `docs/DEMO-READINESS.md` (SCORECARD and BLOCKER TREE first), then `CLAUDE.md`.
 > We are doing the re-baseline run described in `docs/runbooks/rebaseline-run.md`.
 >
+> **The priority is the rebuild and the documentation re-baseline, in that order.**
+> Everything else in this prompt is subordinate to those two. If a smaller item competes
+> for attention with a layer that is mid-deploy or a document that is actively wrong, the
+> smaller item waits.
+>
 > **Phase 1 — prove the rebuild.** Tear down and rebuild the estate. Drive it yourself;
 > dispatch the owning workstream lead only when a layer fails, with the failure in hand.
 > For every layer, record the four-line delta from that document. Fix what breaks. Do not
@@ -152,3 +157,18 @@ The last two are the differentiator. Most demo repositories answer the first thr
 > through a teardown — derived DAST targets, Entra probe roles, the posture feeds, and an
 > Easy Auth audience that was hand-patched and then reverted to the template. If any of
 > them fail to survive, that is the most valuable result this run can produce.
+>
+> **Side quest, only when the rebuild is not waiting on you.** actionlint reports several
+> `Context access might be invalid` warnings, and they are not all noise — one was a real
+> defect. actionlint cannot tell an intentionally-absent variable from a typo, which is the
+> same blind spot that made F125 possible. Three are BY DESIGN and must not be "fixed" by
+> defining the variables: `MLS_MCP_SERVER_URL` is an explicit override for a dead FQDN,
+> `MLS_SQL_ENDPOINT` gates a conditional flag that V8.2 correctly SKIPs without, and
+> `MLS_L10_RESEED_MERGED_AT` is tested for emptiness on purpose. `MLS_RG_APPS` was
+> genuinely wrong — a non-existent variable with a hardcoded company prefix as its
+> fallback — and is already fixed to derive from `naming.bicep`. `MCP_ENDPOINT_PATH` and
+> `MLS_LAKEHOUSE_NAME` were never triaged. **The question is not "does this variable
+> exist" but "what happens when it does not":** if the workflow's behaviour on absence is
+> the intended behaviour, the warning is noise and the right action is a comment saying
+> so, not a new variable. Do not let this displace the rebuild — it is a paper cut beside
+> a load-bearing question, and it will still be there afterwards.
