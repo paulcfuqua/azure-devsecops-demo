@@ -67,15 +67,16 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
    `.github/workflows/gitleaks.yml`'s incident text is the rotation list and must stay
    in sync with this one.
 
-   **UNRECONCILED, 2026-09-02.** The vault actually holds **four** secrets. Besides the two
-   above it carries `mls-github-token` and `mls-data-api-github-token`, which are referenced
-   nowhere in `infra/`, `.github/` or `apps/`. A closed list exists so exactly this cannot
-   happen, and it did: for however long they have been there, a leak would not have rotated
-   them because nothing named them. They are listed in the rotation table for now — treat
-   that as containment, not resolution. Establish whether anything reads them by a name built
-   at runtime; if nothing does, rotate them out and delete them, and if something does,
-   promote them into the list above with a written reason. Do not delete on the strength of a
-   grep alone.
+   **A THIRD LIVES IN KEY VAULT, and the list said two until 2026-09-02.**
+   `mls-data-api-github-token` is the read-only GitHub PAT behind the control tower's Dev and
+   Sec tabs, created by G0 step 11b for finding F116. That is the written reason. It was
+   legitimate all along and simply never reached this list, which called itself complete while
+   the vault held four — the fourth being `mls-github-token`, its own pre-rename name, left
+   behind because Key Vault has no rename and the delete half never happened. Deleted
+   2026-09-02; soft-delete retains it until 2026-12-02.
+   `verification/tests/failure-classes.Tests.ps1` now asserts that every secret a runbook
+   creates is named both here and in gitleaks.yml, because a list that is only *believed* to be
+   complete is the one that drifts.
 
 ## How we work
 
