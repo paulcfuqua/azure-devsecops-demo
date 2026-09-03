@@ -23,9 +23,19 @@ BeforeAll {
     }
     Set-Content -LiteralPath $script:BaselinePath -Value ($script:Baseline | ConvertTo-Json) -Encoding utf8
 
-    $script:EnvironmentVariable = @('TENANT_DOMAIN', 'MLS_TENANT_DOMAIN', 'MLS_VERIFIER_APP_ID', 'MLS_VERIFIER_CERT')
+    # MLS_VERIFIER_CERT_PATH / _PASSWORD are here for the same reason as the rest: the
+    # audit now resolves its S&C certificate from either of two forms, and a developer
+    # who has one exported would otherwise change what these tests exercise (F172).
+    $script:EnvironmentVariable = @('TENANT_DOMAIN', 'MLS_TENANT_DOMAIN', 'MLS_VERIFIER_APP_ID',
+        'MLS_VERIFIER_CERT', 'MLS_VERIFIER_CERT_PATH', 'MLS_VERIFIER_CERT_PASSWORD')
     $script:SavedEnvironment = @{}
     foreach ($name in $script:EnvironmentVariable) { $script:SavedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
+    # Cleared, not merely saved: these two are new and a developer running the suite on a
+    # box that has staged a real PFX would otherwise send the audit down the file branch
+    # while the test believes it is exercising the thumbprint one.
+    foreach ($name in @('MLS_VERIFIER_CERT_PATH', 'MLS_VERIFIER_CERT_PASSWORD')) {
+        [Environment]::SetEnvironmentVariable($name, $null)
+    }
 
     function Get-Row {
         param($Context, [string]$Id)

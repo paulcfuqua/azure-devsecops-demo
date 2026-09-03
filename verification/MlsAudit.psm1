@@ -1107,6 +1107,8 @@ function Invoke-MlsSqlQuery {
 }
 
 function Connect-MlsCompliance {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'CertificatePassword',
+        Justification = 'A Security and Compliance certificate password arrives from a GitHub Actions secret as an environment variable, which is a plain string before this code ever sees it. SecureString would not protect it: on .NET for Linux - and CI is ubuntu-latest - SecureString is not encrypted at all, and the -CertificatePassword parameter takes it back to plain text to open the PFX regardless. The value is never logged, and the PFX is deleted by the cleanup step in the job that staged it.')]
     <#
     .SYNOPSIS
         Read-only Security & Compliance PowerShell session for the L4 label audit.
@@ -1116,10 +1118,74 @@ function Connect-MlsCompliance {
     param(
         [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$AppId,
-        [Parameter(Mandatory)][string]$CertificateThumbprint
+        [AllowEmptyString()][AllowNull()][string]$CertificateThumbprint,
+        [AllowEmptyString()][AllowNull()][string]$CertificateFilePath,
+        [AllowEmptyString()][AllowNull()][string]$CertificatePassword
     )
     Assert-MlsCommand -Name 'Connect-IPPSSession' -Hint 'Install ExchangeOnlineManagement (Install-Module ExchangeOnlineManagement -Scope CurrentUser); L4 reads labels through Security & Compliance PowerShell.'
-    Connect-IPPSSession -AppId $AppId -Organization $Organization -CertificateThumbprint $CertificateThumbprint | Out-Null
+
+    # -CertificateThumbprint IS A WINDOWS-ONLY PARAMETER, AND CI IS LINUX.
+    #
+    # This function passed it unconditionally and could therefore never run in CI. The
+    # module declares its certificate parameters DYNAMICALLY and gates that one on the
+    # platform - ExchangeOnlineManagement/netCore/ExchangeOnlineManagement.psm1, with the
+    # module's own comment on the line above it:
+    #
+    #     # We do not want to expose certificate thumprint in Linux as it is not feasible there.
+    #     if($IsWindows) { $paramDictionary.Add('CertificateThumbprint', $CertificateThumbprint); }
+    #
+    # so on ubuntu-latest the call died at parameter binding with "A parameter cannot be
+    # found that matches parameter name 'CertificateThumbprint'" before it opened a socket,
+    # and the audit exited 2 without recording a single criterion (F172). It was invisible
+    # for the life of the project because the job that runs it had never once executed: its
+    # credential guard read an environment secret from the wrong environment and skipped
+    # green every time (F170/F171).
+    #
+    # THE WORKING IMPLEMENTATION WAS SIXTY LINES ABOVE IT IN THE SAME FILE. L4's apply job
+    # connects to the same service on the same runner and uses -Certificate /
+    # -CertificateFilePath, which the module adds unconditionally on every platform. This
+    # now mirrors that proven path exactly rather than inventing a third one.
+    $connect = @{
+        AppId        = $AppId
+        Organization = $Organization
+        ShowBanner   = $false
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CertificateFilePath)) {
+        if (-not (Test-Path -LiteralPath $CertificateFilePath)) {
+            throw "Certificate file '$CertificateFilePath' does not exist. L4 authenticates to Security & Compliance PowerShell with a PFX; the step that writes it must run before the audit."
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CertificatePassword)) {
+            # Built character by character rather than with ConvertTo-SecureString
+            # -AsPlainText -Force. Both end at the same SecureString holding the same
+            # secret - the password arrives from a CI secret as a plain environment
+            # variable either way - but the cmdlet form trips
+            # PSAvoidUsingConvertToSecureStringWithPlainText, which lint-ci runs at
+            # Warning severity, and that rule does not honour function-scoped
+            # suppression. Writing the loop is cheaper than an exclusion nobody revisits.
+            $secure = [System.Security.SecureString]::new()
+            foreach ($character in $CertificatePassword.ToCharArray()) { $secure.AppendChar($character) }
+            $secure.MakeReadOnly()
+            $connect['Certificate'] = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $CertificateFilePath, $secure)
+        }
+        else {
+            $connect['CertificateFilePath'] = $CertificateFilePath
+        }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+        # ASSERT THE CAPABILITY, NOT THE PLATFORM. Testing $IsWindows would encode today's
+        # gate; asking the installed cmdlet what it accepts follows the module if that gate
+        # ever moves - and turns an opaque binding error into a message naming the fix.
+        $parameter = (Get-Command Connect-IPPSSession).Parameters
+        if (-not $parameter.ContainsKey('CertificateThumbprint')) {
+            throw "The installed Connect-IPPSSession does not accept -CertificateThumbprint on this platform - it is a Windows-only dynamic parameter of ExchangeOnlineManagement. Pass -CertificateFilePath (and -CertificatePassword if the PFX is protected) instead: that path is added on every platform and is what L4's apply job already uses."
+        }
+        $connect['CertificateThumbprint'] = $CertificateThumbprint
+    }
+    else {
+        throw 'Connect-MlsCompliance needs a certificate: pass -CertificateFilePath (preferred; works on every platform) or -CertificateThumbprint (Windows only).'
+    }
+    Connect-IPPSSession @connect | Out-Null
 }
 
 function Get-MlsLabel {

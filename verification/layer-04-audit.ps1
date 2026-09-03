@@ -32,10 +32,16 @@
     ./layer-04-audit.ps1 -Organization contoso.onmicrosoft.com
 #>
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'CertificatePassword',
+    Justification = 'A Security and Compliance certificate password arrives from a GitHub Actions secret as an environment variable, which is a plain string before this code ever sees it. SecureString would not protect it: on .NET for Linux - and CI is ubuntu-latest - SecureString is not encrypted at all, and the -CertificatePassword parameter takes it back to plain text to open the PFX regardless. The value is never logged, and the PFX is deleted by the cleanup step in the job that staged it.')]
 param(
     [string]$Organization,
     [string]$VerifierAppId,
+    # Windows only - Connect-IPPSSession gates -CertificateThumbprint on $IsWindows (F172).
     [string]$CertificateThumbprint,
+    # The path CI uses: accepted on every platform.
+    [string]$CertificateFilePath,
+    [string]$CertificatePassword,
     # Empty resolves to the prefixed taxonomy read from infra/bicep/naming.bicep
     # (F32): the labels are named <prefix>-public/-internal/-confidential/
     # -export-controlled, never the bare words, so this audit can never be pointed at
@@ -227,10 +233,14 @@ function Test-LabelPolicyScope {
 function Invoke-Main {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
         Justification = 'Every parameter is consumed inside the criterion scriptblocks; PSSA cannot see through scriptblock closures.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'CertificatePassword',
+        Justification = 'A Security and Compliance certificate password arrives from a GitHub Actions secret as an environment variable, which is a plain string before this code ever sees it. SecureString would not protect it: on .NET for Linux - and CI is ubuntu-latest - SecureString is not encrypted at all, and the -CertificatePassword parameter takes it back to plain text to open the PFX regardless. The value is never logged, and the PFX is deleted by the cleanup step in the job that staged it.')]
     param(
         [string]$Organization,
         [string]$VerifierAppId,
         [string]$CertificateThumbprint,
+        [string]$CertificateFilePath,
+        [string]$CertificatePassword,
         [string[]]$ExpectedLabel = @(),
         [string]$LabelGuidPath,
         [string]$Checkpoint = 'layer',
@@ -255,8 +265,21 @@ function Invoke-Main {
         -Hint 'Connect-IPPSSession needs the tenant domain; the S&C endpoint has no other way to find the tenant.'
     $appId = Resolve-MlsInput -Name 'VerifierAppId' -Value $VerifierAppId -EnvironmentVariable @('MLS_VERIFIER_APP_ID') `
         -Hint 'App-only S&C auth for mls-verifier (Exchange.ManageAsApp + View-Only Configuration, granted at G0).'
-    $thumbprint = Resolve-MlsInput -Name 'CertificateThumbprint' -Value $CertificateThumbprint -EnvironmentVariable @('MLS_VERIFIER_CERT') `
-        -Hint 'Certificate thumbprint for the mls-verifier app-only S&C session.'
+    # EITHER credential form, but at least one - and the FILE is the one CI uses, because
+    # -CertificateThumbprint is a Windows-only dynamic parameter of Connect-IPPSSession and
+    # every runner here is ubuntu-latest (F172; see Connect-MlsCompliance).
+    #
+    # Read DIRECTLY, not through Resolve-MlsInput: that helper THROWS when it resolves to
+    # nothing, and an empty -DefaultValue does not make it optional (it treats empty as "no
+    # default supplied"). These three are optional INDIVIDUALLY and required as a SET, so
+    # the check that matters is the one below - which can then name both ways to satisfy it
+    # instead of failing on whichever happened to be resolved first.
+    $certificateFile = if (-not [string]::IsNullOrWhiteSpace($CertificateFilePath)) { $CertificateFilePath } else { "$env:MLS_VERIFIER_CERT_PATH" }
+    $certificatePassword = if (-not [string]::IsNullOrWhiteSpace($CertificatePassword)) { $CertificatePassword } else { "$env:MLS_VERIFIER_CERT_PASSWORD" }
+    $thumbprint = if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) { $CertificateThumbprint } else { "$env:MLS_VERIFIER_CERT" }
+    if (-not $SkipConnect -and [string]::IsNullOrWhiteSpace($certificateFile) -and [string]::IsNullOrWhiteSpace($thumbprint)) {
+        throw "Required input 'CertificateFilePath' was not supplied. L4 opens its own read-only Security & Compliance session as mls-verifier and S&C PowerShell has no federated path, so it needs a certificate. Set -CertificateFilePath / `$env:MLS_VERIFIER_CERT_PATH to the PFX (preferred - it is the only form that works on Linux, and CI is ubuntu-latest), or -CertificateThumbprint / `$env:MLS_VERIFIER_CERT on Windows."
+    }
     $baselinePath = Resolve-MlsInput -Name 'LabelGuidPath' -Value $LabelGuidPath -EnvironmentVariable @('MLS_LABEL_GUID_PATH') `
         -DefaultValue (Join-Path -Path $repoRoot -ChildPath 'verification' -AdditionalChildPath 'reports', 'label-guids.json') `
         -Hint 'Recorded label GUID baseline.'
@@ -270,7 +293,9 @@ function Invoke-Main {
         -Status $(if (Test-Path -LiteralPath $baselinePath) { 'OK' } else { 'ABSENT' })
 
     if (-not $SkipConnect) {
-        Connect-MlsCompliance -Organization $organizationName -AppId $appId -CertificateThumbprint $thumbprint
+        Connect-MlsCompliance -Organization $organizationName -AppId $appId `
+            -CertificateThumbprint $thumbprint -CertificateFilePath $certificateFile `
+            -CertificatePassword $certificatePassword
     }
     $baseline = Get-RecordedLabelGuid -Path $baselinePath
 
@@ -302,7 +327,8 @@ function Invoke-Main {
 if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -Organization $Organization -VerifierAppId $VerifierAppId `
-            -CertificateThumbprint $CertificateThumbprint -ExpectedLabel $ExpectedLabel `
+            -CertificateThumbprint $CertificateThumbprint -CertificateFilePath $CertificateFilePath `
+            -CertificatePassword $CertificatePassword -ExpectedLabel $ExpectedLabel `
             -LabelGuidPath $LabelGuidPath -Checkpoint $Checkpoint -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion `
             -ExpectedLabelPolicy $ExpectedLabelPolicy -ExpectedLabelPolicyScope $ExpectedLabelPolicyScope

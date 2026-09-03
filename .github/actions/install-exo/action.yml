@@ -1,0 +1,56 @@
+name: Install ExchangeOnlineManagement
+description: >-
+  Installs the PINNED ExchangeOnlineManagement module. The single source of the version
+  every Security & Compliance job in this repository runs against.
+
+# WHY THIS ACTION EXISTS AT ALL, given it wraps one command.
+#
+# Three jobs installed this module and all three did it unpinned:
+#
+#     Install-Module ExchangeOnlineManagement -Force -Scope CurrentUser -AllowClobber
+#
+# That is a dependency of the VERIFIER — the component whose independence is the product —
+# resolving to whatever the gallery served that morning. The audit's behaviour could
+# therefore change with no commit to this repository, and a rebuild run twice could
+# legitimately produce two different verdicts with nothing in git to explain the second.
+# There is no lockfile for PowerShell modules; `-RequiredVersion` is the lockfile, and it
+# has to be written down somewhere that all three callers share or it is three constants
+# that drift (CLAUDE.md: every value has one source).
+#
+# It is also the module whose PARAMETER SET differs by platform, which is what F172 was:
+# `Connect-IPPSSession -CertificateThumbprint` is a Windows-only dynamic parameter, so the
+# L4 audit could not start on ubuntu-latest. A version that moves under CI is a version
+# whose platform behaviour moves under CI too.
+#
+# BUMPING IT is a deliberate act with a diff: change the default below, and
+# verification/tests/module-pinning.Tests.ps1 keeps every caller honest.
+
+inputs:
+  version:
+    description: >-
+      ExchangeOnlineManagement version to install. Defaults to the pinned estate version;
+      override only to test a bump.
+    required: false
+    default: '3.9.2'
+
+runs:
+  using: composite
+  steps:
+    - name: Install ExchangeOnlineManagement ${{ inputs.version }}
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $version = '${{ inputs.version }}'
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        Install-Module ExchangeOnlineManagement -RequiredVersion $version `
+          -Force -Scope CurrentUser -AllowClobber
+
+        # ASSERT THE INSTALL, do not infer it from the exit code. Install-Module is one of
+        # the commands this repository has already been burned by trusting (F119's class:
+        # a step allowed to succeed quietly while its work did not happen).
+        Import-Module ExchangeOnlineManagement -RequiredVersion $version -Force
+        $loaded = (Get-Module ExchangeOnlineManagement).Version.ToString()
+        if ($loaded -ne $version) {
+          throw "Expected ExchangeOnlineManagement $version, loaded $loaded."
+        }
+        Write-Host "ExchangeOnlineManagement $loaded (pinned)."

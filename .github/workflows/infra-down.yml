@@ -499,42 +499,34 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Install the mls-verifier certificate for the child L4 audit
+      - name: Install ExchangeOnlineManagement (pinned)
+        if: ${{ steps.tenant.outputs.configured == 'true' }}
+        uses: ./.github/actions/install-exo
+
+      - name: Stage the mls-verifier certificate for the child L4 audit
         id: cert
         if: ${{ steps.tenant.outputs.configured == 'true' }}
         shell: pwsh
         env:
           MLS_VERIFIER_CERT_BASE64: ${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
-          MLS_VERIFIER_CERT_PASSWORD: ${{ secrets.MLS_VERIFIER_CERT_PASSWORD }}
         run: |
+          # A FILE, NOT THE CERTIFICATE STORE. This used to import the PFX into
+          # CurrentUser\My and hand Connect-IPPSSession a thumbprint, reasoning that
+          # .NET implements that store on Linux. The store part was true and the
+          # conclusion was not: `-CertificateThumbprint` is a Windows-only DYNAMIC
+          # parameter of Connect-IPPSSession, so on ubuntu-latest the audit died at
+          # parameter binding having never opened a connection, and nobody saw it for
+          # the life of the project because this job had never once run (F170/F171/F172).
+          #
+          # `-CertificateFilePath` is added on every platform, and is what L4's apply
+          # job - the one that genuinely works - has always used. The PFX therefore
+          # stays on disk in RUNNER_TEMP until the audit has read it, and is removed
+          # by the cleanup step below whatever the audit's verdict.
           $ErrorActionPreference = 'Stop'
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module ExchangeOnlineManagement -Force -Scope CurrentUser -AllowClobber
-
-          # .NET implements the CurrentUser\My store on Linux as well, which is
-          # what Connect-IPPSSession -CertificateThumbprint reads. The
-          # Import-PfxCertificate cmdlet is Windows-only, hence the raw API.
           $pfxPath = Join-Path $env:RUNNER_TEMP 'mls-verifier.pfx'
           [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:MLS_VERIFIER_CERT_BASE64))
-          try {
-            $flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet -bor
-                     [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
-            $certificate = if ($env:MLS_VERIFIER_CERT_PASSWORD) {
-              [Security.Cryptography.X509Certificates.X509Certificate2]::new(
-                $pfxPath, (ConvertTo-SecureString $env:MLS_VERIFIER_CERT_PASSWORD -AsPlainText -Force), $flags)
-            }
-            else {
-              [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, '', $flags)
-            }
-            $store = [Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
-            $store.Open('ReadWrite')
-            $store.Add($certificate)
-            $store.Close()
-            "MLS_VERIFIER_CERT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          }
-          finally {
-            Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
-          }
+          "MLS_VERIFIER_CERT_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Staged the mls-verifier PFX at $pfxPath ($((Get-Item $pfxPath).Length) bytes)."
 
       - name: Tenant-object audits unavailable
         if: ${{ steps.tenant.outputs.configured != 'true' }}
@@ -545,6 +537,10 @@ jobs:
       - name: Run verification/layer-11-audit.ps1 (down phase)
         id: audit
         uses: ./.github/actions/layer-audit
+        # The child L4 audit reads this; a path is not a secret and a password is, so
+        # the path goes through GITHUB_ENV above and the password comes in here.
+        env:
+          MLS_VERIFIER_CERT_PASSWORD: ${{ secrets.MLS_VERIFIER_CERT_PASSWORD }}
         with:
           layer: '11'
           args: |
@@ -560,6 +556,13 @@ jobs:
 
             ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
             ${{ inputs.only_criterion }}
+      - name: Remove the staged certificate
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'mls-verifier.pfx'
+          if (Test-Path -LiteralPath $pfxPath) { Remove-Item -LiteralPath $pfxPath -Force }
+
       - name: Upload the down-state audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}
         uses: actions/upload-artifact@v7
