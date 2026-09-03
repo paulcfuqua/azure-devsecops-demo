@@ -86,7 +86,8 @@ jobs:
       configured: ${{ steps.guard.outputs.configured }}
       missing: ${{ steps.guard.outputs.missing }}
       verifier: ${{ steps.verifier.outputs.configured }}
-      tenant-audits: ${{ steps.tenant.outputs.configured }}
+      # No `tenant-audits` output: it is decided inside the `verify` job now, which is
+      # the only job that can see the certificate it depends on (F170, above).
     steps:
       - uses: actions/checkout@v7
       - id: guard
@@ -107,21 +108,31 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           layer: post-down verification (mls-verifier)
 
-      # V11.2 re-executes the L3 and L4 audits to prove the teardown did not
-      # cross the tenant-object line. Those two need the tenant domain and the
-      # Security & Compliance app-only certificate; without them V11.2 records
-      # SKIP (via -SkipChildAudit) rather than failing a teardown that worked.
-      - id: tenant
-        uses: ./.github/actions/demo-env-guard
-        with:
-          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          additional: |
-            MLS_TENANT_DOMAIN=${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
-            MLS_VERIFIER_APP_ID=${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
-            MLS_VERIFIER_CERT_BASE64=${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
-          layer: post-down tenant-object audits (V11.2 re-runs L3 + L4)
+      # THE TENANT-AUDIT GUARD IS NOT HERE ANY MORE, AND THAT IS THE FIX (F170).
+      #
+      # It used to live in this job, which declares `environment: demo`, and it read
+      # `secrets.MLS_VERIFIER_CERT_BASE64` — a secret that lives on the `verify`
+      # environment, not `demo`. An absent GitHub secret is the EMPTY STRING, not an
+      # error, so the guard reported "not configured" on every single run, the audit was
+      # always invoked with `-SkipChildAudit`, and V11.2 recorded SKIP every time while
+      # this workflow reported green and L11's scorecard row read "verified".
+      #
+      # Measured 2026-09-03 on run 33705808526:
+      #     [PASS] V11.1  All RGs absent post-down
+      #     [SKIP] V11.2  Tenant objects intact (L3/L4 audits still pass)
+      #            observed: child audits skipped by -SkipChildAudit
+      #
+      # So the one criterion that proves a teardown did NOT cross the G3 tenant-object
+      # line has never had evidence. That is F123's class (a secret that cannot be seen
+      # by the job that reads it) and F125's (a guard whose "skip when unconfigured"
+      # meant "skip always"), and it is worse here than in either: this criterion is the
+      # kill/rebuild cycle's honesty checkpoint.
+      #
+      # The guard now runs INSIDE the `verify` job, which declares `environment: verify`
+      # and can therefore see both the certificate AND every variable the child audits
+      # need (MLS_TENANT_DOMAIN, MLS_VERIFIER_APP_ID and AZURE_VERIFIER_CLIENT_ID are all
+      # present on that environment — checked, not assumed). Deciding it in the job that
+      # consumes it also removes the cross-job hop that hid the mismatch.
 
   fabric:
     name: Fabric items + capacity pause
@@ -301,6 +312,14 @@ jobs:
             exit 0
           fi
 
+          # Captured BEFORE the delete because it is the only value that can tell a
+          # genuinely new workspace from a recovered one (F167). Printed for the operator
+          # and the rebuild to compare against; see the post-condition block below.
+          old_customer_id="$(az monitor log-analytics workspace show \
+                               --resource-group "${RG_PLATFORM}" --workspace-name "${LAW_NAME}" \
+                               --query customerId -o tsv 2>/dev/null || echo 'unknown')"
+          echo "Pre-purge customerId: ${old_customer_id}"
+
           echo "Purging ${LAW_NAME} (--force: no 14-day recovery, so the rebuild creates a NEW workspace)."
           if az monitor log-analytics workspace delete \
                --resource-group "${RG_PLATFORM}" --workspace-name "${LAW_NAME}" --force --yes; then
@@ -309,14 +328,47 @@ jobs:
             echo "::warning title=Workspace purge failed::Could not purge ${LAW_NAME}. The resource-group delete below will SOFT-delete it instead, and the next rebuild will recover it - at which point L6's alert rules fail with 'The workspace could not be found' (F107). Purge it by hand before rebuilding: az monitor log-analytics workspace delete -g ${RG_PLATFORM} -n ${LAW_NAME} --force --yes"
           fi
 
-          # Whether it purged or not, say what the next rebuild will find. A
-          # teardown that leaves this ambiguous is how F107 cost an hour.
-          if az monitor log-analytics workspace list-deleted-workspaces \
-               --query "[?name=='${LAW_NAME}'] | length(@)" -o tsv 2>/dev/null | grep -q '^0$'; then
-            echo "No soft-deleted ${LAW_NAME} remains - the rebuild will create a genuinely new workspace."
+          # F167 - DO NOT ASSERT THE PURGE FROM `list-deleted-workspaces`. IT CANNOT SEE IT.
+          #
+          # This block used to read that list and, finding the workspace still in it, emit
+          # "a same-name rebuild will RECOVER it and L6's alert rules will fail (F107)".
+          # That warning was FALSE, and it was false on EVERY run: `--force` purges the
+          # workspace but leaves a tombstone in the deleted list. Measured 2026-09-03 - the
+          # tombstone for customerId 5c967cf4 was still listed while a NEW same-name
+          # workspace (87f95e84) ran live in the same resource group, and both scheduled-
+          # query alert rules - the exact things F107 broke - deployed clean.
+          #
+          # So the old check could only ever report the hazard as PRESENT, which is the
+          # worse half of CLAUDE.md's rule: "an auditor that cannot see a control must not
+          # be able to report it as PRESENT either." It cost real time on the run that
+          # found it: it read as an F107 regression and nearly earned a hand-purge, which
+          # would have made the run green and taught nothing.
+          #
+          # What DOES distinguish a new workspace from a recovered one is the LIVE
+          # workspace's customerId - which is what F107's own entry recorded ("its original
+          # customerId intact") and never encoded as a check. So assert the two things
+          # observable from HERE, and hand the rebuild the value it needs to finish the job.
+          if az monitor log-analytics workspace show \
+               --resource-group "${RG_PLATFORM}" --workspace-name "${LAW_NAME}" >/dev/null 2>&1; then
+            echo "::warning title=Workspace still live::${LAW_NAME} is still present in ${RG_PLATFORM} after the purge returned. The RG delete below will soft-delete it instead, and the rebuild may recover it (F107)."
           else
-            echo "::warning title=Soft-deleted workspace remains::A soft-deleted ${LAW_NAME} is still registered, so a same-name rebuild will RECOVER it and L6's alert rules will fail (F107)."
+            echo "${LAW_NAME} is gone from ${RG_PLATFORM}."
           fi
+
+          # The post-condition the rebuild must check. A tombstone in
+          # list-deleted-workspaces is NOT evidence either way - only this value is.
+          {
+            echo "### Log Analytics workspace purged (F107)"
+            echo
+            echo "Pre-purge \`customerId\`: \`${old_customer_id}\`"
+            echo
+            echo "The rebuild must create a workspace with a DIFFERENT \`customerId\`."
+            echo "A same value means the purge did not take and the rebuild RECOVERED the"
+            echo "old workspace, at which point L6's alert rules fail with"
+            echo "\`The workspace could not be found\`. A tombstone left in"
+            echo "\`az monitor log-analytics workspace list-deleted-workspaces\` is expected"
+            echo "after \`--force\` and is NOT evidence of a failed purge (F167)."
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Delete in parallel, then wait for the estate to drain
         timeout-minutes: 45
@@ -421,6 +473,25 @@ jobs:
       - id: names
         uses: ./.github/actions/naming
 
+      # Decided HERE, not in preflight, because this job declares `environment: verify`
+      # and is therefore the only one that can see MLS_VERIFIER_CERT_BASE64 at all (F170).
+      # V11.2 re-executes the L3 and L4 audits to prove the teardown did not cross the
+      # tenant-object line; those two need the tenant domain and the Security & Compliance
+      # app-only certificate. Without them the audit still records SKIP rather than failing
+      # a teardown that worked — but it now records SKIP because the certificate is
+      # genuinely absent, not because the job was looking in the wrong environment.
+      - id: tenant
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            MLS_TENANT_DOMAIN=${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
+            MLS_VERIFIER_APP_ID=${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
+            MLS_VERIFIER_CERT_BASE64=${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
+          layer: post-down tenant-object audits (V11.2 re-runs L3 + L4)
+
       - name: Azure login (OIDC, mls-verifier — Reader / Directory.Read.All)
         uses: azure/login@v3
         with:
@@ -430,7 +501,7 @@ jobs:
 
       - name: Install the mls-verifier certificate for the child L4 audit
         id: cert
-        if: ${{ needs.preflight.outputs.tenant-audits == 'true' }}
+        if: ${{ steps.tenant.outputs.configured == 'true' }}
         shell: pwsh
         env:
           MLS_VERIFIER_CERT_BASE64: ${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
@@ -466,7 +537,7 @@ jobs:
           }
 
       - name: Tenant-object audits unavailable
-        if: ${{ needs.preflight.outputs.tenant-audits != 'true' }}
+        if: ${{ steps.tenant.outputs.configured != 'true' }}
         run: |
           set -euo pipefail
           echo "::warning title=V11.2 will record SKIP::MLS_TENANT_DOMAIN and/or the mls-verifier Security & Compliance certificate are not configured, so the L3 and L4 child audits cannot run and V11.2 has no evidence. The audit is invoked with -SkipChildAudit, which records SKIP with that reason — it does NOT pass. V11.1 (all resource groups absent) is still verified."
@@ -485,7 +556,7 @@ jobs:
             ${{ steps.names.outputs.prefix }}-rg-
             -Repository
             ${{ github.repository }}
-            ${{ needs.preflight.outputs.tenant-audits == 'true' && '' || '-SkipChildAudit' }}
+            ${{ steps.tenant.outputs.configured == 'true' && '' || '-SkipChildAudit' }}
 
             ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
             ${{ inputs.only_criterion }}

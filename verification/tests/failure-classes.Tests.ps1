@@ -1496,6 +1496,83 @@ Describe 'a job that reads an estate setting declares the environment holding it
         $offender -join ' | ' | Should -BeNullOrEmpty `
             -Because 'an MLS_ variable lives in the demo environment, so a job that does not declare one reads the EMPTY STRING - silently, because an absent GitHub variable is not an error (F124)'
     }
+
+    # F170, and declaring SOME environment is not enough - it has to be the RIGHT one.
+    #
+    # The test above catches a job that declares no environment at all. infra-down.yml's
+    # `preflight` declared `environment: demo` and read `secrets.MLS_VERIFIER_CERT_BASE64`,
+    # which lives on `verify`. It passed the test above and was broken anyway: the guard
+    # reported "not configured" on every run since it was written, the down-state audit was
+    # always invoked with `-SkipChildAudit`, and V11.2 - the criterion that proves a
+    # teardown did NOT cross the G3 tenant-object line - recorded SKIP every single time
+    # while the workflow went green and the scorecard read "verified".
+    #
+    # A reviewer scanning for "does this job declare an environment" would have seen yes.
+    # That is F124's own lesson one level up, and it is why this asserts the NAME.
+    #
+    # Writing this sweep immediately found two more, which is the point of writing sweeps:
+    #   layer-04-purview.yml   `preflight` reads the verifier cert under environment: demo
+    #   layer-09-devsecops.yml `ghas` reads MLS_VERIFIER_GH_TOKEN with no environment, so
+    #                          the first element of its token fallback chain is dead code
+    #                          and the job has only ever run on SELF_HEAL_TOKEN.
+    It 'declares the environment that actually HOLDS each environment-scoped secret it reads' {
+        # The authority for this map is the GitHub environment configuration, mirrored here
+        # because a test cannot query it. CLAUDE.md hard rule 5 enumerates the long-lived
+        # credentials; these are the ones that are environment-scoped rather than
+        # repository-scoped. SELF_HEAL_TOKEN is deliberately ABSENT: F123 made it a
+        # repository secret precisely so every job can see it, so it constrains nothing.
+        $holder = @{
+            'MLS_VERIFIER_CERT_BASE64'   = 'verify'
+            'MLS_VERIFIER_CERT_PASSWORD' = 'verify'
+            'MLS_VERIFIER_GH_TOKEN'      = 'verify'
+            'PURVIEW_CERT_BASE64'        = 'demo'
+            'PURVIEW_CERT_PASSWORD'      = 'demo'
+        }
+
+        $workflows = @(Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File)
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($workflow in $workflows) {
+            $lines = Get-Content -LiteralPath $workflow.FullName
+            $job = ''
+            $declared = @{}
+            $readsSecret = @{}
+            $lineNumber = 0
+            foreach ($line in $lines) {
+                $lineNumber++
+                # Comment lines are skipped: this file documents the very defect it scans
+                # for, and a prose mention of a secret name is not a read of it.
+                if ($line -match '^\s*#') { continue }
+                if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') {
+                    $job = $Matches[1]
+                    continue
+                }
+                if ([string]::IsNullOrWhiteSpace($job)) { continue }
+                if ($line -match '^\s{3,}environment:\s*([A-Za-z0-9_-]+)\s*$') { $declared[$job] = $Matches[1] }
+                foreach ($match in [regex]::Matches($line, 'secrets\.([A-Z0-9_]+)')) {
+                    $name = $match.Groups[1].Value
+                    if (-not $holder.ContainsKey($name)) { continue }
+                    $key = "$job`n$name"
+                    if (-not $readsSecret.ContainsKey($key)) { $readsSecret[$key] = $lineNumber }
+                }
+            }
+            foreach ($key in $readsSecret.Keys) {
+                $jobName, $secretName = $key -split "`n", 2
+                $scanned++
+                $want = $holder[$secretName]
+                $got = if ($declared.ContainsKey($jobName)) { $declared[$jobName] } else { '<none>' }
+                if ($got -ne $want) {
+                    $offender.Add("$($workflow.Name):$($readsSecret[$key]) job '$jobName' reads $secretName with environment '$got', but it lives on '$want'")
+                }
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 0 `
+            -Because 'if no job reads an environment-scoped secret, this test asserts nothing and would pass over the very defect it exists to catch'
+        $offender -join ' | ' | Should -BeNullOrEmpty `
+            -Because 'an absent GitHub secret is the EMPTY STRING, not an error, so a job declaring the WRONG environment reads nothing and degrades silently - which is how V11.2 never once had evidence while reporting green (F170)'
+    }
 }
 
 Describe 'a site that references Key Vault names the identity that will resolve it' {
