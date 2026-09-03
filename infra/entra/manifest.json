@@ -154,12 +154,12 @@
   "bootstrapAppRegistrations": [
     {
       "displayName": "${prefix}-github-deployer",
-      "createdBy": "docs/runbooks/g0-bootstrap.md step 1 (scripts/bootstrap/01-root-oidc.ps1)",
+      "createdBy": "docs/runbooks/g0-bootstrap.md step 3 (scripts/bootstrap/01-root-oidc.ps1)",
       "notes": "The OIDC deploy identity, federated to this repository's environments and holding no stored cloud secret. It is the identity that APPLIES this manifest, so it cannot be declared in it: it holds Application.ReadWrite.OwnedBy, which covers only the registrations it created itself."
     },
     {
       "displayName": "${prefix}-verifier",
-      "createdBy": "docs/runbooks/g0-bootstrap.md step 1 (scripts/bootstrap/01-root-oidc.ps1)",
+      "createdBy": "docs/runbooks/g0-bootstrap.md step 3 (scripts/bootstrap/01-root-oidc.ps1)",
       "notes": "The read-only audit identity - Reader, Directory.Read.All, Policy.Read.All. It is the identity RUNNING the audit that reads this file. It also carries its own X.509 certificate (MLS_VERIFIER_CERT_BASE64) for the L4 Security & Compliance audit."
     },
     {
