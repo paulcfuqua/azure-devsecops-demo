@@ -596,6 +596,77 @@ Describe 'the estate can be renamed from one place' {
             -Because "a Fabric name that does not match naming.bicep's fabricWorkspaceName/fabricLakehouseName is a hardcoded company prefix, which a rebrand carries into Azure and leaves behind (F90)"
     }
 
+    It 'classifies permission errors wherever it discards stderr and then claims a thing is absent' {
+        # F183. The defect is NOT `2>/dev/null || true` - that idiom is correct and common
+        # here, wherever absence is a legitimate expected state and the caller can actually
+        # look. The defect is DISCARDING THE REASON AND THEN ANNOUNCING A CONCLUSION.
+        #
+        # layer-08's eval read the Direct Line secret with `... 2>/dev/null || true`, tested
+        # `[ -z "$secret" ]`, and emitted "<vault> holds no '<name>'". A 403 and a 404 arrive
+        # at that test as the same empty string. The deployer holds no Key Vault data-plane
+        # role, so the read was ALWAYS Forbidden and the step ALWAYS announced a secret that
+        # was sitting in the vault - measured 2026-09-03, when the Ask tab exchanged that
+        # same secret from that same vault minutes later. `layer-08-agent-eval` had never
+        # once been uploaded, so V8.2/V8.4/V8.5 skipped on "no eval artifact" and L8 stayed
+        # green over a broken showpiece.
+        #
+        # So the rule is conditional, which is what keeps it from being noise: a file may
+        # discard stderr freely, and a file may claim absence freely, but a file that does
+        # BOTH has to be able to tell a refusal from an absence.
+        $files = @(
+            Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File
+            Get-ChildItem -Path (Join-Path $script:Root '.github/actions') -Filter '*.yml' -File -Recurse
+        )
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($file in $files) {
+            $content = Get-Content -LiteralPath $file.FullName -Raw
+            # An assertion, in an annotation the operator reads, that a named thing is not there.
+            # THIS DETECTOR KEYS ON PROSE, WHICH IS ITS WEAKNESS - STATED, NOT HIDDEN.
+            # Rewording a message can drop a file out of scope silently, and that happened
+            # while this test was being written: the fixed vuln-lab-witness.yml message said
+            # "is genuinely absent from", which an earlier version of this list did not
+            # match, so the file stopped being scanned and a mutation test wrongly passed.
+            # The vocabulary below is therefore deliberately wide, and the guard on
+            # $scanned below is what catches the day it goes empty.
+            $claimsAbsence = $content -match '::(notice|warning|error)[^\n]*(holds no|does not exist|is not present|no such |could not be found|genuinely absent|is absent|not provisioned)'
+            if (-not $claimsAbsence) { continue }
+
+            # THE DENOMINATOR IS FILES THAT CLAIM ABSENCE, not files that also discard
+            # stderr. Counted the other way this test goes vacuous the moment it succeeds -
+            # fixing every offender would leave nothing scanned, the guard below would fire,
+            # and a later regression would have no tripwire. Ask "does anything still make
+            # this claim", then judge each claim; do not ask "does anything still make it
+            # badly".
+            $scanned++
+
+            # Only a REMOTE call can be refused. A `Test-Path` on a file in the checkout
+            # either finds it or does not, and there is no third state to confuse it with -
+            # which is why infra-down.yml's "teardown-items.ps1 does not exist on this ref"
+            # is correct and is not what this catches. The discard has to be on something
+            # that can answer "you may not look".
+            $discardsStderr = $content -match '(?m)\b(az|gh|curl|Invoke-RestMethod)\b[^\n]*2>\s*/dev/null'
+            if (-not $discardsStderr) { continue }
+
+            # THE CLASSIFICATION HAS TO BE EXECUTABLE, NOT PROSE. A first version of this
+            # accepted the words `forbidden|authoriz` anywhere in the file, and a mutation
+            # test showed it passing with the real branch removed - because a COMMENT
+            # explaining the classification satisfied it. That is the same defect
+            # workload-rbac.Tests.ps1 had: a green check over prose describing the thing it
+            # was supposed to assert. The pattern must sit inside a matching construct.
+            $classifies = $content -match '(?i)(grep|Select-String|-match|case)[^\n]*(forbidden|authoriz|access denied)'
+            if (-not $classifies) {
+                $offender.Add($file.Name)
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 0 `
+            -Because 'if no workflow claims a thing is absent, this test asserts nothing and would pass over the defect it exists to catch'
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'a step that discards stderr and then announces a thing is absent cannot tell a refusal from an absence - it must classify the permission case and report UNOBSERVABLE rather than guessing (F183, and F105 before it)'
+    }
+
     It 'puts no comment inside an `args: |` block, where it becomes an argument' {
         # F180's own fix broke the workflow it was fixing, which is why this exists.
         #

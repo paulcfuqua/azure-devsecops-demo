@@ -574,15 +574,56 @@ jobs:
             exit 0
           fi
 
+          # THE READ MUST SAY WHY IT FAILED. IT USED TO SAY "ABSENT" FOR EVERYTHING (F183).
+          #
+          # This was `... 2>/dev/null || true`, then `[ -z "$secret" ]` -> "holds no
+          # '<name>'". `2>/dev/null` discards the reason and `|| true` discards the exit
+          # code, so a 403 and a 404 arrive here as the same empty string and the step
+          # reported the one it happened to name.
+          #
+          # It reported the wrong one on every run there has ever been. The deployer holds
+          # no Key Vault data-plane role - infra/bicep/platform/main.bicep grants Secrets
+          # User to the FUNCTION's identity and to nothing else - so this read has always
+          # returned Forbidden, and the step has always announced a secret that was sitting
+          # in the vault. Measured 2026-09-03: minutes after this notice fired, the Ask tab
+          # exchanged that same secret from that same vault and allocated a Direct Line
+          # conversation. `layer-08-agent-eval` has never once been uploaded.
+          #
+          # The comment four lines above this one is F147, which says: "the secret existed,
+          # was spelled correctly, and could not be seen by the thing that read it - and
+          # this step reported it ABSENT". It described this bug and the code kept it.
+          stderr_file="$(mktemp)"
+          set +e
           secret="$(az keyvault secret show \
             --vault-name "${KEY_VAULT_NAME}" \
             --name "${SECRET_NAME}" \
-            --query value -o tsv 2>/dev/null || true)"
+            --query value -o tsv 2>"${stderr_file}")"
+          read_rc=$?
+          set -e
+          read_err="$(cat "${stderr_file}")"
+          rm -f "${stderr_file}"
 
-          if [ -z "${secret}" ]; then
+          if [ "${read_rc}" -ne 0 ] || [ -z "${secret}" ]; then
+            # NOT FOUND is the documented degrade path and the only one that exits 0.
+            if printf '%s' "${read_err}" | grep -qiE 'SecretNotFound|was not found|not found in this key vault'; then
+              echo "ran=false" >> "${GITHUB_OUTPUT}"
+              echo "::notice title=No Direct Line secret::${KEY_VAULT_NAME} genuinely holds no '${SECRET_NAME}' — the read succeeded and the secret is absent. That secret is G0 item C7 and can only be created AFTER this pipeline first publishes the agent (Copilot Studio -> Settings -> Security -> Web channel security). Until then verification/layer-08-audit.ps1 records V8.2/V8.4/V8.5 as SKIP with that reason — which is the honest state, not a pass."
+              exit 0
+            fi
+
+            # FORBIDDEN is UNOBSERVABLE, and it is NOT absence. Fail loudly: the caller
+            # could not look, so it may not report on what is there. `verify` declares
+            # `always()` and tolerates a failed eval, so this does not starve the audit
+            # that would judge it (CLAUDE.md).
+            if printf '%s' "${read_err}" | grep -qiE 'forbidden|authoriz|access denied|does not have secrets get'; then
+              echo "ran=false" >> "${GITHUB_OUTPUT}"
+              echo "::error title=Cannot read the Direct Line secret::UNOBSERVABLE, not absent. The caller was REFUSED by ${KEY_VAULT_NAME} when reading '${SECRET_NAME}', so this job cannot say whether the secret exists — and it must not guess. mls-github-deployer holds no Key Vault data-plane role: infra/bicep/platform/main.bicep grants Secrets User to the directline Function's identity and to nothing else. Grant the deployer 'Key Vault Secrets User' on that vault IN THE TEMPLATE (the module already exists: infra/bicep/apps/modules/key-vault-secrets-user-role.bicep), so a rebuild reproduces it. Azure said: ${read_err}"
+              exit 1
+            fi
+
             echo "ran=false" >> "${GITHUB_OUTPUT}"
-            echo "::notice title=No Direct Line secret::${KEY_VAULT_NAME} holds no '${SECRET_NAME}', so the agent cannot be evaluated and no artifact was produced. That secret is G0 item C7 and can only be created AFTER this pipeline first publishes the agent (Copilot Studio -> Settings -> Security -> Web channel security). Until then verification/layer-08-audit.ps1 records V8.2/V8.4/V8.5 as SKIP with that reason — which is the honest state, not a pass."
-            exit 0
+            echo "::error title=Direct Line secret read failed::Neither a not-found nor a permissions error, so this job will not classify it. Azure said: ${read_err}"
+            exit 1
           fi
 
           # Masked before it is used anywhere, so a stack trace or a set -x
