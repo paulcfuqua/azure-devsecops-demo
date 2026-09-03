@@ -534,6 +534,24 @@ jobs:
           set -euo pipefail
           echo "::warning title=V11.2 will record SKIP::MLS_TENANT_DOMAIN and/or the mls-verifier Security & Compliance certificate are not configured, so the L3 and L4 child audits cannot run and V11.2 has no evidence. The audit is invoked with -SkipChildAudit, which records SKIP with that reason — it does NOT pass. V11.1 (all resource groups absent) is still verified."
 
+      # THE NON-EMPTY VALUE GOES IN THE `&&` BRANCH BELOW. NOT COSMETIC (F180).
+      #
+      # The -SkipChildAudit line read `configured == 'true' && '' || '-SkipChildAudit'`,
+      # which ALWAYS yielded `-SkipChildAudit`. GitHub Actions has no ternary; `A && B || C`
+      # is short-circuit evaluation, and the empty string is FALSY - so when the guard said
+      # `true`, `true && ''` evaluated to `''`, that was falsy, and `|| C` won. The condition
+      # could not express "pass nothing" for any input.
+      #
+      # So V11.2 recorded SKIP on every teardown even AFTER F170 moved the guard to a job
+      # that can see the certificate. Measured 2026-09-03: the guard reported configured, the
+      # certificate staged, the "unavailable" notice correctly skipped - and -SkipChildAudit
+      # was passed anyway. Inverted so the flag itself is the `&&` value, which is the shape
+      # every other call site here already uses.
+      #
+      # THIS COMMENT LIVES OUT HERE ON PURPOSE. `args: |` is a LITERAL BLOCK SCALAR: every
+      # line inside it is text, `#` included, so a comment placed there is passed to the
+      # script as an argument. That is not hypothetical - it happened on run 33750701722,
+      # which failed with the comment text in its argv.
       - name: Run verification/layer-11-audit.ps1 (down phase)
         id: audit
         uses: ./.github/actions/layer-audit
@@ -552,25 +570,6 @@ jobs:
             ${{ steps.names.outputs.prefix }}-rg-
             -Repository
             ${{ github.repository }}
-            # THE NON-EMPTY VALUE GOES IN THE `&&` BRANCH. NOT COSMETIC (F180).
-            #
-            # This read `configured == 'true' && '' || '-SkipChildAudit'`, which ALWAYS
-            # yields `-SkipChildAudit`. GitHub Actions has no ternary; `A && B || C` is
-            # short-circuit evaluation, and the empty string is FALSY — so when the guard
-            # said `true`, `true && ''` evaluated to `''`, that was falsy, and `|| C` won.
-            # The condition could not express "pass nothing" at all.
-            #
-            # So V11.2 recorded SKIP on every teardown even AFTER F170 moved the guard to a
-            # job that can see the certificate. Measured 2026-09-03: the guard reported
-            # configured, the certificate staged, the "unavailable" notice correctly skipped
-            # — and `-SkipChildAudit` was passed anyway.
-            #
-            # Inverted so the flag itself is the `&&` value: when the guard is false the
-            # expression yields `-SkipChildAudit`; when it is true, `false && ...` is falsy
-            # and `|| ''` yields the empty string, which is what "pass nothing" needs to be.
-            # Every other call site in this repository already uses that shape
-            # (`inputs.only_criterion && '-OnlyCriterion' || ''`); this was the one that
-            # did not.
             ${{ steps.tenant.outputs.configured != 'true' && '-SkipChildAudit' || '' }}
 
             ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}

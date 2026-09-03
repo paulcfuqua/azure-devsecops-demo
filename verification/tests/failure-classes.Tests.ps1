@@ -596,6 +596,53 @@ Describe 'the estate can be renamed from one place' {
             -Because "a Fabric name that does not match naming.bicep's fabricWorkspaceName/fabricLakehouseName is a hardcoded company prefix, which a rebrand carries into Azure and leaves behind (F90)"
     }
 
+    It 'puts no comment inside an `args: |` block, where it becomes an argument' {
+        # F180's own fix broke the workflow it was fixing, which is why this exists.
+        #
+        # `args: |` is a YAML LITERAL BLOCK SCALAR. Every line inside it is text - `#`
+        # included - so a comment written there is handed to the script as an argument.
+        # Measured on run 33750701722, whose down-state audit failed with the explanatory
+        # comment sitting in its argv:
+        #
+        #   Run verification/layer-11-audit.ps1 (down phase)  # So V11.2 recorded SKIP ...
+        #
+        # It reads as a comment in every editor and in the GitHub diff view. The only place
+        # it does not is at run time. Comments about an args block go ABOVE the step.
+        $files = @(
+            Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File
+            Get-ChildItem -Path (Join-Path $script:Root '.github/actions') -Filter '*.yml' -File -Recurse
+        )
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($file in $files) {
+            $inBlock = $false
+            $blockIndent = 0
+            $lineNumber = 0
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                $lineNumber++
+                if ($line -match '^(\s*)args:\s*\|\s*$') {
+                    $inBlock = $true
+                    $blockIndent = $Matches[1].Length
+                    $scanned++
+                    continue
+                }
+                if (-not $inBlock) { continue }
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                $indent = $line.Length - $line.TrimStart().Length
+                if ($indent -le $blockIndent) { $inBlock = $false; continue }
+                if ($line.TrimStart().StartsWith('#')) {
+                    $offender.Add("$($file.Name):$lineNumber $($line.Trim().Substring(0, [Math]::Min(60, $line.Trim().Length)))")
+                }
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 0 `
+            -Because 'if no workflow uses an args: | block, this test asserts nothing and would pass over the defect it exists to catch'
+        $offender -join ' | ' | Should -BeNullOrEmpty `
+            -Because 'args: | is a literal block scalar, so a # line inside it is passed to the script as an argument rather than ignored - put the comment above the step (F180)'
+    }
+
     It 'never puts the empty string in the winning branch of a workflow `&&` expression' {
         # F180. GitHub Actions has no ternary operator. `A && B || C` is short-circuit
         # evaluation over TRUTHINESS, and the empty string is FALSY - so
