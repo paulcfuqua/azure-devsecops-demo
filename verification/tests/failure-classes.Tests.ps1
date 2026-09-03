@@ -596,6 +596,55 @@ Describe 'the estate can be renamed from one place' {
             -Because "a Fabric name that does not match naming.bicep's fabricWorkspaceName/fabricLakehouseName is a hardcoded company prefix, which a rebrand carries into Azure and leaves behind (F90)"
     }
 
+    It 'never puts the empty string in the winning branch of a workflow `&&` expression' {
+        # F180. GitHub Actions has no ternary operator. `A && B || C` is short-circuit
+        # evaluation over TRUTHINESS, and the empty string is FALSY - so
+        #
+        #     ${{ cond && '' || '-Flag' }}
+        #
+        # yields '-Flag' whether cond is true or false. When cond is true, `true && ''`
+        # evaluates to '', that result is falsy, and `|| '-Flag'` wins. The expression
+        # cannot express "pass nothing", which is the only thing it was written to do.
+        #
+        # This was infra-down.yml's -SkipChildAudit condition. V11.2 - the criterion that
+        # proves a teardown did not cross the G3 tenant-object line - recorded SKIP on every
+        # teardown ever run, and kept recording SKIP after F170 moved the guard to a job
+        # that could actually see the certificate. Measured 2026-09-03: the guard reported
+        # configured, the certificate staged, the "unavailable" notice correctly skipped,
+        # and -SkipChildAudit was passed regardless. Two independent causes stacked behind
+        # one symptom, and only a real teardown separated them.
+        #
+        # The fix is positional, not clever: put the NON-EMPTY value in the `&&` branch.
+        # Every other call site in this repository already did.
+        $workflows = @(
+            Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File
+            Get-ChildItem -Path (Join-Path $script:Root '.github/actions') -Filter '*.yml' -File -Recurse
+        )
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($file in $workflows) {
+            $lineNumber = 0
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                $lineNumber++
+                if ($line -match '^\s*#') { continue }
+                # Any ${{ ... && ... || ... }} expression is a candidate; only those whose
+                # `&&` value is an empty literal are broken.
+                foreach ($match in [regex]::Matches($line, '\$\{\{[^}]*?&&[^}]*?\|\|[^}]*?\}\}')) {
+                    $scanned++
+                    if ($match.Value -match "&&\s*''\s*\|\|") {
+                        $offender.Add("$($file.Name):$lineNumber $($match.Value.Trim())")
+                    }
+                }
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 0 `
+            -Because 'if no workflow uses the && || idiom at all, this test asserts nothing and would pass over the defect it exists to catch'
+        $offender -join ' | ' | Should -BeNullOrEmpty `
+            -Because "the empty string is falsy, so `${{ cond && '' || 'X' }}` yields 'X' for EVERY value of cond - put the non-empty value in the && branch instead (F180)"
+    }
+
     It 'never provisions the Fabric capacity into a resource group the teardown deletes' {
         # A PAID CAPACITY IN A GATE-FREE BLAST RADIUS (sponsor decision 2026-09-03).
         #

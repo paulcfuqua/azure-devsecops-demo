@@ -52,6 +52,62 @@ across `docs/`, `CLAUDE.md`, the layer runbooks and `verification/tests/`.
 
 ---
 
+### F180 — the empty string cannot win a `&&`, so V11.2 skipped even after F170 was fixed *(fixed 2026-09-03)*
+
+F170 established that V11.2 had never had evidence, and moved the guard into the job that
+can actually see the certificate. The fix was merged, and the **second teardown of the day
+proved it did not work**:
+
+    [PASS] V11.1  All RGs absent post-down
+    [SKIP] V11.2  Tenant objects intact (L3/L4 audits still pass)
+           observed: child audits skipped by -SkipChildAudit
+
+The guard itself was now correct — measurable from the job's own steps:
+
+    success  Run ./.github/actions/demo-env-guard
+    success  Install ExchangeOnlineManagement (pinned)
+    success  Stage the mls-verifier certificate for the child L4 audit
+    skipped  Tenant-object audits unavailable      <- correctly skipped: guard said CONFIGURED
+
+The certificate staged. The "unavailable" notice did not fire. And `-SkipChildAudit` was
+passed anyway.
+
+**The cause is that GitHub Actions has no ternary operator.** `A && B || C` is
+short-circuit evaluation over *truthiness*, and **the empty string is falsy**. The
+condition read:
+
+    ${{ steps.tenant.outputs.configured == 'true' && '' || '-SkipChildAudit' }}
+
+When the guard said `true`, `true && ''` evaluated to `''`; `''` is falsy, so `|| C` won and
+the flag was passed. When the guard said `false`, the flag was passed. **The expression
+could not express "pass nothing" for any input** — the one thing it existed to do.
+
+The fix is positional rather than clever: put the **non-empty** value in the `&&` branch.
+
+    ${{ steps.tenant.outputs.configured != 'true' && '-SkipChildAudit' || '' }}
+
+Every other call site in the repository already used that shape
+(`inputs.only_criterion && '-OnlyCriterion' || ''`, seven of them). This was the only one
+that did not, and it was the one guarding the kill/rebuild cycle's honesty checkpoint.
+
+**Two independent causes stacked behind one symptom.** F170 was real and its fix was
+necessary; it was simply not sufficient, and nothing short of another teardown could show
+that — the guard and the flag are only observable together on a run that performs a
+teardown. Fixing F170 and declaring V11.2 repaired would have been exactly the error the
+register keeps recording: a change that makes the code look right, asserted without the
+observation that would test it.
+
+**It is also the same family as F26 and F125.** All three are the empty string behaving as
+a value in one place and as a falsehood in another: an absent GitHub variable is `''` rather
+than an error (F26); a job-level `if:` evaluates before the environment resolves so it reads
+`''` and fires always (F125); and here `''` in a `&&` branch is unreachable as a result. The
+platform is consistent about this and it is consistently surprising.
+
+`verification/tests/failure-classes.Tests.ps1` now sweeps every `${{ ... && ... || ... }}`
+expression in `.github/workflows` and `.github/actions` and fails any whose `&&` value is an
+empty literal. Mutation-tested: restoring the old expression fails with the file, line and
+the expression itself.
+
 ### F179 — L4 has a verdict, and it took three stacked defects to get one *(2026-09-03)*
 
 `verify L4 (mls-verifier)` reported real criteria for the first time in the project's
