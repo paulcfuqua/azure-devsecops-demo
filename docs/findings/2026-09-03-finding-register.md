@@ -52,6 +52,73 @@ across `docs/`, `CLAUDE.md`, the layer runbooks and `verification/tests/`.
 
 ---
 
+### F183 — the agent eval reports a missing secret it was merely forbidden to read *(open, 2026-09-03)*
+
+Opening the control tower in a browser after the second rebuild found showpiece #1 broken in a
+way every green check missed.
+
+**The Ask tab is wired and the agent answers nothing.** Direct Line is fully live — the page
+forwarded its Easy Auth token, the Function verified it, exchanged the Key Vault secret and
+allocated conversation `eSkHfta8iNKdzGnJU2yxO-us`. Asked the golden question and one simpler
+rephrasing, the agent replied to both:
+
+    what day of the week had the most launches
+    -> I'm sorry, I'm not sure how to help with that. Can you try rephrasing?
+
+    How many launches are in the launches table?
+    -> I'm sorry, I'm not sure how to help with that. Can you try rephrasing?
+
+On 2026-09-02 that first question returned *"Saturday had the most launches, with 309 launches
+recorded in the launches table"*. `kill-rebuild.md` § 4 leg 6 predicts this symptom exactly:
+*"If the agent answers but every tool call fails after a rebuild, this is why (L08 failure
+mode 5)."*
+
+**Nothing caught it, and the reason is the finding.** L8 ran in that same rebuild and went
+green. Its eval job:
+
+    success  Run the golden-question eval against the deployed agent
+    skipped  Upload the agent eval artifact
+
+The eval step has two early exits that `exit 0` — reporting SUCCESS — and one fired:
+
+    ##[notice] mls-sec-demo-kv holds no 'mls-directline-secret', so the agent cannot be
+               evaluated and no artifact was produced.
+
+**That notice is false.** The vault does hold it: minutes later the Ask tab allocated a Direct
+Line conversation, which requires the directline-token Function to read exactly that secret
+from exactly that vault. What the step actually hit is a permissions failure, converted into an
+absence by
+
+    secret="$(az keyvault secret show ... 2>/dev/null || true)"
+
+`mls-github-deployer` cannot read the secret; the Function's managed identity can. `2>/dev/null`
+discards the `Forbidden`, `|| true` discards the exit code, and `[ -z "$secret" ]` cannot tell
+the two apart.
+
+**The step's own comment, four lines above, warns about exactly this.** F147's note reads: *"the
+secret existed, was spelled correctly, and could not be seen by the thing that read it — and
+this step reported it ABSENT, sending a reader off to publish an agent and create a secret that
+had been there for a day."* The comment describes the bug the code beneath it still commits.
+
+**The cascade.** `ran=false` gates the artifact upload, so no artifact is produced; V8.2, V8.4
+and V8.5 then record SKIP with *"no eval artifact"*; L8 reports 1 PASS + 4 SKIP and the run is
+green. Every layer of the check agreed, and the estate was broken. This is BLOCKER-B's severity
+demonstrated rather than argued: the showpiece rests on a job's exit code, and that exit code is
+reachable without evaluating anything.
+
+**Not proven, and worth saying which half.** That the notice is wrong is strongly evidenced but
+one step short of proof: I could not read the secret either (Global Admin has no Key Vault
+data-plane role), so my evidence is the working Direct Line conversation rather than a direct
+read. What would settle it is the step distinguishing the states instead of guessing — capture
+stderr, separate a 403 from a 404, and report **UNOBSERVABLE** when the caller cannot look.
+F105's rule already says exactly that.
+
+**Two things follow, and they are separate.** The eval's blindness is one defect. Whether the
+agent's tool connection actually survives a rebuild is a second, still undiagnosed — the MCP
+FQDN moved to `delightfulwave-5d53f2e4` and `MLS_MCP_SERVER_URL` is unset, so the repoint should
+have derived the right target. That wants its own investigation, with the eval fixed first so it
+can report what it finds.
+
 ### F182 — V6.2 reports "no result" where its sibling reports an expired credential *(open, 2026-09-03)*
 
 L6's verify has failed on the rebuilt estate twice, ~3 hours apart, on the same criterion:
