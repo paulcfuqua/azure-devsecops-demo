@@ -52,6 +52,44 @@ across `docs/`, `CLAUDE.md`, the layer runbooks and `verification/tests/`.
 
 ---
 
+### F181 — a transient in L4's supplementary step skipped four layers *(noted 2026-09-03, not chased)*
+
+Rebuild 3, first attempt. L4's apply failed and took the rest of the estate with it:
+
+    success  Install ExchangeOnlineManagement (pinned)
+    failure  Connect S&C PowerShell and apply the label taxonomy
+
+    Label 'mls-public' already correct - skipping.
+    Label 'mls-internal' already correct - skipping.
+    Label 'mls-confidential' already correct - skipping.
+    Label 'mls-export-controlled' already correct - skipping.
+    WARNING: Force Validate not set
+    Set-LabelPolicy: One or more errors occurred.
+
+**All four labels applied cleanly.** Only `Set-LabelPolicy` failed, with Security & Compliance
+PowerShell's generic aggregate error — and the label policy is what V4.3 itself calls
+*supplementary*, beside V4.1's labels, which are the layer's actual deliverable and had
+already succeeded in that same run.
+
+**It did not reproduce.** An immediate standalone re-run of `layer-04-purview.yml` passed both
+apply and verify, as did the next full rebuild. One failure, two immediate passes.
+
+**Deliberately recorded rather than diagnosed, and deliberately not fixed.** One sample is not
+a cause, and a confident first explanation from a single observation is the error this register
+keeps cataloguing — F107 asserted a permanent state from a forty-minute sample and was wrong.
+Calling this "S&C flakiness" would be a guess wearing a diagnosis's clothes.
+
+What is *not* a guess is the blast radius: **L5, L6, L7 and L8 all skipped, and the L11 rebuild
+proof failed**, because a supplementary step in a tenant-object layer hiccuped. L5 and L6 have
+no real dependency on L4 — the labels are tenant-scoped and nothing in the data or platform
+layers consumes them; `infra-up.yml` chains them for ordering alone.
+
+So there is a design question here — should the layer graph gate on this at all, and should a
+supplementary step be able to fail a layer — and it is the same *kind* of question as
+BLOCKER-E: a decision about what the gate-free cycle is allowed to stop for, not a bug with an
+obvious fix. **Sponsor's call, 2026-09-03: note it, do not chase it.** Recorded here so the
+next person who hits it knows it has been seen once, recovered on retry, and is not new.
+
 ### F180 — the empty string cannot win a `&&`, so V11.2 skipped even after F170 was fixed *(fixed 2026-09-03)*
 
 F170 established that V11.2 had never had evidence, and moved the guard into the job that
