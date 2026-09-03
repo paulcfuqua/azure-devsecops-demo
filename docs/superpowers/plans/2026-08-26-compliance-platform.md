@@ -1,5 +1,16 @@
 # Compliance Platform Implementation Plan
 
+> **HISTORY — this plan was executed. It is kept as the record of what was done and why,
+> not as a description of current state or of work still to do.**
+>
+> For what is true now, read [docs/DEMO-READINESS.md](../../DEMO-READINESS.md). For how
+> each thing came to be true — including the diagnoses that turned out to be wrong — read
+> [docs/findings/2026-09-03-finding-register.md](../../findings/2026-09-03-finding-register.md).
+>
+> Checkboxes below are left in the state they were in. An unticked box here does **not**
+> mean outstanding work; it means the plan moved on. Nothing is deleted, because a plan
+> that edits its own premises after the fact stops being evidence of anything.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A self-auditing compliance platform that renders all 110 NIST SP 800-171 Rev 2 requirements — with 800-53 Rev 5 and CMMC 2.0 L1/L2 views over the same records — showing status, evidence, provenance, and what would close each gap.
