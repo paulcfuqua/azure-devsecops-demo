@@ -254,12 +254,22 @@ why each phase gates the next.*
 **1. The IaC runs smoothly, up and down.** A clean deploy of every layer, and a teardown and
 rebuild that completes. This is first because everything else is measured against a
 rebuilt estate: if the environment cannot be recreated, nothing built on it can be trusted
-or shown twice. F107 lives here — the rebuild currently fails at L6, because Log Analytics
-soft-deletes for 14 days and a same-name recreate recovers the old workspace.
+or shown twice.
+
+*Both named blockers here are closed as of 2026-09-02, and this paragraph used to say
+otherwise.* F107 — Log Analytics soft-deleting for 14 days so a same-name recreate recovered
+the old workspace — is fixed: the teardown purges with `--force`, a failure-classes test
+asserts it, and the last two `infra-down` runs succeeded. The other was L8, which never
+imported because its default asked for a package type the source cannot produce (F132, fixed
+and proven). **What is untested is not the known blockers but everything added since the last
+rebuild** — derived DAST targets, Entra probe roles, the posture feeds, an Easy Auth audience
+that was hand-patched and then reverted to the template. That is the argument FOR running it.
 
 **2. The apps tell the truth about what is there.** The dashboards render real rows from the
-lakehouse, and what they display matches what the estate actually contains. F101 is the
-whole of this phase today: `data-api` cannot authenticate to Fabric's SQL endpoint, so every
+lakehouse, and what they display matches what the estate actually contains. *F101 was the
+whole of this phase and is closed — V7.6 now independently confirms the data API answers with
+rows, not merely a status code.* The historical statement follows: F101 was that
+`data-api` could not authenticate to Fabric's SQL endpoint, so every
 dashboard renders empty while every criterion passes. This phase is also where the gap named
 in `docs/DEMO-READINESS.md` § D closes — **no criterion currently asserts that the API
 returns a row**, and a layer that verifies plumbing without verifying water is why an empty
