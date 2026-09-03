@@ -375,15 +375,26 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Resolve estate naming
+        id: naming
+        if: ${{ matrix.target.auth }}
+        uses: ./.github/actions/naming
+
       - name: Mint the probe token for this target
         id: probe
         if: ${{ matrix.target.auth && steps.login.outcome == 'success' }}
         env:
           APP: ${{ matrix.target.name }}
-          RG_APPS: ${{ vars.MLS_RG_APPS }}
+          # DERIVED FROM naming.bicep, not a variable with a hardcoded fallback.
+          # This read `vars.MLS_RG_APPS` with `${RG_APPS:-mls-rg-apps}` behind it -
+          # a variable that does not exist (actionlint said so) propped up by a
+          # literal company prefix, which CLAUDE.md forbids precisely because a
+          # rebrand then reaches Azure and leaves this behind (F90). The naming
+          # action already resolves it and the resolve job already uses it.
+          RG_APPS: ${{ steps.naming.outputs.rg-apps }}
         run: |
           set -uo pipefail
-          rg="${RG_APPS:-mls-rg-apps}"
+          rg="${RG_APPS}"
           cid="$(az containerapp auth show -n "${APP}" -g "${rg}"                    --query 'identityProviders.azureActiveDirectory.registration.clientId'                    -o tsv 2>/dev/null || true)"
           token=""
           # THE BARE CLIENT ID, matching token_for() in the resolve job (F163).
