@@ -484,8 +484,14 @@ jobs:
         shell: pwsh
         env:
           SQL_ENDPOINT_OVERRIDE: ${{ vars.MLS_SQL_ENDPOINT }}
-          WORKSPACE_NAME: ${{ steps.names.outputs.prefix }}-operations
-          LAKEHOUSE_NAME: ${{ vars.MLS_LAKEHOUSE_NAME || 'mls_operations' }}
+          # DERIVED, not composed here and not a literal. naming.bicep defines
+          # fabricWorkspaceName / fabricLakehouseName expressly so nothing hardcodes the
+          # company prefix; the naming action exposes them as of 2026-09-03. This line
+          # previously built the workspace by string-concatenating the prefix and fell back
+          # to the literal 'mls_operations' for the lakehouse behind a variable that does
+          # not exist - correct today, and F90's defect the moment anyone rebrands.
+          WORKSPACE_NAME: ${{ steps.names.outputs.fabric-workspace }}
+          LAKEHOUSE_NAME: ${{ steps.names.outputs.fabric-lakehouse }}
           ALLOW_LOCAL: ${{ inputs.allow_local_backend }}
         run: |
           $ErrorActionPreference = 'Stop'

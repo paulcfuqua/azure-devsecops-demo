@@ -520,6 +520,82 @@ Describe 'the estate can be renamed from one place' {
         }
     }
 
+    It 'every hardcoded Fabric name equals what naming.bicep derives, prefix included' {
+        # THE SAME ARGUMENT AS THE TEST ABOVE, APPLIED TO THE NAMES IT DID NOT COVER.
+        #
+        # naming.bicep defines fabricWorkspaceName and fabricLakehouseName expressly so
+        # nothing hardcodes the company prefix, and its own comment says so. Nothing was
+        # checking that anyone obeyed. Found 2026-09-03 while triaging an actionlint
+        # "Context access might be invalid: MLS_LAKEHOUSE_NAME" warning: the variable does
+        # not exist, and the fallback behind it was the literal 'mls_operations' - which is
+        # correct behaviour today and a hardcoded company prefix, the F90 defect that a
+        # rebrand carries into Azure and leaves behind.
+        #
+        # Fabric names are NOT ARM resource names: no env segment, no type suffix, and the
+        # lakehouse takes an UNDERSCORE where the workspace takes a hyphen (lakehouse names
+        # allow letters, digits and underscores only). So this asserts both shapes.
+        function Get-NamingFunc {
+            param([string]$Name)
+            $m = Select-String -LiteralPath $script:NamingFile -Pattern "^func $Name\(prefix string\) string => '\`$\{prefix\}([^']*)'" |
+                Select-Object -First 1
+            if ($m) { return $m.Matches[0].Groups[1].Value }
+            return ''
+        }
+
+        $prefix = Get-NamingLiteral -Name 'defaultCompanyPrefix'
+        $workspaceSuffix = Get-NamingFunc -Name 'fabricWorkspaceName'
+        $lakehouseSuffix = Get-NamingFunc -Name 'fabricLakehouseName'
+
+        $prefix | Should -Not -BeNullOrEmpty
+        $workspaceSuffix | Should -Not -BeNullOrEmpty `
+            -Because 'if fabricWorkspaceName cannot be parsed this test asserts nothing and passes over the defect it exists to catch'
+        $lakehouseSuffix | Should -Not -BeNullOrEmpty `
+            -Because 'if fabricLakehouseName cannot be parsed this test asserts nothing and passes over the defect it exists to catch'
+
+        $expectedWorkspace = "$prefix$workspaceSuffix"
+        $expectedLakehouse = "$prefix$lakehouseSuffix"
+
+        # DEPLOYABLE ARTIFACTS AND AUDIT SCRIPTS. Docs, tests and fixtures may name the
+        # estate's own workspace freely - what must not drift is a value a DEPLOYMENT or an
+        # AUDIT reads. That deliberately includes PowerShell parameter defaults: a rebrand
+        # that reaches Azure and leaves `[string]$LakehouseName = 'mls_operations'` behind
+        # in the audit is F90 in the component whose job is to notice F90. Tests are
+        # excluded because a fixture asserting a literal name is the point of the fixture.
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+        $targets = @(
+            Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File
+            Get-ChildItem -Path (Join-Path $script:Root '.github/actions') -Filter '*.yml' -File -Recurse
+            Get-ChildItem -Path (Join-Path $script:Root 'infra/bicep') -Filter '*.bicepparam' -File -Recurse
+            @(Get-ChildItem -Path (Join-Path $script:Root 'infra') -Filter '*.ps1' -File -Recurse) +
+            @(Get-ChildItem -Path (Join-Path $script:Root 'infra') -Filter '*.psm1' -File -Recurse) +
+            @(Get-ChildItem -Path (Join-Path $script:Root 'verification') -Filter '*.ps1' -File) +
+            @(Get-ChildItem -Path (Join-Path $script:Root 'data/seed') -Filter '*.ps1' -File -Recurse) +
+            @(Get-ChildItem -Path (Join-Path $script:Root 'data/seed') -Filter '*.psm1' -File -Recurse) |
+                Where-Object { $_.FullName -notmatch '[\\/]tests?[\\/]' }
+        )
+        foreach ($file in $targets) {
+            $lineNumber = 0
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                $lineNumber++
+                if ($line -match '^\s*#') { continue }
+                foreach ($match in [regex]::Matches($line, "'([A-Za-z][A-Za-z0-9]*[_-]operations)'")) {
+                    $literal = $match.Groups[1].Value
+                    $scanned++
+                    $expected = if ($literal -like '*_*') { $expectedLakehouse } else { $expectedWorkspace }
+                    if ($literal -ne $expected) {
+                        $offender.Add("$($file.Name):$lineNumber has '$literal', but naming.bicep derives '$expected'")
+                    }
+                }
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 0 `
+            -Because 'if no deployable artifact names the Fabric workspace or lakehouse, this test asserts nothing'
+        $offender -join ' | ' | Should -BeNullOrEmpty `
+            -Because "a Fabric name that does not match naming.bicep's fabricWorkspaceName/fabricLakehouseName is a hardcoded company prefix, which a rebrand carries into Azure and leaves behind (F90)"
+    }
+
     It 'no bicepparam trusts readEnvironmentVariable to supply the estate default' {
         # readEnvironmentVariable's own default fires only when the variable is UNSET, and an
         # undefined GitHub variable expands to the EMPTY STRING (F26). Verified live: with

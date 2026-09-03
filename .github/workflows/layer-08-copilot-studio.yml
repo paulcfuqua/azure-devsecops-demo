@@ -671,6 +671,16 @@ jobs:
           RG_APPS: ${{ steps.names.outputs.rg-apps }}
           CA_MCP: ${{ steps.names.outputs.ca-mcp }}
           OVERRIDE: ${{ vars.MLS_MCP_SERVER_URL }}
+          # actionlint reports "Context access might be invalid: MCP_ENDPOINT_PATH".
+          # NOISE, deliberately, and triaged 2026-09-03: the variable is not defined and is
+          # not meant to be. The question to ask of one of these warnings is never "does
+          # this variable exist" but "what happens when it does not" — and here the answer
+          # is `/mcp`, which is the intended default and the path the MCP server actually
+          # serves. The variable exists only as an escape hatch for a server mounted
+          # elsewhere. No company prefix, no hostname, nothing a rebuild or a rebrand can
+          # invalidate — unlike MLS_RG_APPS and MLS_LAKEHOUSE_NAME, whose identical-looking
+          # warnings were both real defects (a hardcoded company prefix propping up a
+          # non-existent variable). Do not "fix" this by defining the variable.
           ENDPOINT_PATH: ${{ vars.MCP_ENDPOINT_PATH || '/mcp' }}
         run: |
           set -euo pipefail
