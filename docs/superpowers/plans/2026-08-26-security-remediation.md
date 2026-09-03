@@ -1,5 +1,16 @@
 # Security Remediation Implementation Plan
 
+> **HISTORY — this plan was executed. It is kept as the record of what was done and why,
+> not as a description of current state or of work still to do.**
+>
+> For what is true now, read [docs/DEMO-READINESS.md](../../DEMO-READINESS.md). For how
+> each thing came to be true — including the diagnoses that turned out to be wrong — read
+> [docs/findings/2026-09-03-finding-register.md](../../findings/2026-09-03-finding-register.md).
+>
+> Checkboxes below are left in the state they were in. An unticked box here does **not**
+> mean outstanding work; it means the plan moved on. Nothing is deleted, because a plan
+> that edits its own premises after the fact stops being evidence of anything.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close the 15 findings from the 2026-08-26 pre-publication security review, capturing each one first as durable data so nothing survives only in conversation. Task 2 scrubs for 800-53/CMMC gaps the 800-171 pass didn't cover and found three more (F16-F18), bringing the total to 18.

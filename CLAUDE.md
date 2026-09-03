@@ -256,14 +256,28 @@ rebuild that completes. This is first because everything else is measured agains
 rebuilt estate: if the environment cannot be recreated, nothing built on it can be trusted
 or shown twice.
 
-*Both named blockers here are closed as of 2026-09-02, and this paragraph used to say
-otherwise.* F107 — Log Analytics soft-deleting for 14 days so a same-name recreate recovered
-the old workspace — is fixed: the teardown purges with `--force`, a failure-classes test
-asserts it, and the last two `infra-down` runs succeeded. The other was L8, which never
-imported because its default asked for a package type the source cannot produce (F132, fixed
-and proven). **What is untested is not the known blockers but everything added since the last
-rebuild** — derived DAST targets, Entra probe roles, the posture feeds, an Easy Auth audience
-that was hand-patched and then reverted to the template. That is the argument FOR running it.
+**RUN, AND LARGELY ACHIEVED, 2026-09-03.** The estate was torn down (14 minutes, clean) and
+rebuilt (87 minutes), and came back with the same 30 resources. L2, L3, L5, L6 and L7 all
+signed off on the rebuilt estate — L7 at 7 of 7, including V7.6, the criterion that asserts
+the data API returns rows rather than a status code.
+
+**All four of the never-rebuilt fixes survived**: the derived DAST targets (six enumerated
+from Azure, zero High-risk alerts), the Entra probe roles (all three Easy Auth apps
+authenticated), F107's Log Analytics purge (a genuinely new workspace, proven by
+`customerId`), and the Easy Auth audience — which was correctly *erased*, because the
+template no longer produces it. That last one settled F159 against F161 empirically: the
+hand-applied audience was never load-bearing.
+
+**What the rebuild actually bought was not those four.** It failed twice before it passed
+and produced eleven findings (F167–F177), and the three most valuable were not broken
+infrastructure but **green checks verifying nothing**: L4's audit had never once executed on
+any run in the repository's history, V11.2 had never had evidence on any teardown ever run,
+and a step whose only job is to announce a failed grant was reporting success. Nothing but a
+real teardown finds those.
+
+**Still open from phase 1:** L4 cannot be independently audited until a human performs
+g0-bootstrap step 11d (`mls-verifier` holds no Security & Compliance grant — a tenant change,
+so G3); and V11.2's fix is itself untested, because no teardown has happened since it landed.
 
 **2. The apps tell the truth about what is there.** The dashboards render real rows from the
 lakehouse, and what they display matches what the estate actually contains. *F101 was the

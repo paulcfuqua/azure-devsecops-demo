@@ -1,10 +1,20 @@
 # G1 Master Plan — Meridian Launch Systems Demo
 
-> **Before trusting anything below: [docs/DEMO-READINESS.md](../../DEMO-READINESS.md) is the register of what
-> is actually verified, what is broken, and what nobody has looked at.** A layer signing off
-> means its own criteria passed, not that the product works - and as of 2026-09-01 the apps
-> serve no data (F101), the label taxonomy has never been applied, and the rebuild fails at
-> L6 (F107). None of that shows as a red pipeline.
+> **HISTORY — this plan was executed. It is kept as the record of what was approved at G1,
+> not as a description of current state.** The twelve layers below were built; several of
+> the statements about them are now years of estate-time out of date in demo terms.
+>
+> **For current state read [docs/DEMO-READINESS.md](../../DEMO-READINESS.md)**, the live
+> scorecard, and [docs/findings/2026-09-03-finding-register.md](../../findings/2026-09-03-finding-register.md)
+> for how each thing came to be true.
+>
+> This banner previously said the apps served no data (F101), the label taxonomy had never
+> been applied, and the rebuild failed at L6 (F107). **All three are closed** — V7.6 now
+> asserts the data API returns rows, the labels are applied, and the estate was destroyed
+> and rebuilt on 2026-09-03. The sentence is preserved here rather than deleted because a
+> plan that silently updates its own premises is not a record. A layer signing off still
+> means its own criteria passed, not that the product works — and that distinction is the
+> most valuable thing this plan produced.
 
 > **For agentic workers:** This is the program-level plan the human approves once at G1.
 > Each layer below is decomposed into a full task-level implementation plan (superpowers

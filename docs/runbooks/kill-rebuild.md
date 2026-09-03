@@ -130,15 +130,37 @@ outcome; the parallelization is the conservative schedule that achieves it.
 audit green. Recorded from two independent sources (script timestamps + GitHub run
 timestamps) into `verification/reports/rebuild-proof.md` (L11).
 
-**Critical path** (the thing to watch when the clock runs hot):
+**MEASURED 2026-09-03, and the model below was wrong about where the time goes.** The
+first full cycle since this section was written came in at **87 minutes**, not 52 — and
+not because any deploy ran long. Every deploy was at or under estimate; two audits were
+not:
 
 ```
-up.ps1 → [L2–L4 no-ops ~4m] → L6 platform ~15m → L7 apps ~12m → L8 mcp+repoint+eval ~12m → audits ~9m
-                             ↘ L5 fabric+seed ~22m (parallel; must finish before L8's eval)
-≈ 52 minutes nominal, ~8 minutes of margin
+deploy work, all legs               ~30 min   (L2 8.3 · L6 13.1 · L5 seed 4.0 · L7 3.8)
+verification, all legs              ~84 min   (L5 verify 31.2 · L7 verify 50.6 · rest <2)
+wall clock                           87 min
 ```
 
-What eats the margin, in observed-likelihood order:
+L5's seed took **4 minutes against a claimed 20–25**; L7's deploy **3.8 against 10–15**.
+The two long audits were on their *failing* run, which is the point: an audit that fails
+late costs its whole retry window, and the two that did were 94% of all verification time.
+
+The nominal model, kept because it is still the right shape for the DEPLOY half:
+
+```
+up.ps1 → [L2–L4 ~12m] → L6 platform ~15m → L7 apps ~12m → L8 mcp+repoint+eval ~12m → audits
+                       ↘ L5 fabric+seed ~22m (parallel; must finish before L8's eval)
+```
+
+What eats the margin — **reordered by what was actually observed**, not by expectation:
+
+0. **Audit retry windows, by a wide margin.** A criterion that inherits a window sized for
+   something it is not waiting on spends the whole window reaching a verdict that was
+   settled at minute zero. Two instances were found and fixed on this cycle: L3's drift
+   sweep burned 45.9 minutes on a fact true at the start (F169), and L5's V5.2 burned 30
+   minutes — 91 attempts — on a permission answer that could not change by waiting (F171).
+   Both now fail fast. **Check this first when the clock runs hot**, before suspecting any
+   deploy.
 
 1. **Fabric SQL-endpoint sync lag** after lakehouse recreation (L5 audit's V5.3
    wait) — the single most variable leg.

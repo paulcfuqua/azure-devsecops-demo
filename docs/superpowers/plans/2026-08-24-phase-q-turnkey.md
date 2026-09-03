@@ -1,5 +1,16 @@
 # Phase Q — Turn-Key Plan (pre-tenant, cloud-path complete)
 
+> **HISTORY — this plan was executed. It is kept as the record of what was done and why,
+> not as a description of current state or of work still to do.**
+>
+> For what is true now, read [docs/DEMO-READINESS.md](../../DEMO-READINESS.md). For how
+> each thing came to be true — including the diagnoses that turned out to be wrong — read
+> [docs/findings/2026-09-03-finding-register.md](../../findings/2026-09-03-finding-register.md).
+>
+> Checkboxes below are left in the state they were in. An unticked box here does **not**
+> mean outstanding work; it means the plan moved on. Nothing is deleted, because a plan
+> that edits its own premises after the fact stops being evidence of anything.
+
 > **Sponsor directive, 2026-08-24:** *"I don't plan on demo'ing locally, only on the
 > Azure tenant… get us to the turn-key level when tenant is provisioned and we can just
 > light the fuse and let it build."*
