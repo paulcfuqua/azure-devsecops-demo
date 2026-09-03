@@ -38,6 +38,39 @@ BeforeAll {
     # No Set-StrictMode -Off: the audit scripts set -Version Latest and CI runs them that
     # way, so the harness must not relax the language mode it is testing (F49).
 
+    # THE STUB IS DEFINED UNCONDITIONALLY, AND THAT IS THE POINT.
+    #
+    # Pester cannot mock a command that does not exist, and the lint job installs
+    # PSScriptAnalyzer, Pester and SqlServer - not ExchangeOnlineManagement. So the first
+    # version of this file passed on a Windows box with the real module installed and
+    # failed all nine on ubuntu-latest with "Could not find Command Connect-IPPSSession":
+    # a test about a platform-gated parameter that was itself platform-dependent, which is
+    # the same shape as the defect it exists to pin.
+    #
+    # Defining it inside the MODULE's session state - where Connect-MlsCompliance resolves
+    # its commands - makes every run identical on every platform and independent of whether
+    # the real module happens to be installed. The parameter set here is the LINUX one
+    # (no CertificateThumbprint); the Windows context below re-stubs it with that parameter
+    # added, so both platforms are exercised everywhere rather than one being exercised
+    # wherever the suite happens to run.
+    # Set-Item on the function: drive, NOT a bare `function` keyword. InModuleScope runs
+    # its scriptblock in a CHILD scope of the module, so a plain definition evaporates the
+    # moment it returns and Mock still reports "Could not find Command". Writing
+    # function:script: puts it in the module's own script scope, where it persists and
+    # where Connect-MlsCompliance resolves.
+    InModuleScope MlsAudit {
+        Set-Item -Path 'function:script:Connect-IPPSSession' -Value {
+            param($AppId, $Organization, $Certificate, $CertificateFilePath,
+                [SecureString]$CertificatePassword, $ShowBanner)
+            # Referenced so the parameters are not 'unused': this stub exists to declare a
+            # parameter SET - which names Connect-IPPSSession will and will not bind on a
+            # given platform - and has deliberately no behaviour. CertificatePassword is
+            # typed SecureString because that is what the real cmdlet takes.
+            $null = $AppId, $Organization, $Certificate, $CertificateFilePath,
+                $CertificatePassword, $ShowBanner
+        }
+    }
+
     $script:Root = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-scc-$([guid]::NewGuid().ToString('n'))"
     New-Item -ItemType Directory -Path $script:Root -Force | Out-Null
 
@@ -157,6 +190,22 @@ Describe 'Connect-MlsCompliance' {
     Context 'on Windows, where -CertificateThumbprint exists' {
 
         BeforeEach {
+            # RE-STUBBED WITH THE WINDOWS PARAMETER SET, so this context exercises a
+            # command that can actually bind -CertificateThumbprint. Without this the
+            # stub above (deliberately missing it, as Linux is) would be the thing under
+            # test here too, and a passing assertion would prove nothing about Windows.
+            InModuleScope MlsAudit {
+                Set-Item -Path 'function:script:Connect-IPPSSession' -Value {
+                    param($AppId, $Organization, $Certificate, $CertificateFilePath,
+                        [SecureString]$CertificatePassword, $CertificateThumbprint, $ShowBanner)
+                    # Referenced so the parameters are not 'unused': this stub exists to declare a
+                    # parameter SET - which names Connect-IPPSSession will and will not bind on a
+                    # given platform - and has deliberately no behaviour. CertificatePassword is
+                    # typed SecureString because that is what the real cmdlet takes.
+                    $null = $AppId, $Organization, $Certificate, $CertificateFilePath,
+                        $CertificatePassword, $CertificateThumbprint, $ShowBanner
+                }
+            }
             Mock Connect-IPPSSession { $script:Captured = $PSBoundParameters } -ModuleName 'MlsAudit'
             Mock Get-Command {
                 return [pscustomobject]@{
@@ -200,6 +249,21 @@ Describe 'Connect-MlsCompliance' {
     Context 'inputs that cannot open a session' {
 
         BeforeEach {
+            # Back to the Linux parameter set: the Windows context above replaced the
+            # module-scope stub, and a context that inherited it would be testing a
+            # different command from the one it names.
+            InModuleScope MlsAudit {
+                Set-Item -Path 'function:script:Connect-IPPSSession' -Value {
+                    param($AppId, $Organization, $Certificate, $CertificateFilePath,
+                        [SecureString]$CertificatePassword, $ShowBanner)
+                    # Referenced so the parameters are not 'unused': this stub exists to declare a
+                    # parameter SET - which names Connect-IPPSSession will and will not bind on a
+                    # given platform - and has deliberately no behaviour. CertificatePassword is
+                    # typed SecureString because that is what the real cmdlet takes.
+                    $null = $AppId, $Organization, $Certificate, $CertificateFilePath,
+                        $CertificatePassword, $ShowBanner
+                }
+            }
             Mock Connect-IPPSSession {} -ModuleName 'MlsAudit'
             Mock Get-Command {
                 return [pscustomobject]@{ Parameters = @{ CertificateFilePath = $null } }
