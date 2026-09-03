@@ -117,6 +117,40 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F165 — V9.5 asserted the security control should be OFF *(fixed 2026-09-02)*
+
+Enabling Defender for Containers so the estate would produce posture (F153) made V9.5 fail, and
+the sponsor put their finger on why: *"I think it was built on a false premise."*
+
+They were right. The criterion required
+
+    pricingTier == 'Free'                                  <- the END state
+    AND paired Standard-then-Free writes in the window      <- proof it toggled
+
+which encodes an assumption nobody ever stated: that this estate's normal condition is Defender
+**switched off**, and the plan is turned on only briefly to demonstrate that turning it on works.
+For a security demo that is backwards. The old failure text even called an enabled security
+control *"a cost leak: disable immediately"*.
+
+**Decision: the plan stays on.** ~USD 0.29/day, on a free trial until 2026-10-01 that outlasts
+the demo window, and it is one of the five plans whose enablement took Defender's assessment
+surface from 0 to 6 findings in seconds.
+
+**This needed code, not just documentation**, and that was worth saying out loud. Leaving a
+criterion permanently red while a document explains that the red is fine produces exactly the
+thing this repository spends its budget avoiding: a failing check people learn to scroll past.
+CLAUDE.md's own rule is that a finding with a test is closed and a finding with only prose is
+open.
+
+So V9.5 now asserts what the estate intends - **the plan is Standard** - and a DISABLED plan is
+the failure, with a message that sends the reader to the G2 gate (and to
+`freeTrialRemainingTime` first, since the delta is zero while the trial runs) rather than telling
+them to switch protection off. The Activity Log write count is **reported beside the tier, not
+required**: a quiet day with nobody touching the plan is the normal case, and failing on it would
+make the criterion red most days.
+
+Mutation-tested: restoring the old premise fails four tests. 21 L9 audit tests pass.
+
 ### F164 — sweeping today's classes across the repo, and what it found *(2026-09-02)*
 
 The sponsor asked the right question: *"we have patterns we may need to scan on other layers like
@@ -883,7 +917,7 @@ the same job. Mutation-tested - breaking the derive fails it. On its first run t
 `layer-09-devsecops.yml` too; that one was prose drift in an input description rather than a
 second hole, and the description was corrected.
 
-### F143 — one idle database is 99% of the bill, and auto-pause is working correctly *(open, needs a decision)*
+### F143 — one idle database is 99% of the bill, and auto-pause is working correctly *(accepted 2026-09-02)*
 
 Measured directly from Azure Monitor rather than inferred, because Cost Management was
 throttling (F140, and retrying deepens the window):
@@ -920,8 +954,15 @@ the estate verifying itself, which is the thing this repository is *for*.
   and `data-api` reads Fabric for most feeds. If Azure SQL only backs one feed, retiring it is
   the whole $120. That is a design question worth an hour before it is worth a change.
 
-**Not acted on.** Every lever trades away either verification frequency or a component the
-demo may need, and none of the three is mine to choose.
+**DECIDED 2026-09-02: run as is.** The sponsor's words - *"we seem to be ok at the burn rate we
+have for 3 more weeks. If it starts feeling like pressure and we need relief, we can turn off
+then."* Option 1, with an explicit trigger rather than an open question.
+
+That is a reasonable call on the numbers: ~$120 of a $200 ceiling leaves headroom, the demo
+window closes ~2026-09-21, and both cheaper options cost something real - self-healing latency on
+the one undemonstrated showpiece, or an hour of design work on whether the database is needed at
+all. **The relief lever stays documented above** so that if pressure does arrive, the next reader
+finds the options already costed rather than starting the analysis over.
 
 ### F142 — the sign-in expires after an hour and nothing renewed it *(fixed 2026-09-02)*
 

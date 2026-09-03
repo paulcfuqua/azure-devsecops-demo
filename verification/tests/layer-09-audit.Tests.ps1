@@ -68,7 +68,8 @@ Describe 'layer-09-audit' {
         $script:ReleaseAsset = @('launch-ops.spdx.json', 'control-tower.spdx.json')
         $script:SpdxPackages = @(@{ name = 'react'; versionInfo = '19.0.0' })
         $script:ZapAlert = @(@{ riskdesc = 'Medium (Medium)'; alert = 'Missing header' })
-        $script:PricingTier = 'Free'
+        # The estate deliberately runs this plan (F165): Standard is the healthy state.
+        $script:PricingTier = 'Standard'
         $script:PricingEvents = @(
             [pscustomobject]@{ op = 'Microsoft.Security/pricings/write'; status = 'Succeeded'; time = '2026-08-24T09:00:00Z' }
             [pscustomobject]@{ op = 'Microsoft.Security/pricings/write'; status = 'Succeeded'; time = '2026-08-24T09:10:00Z' }
@@ -159,27 +160,46 @@ Describe 'layer-09-audit' {
             $row.Detail | Should -BeLike '*in-process*'
         }
 
-        It 'requires the paired Standard-then-Free writes, not merely a Free tier' {
+        It 'reports the pricings write count beside the tier, without requiring it' {
+            # Was: "requires the paired Standard-then-Free writes, not merely a Free
+            # tier". F165 inverted the premise - the plan is meant to be ON - so the
+            # write count is evidence offered to a reader, not a condition. Requiring
+            # it would fail the criterion on every day nobody touched the plan.
             $context = Invoke-AuditForTest
-            (Get-Row -Context $context -Id 'V9.5').Observed | Should -BeLike '*toggle exercised*'
+            $row = Get-Row -Context $context -Id 'V9.5'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*pricings write event(s)*'
         }
     }
 
     Context 'a criterion fails on a realistic wrong value' {
-        It 'fails V9.5 when Defender was left on Standard' {
-            $script:PricingTier = 'Standard'
+        It 'fails V9.5 when the Defender plan is OFF, and says enabling it is a G2 call' {
+            # INVERTED BY F165. This test used to assert the opposite - that an
+            # ENABLED plan is a failure and should be "disabled immediately" - which
+            # encoded the false premise that this estate's normal state is Defender
+            # switched off. For a security demo that is backwards.
+            $script:PricingTier = 'Free'
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V9.5'
             $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike "*'Standard', expected 'Free'*"
-            $row.Detail | Should -BeLike '*disable immediately*'
+            $row.Observed | Should -BeLike "*'Free', expected 'Standard'*"
+            # The remedy is a SPEND INCREASE, so the message must send the reader to
+            # the gate rather than telling them to just turn it on.
+            $row.Detail | Should -BeLike '*G2*'
+            $row.Detail | Should -BeLike '*freeTrialRemainingTime*'
             Get-MlsExitCode -Context $context | Should -Be 1
         }
 
-        It 'fails V9.5 when the tier is Free but the toggle was never exercised' {
+        It 'PASSES V9.5 on a quiet day with no pricings writes at all' {
+            # The Activity Log window is reported, not required (F165). Requiring a
+            # write would make the criterion red every day nobody touched the plan -
+            # which is most days, and exactly the "red check people learn to ignore"
+            # this repository spends its budget avoiding.
             $script:PricingEvents = @()
             $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V9.5').Observed | Should -BeLike '*only 0 Microsoft.Security/pricings write event*'
+            $row = Get-Row -Context $context -Id 'V9.5'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*Standard (enabled)*'
         }
 
         It 'fails V9.4 when ZAP reports a High alert' {
