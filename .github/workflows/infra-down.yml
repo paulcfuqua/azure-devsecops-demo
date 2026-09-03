@@ -313,7 +313,7 @@ jobs:
           fi
 
           # Captured BEFORE the delete because it is the only value that can tell a
-          # genuinely new workspace from a recovered one (F167). Printed for the operator
+          # genuinely new workspace from a recovered one (F174). Printed for the operator
           # and the rebuild to compare against; see the post-condition block below.
           old_customer_id="$(az monitor log-analytics workspace show \
                                --resource-group "${RG_PLATFORM}" --workspace-name "${LAW_NAME}" \
@@ -328,7 +328,7 @@ jobs:
             echo "::warning title=Workspace purge failed::Could not purge ${LAW_NAME}. The resource-group delete below will SOFT-delete it instead, and the next rebuild will recover it - at which point L6's alert rules fail with 'The workspace could not be found' (F107). Purge it by hand before rebuilding: az monitor log-analytics workspace delete -g ${RG_PLATFORM} -n ${LAW_NAME} --force --yes"
           fi
 
-          # F167 - DO NOT ASSERT THE PURGE FROM `list-deleted-workspaces`. IT CANNOT SEE IT.
+          # F174 - DO NOT ASSERT THE PURGE FROM `list-deleted-workspaces`. IT CANNOT SEE IT.
           #
           # This block used to read that list and, finding the workspace still in it, emit
           # "a same-name rebuild will RECOVER it and L6's alert rules will fail (F107)".
@@ -367,7 +367,7 @@ jobs:
             echo "old workspace, at which point L6's alert rules fail with"
             echo "\`The workspace could not be found\`. A tombstone left in"
             echo "\`az monitor log-analytics workspace list-deleted-workspaces\` is expected"
-            echo "after \`--force\` and is NOT evidence of a failed purge (F167)."
+            echo "after \`--force\` and is NOT evidence of a failed purge (F174)."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Delete in parallel, then wait for the estate to drain

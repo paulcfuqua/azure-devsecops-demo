@@ -1170,7 +1170,7 @@ Describe 'a teardown leaves nothing a rebuild will recover' {
         # workspace az calls Succeeded explains nothing. A teardown that leaves a recoverable
         # workspace behind must say so, at the moment it happens. THAT INTENT IS UNCHANGED.
         #
-        # What changed is the mechanism, because the old one could not do the job (F167).
+        # What changed is the mechanism, because the old one could not do the job (F174).
         # This used to require the string 'Soft-deleted workspace remains', emitted when
         # `list-deleted-workspaces` still listed the workspace after the purge. That warning
         # fired on EVERY teardown and was false every time: `--force` purges the workspace
@@ -1199,9 +1199,9 @@ Describe 'a teardown leaves nothing a rebuild will recover' {
             -Because 'the value is useless if it stays in a log line nobody carries to the rebuild'
 
         # THE REGRESSION GUARD, and the reason this test is not merely relaxed. Anyone
-        # re-adding a verdict derived from list-deleted-workspaces re-adds F167.
+        # re-adding a verdict derived from list-deleted-workspaces re-adds F174.
         $script:Down | Should -Not -Match 'Soft-deleted workspace remains' `
-            -Because 'that warning is emitted on every teardown regardless of whether the purge worked, because --force leaves a tombstone in list-deleted-workspaces - an auditor that cannot see a control must not be able to report it as present either (F167)'
+            -Because 'that warning is emitted on every teardown regardless of whether the purge worked, because --force leaves a tombstone in list-deleted-workspaces - an auditor that cannot see a control must not be able to report it as present either (F174)'
     }
 }
 
