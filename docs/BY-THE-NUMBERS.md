@@ -1,35 +1,52 @@
 # By the Numbers
 
-> ## Two measurements, four days apart
+> ## Two measurements, six days apart
 >
 > This file was written on **2026-08-28**, when the repository existed and **the tenant did
 > not**. Its headline claim — *zero cloud writes* — was the point: an entire enterprise estate
 > authored, tested and made auditable before a single resource was created.
 >
 > **That is no longer the state of the world, and the original text is kept anyway**, because
-> a measurement is only worth anything if it stays what it was. The estate has since been
-> deployed, torn down, rebuilt and independently audited. The table immediately below is the
-> **2026-09-02** re-measurement against the live tenant; everything after it is the untouched
-> 2026-08-28 record.
+> a measurement is only worth anything if it stays what it was. The table immediately below is
+> the **2026-09-03** re-measurement, taken the morning the estate was torn down and rebuilt;
+> everything after it is the untouched 2026-08-28 record.
 >
-> | | 2026-08-28 · pre-tenant | 2026-09-02 · deployed |
+> | | 2026-08-28 · pre-tenant | 2026-09-03 · deployed and rebuilt |
 > |---|---|---|
-> | Authored lines | 118,314 | **142,405** |
-> | Tracked files | 567 | **599** |
-> | Automated tests | 2,342 | **2,443** (0 failing) |
-> | Verification criteria | 45 + 6 | **56**, all as deployed-state audits |
-> | Commits | 162 | **334** · 183 PRs |
+> | Authored lines | 118,314 | **145,379** (635 files; 7 lockfiles and PDFs excluded) |
+> | Tracked files | 567 | **642** |
+> | Automated tests | 2,342 | **2,663** (0 failing) — Pester 1,598 · npm 1,035 · pytest 30 |
+> | Verification criteria | 45 + 6 | **57**, all as deployed-state audits |
+> | Commits | 162 | **356** · 205 PRs |
 > | Cloud writes | **0** | 30 resources · 4 resource groups · 1 region |
-> | Azure spend | — | **$7.70** of a $200 ceiling |
-> | Live data rows | 0 | **8,957** across 10 lakehouse tables |
-> | Showpieces working | 0 of 4 | **3 of 4** |
-> | NIST 800-171 requirements | 110 rendered, 0 COMPLIANT | 110 · 15 PARTIAL · 1 GAP · 94 NOT_ASSESSED |
+> | **Resources after a destroy and rebuild** | — | **30** — identical, same names, same ingress shape |
+> | Azure spend | — | *not measurable today; see below* |
+> | Live data rows | 0 | `launches` = **1,200**, confirmed by V5.3 against the SQL endpoint |
+> | Showpieces working | 0 of 4 | **1 fully, 3 qualified** — see `DEMO-READINESS.md` |
+> | NIST 800-171 requirements | 110 rendered, 0 COMPLIANT | 110 · 15 PARTIAL · 1 GAP · 94 NOT_ASSESSED · **0 machine-verified** |
 >
-> Two caveats a reader should carry, because omitting them would be the exact failure this
-> repository spends its budget preventing. The compliance row was **collected 2026-08-29 and is
-> stale** — a fresh collection is owed before that number is quoted. And the 2026-09-02 figures
-> were measured with live Azure, Graph, Fabric and GitHub APIs, so unlike the 2026-08-28 column
-> they are *not* reproducible from a checkout alone.
+> **The row that matters is the new one.** The estate was destroyed and rebuilt on 2026-09-03
+> and came back with the same thirty resources. That is the claim the repository exists to
+> make, and until that morning it was an assertion rather than a measurement.
+>
+> Four caveats, because omitting them is the exact failure this repository spends its budget
+> preventing:
+>
+> - **The compliance row is stale — collected 2026-08-29**, and it is stale for a reason that
+>   is itself an open finding (F120): the nightly state cannot merge, so `compliance/state/`
+>   holds two snapshots instead of a dozen.
+> - **Azure spend could not be measured.** `az consumption usage list` returns zero records for
+>   this subscription type and `costmanagement query` is absent from this CLI build. The last
+>   figure (**$7.70**, 2026-09-02, of which Azure SQL was 99%) is not comparable anyway, since
+>   the estate was destroyed at 02:00Z and rebuilt. Re-measure from Cost Management before
+>   quoting a number.
+> - **"Showpieces working" went DOWN, and that is the honest direction.** The previous *3 of 4*
+>   was measured on an estate carrying hand-applied state. On a rebuilt one, the control tower
+>   is verified to serve rows (V7.6), while the copilot's answers cannot be independently
+>   re-derived (three L8 criteria skip on a missing eval artifact) and the compliance board's
+>   state is five days old.
+> - **The 2026-09-03 figures came from live Azure, Graph, Fabric and GitHub APIs**, so unlike
+>   the 2026-08-28 column they are *not* reproducible from a checkout alone.
 
 
 ## The 2026-08-28 record, unchanged
