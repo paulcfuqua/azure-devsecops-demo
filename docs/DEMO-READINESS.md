@@ -117,6 +117,43 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F164 — sweeping today's classes across the repo, and what it found *(2026-09-02)*
+
+The sponsor asked the right question: *"we have patterns we may need to scan on other layers like
+this"*. CLAUDE.md's own rule says a class paid for once becomes a check, so the classes from the
+DAST work were swept across the whole repository rather than left in L9.
+
+**The sweep resolved F151 outright.** The two Key Vault secrets recorded as unaccounted-for are
+not mysterious at all:
+
+- **`mls-data-api-github-token`** is created by **G0 step 11b**, added 2026-09-01 for finding
+  F116 - the read-only GitHub token behind Control Tower's Dev and Sec tabs. Entirely
+  legitimate, fully documented in a runbook, and simply never added to rule 5's list.
+- **`mls-github-token`** is its **pre-rename name**, left behind when 11b renamed it. A genuine
+  orphan; rotate and delete it, which is a deletion and so the sponsor's call rather than mine.
+
+Neither was dangerous. The finding is that a list which calls itself *"the complete list of
+long-lived credentials"* - and which `gitleaks.yml` mirrors as the rotation runbook someone
+follows after a leak - drifted from the estate silently, and the two documents agreed with each
+other while both disagreed with the vault.
+
+**Encoded:** every `az keyvault secret set --name X` in the runbooks must name X in CLAUDE.md
+rule 5 **and** in gitleaks.yml's rotation table. Mutation-tested: removing one mention from
+CLAUDE.md fails it. CLAUDE.md has always said those two must stay in sync; nothing enforced it
+until now.
+
+**Three working agreements added**, because these generalise past the layer that paid for them:
+
+- *A probe must be made with the client that will make it* (F158)
+- *A change is finished when a rebuild reproduces it, not when the thing works* (F159, F163)
+- *Evidence that cannot distinguish two states is not evidence* (F162)
+
+**Still open from the sweep, and worth someone's hour:** the feed contract is declared twice -
+`apps/data-api/src/contract/feeds.ts` and `apps/control-tower/src/providers/types.ts` - with
+nothing keeping them equal. F154 hit it (a field added to one arrived `undefined` from the other)
+and the fixtures are parity-checked, but the *types* are not. Same shape as the credential list
+and the two token mints: two copies of one fact.
+
 ### F163 — the token was minted in two places and only one was fixed *(fixed 2026-09-02)*
 
 F162's proof step worked immediately, by producing **one line where there should have been
