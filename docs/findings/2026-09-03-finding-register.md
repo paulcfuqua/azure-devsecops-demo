@@ -119,6 +119,49 @@ FQDN moved to `delightfulwave-5d53f2e4` and `MLS_MCP_SERVER_URL` is unset, so th
 have derived the right target. That wants its own investigation, with the eval fixed first so it
 can report what it finds.
 
+### F184 — with the eval finally able to run, the agent makes no tool calls at all *(open, 2026-09-03)*
+
+F183's fix (classify the error) and its enablement (grant the deployer Key Vault Secrets
+User, both merged) did what they were for: **`layer-08-agent-eval` uploaded for the first
+time in the project's history**, and the eval reported a real verdict instead of a green
+job over nothing.
+
+    passed 0/10 (bar 9)   p95 4.0s   path mcp-tools-only
+    conversation 5VSgXPoSugq5td4vg44Azd-us
+
+    TOTAL tool calls across all ten questions : 0
+    TOTAL adaptive cards                      : 0
+    questions reporting a transport error     : none
+
+    8x  "Escalating to a representative is not currently configured for this agent..."
+    2x  "I'm sorry, I'm not sure how to help with that. Can you try rephrasing?"
+
+**Transport is healthy and the agent is empty.** Direct Line connects, a conversation is
+allocated, every question is answered inside four seconds, and no question reports an error
+— so this is not a connectivity, auth or timeout problem. The agent is routing to its
+BUILT-IN system topics (`Escalate`, fallback) rather than to any custom topic, and it
+invokes **zero tools**, on every question, for both wordings.
+
+That matches the browser exactly: asked the golden question and a plain rephrasing through
+the Ask tab, the agent gave the same fallback both times.
+
+**What this rules in and out.** Not the MCP FQDN going stale on rebuild — that was the
+leading hypothesis from `kill-rebuild.md` § 4 leg 6, and a repoint failure would produce
+tool calls that FAIL, not an absence of tool calls. Zero invocations means the agent does
+not believe it has tools to call, which points at the solution import: the topics and the
+tool/connector components, not the endpoint they would target. V8.1 passes, so the
+solution's component list matches what was committed — which makes what is *in* that list
+the next thing to read.
+
+**Not diagnosed further here, deliberately.** This is a fresh investigation and it belongs
+to whoever owns L8, with the evidence now available rather than inferred: a real eval
+artifact, per-question tool-call counts, and a reproduction in a browser.
+
+**The point worth keeping.** For the life of this project L8 reported green while the agent
+answered nothing, because the check that would have caught it could not see. Two fixes
+later the same estate, unchanged, reports 0/10. Nothing about the agent got worse today —
+only the reporting got honest.
+
 ### F182 — V6.2 reports "no result" where its sibling reports an expired credential *(open, 2026-09-03)*
 
 L6's verify has failed on the rebuilt estate twice, ~3 hours apart, on the same criterion:
