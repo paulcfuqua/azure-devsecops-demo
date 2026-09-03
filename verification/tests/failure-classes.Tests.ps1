@@ -1768,3 +1768,60 @@ docstring says so, and V7.3 has always done it that way.
 "@
     }
 }
+
+Describe 'every credential a runbook creates is in the closed inventory' {
+    # F151/F164. CLAUDE.md rule 5 calls its credential list "the complete list of
+    # long-lived credentials" and names two Key Vault entries. The vault held four.
+    #
+    # A census found the extra two; this sweep is what would have found them the day
+    # they appeared. `mls-data-api-github-token` turned out to be entirely legitimate
+    # - G0 step 11b creates it, added for F116 - and simply never reached rule 5's
+    # list. `mls-github-token` is its pre-rename name, left behind.
+    #
+    # The point is not that either was dangerous. It is that a list which calls
+    # itself complete, and is the rotation runbook after a leak, drifted silently
+    # from the thing it describes. A leak would have rotated the named ones and left
+    # the rest.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:Claude = Get-Content -LiteralPath (Join-Path $script:Root 'CLAUDE.md') -Raw
+        $script:Gitleaks = Get-Content -LiteralPath (Join-Path $script:Root '.github/workflows/gitleaks.yml') -Raw
+
+        # Every Key Vault secret the runbooks tell an operator to create.
+        $script:RunbookSecrets = @(
+            Get-ChildItem -Path (Join-Path $script:Root 'docs/runbooks') -Filter '*.md' -Recurse -File |
+                ForEach-Object { Select-String -LiteralPath $_.FullName -Pattern 'keyvault secret set[^\r\n]*--name\s+([A-Za-z0-9$_"{}-]+)' -AllMatches } |
+                ForEach-Object { $_.Matches } |
+                ForEach-Object { $_.Groups[1].Value.Trim('"') } |
+                # A name built from a variable is resolved elsewhere and cannot be
+                # compared as a literal; the variable itself must be in the list.
+                Where-Object { $_ -notmatch '^\$' -and $_ -notmatch '^\$\{' } |
+                Sort-Object -Unique
+        )
+    }
+
+    It 'finds secrets in the runbooks, so the sweep is not vacuous' {
+        $script:RunbookSecrets.Count | Should -BeGreaterThan 0
+    }
+
+    It 'names every runbook-created secret in CLAUDE.md rule 5' {
+        $missing = @($script:RunbookSecrets | Where-Object { $script:Claude -notmatch [regex]::Escape($_) })
+        $missing -join ', ' | Should -BeNullOrEmpty -Because @"
+CLAUDE.md rule 5 calls its list "the complete list of long-lived credentials" and is the
+rotation runbook after a leak. A secret a runbook creates and that list does not name is a
+credential nobody would rotate.
+"@
+    }
+
+    It 'names every runbook-created secret in the gitleaks rotation table' {
+        # CLAUDE.md: "gitleaks.yml's incident text is the rotation list and must stay
+        # in sync with this one." Nothing enforced that until now, and the two agreed
+        # with each other while both disagreed with the vault.
+        $missing = @($script:RunbookSecrets | Where-Object { $script:Gitleaks -notmatch [regex]::Escape($_) })
+        $missing -join ', ' | Should -BeNullOrEmpty -Because @"
+gitleaks.yml's incident text is what someone follows at 3am after a leak. A credential absent
+from it is one that does not get rotated.
+"@
+    }
+}

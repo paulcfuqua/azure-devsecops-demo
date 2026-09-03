@@ -175,6 +175,31 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
   was a GitHub variable containing a Container Apps FQDN, which is a name that cannot survive
   the rebuild this demo exists to show (F129, F90's class in configuration).
 
+- **A probe must be made with the client that will make it.** Status codes are
+  content-negotiated. The DAST's auth-wall detector looked for a 302 to
+  login.microsoftonline.com and was validated with PowerShell, which sends browser-like
+  headers and gets exactly that. CI runs `curl`, which sends no `Accept` header and gets a
+  **401 with no redirect** - so the detector never fired once, every Easy Auth app was
+  classified as reachable content, and a scan of a login page passed as a security result
+  (F158). The signal was in the response the whole time: Easy Auth's challenge carries
+  `authorization_uri=` and names the audience in `resource_id=`, while a genuine
+  application 401 carries neither. Validate a check against a friendlier client than
+  production uses and you have tested a different system.
+
+- **A change is finished when a rebuild reproduces it, not when the thing works.** An Easy
+  Auth audience was hand-patched onto three running apps and the scan started working;
+  `validation` appeared zero times in the template, so the next teardown would have erased
+  it silently (F159). The same session hand-added an `identifierUris` to one app while
+  testing, and that single manual value then masked a bug in the other two for three runs
+  (F163). Configuration that exists only in the estate is a demo that works once.
+
+- **Evidence that cannot distinguish two states is not evidence.** An authenticated scan and
+  a blocked one produced identical reports - 17 alerts over 3 URLs - and nothing recorded
+  which had happened, so "is this working" could not be answered from the artifact at all
+  (F162). The fix was not more capability but one recorded line per target: `authenticated
+  GET / -> HTTP 200, 638 bytes`. It found the real bug on its first run. When a check cannot
+  tell success from silence, add the observation, not another feature.
+
 - **A list that feeds two checks answers two questions.** V8.1's expected component set was
   built from one of the three files that declare components, so it could never match what
   Dataverse reports and spent days naming sixteen legitimate topics as drift (F145). Fixing it
