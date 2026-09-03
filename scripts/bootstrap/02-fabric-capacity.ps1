@@ -37,21 +37,32 @@ param(
 
     # THIS RESOURCE GROUP IS DELETED BY THE ORDINARY TEARDOWN, SO A PAID F2 CAPACITY
     # CREATED HERE DOES NOT SURVIVE A REBUILD - AND NOTHING RECREATES IT.
-    # `mls-rg-platform` is the first entry in infra-down.yml's RG list (the `naming`
-    # composite action emits `<prefix>-rg-platform <prefix>-rg-apps <prefix>-rg-data
-    # <prefix>-rg-ops`), and that teardown is gate-free by design. Grep
-    # `.github/workflows/` for `02-fabric-capacity`: zero hits. This script is G0-only and
-    # human-run, and -Mode F2 is G2-gated, so infra-up.yml has no path to it.
+    # OUTSIDE THE FOUR DEMO RESOURCE GROUPS, DELIBERATELY. Sponsor decision 2026-09-03.
     #
-    # Consequence on the paid path: the RG delete destroys the capacity, FABRIC_CAPACITY_ID
-    # becomes a dead ARM id, the surviving `mls-operations` workspace is stranded, and the
-    # NEXT infra-down fails on `az resource invoke-action --ids <dead id> --action suspend`.
-    # It arms itself on the first teardown after the G2 to paid F2 - i.e. it goes off right
-    # after someone starts spending money. It is invisible today only because this estate is
-    # on the trial capacity, which is Microsoft-managed with no ARM resource to delete.
-    # Where the capacity should live is a sponsor decision; see
-    # docs/runbooks/kill-rebuild.md section 1. Nothing here is changed on that account.
-    [string]$ResourceGroup = 'mls-rg-platform',
+    # This defaulted to `mls-rg-platform`, which is the first entry in infra-down.yml's RG
+    # list (the `naming` composite action emits `<prefix>-rg-platform <prefix>-rg-apps
+    # <prefix>-rg-data <prefix>-rg-ops`), and that teardown is gate-free by design. Grep
+    # `.github/workflows/` for `02-fabric-capacity`: zero hits. This script is G0-only and
+    # human-run, and -Mode F2 is G2-gated, so infra-up.yml has no path to it - meaning
+    # nothing recreates what the teardown removes.
+    #
+    # Consequence on the paid path: the RG delete destroyed the capacity, FABRIC_CAPACITY_ID
+    # became a dead ARM id, the surviving `<prefix>-operations` workspace was stranded, and
+    # the NEXT infra-down failed on `az resource invoke-action --ids <dead id> --action
+    # suspend`. It armed itself on the first teardown after the G2 to paid F2 - i.e. it went
+    # off right after someone started spending money. It was invisible only because this
+    # estate is on the trial capacity, which is Microsoft-managed with no ARM resource to
+    # delete, so no run has ever exercised it.
+    #
+    # `docs/runbooks/kill-rebuild.md` section 1 already told operators the capacity PERSISTS
+    # across the standard cycle. It now does. A fifth resource group is the whole fix: the
+    # teardown deletes four by NAME, so anything outside that list is untouched, and the
+    # claim the runbook makes becomes true rather than aspirational.
+    #
+    # verification/tests/failure-classes.Tests.ps1 asserts this default is never one of the
+    # four, derived from naming.bicep rather than compared against a literal - so a rebrand
+    # cannot quietly move the capacity back inside the blast radius.
+    [string]$ResourceGroup = 'mls-rg-fabric',
 
     # Fabric capacity names: lowercase letters and digits only.
     #

@@ -596,6 +596,42 @@ Describe 'the estate can be renamed from one place' {
             -Because "a Fabric name that does not match naming.bicep's fabricWorkspaceName/fabricLakehouseName is a hardcoded company prefix, which a rebrand carries into Azure and leaves behind (F90)"
     }
 
+    It 'never provisions the Fabric capacity into a resource group the teardown deletes' {
+        # A PAID CAPACITY IN A GATE-FREE BLAST RADIUS (sponsor decision 2026-09-03).
+        #
+        # scripts/bootstrap/02-fabric-capacity.ps1 defaulted -ResourceGroup to
+        # <prefix>-rg-platform, which infra-down.yml deletes without a gate, and NOTHING
+        # recreates it: grep .github/workflows for 02-fabric-capacity and there are zero
+        # hits. The teardown would destroy the capacity, leave FABRIC_CAPACITY_ID pointing
+        # at a dead ARM id, strand the surviving workspace, and make the NEXT teardown fail
+        # trying to suspend something that no longer exists.
+        #
+        # It is invisible on the trial capacity, which is Microsoft-managed and has no ARM
+        # resource to delete. It arms on the first teardown AFTER the G2 move to paid F2 -
+        # which is to say the moment the estate starts costing money. That is the worst
+        # possible time for a latent fault, and no test could ever have caught it by
+        # running, because the path only exists once someone has paid.
+        #
+        # Derived from naming.bicep, not compared against literals: a rebrand must not be
+        # able to quietly move the capacity back inside the blast radius.
+        $script = Join-Path $script:Root 'scripts/bootstrap/02-fabric-capacity.ps1'
+        Test-Path -LiteralPath $script | Should -BeTrue `
+            -Because 'if the bootstrap script is gone this test asserts nothing and passes over the defect it exists to catch'
+
+        $content = Get-Content -LiteralPath $script -Raw
+        $content | Should -Match '\$ResourceGroup\s*=\s*''([^'']+)''' `
+            -Because 'the capacity resource group must have a readable default to check'
+        $null = $content -match '\$ResourceGroup\s*=\s*''([^'']+)'''
+        $capacityGroup = $Matches[1]
+
+        $prefix = Get-NamingLiteral -Name 'defaultCompanyPrefix'
+        $prefix | Should -Not -BeNullOrEmpty
+        $teardownGroups = @('platform', 'apps', 'data', 'ops') | ForEach-Object { "$prefix-rg-$_" }
+
+        $teardownGroups | Should -Not -Contain $capacityGroup `
+            -Because "infra-down.yml deletes $($teardownGroups -join ', ') gate-free and no workflow recreates the capacity, so a paid F2 provisioned into one of them is destroyed on the first teardown after the G2 - and kill-rebuild.md section 1 tells operators the capacity persists"
+    }
+
     It 'no bicepparam trusts readEnvironmentVariable to supply the estate default' {
         # readEnvironmentVariable's own default fires only when the variable is UNSET, and an
         # undefined GitHub variable expands to the EMPTY STRING (F26). Verified live: with
