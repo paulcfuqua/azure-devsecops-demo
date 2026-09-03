@@ -124,6 +124,19 @@ Describe 'layer-03-audit' {
         $script:LicenseError = 'None'
         $script:MissingMember = ''
         $script:ExtraGroupName = ''
+        $script:ExtraApplicationName = ''
+        # A REAL TENANT HOLDS THE G0 BOOTSTRAP IDENTITIES, so the default fixture does too.
+        # They are prefixed app registrations the manifest declares under
+        # bootstrapAppRegistrations and apply-entra.ps1 never creates. A fixture omitting
+        # them would model a tenant nobody has, and would leave the exemption path - the
+        # thing that stopped the 2026-09-03 rebuild - untested by the happy case.
+        $script:LiveBootstrapApplication = @($script:Manifest.bootstrapAppRegistrations | ForEach-Object { $_.displayName })
+        # $null means "derive the sweep's result from the manifest above". A test that
+        # audits a DIFFERENT manifest - the rebranded one - sets these, because the two
+        # startswith sweeps are the only Graph calls whose answer depends on the estate's
+        # prefix rather than on a name the caller asked for.
+        $script:LiveApplicationOverride = $null
+        $script:LiveGroupOverride = $null
 
         Mock Invoke-MlsGraph {
             if ($Uri -like '*subscribedSkus*') {
@@ -162,7 +175,8 @@ Describe 'layer-03-audit' {
                 return [pscustomobject]@{ value = $member }
             }
             if ($Uri -like '*/groups?*startswith*') {
-                $names = @($script:Manifest.groups | ForEach-Object { $_.displayName })
+                $names = if ($null -ne $script:LiveGroupOverride) { @($script:LiveGroupOverride) }
+                else { @($script:Manifest.groups | ForEach-Object { $_.displayName }) }
                 if ($script:ExtraGroupName) { $names += $script:ExtraGroupName }
                 return [pscustomobject]@{ value = @($names | ForEach-Object { [pscustomobject]@{ id = "id-$_"; displayName = $_ } }) }
             }
@@ -171,8 +185,11 @@ Describe 'layer-03-audit' {
                 return [pscustomobject]@{ value = @([pscustomobject]@{ id = "id-$name"; displayName = $name }) }
             }
             if ($Uri -like '*/applications?*startswith*') {
-                return [pscustomobject]@{ value = @($script:Manifest.appRegistrations | ForEach-Object {
-                            [pscustomobject]@{ id = "id-$($_.displayName)"; displayName = $_.displayName }
+                $names = if ($null -ne $script:LiveApplicationOverride) { @($script:LiveApplicationOverride) }
+                else { @($script:Manifest.appRegistrations | ForEach-Object { $_.displayName }) + @($script:LiveBootstrapApplication) }
+                if ($script:ExtraApplicationName) { $names += $script:ExtraApplicationName }
+                return [pscustomobject]@{ value = @($names | ForEach-Object {
+                            [pscustomobject]@{ id = "id-$_"; displayName = $_ }
                         })
                 }
             }
@@ -303,6 +320,96 @@ Describe 'layer-03-audit' {
             $row = Get-Row -Context $context -Id 'V3.1'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*mls-shadow-admins*'
+        }
+    }
+
+    Context 'V3.1 drift sweep and the G0 bootstrap identities' {
+        # The 2026-09-03 rebuild stopped here. mls-purview - the certificate-bearing
+        # Security & Compliance identity g0-bootstrap.md step 11c creates BY HAND, because
+        # Security & Compliance PowerShell has no federated auth path - was reported as
+        # drift, correctly, because nothing in this repository declared it. The exemption
+        # list was the literal @('mls-github-deployer', 'mls-verifier') inside the audit:
+        # a second source of truth for which identities the estate has, in the one file
+        # whose job is to have none, that also hardcoded the company prefix.
+
+        It 'passes with the declared bootstrap identities present, and says it saw them' {
+            # The regression test for the blocker itself: mls-purview in the tenant, and
+            # V3.1 green because the MANIFEST declares it, not because the audit knows
+            # its name.
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V3.1'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike "*bootstrap (not applied by L3) $($script:LiveBootstrapApplication.Count)/$($script:LiveBootstrapApplication.Count) present*"
+            foreach ($name in $script:LiveBootstrapApplication) {
+                $row.Observed | Should -Not -BeLike "*drift*$name*"
+            }
+        }
+
+        It 'still fails on an undeclared prefixed app registration' {
+            # The control has to keep its teeth. An exemption that swallowed anything
+            # prefixed would destroy the only thing this sweep does.
+            $script:ExtraApplicationName = 'mls-shadow-app'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*drift*mls-shadow-app*'
+        }
+
+        It 'exempts by exact name, not by resemblance to a bootstrap identity' {
+            # A per-name declaration, never a pattern: an attacker who names their
+            # registration after one of ours gets no cover from it.
+            $script:ExtraApplicationName = "$($script:LiveBootstrapApplication[0])-2"
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V3.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike "*drift*$($script:LiveBootstrapApplication[0])-2*"
+        }
+
+        It 'reports an absent bootstrap identity rather than failing on it' {
+            # A clone that has not run g0 step 11c genuinely has no mls-purview, and L4's
+            # documented degrade path covers exactly that (F43). Absence is a fact to
+            # report, not drift - but it must not be SILENT, because a bootstrap identity
+            # is in no count above and a deleted one was invisible to V3.1 before this.
+            $absent = $script:LiveBootstrapApplication[-1]
+            $script:LiveBootstrapApplication = @($script:LiveBootstrapApplication | Where-Object { $_ -ne $absent })
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V3.1'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike "*absent: $absent*"
+        }
+
+        It 'fails IMMEDIATELY on drift instead of waiting out the propagation window' {
+            # Propagation makes a DECLARED object appear late; it cannot make an EXTRA
+            # object disappear, so re-polling can never change this verdict. The run that
+            # found the blocker spent 45.9 minutes - the entire window, on the critical
+            # path of a rebuild that claims to complete in under an hour - re-asking a
+            # question answered at the first poll, while the counts half of the same
+            # message already read 5/5, 7/7, 4/4.
+            #
+            # Deliberately NOT -NoRetry: the retry window is the thing under test.
+            $script:ExtraApplicationName = 'mls-shadow-app'
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V3.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Attempt | Should -Be 1
+            $row.SleptSeconds | Should -Be 0
+            Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Exactly -Times 0
+        }
+
+        It 'derives the exemption from the prefix, so a rebrand does not fail a correct estate' {
+            # F90's class. With the old literal list, MLS_COMPANY_PREFIX=acme made the
+            # sweep look for acme-prefixed apps, find acme-github-deployer, match neither
+            # 'mls-...' literal and fail V3.1 permanently on an estate that was right.
+            #
+            # Test-DirectoryObjectCount is called directly: Invoke-Main resolves the prefix
+            # from naming.bicep for the whole run, and the point here is that NOTHING in
+            # the drift sweep carries a prefix of its own.
+            $raw = Get-Content -LiteralPath $script:ManifestPath -Raw
+            $rebranded = ($raw.Replace('${prefix}', 'acme').Replace('${env}', 'demo')) | ConvertFrom-Json
+            $script:LiveApplicationOverride = @($rebranded.appRegistrations | ForEach-Object { $_.displayName }) +
+                @($rebranded.bootstrapAppRegistrations | ForEach-Object { $_.displayName })
+            $script:LiveGroupOverride = @($rebranded.groups | ForEach-Object { $_.displayName })
+
+            $result = Test-DirectoryObjectCount -Manifest $rebranded -Domain $script:Domain -NamingPrefix 'acme'
+            $result.Passed | Should -BeTrue -Because 'every acme-prefixed object is declared, including the three bootstrap identities'
+            $result.Observed | Should -BeLike '*bootstrap (not applied by L3) 3/3 present*'
         }
     }
 

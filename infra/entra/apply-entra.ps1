@@ -353,7 +353,12 @@ function Assert-ManifestSchema {
     param([Parameter(Mandatory)]$Manifest)
     $problems = [System.Collections.Generic.List[string]]::new()
 
-    foreach ($key in @('domain', 'users', 'groups', 'appRegistrations', 'conditionalAccessPolicies')) {
+    # bootstrapAppRegistrations is REQUIRED even though this script applies none of it:
+    # dropping the key silently removes L3's V3.1 drift exemptions, and the estate's own
+    # deploy identity then reports as drift on the next audit. Required means the manifest
+    # is refused here, in seconds, rather than the failure surfacing 45 minutes into a
+    # verify job with a message about an app registration nobody recognises.
+    foreach ($key in @('domain', 'users', 'groups', 'appRegistrations', 'bootstrapAppRegistrations', 'conditionalAccessPolicies')) {
         if (-not (Test-Field -Object $Manifest -Name $key)) {
             $problems.Add("manifest missing required key '$key'")
         }
@@ -408,6 +413,39 @@ function Assert-ManifestSchema {
 
     $applicationName = @(Get-FieldArray -Object $Manifest -Name 'appRegistrations' |
             ForEach-Object { Get-Field -Object $_ -Name 'displayName' })
+
+    # bootstrapAppRegistrations: DECLARED SO THE AUDIT KNOWS THEM, APPLIED BY NOBODY.
+    #
+    # These are the G0 identities - the OIDC deployer, the verifier, and the certificate-
+    # bearing Security & Compliance app - created by hand before any pipeline exists,
+    # carrying credentials no script here can mint. This script iterates appRegistrations
+    # only and must keep doing so. The key exists because L3's V3.1 drift sweep needs to
+    # know that a prefixed registration is accounted for, and the alternative was a
+    # hardcoded name list inside the Verifier (F90's class).
+    #
+    # DISJOINTNESS IS THE WHOLE GUARD. A name in both arrays would be created by the loop
+    # below on any tenant where the real identity is absent - a fresh clone, or after a G3
+    # teardown - producing an impostor with no certificate, no Exchange.ManageAsApp and no
+    # directory role, while PURVIEW_APP_ID still names the original GUID. V3.1 would then
+    # go GREEN on it, because "resolves to exactly one object" is all a count asserts. That
+    # is this estate's most expensive shape: asserting the artefact where the control is
+    # the capability. Refuse the manifest instead.
+    $bootstrapName = @(Get-FieldArray -Object $Manifest -Name 'bootstrapAppRegistrations' |
+            ForEach-Object { Get-Field -Object $_ -Name 'displayName' })
+    $index = 0
+    foreach ($app in @(Get-Field -Object $Manifest -Name 'bootstrapAppRegistrations')) {
+        if ([string]::IsNullOrWhiteSpace([string](Get-Field -Object $app -Name 'displayName'))) {
+            $problems.Add("bootstrapAppRegistrations[$index] missing required field 'displayName'")
+        }
+        if ([string]::IsNullOrWhiteSpace([string](Get-Field -Object $app -Name 'createdBy'))) {
+            $problems.Add("bootstrapAppRegistrations[$index] missing required field 'createdBy' - an identity this layer does not create must name what does, or nobody can tell drift from a bootstrap step that was never run")
+        }
+        $index++
+    }
+    foreach ($name in @($bootstrapName | Where-Object { $_ -and $_ -in $applicationName })) {
+        $problems.Add("'$name' appears in BOTH appRegistrations and bootstrapAppRegistrations. It cannot be both applied by this script and created out of band: on a tenant where it is absent this script would create a credential-less impostor of a G0 identity, and V3.1 would pass on it. Declare it in exactly one.")
+    }
+
     $groupName = @(Get-FieldArray -Object $Manifest -Name 'groups' |
             ForEach-Object { Get-Field -Object $_ -Name 'displayName' })
     $breakGlassName = Get-BreakGlassGroupName -Manifest $Manifest

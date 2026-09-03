@@ -78,7 +78,10 @@ function Get-ManifestUserPrincipalName {
 
 function Test-DirectoryObjectCount {
     <# V3.1 - every manifest entry resolves to exactly one directory object, and no
-       mls-prefixed group or app exists that the manifest does not declare. #>
+       prefixed group or app exists that the manifest does not declare in either
+       appRegistrations (applied by L3) or bootstrapAppRegistrations (created at G0 and
+       never applied by L3). Two questions with two different answers to "how long is this
+       willing to wait": the counts can be late, the drift sweep cannot. #>
     param(
         [Parameter(Mandatory)]$Manifest,
         [Parameter(Mandatory)][string]$Domain,
@@ -110,7 +113,24 @@ function Test-DirectoryObjectCount {
     }
     $observed.Add("appRegistrations $resolvedApplication/$(@($Manifest.appRegistrations).Count)")
 
-    # Drift sweep: mls-prefixed groups/apps that the manifest does not declare.
+    # Drift sweep: prefixed groups/apps that the manifest does not declare.
+    #
+    # THE EXEMPTIONS ARE READ FROM THE MANIFEST, NOT WRITTEN HERE. This used to be the
+    # literal @('mls-github-deployer', 'mls-verifier') - a second source of truth for
+    # "which identities this estate has", inside the one file whose job is to have no
+    # independent knowledge of the estate, and one that hardcoded the company prefix in a
+    # script that resolves it correctly on every other line (F90's class: a rebrand reaches
+    # Azure and leaves identity behind). After MLS_COMPANY_PREFIX=acme the sweep would look
+    # for acme-prefixed apps, find acme-github-deployer, match neither literal, and V3.1
+    # would fail permanently on a correct estate.
+    #
+    # It also could not be extended without editing the Verifier: mls-purview - the
+    # certificate-bearing Security & Compliance identity G0 step 11c creates by hand - was
+    # reported as drift the first time this ran after it existed, which is the same shape
+    # the groups above hit at F92 and was resolved the same way, by declaring it.
+    $bootstrapApplicationName = @(Get-MlsProperty -InputObject $Manifest -Name 'bootstrapAppRegistrations' |
+            ForEach-Object { Get-MlsProperty -InputObject $_ -Name 'displayName' } |
+            Where-Object { $_ })
     $manifestGroupName = @($Manifest.groups | ForEach-Object { $_.displayName })
     $liveGroup = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/groups?`$filter=startswith(displayName,'$NamingPrefix')") |
             ForEach-Object { Get-MlsProperty -InputObject $_ -Name 'displayName' })
@@ -119,13 +139,41 @@ function Test-DirectoryObjectCount {
     $liveApplication = @(Get-MlsCollection -Response (Invoke-MlsGraph -Uri "https://graph.microsoft.com/v1.0/applications?`$filter=startswith(displayName,'$NamingPrefix')") |
             ForEach-Object { Get-MlsProperty -InputObject $_ -Name 'displayName' })
     $extraApplication = @($liveApplication | Where-Object {
-            $_ -and $_ -notin $manifestApplicationName -and $_ -notin @('mls-github-deployer', 'mls-verifier')
+            $_ -and $_ -notin $manifestApplicationName -and $_ -notin $bootstrapApplicationName
         })
     if ($extraGroup.Count -gt 0) { $problem.Add("drift - $NamingPrefix-prefixed groups absent from the manifest: $($extraGroup -join ', ')") }
     if ($extraApplication.Count -gt 0) { $problem.Add("drift - $NamingPrefix-prefixed app registrations absent from the manifest: $($extraApplication -join ', ')") }
 
+    # WHAT WAS EXEMPTED IS REPORTED, so an exemption cannot hide the thing it exempts.
+    # A bootstrap identity is invisible to every count above - it is in nobody's expected
+    # set - so before this line a DELETED mls-verifier and a present one produced the same
+    # green V3.1. Absence is reported rather than failed: a clone that has not run G0 step
+    # 11c genuinely has no mls-purview, and L4's documented degrade path (F43) covers it.
+    if ($bootstrapApplicationName.Count -gt 0) {
+        $presentBootstrap = @($bootstrapApplicationName | Where-Object { $_ -in $liveApplication })
+        $absentBootstrap = @($bootstrapApplicationName | Where-Object { $_ -notin $liveApplication })
+        $bootstrapNote = "bootstrap (not applied by L3) $($presentBootstrap.Count)/$($bootstrapApplicationName.Count) present"
+        if ($absentBootstrap.Count -gt 0) { $bootstrapNote += " - absent: $($absentBootstrap -join ', ')" }
+        $observed.Add($bootstrapNote)
+    }
+
     if ($problem.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed ($observed -join '; ')
+    }
+
+    # PROPAGATION MAKES A DECLARED OBJECT APPEAR LATE. IT CANNOT MAKE AN EXTRA OBJECT
+    # DISAPPEAR. So a drift finding is -Final: no amount of waiting can turn this criterion
+    # green, and the retry window exists for the counts above, not for this.
+    #
+    # The 2026-09-03 rebuild spent 45.9 minutes here - the whole window, on the critical
+    # path of a kill/rebuild cycle whose headline claim is under an hour - re-asking a
+    # question that was settled at the first poll, while the counts half had already
+    # reported 5/5, 7/7, 4/4 in the very same output. CLAUDE.md: a check declares how long
+    # it is willing to wait, and why. This half waits for nothing and now says so.
+    $drift = ($extraGroup.Count + $extraApplication.Count) -gt 0
+    if ($drift) {
+        return New-MlsCheckResult -Passed $false -Final -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
+            -Detail "Drift is not a propagation artifact - failing immediately rather than re-polling for $($NamingPrefix)-prefixed objects to un-exist. If the extra object is a legitimate G0-created identity carrying a credential no script can mint, declare it in the manifest's bootstrapAppRegistrations (which L3 never applies) - NOT in appRegistrations, where apply-entra.ps1 would create a credential-less impostor of it on any tenant lacking one. Any count shortfall in the same message may still be propagation; re-read it after the objects land."
     }
     return New-MlsCheckResult -Passed $false -Observed (($observed -join '; ') + ' | ' + ($problem -join ' | ')) `
         -Detail 'Entra object propagation can lag 15-45 min (spec F6); partial counts that increase between polls are the propagation case this window exists for.'
@@ -539,8 +587,8 @@ function Invoke-Main {
     # L03: Entra object propagation can lag 15-45 min (spec F6)
     Invoke-MlsCriterion -Context $context -Id 'V3.1' -Control @('3.1.1', '3.5.1') `
         -Description 'Graph queries confirm object counts' `
-        -Command "GET /v1.0/users/<upn> for each manifest user`nGET /v1.0/groups?`$filter=displayName eq '<name>'`nGET /v1.0/applications?`$filter=displayName eq '<name>'`nGET /v1.0/groups?`$filter=startswith(displayName,'$NamingPrefix')  # drift sweep" `
-        -Expected "$(@($manifest.users).Count) users, $(@($manifest.groups).Count) groups, $(@($manifest.appRegistrations).Count) app registrations - each manifest entry resolving to exactly one object, zero $NamingPrefix-prefixed extras" `
+        -Command "GET /v1.0/users/<upn> for each manifest user`nGET /v1.0/groups?`$filter=displayName eq '<name>'`nGET /v1.0/applications?`$filter=displayName eq '<name>'`nGET /v1.0/groups?`$filter=startswith(displayName,'$NamingPrefix')  # drift sweep`nGET /v1.0/applications?`$filter=startswith(displayName,'$NamingPrefix')  # drift sweep, less bootstrapAppRegistrations" `
+        -Expected "$(@($manifest.users).Count) users, $(@($manifest.groups).Count) groups, $(@($manifest.appRegistrations).Count) app registrations - each manifest entry resolving to exactly one object, and zero $NamingPrefix-prefixed extras beyond the $(@(Get-MlsProperty -InputObject $manifest -Name 'bootstrapAppRegistrations' | Where-Object { $_ }).Count) G0 bootstrap identit(y/ies) the manifest declares as externally created" `
         -RetryWindowMinutes 45 `
         -Test { Test-DirectoryObjectCount -Manifest $manifest -Domain $tenantDomain -NamingPrefix $NamingPrefix } | Out-Null
 

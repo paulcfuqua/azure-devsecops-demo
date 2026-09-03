@@ -42,13 +42,13 @@ on 2026-09-02, with the evidence beside it.
 | **1** | **Copilot service** — Ask tab over Direct Line | ✅ **DEMONSTRATED** | **2026-09-02, observed in a browser by a signed-in human** — not inferred from a green run. Asked *"what day of the week had the most launches"* the tab answered **"Saturday had the most launches, with 309 launches recorded in the launches table"**, citing its source. The figure was **independently re-derived** through the MCP server (Saturday 309, Sunday 181, Tuesday 162 …), an exact match. Ten findings between "not configured" and this: F122, F124, F128, F129, F130, F131, F133, F134, F135, F136 — all fixed **in the repo**, so a rebuild reproduces the working state. **And it is not open**: the endpoint 401s an anonymous caller; the page forwards its Easy Auth token and the Function verifies signature, issuer, audience and expiry before the Direct Line secret is touched. That control shipped with a bug of its own (**F142**): the `id_token` expires after about an hour and nothing renewed it, so the tab worked and then locked its user out. Fixed - one refresh, one retry, and a sentence when that fails |
 | **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | **The token half is DONE and proven** (2026-09-01): `SELF_HEAL_TOKEN` is a repository secret, the 403 is gone, the selector reads the alert surface, **V10.3 PASSES**, and the Dependabot lane runs instead of skipping. What is missing is a **subject**: Dependabot opens no security PR for the three seeded CVEs, so the lane has nothing to adopt (**F126**, cause unresolved, deferred). This is the ONLY showpiece with an open engineering blocker |
 
-### The twelve layers — 8 verified, 2 partial, 2 not done
+### The twelve layers — 7 verified, 3 partial, 2 not done
 
 | Layer | Status | Note |
 |---|---|---|
 | L1 repo / IaC / OIDC / up-down | ✅ verified | The pipelines are the product and they run |
 | L2 landing zone | ✅ verified | V2.1, V2.2 PASS |
-| L3 Entra | ✅ verified | V3.1–V3.4 PASS |
+| L3 Entra | 🟡 **blocked, pending re-run** | This row said `✅ verified — V3.1–V3.4 PASS` for two days after it stopped being true, which is **F167** and is a lesson about the scorecard rather than about L3. V3.1 failed on the 2026-09-03 rebuild: `mls-purview` existed in the tenant (created by hand at G0 step 11c on 2026-09-01) and was declared in no manifest, so the drift sweep reported it. Every declared object resolved — `5/5; 7/7; 4/4`. Fixed in the repo (declared under `bootstrapAppRegistrations`, which L3 never applies; exemption derived rather than hardcoded, **F168**; drift now fails in seconds instead of burning the 45-minute propagation window, **F169**). **Re-run `layer-03-entra.yml` to restore the verdict** — nothing here is verified until it does |
 | L7 apps | ✅ verified | **7/7 on 2026-09-02** - a full clean sign-off, including V7.6 (the data API answers with rows, not merely a status code) and V7.7 (a human can complete an interactive sign-in). Those two also settled an open question about Easy Auth audiences, since V7.3 probes with the client-id audience and passed. Previously 6/7, and the layer has 7 criteria now, not 5.** V7.5, V7.6 and V7.7 had NEVER been evaluated on any run - every failure was F104's expired assertion, not the estate. With that fixed, V7.5 and V7.6 passed first time: **V7.6 independently confirms the data API returns real rows**, which is what section D was about. V7.7's failure was F127, a probe following a redirect into Microsoft's login page; fixed |
 | L11 teardown | ✅ verified (down half) | V11.1 PASS. Rebuild proven once. V11.2's blocker (BLOCKER-1) is **closed** — the up-half has simply not been re-run since, and doing so is the sponsor's phase-1 item |
 | L5 Fabric | 🟡 partial | Deployed and seeded (10 tables, `launches`=1,200). Its audit has not passed cleanly since F104/F105/F114 were fixed — **re-run it** |
@@ -116,6 +116,130 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F169 — 45.9 minutes spent on a verdict that was settled at minute zero *(fixed 2026-09-03)*
+
+V3.1 fuses two questions under one criterion id and one retry window:
+
+1. *Do the manifest's declared objects exist yet?* — legitimately propagation-sensitive.
+   Entra object writes can lag 15-45 min (spec F6), so the criterion declares
+   `-RetryWindowMinutes 45` and cites that.
+2. *Is there a prefixed directory object the manifest does not declare?* — settled at the
+   first poll.
+
+**Propagation makes a declared object appear LATE. It cannot make an EXTRA object
+disappear.** The second question's answer cannot change by waiting. It inherited the
+window anyway, because it lives in the same function.
+
+The 2026-09-03 rebuild paid that bill in full. `verify L3 (mls-verifier)` ran
+**02:25:23Z -> 03:11:16Z, 45m53s**, re-asking a question answered at minute zero — while
+the very same output line had already reported `users 5/5; groups 7/7; appRegistrations
+4/4`, so the half the window exists for was complete before the first poll finished. That
+is 45.9 minutes off the critical path of a kill/rebuild cycle whose headline claim is
+under an hour.
+
+CLAUDE.md: *a check declares how long it is willing to wait, and why.* The counts half
+declares 45 minutes and names spec F6. The drift half now declares nothing: it returns
+`New-MlsCheckResult -Final`, which `MlsAudit.psm1` already honours by breaking the retry
+loop, and which `Test-ConditionalAccessState` has used since it was written for exactly
+this reason ("wrong state or scope is not a propagation artifact"). A short count with no
+drift still retries the full window, unchanged.
+
+**This is the second time this window was paid for without being chosen.** Nineteen of
+forty-seven criteria once inherited a 30-minute window nobody selected for them, including
+one whose answer was settled the moment the deploy step returned. Inheriting patience is
+the failure mode. The tell is a criterion that cannot say what it is waiting for.
+
+### F168 — the drift exemption hardcoded the company prefix *(fixed 2026-09-03)*
+
+`verification/layer-03-audit.ps1` resolved the prefix correctly on every line but one:
+
+    $_ -notin @('mls-github-deployer', 'mls-verifier')
+
+Two literals in the file whose whole job is to hold no independent knowledge of the
+estate — and whose drift *messages*, two lines below, interpolate `$NamingPrefix`
+properly. This is **F90's class in verification rather than configuration**: a rebrand
+reaches Azure and leaves identity behind. After `MLS_COMPANY_PREFIX=acme` the sweep would
+query for `acme`-prefixed applications, find `acme-github-deployer` and `acme-verifier`,
+match neither literal, and **V3.1 would fail permanently on a correct estate**.
+
+It never fired, because nothing has ever been rebranded — which is the same reason the one
+wrong constant in the register's verification note survived as long as it did. A value
+that is right until the day it is exercised is not observably wrong before then.
+
+The list was also a **second source of truth for "which identities this estate has"**,
+which is why it could not be extended without editing the Verifier. F167 is what that
+cost. The exemption is now derived from `infra/entra/manifest.json`'s
+`bootstrapAppRegistrations`, tokenised `${prefix}` like every other name in that file,
+with no literal left in the audit. `verification/tests/failure-classes.Tests.ps1` gained a
+repository-wide sweep for the shape — a file that resolves the prefix and then writes a
+prefixed name by hand — because a class paid for once becomes a check.
+
+**Not changed, and named so nobody thinks it was missed.**
+`scripts/bootstrap/01-root-oidc.ps1` still *defaults* `-DeployerAppName` to
+`'mls-github-deployer'` and `-VerifierAppName` to `'mls-verifier'`. Those are overridable
+inputs to a human-run G0 script, not a check's private knowledge, and editing G0 on the
+critical path of a running rebuild trades a real risk for a hypothetical one. A rebrand
+must pass the new names there; nothing derives them.
+
+### F167 — the check worked, and the scorecard had been wrong for two days *(fixed 2026-09-03)*
+
+The 2026-09-03 rebuild stopped at `verify L3 (mls-verifier)`:
+
+    [FAIL   ] V3.1  observed: users 5/5; groups 7/7; appRegistrations 4/4
+                    | drift - mls-prefixed app registrations absent from the manifest: mls-purview
+
+Every declared object resolved. The extra one is `mls-purview`, the certificate-bearing
+Security & Compliance identity `docs/runbooks/g0-bootstrap.md` step 11c creates by hand.
+It is entirely legitimate — Security & Compliance PowerShell has no federated path, which
+is why hard rule 5 permits the certificate at all, and L4 cannot apply the label taxonomy
+without it — and it was **declared nowhere a check could read**.
+
+**V3.1 did not silently pass on this. It never ran.** The registration's
+`createdDateTime` is **2026-09-01T18:23:48Z**. The last `infra-up` before the rebuild
+started **2026-09-01T03:39Z** and had finished by 05:23Z; the last standalone
+`layer-03-entra` run was **2026-08-31T19:13Z**. Both predate the object. The rebuild was
+the sweep's first opportunity and it caught the drift at it — correctly, and on the first
+poll. What it cost was 45.9 minutes to say so (**F169**), against an exemption list that
+could not be extended without editing the Verifier (**F168**).
+
+**What was wrong is this document.** The scorecard carried `L3 Entra | ✅ verified |
+V3.1–V3.4 PASS` as a present-tense fact for two days after the tenant changed underneath
+it. The row was true when written. Nothing in the file made it false, because nothing in
+the file records what a verdict was observed against, or when it stops being an
+observation and becomes a memory.
+
+**The class is a verdict recorded at time T carried forward as current after the system it
+describes changed**, and it is worth naming plainly because this scorecard is *made of*
+such verdicts. Every ✅ row is a past observation written in the present tense against an
+estate that is mutable by design and gets torn down on purpose. The sharp edge is that a
+**rebuild is precisely the event that re-tests them all**, so the scorecard is least
+reliable in the hours before one — which is exactly when a planner reads it to decide what
+to run. The row now says blocked, pending re-run.
+
+The repository fix is that `mls-purview` is declared in `infra/entra/manifest.json` under
+**`bootstrapAppRegistrations`**, beside `mls-github-deployer` and `mls-verifier`: a key
+`apply-entra.ps1` never iterates, with `Assert-ManifestSchema` refusing a name that
+appears in both arrays. Declaring it in `appRegistrations` instead would have been worse
+than the drift — on a tenant lacking it, L3 would create a **credential-less impostor**
+with no certificate, no `Exchange.ManageAsApp` and no Compliance Administrator role, while
+`PURVIEW_APP_ID` still named the old GUID, **and V3.1 would go green on it**, because a
+registration resolving to exactly one object is all the count asserts. That is this
+repository's most expensive shape: asserting the artefact where the control is the
+capability. The sweep keeps its teeth either way, because the exemption is a per-name
+entry in a reviewed, committed file rather than a pattern: `mls-purview-2` still fails.
+
+**Same shape as F92.** `mls-copilot-authors` and `mls-sql-admins` existed in the tenant
+and in no manifest, V3.1 correctly reported both as drift, and both times the manifest was
+wrong rather than the tenant. Resolved the same way, by declaring. The audit now also
+*reports* what it exempted — `bootstrap (not applied by L3) 3/3 present` — because before
+that line a deleted `mls-verifier` and a present one produced the same green V3.1: a
+bootstrap identity is in nobody's expected set.
+
+**Still open, deliberately named:** `scripts/bootstrap/verify-g0.ps1` runs eleven checks
+and none of them is `mls-purview`. G0's own verifier does not assert that step 11c
+happened. L4 finds out — or does not, since all three Purview values missing makes the
+apply job skip green with a notice (F43).
 
 ### F166 — the board reported a backlog and called it posture *(fixed 2026-09-02)*
 

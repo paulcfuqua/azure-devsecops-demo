@@ -93,6 +93,44 @@ Describe 'apply-entra manifest schema validation' {
             Should -Throw "*'ghost.user' does not match any users*"
     }
 
+    # --- bootstrapAppRegistrations: declared here, applied by nobody ------------------
+    #
+    # The G0 identities (the OIDC deployer, the verifier, the certificate-bearing Purview
+    # app) are declared in the manifest so L3's V3.1 drift sweep can tell them from an
+    # undeclared registration - see verification/layer-03-audit.ps1. They must never reach
+    # this script's create loop, because on a tenant where the real identity is absent it
+    # would mint a credential-less impostor that V3.1 would then pass.
+
+    It 'refuses a manifest that declares one name as both applied and bootstrap' {
+        $manifest = Get-FreshManifest
+        $manifest.bootstrapAppRegistrations[0].displayName = $manifest.appRegistrations[0].displayName
+        { Assert-ManifestSchema -Manifest $manifest } |
+            Should -Throw "*appears in BOTH appRegistrations and bootstrapAppRegistrations*"
+    }
+
+    It 'requires a bootstrap identity to name what creates it' {
+        # Without createdBy nobody can tell drift from a G0 step that was never run, which
+        # is the whole distinction the key exists to make.
+        $manifest = Get-FreshManifest
+        $manifest.bootstrapAppRegistrations[0].PSObject.Properties.Remove('createdBy')
+        { Assert-ManifestSchema -Manifest $manifest } |
+            Should -Throw "*missing required field 'createdBy'*"
+    }
+
+    It 'declares at least one bootstrap identity, and none of them is applied by this script' {
+        # $script:AppCount counts appRegistrations ONLY. The apply tests below assert
+        # AppsCreated -eq $script:AppCount, so if this script ever started iterating
+        # bootstrapAppRegistrations they would fail - this It states the invariant those
+        # tests enforce structurally, so a reader meets it before the arithmetic.
+        $manifest = Get-FreshManifest
+        @($manifest.bootstrapAppRegistrations).Count | Should -BeGreaterThan 0
+        $script:AppCount | Should -Be @($manifest.appRegistrations).Count
+        foreach ($bootstrap in @($manifest.bootstrapAppRegistrations)) {
+            @($manifest.appRegistrations).displayName |
+                Should -Not -Contain $bootstrap.displayName -Because 'an identity this script creates cannot also be one it must never create'
+        }
+    }
+
     It 'rejects a CA policy without grantControls' {
         $manifest = Get-FreshManifest
         $manifest.conditionalAccessPolicies[1].PSObject.Properties.Remove('grantControls')
