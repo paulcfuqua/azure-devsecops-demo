@@ -77,9 +77,34 @@ Start here rather than re-surveying:
 |---|---|
 | `README.md` | Opens with "no tenant… no running container" — false. References **Phase P** and **Phase Q**, internal build checkpoints meaningless to a newcomer. Says the register has "grown to 44"; it is 166. |
 | `docs/runbooks/layers/L01–L12` | Thirteen files, all carrying forward-looking language — "will be", "not yet run", "once L*n* completes" — written before the layers existed. |
-| `docs/DEMO-READINESS.md` | 2,462 lines and growing. Genuinely valuable **as a register**, and wrong as a front door. Its SCORECARD is the live part; the findings below it are history. Consider splitting rather than pruning: the register's value is that nothing was quietly removed. |
+| `docs/DEMO-READINESS.md` | 2,462 lines, doing **two jobs**: a live scorecard and a historical register. Wrong front door, right archive. **Split it — do not prune it.** See below. |
 | `docs/BY-THE-NUMBERS.md` | Already carries a pre-tenant and a deployed column. Needs the deployed column re-measured after the rebuild, not restructuring. |
 | `docs/superpowers/plans/*` | Five completed plans. They are history and should say so at the top rather than reading as current intent. |
+
+### Split the register, do not prune it
+
+`docs/DEMO-READINESS.md` is the one item on that list where the obvious action is the
+wrong one. It is 2,462 lines because it has accumulated 166 findings, and the temptation
+on a tidying pass is to delete the old ones. **Do not.**
+
+Its value is precisely that nothing was ever quietly removed. Several entries record a
+confident diagnosis that a later sample disproved — F151 read as two mysterious
+credentials and resolved as one legitimate and one rename leftover; F159 was a wrong
+diagnosis corrected by F161 two hours later. A register that deletes its own wrong turns
+stops being evidence and becomes marketing, and the argument this repository makes to an
+auditor is that it *catches its own false claims*. Pruning it would remove the proof.
+
+So separate the two jobs rather than shortening the file:
+
+- **The live part** — SCORECARD, BLOCKER TREE, and the open items — is what a reader
+  needs on arrival, and belongs where it can be read in a minute.
+- **The register** — every finding, in order, including the ones that were wrong — is an
+  archive. It should be linked, dated, and explicitly described as history so nobody
+  mistakes an entry from 2026-08-29 for current state.
+
+The test for whether the split worked: a stranger can find today's state in under a
+minute, **and** can still find the day the DAST reported zero High-risk alerts against a
+login page.
 
 **A rule for the pass:** delete a checkpoint reference, keep a finding. "Phase Q made
 everything tenant-independent" is scaffolding a stranger does not need. "The scan reported
@@ -112,8 +137,14 @@ The last two are the differentiator. Most demo repositories answer the first thr
 > **Phase 2 — re-baseline the documentation** to the estate that now exists. Use the
 > deltas. Start with `README.md`, which currently opens by telling the reader there is no
 > tenant. Remove build-checkpoint scaffolding — Phase P, Phase Q, "will be", "not yet" —
-> and keep findings. Re-measure `BY-THE-NUMBERS.md`'s deployed column. The target is a
-> repository a stranger can be pointed at as stable.
+> and keep findings. Re-measure `BY-THE-NUMBERS.md`'s deployed column.
+>
+> **`docs/DEMO-READINESS.md` is the exception to the tidying instinct: SPLIT it, do not
+> prune it.** It is doing two jobs — a live scorecard and a 166-finding historical
+> register — and the register's value is that nothing was ever quietly removed, including
+> the diagnoses that turned out to be wrong. Separate the live part from the archive,
+> date the archive, and delete none of it. The target is a repository a stranger can be
+> pointed at as stable.
 >
 > Two standing rules from CLAUDE.md that this run will test hard: **a change is finished
 > when a rebuild reproduces it, not when the thing works**; and **evidence that cannot
