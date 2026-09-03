@@ -52,6 +52,169 @@ across `docs/`, `CLAUDE.md`, the layer runbooks and `verification/tests/`.
 
 ---
 
+### F177 — L4's audit could never have authenticated, and nothing in the repo can fix it *(open, needs a human — 2026-09-03)*
+
+With F170 and F176 fixed, `verification/layer-04-audit.ps1` was reached for the first time
+in the project's history. It failed immediately:
+
+    layer-04-audit could not start: UnAuthorized
+    exit code 2
+
+Read back as Global Admin — a read, nothing granted:
+
+| | `appRoleAssignments` | `memberOf` |
+|---|---|---|
+| **`mls-verifier`** | Graph `Directory.Read.All`, `Policy.Read.All`, 3× `Telemetry.Probe` — **no Office 365 Exchange Online entry at all** | **`[]`** |
+| **`mls-purview`** (control) | **`Exchange.ManageAsApp`** on Office 365 Exchange Online | **Compliance Administrator** |
+
+`mls-purview` is the control that makes this a diagnosis rather than an assertion: identical
+mechanism, same runner, and its Security & Compliance session connects. App-only S&C needs
+**both** halves and `mls-verifier` has **neither**.
+
+**This is not fixable in this repository.** Granting an app role or a directory role is a
+tenant change and G3. It is written up as `docs/runbooks/g0-bootstrap.md` **step 11d**, and
+two judgements in that step are worth reading:
+
+- **It does not copy 11c.** `mls-purview` holds Compliance Administrator, which can *write*
+  labels. `layer-04-audit.ps1`'s own header says a writable Verifier credential would itself
+  be a finding, so 11d proposes **Global Reader** — read-only and Graph-assignable, therefore
+  reproducible — with the View-Only Configuration role group as fallback.
+- **It says what is not verified.** The object ids and the diagnosis are verified; nobody has
+  run the grant sequence end to end, because that is G3. The step says so in a callout rather
+  than reading like a tested recipe.
+
+**A repo defect came out of the same thread.** `scripts/bootstrap/01-root-oidc.ps1` never
+granted this and never claimed to — it grants two Graph roles and *prints* the S&C grant as a
+manual step. But `docs/runbooks/layers/L04.md` said **the script granted it**, and three other
+places stated the same intent as accomplished fact. That sentence was wrong for the life of
+the project. All four now describe what the tenant actually holds. It is F167's class exactly:
+a claim recorded once and carried forward as current.
+
+**Until a human performs 11d, L4 has no verdict** — and GAPs afterwards would be the correct
+outcome, not a green.
+
+### F176 — the S&C session used a Windows-only parameter, and the module was unpinned *(fixed 2026-09-03)*
+
+`-CertificateThumbprint` is a **Windows-only dynamic parameter** of `Connect-IPPSSession`.
+ExchangeOnlineManagement builds its certificate parameters in a `DynamicParam` block and adds
+that one only inside `if($IsWindows)`; the module's own comment reads *"We do not want to
+expose certificate thumprint in Linux as it is not feasible there."* CI is `ubuntu-latest`, so
+the call died at parameter binding before opening a socket. Verified against the installed
+module, not reasoned about.
+
+**It never worked.** This is not a version regression — the path had simply never executed,
+per F170 and F175, so a broken call sat undetected behind a broken guard.
+
+**The working implementation was sixty lines above it in the same file.** L4's `apply` job
+connects to the same service on the same runner using `-Certificate`/`-CertificateFilePath`,
+which the module adds unconditionally, and has always worked. Two jobs, one file, one service;
+the one that never ran diverged and nothing could tell. `Connect-MlsCompliance` now mirrors
+the proven path and probes the **installed cmdlet** rather than `$IsWindows`, so it follows
+the module if the gate moves.
+
+**And the module was unpinned** — three jobs ran `Install-Module ExchangeOnlineManagement`
+with no version, so the Verifier's behaviour could change with no commit to this repository.
+There is no lockfile for PowerShell modules, so `-RequiredVersion` is the lockfile; it now
+lives in one place, `.github/actions/install-exo`, which asserts the version it **loaded**
+rather than trusting `Install-Module`'s exit code.
+
+`Connect-MlsCompliance` previously had **no test of any kind, anywhere** — every suite that
+reaches L4 mocks it away, which is exactly why this survived.
+
+### F175 — L4 was marked verified, and its audit had never once run *(fixed 2026-09-03)*
+
+`docs/DEMO-READINESS.md` recorded:
+
+> **L4 Purview labels | verified | DONE 2026-09-01, the first time ever.
+> `verify L4 (mls-verifier)` PASSED.**
+
+That job passed. It also audited nothing. Steps from the cited run 33548766843, and
+identically from the 2026-09-03 rebuild:
+
+    success  Verifier Security & Compliance credentials not configured
+    skipped  Azure login (OIDC, mls-verifier)
+    skipped  Install the mls-verifier certificate and install ExchangeOnlineManagement
+    skipped  Run verification/layer-04-audit.ps1
+    skipped  Upload audit report
+
+Green in six seconds, because the *"not configured"* NOTICE step succeeded. The guard it
+depends on is F170's.
+
+**What was actually true:** the labels ARE applied — the `apply` job runs
+`Connect S&C PowerShell and apply the label taxonomy` and succeeds, using
+`PURVIEW_CERT_BASE64`, which IS on the `demo` environment that job declares. That half was
+always real. Only the independent verification never happened.
+
+This is the repository's own rule failing in the component built to enforce it: *"a step
+allowed to fail is a step nobody is watching — assert its EFFECT, not its exit code."* A
+layer's third leg reported success while never executing.
+
+### F174 — the purge check cried wolf on every teardown, and could not do otherwise *(fixed 2026-09-03)*
+
+The teardown step that purges the Log Analytics workspace emitted, two seconds apart:
+
+    02:00:15  Purged.
+    02:00:17  ##[warning] A soft-deleted mls-obs-demo-law is still registered, so a
+              same-name rebuild will RECOVER it and L6's alert rules will fail (F107).
+
+The warning is **false, and false on every run**. `az monitor log-analytics workspace delete
+--force` purges the workspace but leaves a tombstone in `list-deleted-workspaces`. Proven
+conclusively on 2026-09-03: the tombstone for `customerId 5c967cf4` was **still listed while a
+new same-name workspace (`87f95e84`) ran live in the same resource group**, and both
+scheduled-query alert rules — the exact things F107 broke — deployed clean.
+
+So the check could only ever report the hazard as PRESENT. That is the worse half of the rule
+three earlier findings taught: *"an auditor that cannot see a control must not be able to
+report it as PRESENT either."*
+
+**It cost real time on the run that found it.** It read as an F107 regression, nearly earned a
+hand-purge — which would have made the run green and taught nothing — and a whole probe
+dispatch was structured around resolving the ambiguity.
+
+The signal that DOES distinguish the two states is the **live** workspace's `customerId`,
+which is what F107's own entry recorded (*"its original customerId intact"*) and never encoded
+as a check. The teardown now captures it before the delete and publishes it in the step
+summary; the test that used to pin the old warning now asserts its **absence**.
+
+### F170 — V11.2 has never had evidence, on any teardown ever run *(fixed 2026-09-03)*
+
+`infra-down.yml`'s `preflight` job declares `environment: demo` and read
+`secrets.MLS_VERIFIER_CERT_BASE64` — a secret that lives on the **`verify`** environment. An
+absent GitHub secret is the **empty string, not an error**, so the guard reported "not
+configured" on every run since it was written, the down-state audit was always invoked with
+`-SkipChildAudit`, and:
+
+    [PASS] V11.1  All RGs absent post-down
+    [SKIP] V11.2  Tenant objects intact (L3/L4 audits still pass)
+           observed: child audits skipped by -SkipChildAudit
+
+**V11.2 is the criterion that proves a teardown did not cross the G3 tenant-object line.** It
+is the kill/rebuild cycle's honesty checkpoint, and it has been reporting nothing while the
+workflow went green and L11's scorecard row read "verified".
+
+This is F123's shape (a secret invisible to the job that reads it) and F125's (a guard whose
+"skip when unconfigured" meant "skip always"), **one level up: the job DID declare an
+environment, just not the one holding the secret.** A reviewer checking "does this job declare
+an environment" would have seen yes — which is why the F124 sweep did not catch it.
+
+The tenant objects were confirmed intact by hand on the day — seven app registrations, seven
+groups, the break-glass account holding an active Global Administrator role — but *confirmed
+by hand* is not what the criterion is for.
+
+**Writing the class as a sweep immediately found two more**, which is the argument for writing
+sweeps rather than filing findings:
+
+    layer-04-purview.yml   `preflight` read the verifier cert under environment: demo, so L4's
+                           independent audit took its degrade path unconditionally (F175)
+    layer-09-devsecops.yml `ghas` read MLS_VERIFIER_GH_TOKEN with no environment at all, so
+                           the first element of its token fallback chain was dead code and the
+                           job has only ever run on SELF_HEAL_TOKEN
+
+`verification/tests/failure-classes.Tests.ps1` now asserts every job reading an
+environment-scoped secret declares the environment that **holds** it, not merely some
+environment. **Fixed and still untested against a real teardown**, because none has happened
+since.
+
 ### F171 — V5.2 read a table list over a route it had been refused, and spent 30 minutes doing it *(fixed 2026-09-03)*
 
 The 2026-09-03 re-baseline:
