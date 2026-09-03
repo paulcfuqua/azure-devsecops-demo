@@ -596,6 +596,41 @@ Describe 'the estate can be renamed from one place' {
             -Because "a Fabric name that does not match naming.bicep's fabricWorkspaceName/fabricLakehouseName is a hardcoded company prefix, which a rebrand carries into Azure and leaves behind (F90)"
     }
 
+    It 'grants the deployer Key Vault access only when there is a secret for it to read' {
+        # F183's enablement half. L8's eval cannot evaluate the agent without reading the
+        # Direct Line secret, and the deployer held no Key Vault data-plane role - so the
+        # read returned Forbidden on every run, the step announced the secret ABSENT, and
+        # three L8 criteria skipped on an artifact that was never produced.
+        #
+        # The grant is the fix, and this pins its SHAPE rather than its existence. Two
+        # guards, both required: no named Direct Line secret means nothing to read, and no
+        # supplied principal means nobody to grant to. Either alone would turn a narrow,
+        # purposeful grant into a standing one - "access with no purpose", which is the
+        # reasoning the sibling grant above it already carries.
+        $platform = Get-Content -LiteralPath (Join-Path $script:Root 'infra/bicep/platform/main.bicep') -Raw
+
+        $platform | Should -Match 'module\s+directlineDeployerKvGrant' `
+            -Because "without this grant L8's eval cannot read the Direct Line secret, and it reports UNOBSERVABLE instead of evaluating the agent (F183)"
+
+        # The guard, asserted on the module's OWN declaration line rather than anywhere in
+        # the file - a file-wide match would be satisfied by the sibling grant's guard.
+        # Matched to end-of-line rather than to a closing paren: the condition contains
+        # `!empty(...)` calls, so a `[^)]*` capture stops at the first inner paren and
+        # silently drops the second guard. That is how the first version of this test
+        # failed against correct code.
+        $declaration = [regex]::Match(
+            $platform,
+            "(?m)^module\s+directlineDeployerKvGrant\b.*$")
+        $declaration.Success | Should -BeTrue `
+            -Because 'the deployer grant must be declared on one readable line'
+        $declaration.Value | Should -Match '=\s*if\s*\(' `
+            -Because 'the deployer grant must be conditional, not unconditional'
+        $declaration.Value | Should -Match 'directlineSecretName' `
+            -Because 'a Key Vault grant for a secret nobody named is access with no purpose'
+        $declaration.Value | Should -Match 'deployerPrincipalId' `
+            -Because 'an empty principal must grant nothing rather than failing the deployment'
+    }
+
     It 'classifies permission errors wherever it discards stderr and then claims a thing is absent' {
         # F183. The defect is NOT `2>/dev/null || true` - that idiom is correct and common
         # here, wherever absence is a legitimate expected state and the caller can actually

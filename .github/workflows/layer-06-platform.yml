@@ -259,6 +259,33 @@ jobs:
           echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
           echo "Key Vault create mode: ${mode}"
 
+      # F183. The deployer needs Key Vault Secrets User so L8's eval can read the Direct
+      # Line secret; without it that read returns Forbidden, the eval reports the secret
+      # ABSENT, and three L8 criteria skip on an artifact that is never produced.
+      #
+      # Resolved here rather than stored as a variable. The job is already authenticated
+      # AS this principal, so looking up its own object id is the one reliable source -
+      # and an object id typed into configuration is exactly the kind of value that can
+      # be wrong without anything noticing (F124's class).
+      #
+      # Empty output is a supported state, not a failure: main.bicep grants nothing
+      # unless both this and a named Direct Line secret are present. A tenant whose
+      # deployer cannot read its own service principal still deploys.
+      - name: Resolve the deployer's object id for the Key Vault grant
+        id: deployer
+        env:
+          DEPLOYER_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+        run: |
+          set -uo pipefail
+          object_id="$(az ad sp show --id "${DEPLOYER_CLIENT_ID}" --query id -o tsv 2>/dev/null || true)"
+          if [ -z "${object_id}" ]; then
+            echo "object-id=" >> "${GITHUB_OUTPUT}"
+            echo "::warning title=Deployer object id unresolved::Could not read the service principal for ${DEPLOYER_CLIENT_ID}, so the Key Vault Secrets User grant is skipped and L8's eval will report UNOBSERVABLE rather than evaluating the agent (F183). This needs Directory.Read.All or Application.Read.All on the deployer."
+            exit 0
+          fi
+          echo "object-id=${object_id}" >> "${GITHUB_OUTPUT}"
+          echo "Deployer object id resolved for the Key Vault grant."
+
       - name: Deploy the platform
         id: manifest
         if: ${{ !inputs.dry_run }}
@@ -268,6 +295,15 @@ jobs:
           # secret's name and an origin list are not sensitive. Unset means the Ask
           # tab stays dark with a typed error, which is a supported deployment.
           MLS_DIRECTLINE_SECRET_NAME: ${{ vars.MLS_DIRECTLINE_SECRET_NAME }}
+          # DERIVED, not stored (F183). L8's eval reads the Direct Line secret to open a
+          # conversation, and the deployer held no Key Vault data-plane role - so that read
+          # returned Forbidden on every run, the step announced the secret ABSENT, and
+          # V8.2/V8.4/V8.5 skipped on an artifact that was never produced. Resolved from
+          # AZURE_CLIENT_ID at deploy time rather than kept in a variable: an object id in
+          # configuration is one more value that can be wrong silently, and this one can be
+          # looked up from the identity the job is already authenticated as. Empty grants
+          # nothing - main.bicep's guard requires both this and a named secret.
+          MLS_DEPLOYER_OBJECT_ID: ${{ steps.deployer.outputs.object-id }}
           # NOT PASSED ANY MORE, and deliberately absent rather than empty-by-accident:
           # the control tower origin is DERIVED inside main.bicep from the Container
           # Apps environment domain, which L6 itself creates. It used to be a GitHub
