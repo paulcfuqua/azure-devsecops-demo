@@ -16,7 +16,7 @@ day-to-day operation.
 | RGs `mls-rg-platform`, `mls-rg-apps`, `mls-rg-data`, `mls-rg-ops` — and everything in them (ACA env + apps, SQL, LAW/App Insights, storage, Key Vault, registry/images) | Entra users (5), groups (5, incl. break-glass), CA policies (2 report-only + 1 enforced MFA), app registrations (4) |
 | Fabric workspace **items** in `mls-operations` (lakehouse `mls_operations` + its 10 Delta tables) — **and, since 2026-08-24, the Fabric data agent, which is a workspace item too** | Purview labels (`<prefix>-public`/`-internal`/`-confidential`/`-export-controlled`) + their GUIDs |
 | Subscription-scope cost-export definition [derived — removed so it doesn't point at deleted storage] | Fabric workspace shell `mls-operations` + role assignments |
-| **A paid F2 capacity, if the estate is on one** — see the note below. `scripts/bootstrap/02-fabric-capacity.ps1` creates it in `mls-rg-platform`, which the teardown deletes | **The trial capacity**: Microsoft-managed, no ARM resource, no resource group, nothing for `az group delete` to reach |
+| — | **The Fabric capacity, trial or paid F2.** The trial is Microsoft-managed with no ARM resource for `az group delete` to reach; a paid F2 lives in `<prefix>-rg-fabric`, deliberately outside the four groups this teardown deletes (see the note below) |
 | | OIDC federation on `mls-github-deployer`; `mls-verifier`; MG `mls` + policy/NIST assignments; the $75 budget; the GitHub repo and all its config |
 | | **The Power Platform environment, its pay-as-you-go billing plan, and the Copilot Studio agent + its solution** (2026-08-24) — not RG-scoped, and re-import + republish + Direct Line reconfiguration does not fit inside the hour |
 
@@ -45,10 +45,17 @@ is not.
 > invisible today only because this estate is on the trial capacity, where there is no ARM
 > resource for the delete to reach.
 >
-> Where the capacity should live is a **sponsor decision, not an editorial one**, and this
-> runbook does not make it: moving it out of the four demo RGs, or teaching `infra-up.yml`
-> to recreate it, both change what the gate-free cycle is allowed to touch. Recorded here
-> so the paid-F2 switch is made with this in hand rather than discovered by the failure.
+> **RESOLVED 2026-09-03 — sponsor decision: the capacity moves out of the four demo RGs.**
+> `-ResourceGroup` now defaults to `<prefix>-rg-fabric`. The teardown deletes four groups by
+> NAME, so a fifth is untouched and the *persists* claim above becomes true rather than
+> aspirational. The alternative — teaching `infra-up.yml` to recreate the capacity — was
+> rejected because it would put a **paid capacity creation on every rebuild**, which is a G2
+> spend action happening automatically, and G2 exists precisely to stop that.
+>
+> `verification/tests/failure-classes.Tests.ps1` asserts the default is never one of the four,
+> derived from `naming.bicep` rather than compared against a literal, so a rebrand cannot move
+> it back inside the blast radius. The paragraphs above are kept unedited: the defect was real
+> until this date, and a runbook that rewrites its own history is not a runbook.
 
 ## 2. `down.ps1` — semantics
 
