@@ -912,6 +912,113 @@ it is still about sign-in risk and auto-labeling, nothing else.
     `bootstrapAppRegistrations` is a key L3 never applies, and
     `Assert-ManifestSchema` refuses a name that appears in both arrays.
 
+11d. **`mls-verifier`'s Security & Compliance grant — the one that makes L4 auditable**
+    *(added 2026-09-03, finding F177)*. **Unperformed as of that date**, which is why
+    `verify L4 (mls-verifier)` reports `UnAuthorized` and V4.1–V4.3 record no verdict.
+
+    **`01-root-oidc.ps1` does not do this and never claimed to** — it grants the verifier
+    two Graph roles and then *prints* this as a manual step. `docs/runbooks/layers/L04.md`
+    said the script granted it; that sentence was wrong for the life of the project and is
+    now corrected.
+
+    **Why not just reuse `mls-purview`.** That identity works (step 11c) and is the
+    deployer's. The Verifier authenticates as itself or its sign-off means nothing —
+    CLAUDE.md: the Verifier never runs as the deployer. **And do not copy 11c's role
+    either:** `mls-purview` holds **Compliance Administrator**, which can *write* labels.
+    A Verifier that can rewrite what it audits is itself a finding.
+
+    Read back what the principal holds before and after, with the object ids for this
+    tenant (`mls-verifier` appId `5ba99346-481a-4994-a357-46cc92c1d570`):
+
+    ```bash
+    APP_ID=$(az ad app list --display-name mls-verifier --query '[0].appId' -o tsv)
+    SP_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+
+    az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/appRoleAssignments"
+    az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/memberOf"
+    ```
+
+    Observed 2026-09-03: `appRoleAssignments` held Graph `Directory.Read.All` +
+    `Policy.Read.All` and three `Telemetry.Probe` roles — **no Office 365 Exchange Online
+    entry at all** — and `memberOf` returned `[]`.
+
+    **`memberOf`, NOT `GET /directoryRoles/{id}/members`.** That endpoint does not
+    enumerate service principal members and returns `[]` for a role the principal is
+    genuinely in. It cost a wrong conclusion once already (step 11c).
+
+    **(1) `Exchange.ManageAsApp`, admin-consented.** Ids verified against this tenant, not
+    written from memory: the permission is `dc50a0fb-09a3-484d-be87-e023b12c6440` on
+    Office 365 Exchange Online (`00000002-0000-0ff1-ce00-000000000000`, whose service
+    principal here is `b07fd90c-9aca-4b3b-bda2-28ea3eabeefe`).
+
+    ```bash
+    az ad app permission add --id "$APP_ID" \
+      --api 00000002-0000-0ff1-ce00-000000000000 \
+      --api-permissions dc50a0fb-09a3-484d-be87-e023b12c6440=Role
+    az ad app permission admin-consent --id "$APP_ID"
+    ```
+
+    **VERIFY THE CONSENT, DO NOT TRUST ITS EXIT CODE** — on step 11c `admin-consent`
+    exited 0 and created nothing. Re-run the `appRoleAssignments` read above; if it is
+    still empty, POST the assignment directly, which works:
+
+    ```bash
+    EXO_SP=$(az ad sp show --id 00000002-0000-0ff1-ce00-000000000000 --query id -o tsv)
+    az rest --method post \
+      --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/appRoleAssignments" \
+      --headers "Content-Type=application/json" \
+      --body "{\"principalId\":\"$SP_ID\",\"resourceId\":\"$EXO_SP\",\"appRoleId\":\"dc50a0fb-09a3-484d-be87-e023b12c6440\"}"
+    ```
+
+    **(2) A READ-ONLY role.** The permission authenticates the app; it grants it nothing to
+    do. Assign **Global Reader** — directory role template
+    `f2ef992c-3afb-46b9-b7cf-a126ee74c451`, verified against this tenant — which is
+    read-only tenant-wide and is the role Microsoft documents for app-only Security &
+    Compliance access.
+
+    ```bash
+    # The role must be ACTIVATED in the tenant before it can be assigned. This is a no-op
+    # when it already is; the error it returns in that case is expected, hence `|| true`.
+    az rest --method post --url "https://graph.microsoft.com/v1.0/directoryRoles" \
+      --headers "Content-Type=application/json" \
+      --body '{"roleTemplateId":"f2ef992c-3afb-46b9-b7cf-a126ee74c451"}' || true
+
+    ROLE_ID=$(az rest --method get --url "https://graph.microsoft.com/v1.0/directoryRoles" \
+      --query "value[?roleTemplateId=='f2ef992c-3afb-46b9-b7cf-a126ee74c451'].id | [0]" -o tsv)
+
+    az rest --method post \
+      --url "https://graph.microsoft.com/v1.0/directoryRoles/$ROLE_ID/members/\$ref" \
+      --headers "Content-Type=application/json" \
+      --body "{\"@odata.id\":\"https://graph.microsoft.com/v1.0/directoryObjects/$SP_ID\"}"
+    ```
+
+    > **Two things here are NOT verified, and saying so is the point.** Every id above was
+    > read back from this tenant, but **nobody has run this sequence end to end** — the
+    > grant is a tenant-object change, which is G3, so the agent that diagnosed F177 was
+    > right not to perform it. What *is* verified is the diagnosis: both the permission and
+    > the role are absent on `mls-verifier`, and the identical pairing on `mls-purview`
+    > connects successfully.
+    >
+    > Second, older text in this repo said to add the principal to the **View-Only
+    > Configuration** role group. That is a **Purview/Exchange role group**, not an Entra
+    > directory role — a different mechanism reached through the Purview portal or
+    > `Add-RoleGroupMember`, and service-principal support there has historically been
+    > uneven. Global Reader is preferred here because it is assignable through Graph and is
+    > therefore reproducible. **If Global Reader does not satisfy the S&C endpoint, try the
+    > role group and record which one worked, here** — do not leave the next operator to
+    > rediscover it.
+
+    **Then prove it, and let the audit be the proof:**
+
+    ```bash
+    gh workflow run layer-04-purview.yml
+    ```
+
+    A verdict other than `UnAuthorized` means this step is done. **GAPs are a real
+    verdict**; a green job that audited nothing is what hid all of this (F175). The audit
+    deliberately FAILS rather than skipping when the grant is missing, and
+    `Connect-MlsCompliance` names this step in the failure text.
+
 12. ⚠ **Entra ID `SignInLogs`/`AuditLogs` diagnostic setting** — *added 2026-08-26 for
     finding F9* (`compliance/findings/2026-08-26-prepublication-review.md#f9`);
     *deliberately a human step, not a pipeline step — see below.* **Out of sequence

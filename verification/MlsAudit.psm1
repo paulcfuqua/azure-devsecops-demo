@@ -1107,19 +1107,108 @@ function Invoke-MlsSqlQuery {
 }
 
 function Connect-MlsCompliance {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'CertificatePassword',
+        Justification = 'A Security and Compliance certificate password arrives from a GitHub Actions secret as an environment variable, which is a plain string before this code ever sees it. SecureString would not protect it: on .NET for Linux - and CI is ubuntu-latest - SecureString is not encrypted at all, and the -CertificatePassword parameter takes it back to plain text to open the PFX regardless. The value is never logged, and the PFX is deleted by the cleanup step in the job that staged it.')]
     <#
     .SYNOPSIS
         Read-only Security & Compliance PowerShell session for the L4 label audit.
-        mls-verifier holds Exchange.ManageAsApp with the View-Only Configuration role
-        (L04.md Preconditions) - it can Get-Label and nothing else.
+        mls-verifier is INTENDED to hold Exchange.ManageAsApp with a read-only compliance
+        role - Get-Label and nothing else. As of 2026-09-03 it holds neither and the
+        service answers UnAuthorized; both are human grants (g0-bootstrap.md step 11d),
+        which is why the catch below explains that rather than reporting one word.
     #>
     param(
         [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$AppId,
-        [Parameter(Mandatory)][string]$CertificateThumbprint
+        [AllowEmptyString()][AllowNull()][string]$CertificateThumbprint,
+        [AllowEmptyString()][AllowNull()][string]$CertificateFilePath,
+        [AllowEmptyString()][AllowNull()][string]$CertificatePassword
     )
     Assert-MlsCommand -Name 'Connect-IPPSSession' -Hint 'Install ExchangeOnlineManagement (Install-Module ExchangeOnlineManagement -Scope CurrentUser); L4 reads labels through Security & Compliance PowerShell.'
-    Connect-IPPSSession -AppId $AppId -Organization $Organization -CertificateThumbprint $CertificateThumbprint | Out-Null
+
+    # -CertificateThumbprint IS A WINDOWS-ONLY PARAMETER, AND CI IS LINUX.
+    #
+    # This function passed it unconditionally and could therefore never run in CI. The
+    # module declares its certificate parameters DYNAMICALLY and gates that one on the
+    # platform - ExchangeOnlineManagement/netCore/ExchangeOnlineManagement.psm1, with the
+    # module's own comment on the line above it:
+    #
+    #     # We do not want to expose certificate thumprint in Linux as it is not feasible there.
+    #     if($IsWindows) { $paramDictionary.Add('CertificateThumbprint', $CertificateThumbprint); }
+    #
+    # so on ubuntu-latest the call died at parameter binding with "A parameter cannot be
+    # found that matches parameter name 'CertificateThumbprint'" before it opened a socket,
+    # and the audit exited 2 without recording a single criterion (F176). It was invisible
+    # for the life of the project because the job that runs it had never once executed: its
+    # credential guard read an environment secret from the wrong environment and skipped
+    # green every time (F170/F175).
+    #
+    # THE WORKING IMPLEMENTATION WAS SIXTY LINES ABOVE IT IN THE SAME FILE. L4's apply job
+    # connects to the same service on the same runner and uses -Certificate /
+    # -CertificateFilePath, which the module adds unconditionally on every platform. This
+    # now mirrors that proven path exactly rather than inventing a third one.
+    $connect = @{
+        AppId        = $AppId
+        Organization = $Organization
+        ShowBanner   = $false
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CertificateFilePath)) {
+        if (-not (Test-Path -LiteralPath $CertificateFilePath)) {
+            throw "Certificate file '$CertificateFilePath' does not exist. L4 authenticates to Security & Compliance PowerShell with a PFX; the step that writes it must run before the audit."
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CertificatePassword)) {
+            # Built character by character rather than with ConvertTo-SecureString
+            # -AsPlainText -Force. Both end at the same SecureString holding the same
+            # secret - the password arrives from a CI secret as a plain environment
+            # variable either way - but the cmdlet form trips
+            # PSAvoidUsingConvertToSecureStringWithPlainText, which lint-ci runs at
+            # Warning severity, and that rule does not honour function-scoped
+            # suppression. Writing the loop is cheaper than an exclusion nobody revisits.
+            $secure = [System.Security.SecureString]::new()
+            foreach ($character in $CertificatePassword.ToCharArray()) { $secure.AppendChar($character) }
+            $secure.MakeReadOnly()
+            $connect['Certificate'] = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $CertificateFilePath, $secure)
+        }
+        else {
+            $connect['CertificateFilePath'] = $CertificateFilePath
+        }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+        # ASSERT THE CAPABILITY, NOT THE PLATFORM. Testing $IsWindows would encode today's
+        # gate; asking the installed cmdlet what it accepts follows the module if that gate
+        # ever moves - and turns an opaque binding error into a message naming the fix.
+        $parameter = (Get-Command Connect-IPPSSession).Parameters
+        if (-not $parameter.ContainsKey('CertificateThumbprint')) {
+            throw "The installed Connect-IPPSSession does not accept -CertificateThumbprint on this platform - it is a Windows-only dynamic parameter of ExchangeOnlineManagement. Pass -CertificateFilePath (and -CertificatePassword if the PFX is protected) instead: that path is added on every platform and is what L4's apply job already uses."
+        }
+        $connect['CertificateThumbprint'] = $CertificateThumbprint
+    }
+    else {
+        throw 'Connect-MlsCompliance needs a certificate: pass -CertificateFilePath (preferred; works on every platform) or -CertificateThumbprint (Windows only).'
+    }
+    # AN AUTHORISATION FAILURE HERE IS A TENANT GRANT, NOT A BUG, AND MUST SAY SO.
+    #
+    # Once the parameter binding was fixed the service answered "UnAuthorized" - one word,
+    # naming nothing, from a script that exits 2 before recording a criterion. The cause is
+    # that app-only Security & Compliance auth needs TWO grants and mls-verifier has
+    # neither: the Exchange.ManageAsApp application permission (admin-consented), and a
+    # directory role, because the permission authenticates the app and grants it nothing to
+    # DO. Both are tenant-object changes a human performs at G0 - see g0-bootstrap.md step
+    # 11d - so this cannot self-heal and must not pretend to.
+    #
+    # It FAILS rather than degrading to a skip. A green job that audited nothing is exactly
+    # what hid this for the life of the project (F175).
+    try {
+        Connect-IPPSSession @connect | Out-Null
+    }
+    catch {
+        $reason = "$($_.Exception.Message)".Trim()
+        if ($reason -match '(?i)unauthor|forbidden|access.?denied|AADSTS') {
+            throw "Security & Compliance refused the app-only session for AppId $AppId ($reason). The certificate and parameters are fine - this is a missing TENANT GRANT, and app-only S&C auth needs both halves: (1) the Exchange.ManageAsApp application permission on Office 365 Exchange Online, admin-consented; and (2) a directory role, because the permission authenticates the app but grants it nothing to do. Verify what the principal actually holds with GET /v1.0/servicePrincipals/<id>/appRoleAssignments and GET /v1.0/servicePrincipals/<id>/memberOf - NOT GET /directoryRoles/<id>/members, which returns [] for a service principal that is genuinely a member. Granting either is a human step: docs/runbooks/g0-bootstrap.md step 11d."
+        }
+        throw
+    }
 }
 
 function Get-MlsLabel {
@@ -1136,8 +1225,8 @@ function Get-MlsLabelPolicy {
     <#
     .SYNOPSIS
         Get-LabelPolicy over the read-only S&C session (V4.3) - read-only, same as
-        Get-Label: mls-verifier's View-Only Configuration role can read policies, not
-        write them. Returns $null when the named policy does not exist, same shape as
+        Get-Label: the read-only compliance role mls-verifier is meant to hold can read
+        policies, not write them. Returns $null when the named policy does not exist, same shape as
         labels.ps1's own Get-ExistingLabelPolicy, rather than letting the cmdlet's
         not-found error surface as a thrown exception.
     #>
