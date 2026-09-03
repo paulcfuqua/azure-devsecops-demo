@@ -49,9 +49,9 @@ on 2026-09-02, with the evidence beside it.
 | L1 repo / IaC / OIDC / up-down | ✅ verified | The pipelines are the product and they run |
 | L2 landing zone | ✅ verified | V2.1, V2.2 PASS |
 | L3 Entra | 🟡 **blocked, pending re-run** | This row said `✅ verified — V3.1–V3.4 PASS` for two days after it stopped being true, which is **F167** and is a lesson about the scorecard rather than about L3. V3.1 failed on the 2026-09-03 rebuild: `mls-purview` existed in the tenant (created by hand at G0 step 11c on 2026-09-01) and was declared in no manifest, so the drift sweep reported it. Every declared object resolved — `5/5; 7/7; 4/4`. Fixed in the repo (declared under `bootstrapAppRegistrations`, which L3 never applies; exemption derived rather than hardcoded, **F168**; drift now fails in seconds instead of burning the 45-minute propagation window, **F169**). **Re-run `layer-03-entra.yml` to restore the verdict** — nothing here is verified until it does |
-| L7 apps | ✅ verified | **7/7 on 2026-09-02** - a full clean sign-off, including V7.6 (the data API answers with rows, not merely a status code) and V7.7 (a human can complete an interactive sign-in). Those two also settled an open question about Easy Auth audiences, since V7.3 probes with the client-id audience and passed. Previously 6/7, and the layer has 7 criteria now, not 5.** V7.5, V7.6 and V7.7 had NEVER been evaluated on any run - every failure was F104's expired assertion, not the estate. With that fixed, V7.5 and V7.6 passed first time: **V7.6 independently confirms the data API returns real rows**, which is what section D was about. V7.7's failure was F127, a probe following a redirect into Microsoft's login page; fixed |
+| L7 apps | 🟡 **blocked, pending re-run** | This row said `✅ verified — 7/7` until the 2026-09-03 rebuild, and V7.6 failed on it: `launch-ops http=502 rows=n/a`. **The criterion worked; the estate did not.** `data-api`'s managed identity had no login on Azure SQL, because the contained-user grant depends on a G0 Directory Readers assignment bound to the SQL server's system-assigned identity — which teardown destroys and rebuilds with a new principal id (**F172**). The deploy job reported success anyway, which is **F173**. Both are fixed in the repo: the user is now created with an explicit SID from the identity's clientId, so nothing asks Graph and a rebuild reproduces it. **Re-run `layer-07-apps.yml`** — nothing here is verified until V7.6 reads a row again. The historical note follows: V7.5, V7.6 and V7.7 had NEVER been evaluated before 2026-09-02 (F104's expired assertion); V7.7's failure was F127 |
 | L11 teardown | ✅ verified (down half) | V11.1 PASS. Rebuild proven once. V11.2's blocker (BLOCKER-1) is **closed** — the up-half has simply not been re-run since, and doing so is the sponsor's phase-1 item |
-| L5 Fabric | 🟡 partial | Deployed and seeded (10 tables, `launches`=1,200). Its audit has not passed cleanly since F104/F105/F114 were fixed — **re-run it** |
+| L5 Fabric | 🟡 **blocked, pending re-run** | Deployed and seeded (10 tables, `launches`=1,200) — the deploy job's own log says `10 reported by Fabric`. The 2026-09-03 rebuild ran **V5.1 PASS, V5.2 FAIL, V5.3 PASS, V5.4 PASS**, and V5.2's failure was the auditor rather than the estate: Fabric workspace **Viewer** confers no OneLake read, and `/lakehouses/<id>/tables` answers 200 with `[]` rather than 403 to a caller without it (**F171**, F105 recurring). V5.2 now probes OneLake first — which does answer 403 — reads the table list over the SQL analytics catalog when it is refused, records which route answered, and reports UNOBSERVABLE rather than FAIL when neither can look. It also stopped spending 30 minutes on a permission verdict. **Re-run `layer-05-fabric.yml`** |
 | L6 platform | ✅ verified | **5 PASS + 2 PENDING on 2026-09-01**, and both PENDINGs sign off by design (V6.3's cost export has a 24 h window, V6.4's SQL auto-pause a 75 min one — L06.md V6.3). Both Function Apps hold code (V6.7) and **V6.8 confirms the Key Vault reference actually resolves**, which is what F122 broke silently |
 | L9 DevSecOps chain | 🟡 partial | **The DAST is real for the first time (2026-09-02).** V9.4 asserted "0 High" over a scan of a login page; it now covers **six endpoints** - every externally reachable app plus both Function Apps, enumerated from Azure rather than listed - with the three Easy Auth apps **authenticated** and each run recording `authenticated GET / -> HTTP 200, N bytes` as proof it got inside. **Zero High across the estate.** It took nine findings to get there (F152, F155, F157-F163) and only two were wrong behaviour; the rest were unreadable evidence. **V9.1 PASSES** (F103's fix). **V9.6 added and PASSES**: Defender now genuinely produces posture, 0 -> 6 assessments the moment the plans were enabled. **V9.5 is the one gap** - it needs a Defender toggle round-trip inside the run window, which is a G2 action; the plans being permanently on does not satisfy it |
 | L12 compliance | ✅ verified | **The last layer to get an audit, 2026-09-01.** 4 PASS + 2 SKIP; wired into `compliance.yml` as a `verify` job after every collection. `MlsAudit` capped `Layer` at 11 until now - the module could not represent layer 12 even if someone had written the script |
@@ -116,6 +116,179 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
   have to defeat V12.4 to run, and V12.5 is L8's V8.3 against the same server.
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
+
+### F171 — V5.2 read a table list over a route it had been refused, and spent 30 minutes doing it *(fixed 2026-09-03)*
+
+The 2026-09-03 re-baseline:
+
+    [PASS] V5.1  Fabric REST: workspace + lakehouse exist
+    [FAIL] V5.2  Table list matches manifest
+    [PASS] V5.3  SQL analytics endpoint returns expected row counts (launches = 1,200 +/- 0)
+
+V5.2 said the table list did not match while V5.3, reading **the same lakehouse**, returned
+1,200 rows. This is **F105 recurring**, and F105's own stated rule is that the criterion must
+report UNOBSERVABLE — *"establish that you could observe before reporting what you saw, and
+when you could not, fail as UNOBSERVABLE - never pass, and never claim the control is
+missing."*
+
+**F105's fix was applied to the message and not to the verdict.** The code did recognise the
+shape and printed an honest sentence —
+
+    observed: the tables endpoint returned an EMPTY LIST - this is what it returns without
+              OneLake read, not necessarily an empty lakehouse
+
+— and then returned a plain `FAIL` with no `-Final`. So the most-likely-correct state of the
+estate produced a red criterion that re-asked a permission question for the full window:
+**03:59:25 → 04:29:33, thirty minutes, 91 attempts** at an answer settled on the first poll.
+That is F169's shape in a second layer, and the mutation test now measures it — removing the
+`-Final` takes the attempt count from 1 back to 91.
+
+**Why the Verifier cannot see the tables, established rather than assumed.** Fabric has four
+workspace roles — Admin, Member, Contributor, Viewer — and `mls-verifier` holds **Viewer**,
+because the Verifier is read-only by contract. Viewer can read the SQL analytics endpoint
+(V5.3 proves it every run) and **cannot read OneLake**, which is what
+`GET /lakehouses/<id>/tables` requires. Same lakehouse, minutes apart, on this very run:
+
+    03:58:35Z  deploy identity (Contributor):  Lakehouse seeded: 10 Delta table(s) loaded, 10 reported by Fabric
+    03:59:25Z  mls-verifier   (Viewer):        []
+
+Probed directly against the live estate as a principal holding no workspace role at all, the
+two endpoints disagree about how to say no — and that disagreement is the whole fix:
+
+    GET .../v1/workspaces/<ws>/lakehouses/<lh>/tables              -> HTTP 200  {"data":[]}
+    GET https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>/Tables  -> HTTP 403  Forbidden
+
+**So the criterion probes OneLake first, and only then decides what it is looking at.** Three
+outcomes where there were two: OneLake readable, so the Fabric list means what it says and an
+empty one is a real empty lakehouse; OneLake denied, so that list is UNOBSERVABLE and the
+table list is read from the SQL analytics endpoint's own catalog instead, which a Viewer
+demonstrably can read; neither, and the criterion reports `UNOBSERVABLE:` and is `-Final`,
+because a denial is not a propagation artifact. Every run now records one line of positive
+evidence naming which route answered (F162's shape):
+
+    OneLake read: https://onelake.dfs.fabric.microsoft.com/... -> HTTP 403 (denied - so the
+    Fabric /tables list this identity receives is UNOBSERVABLE, not empty) | table list read
+    from the SQL analytics endpoint instead: INFORMATION_SCHEMA.TABLES on ... returned 10 dbo
+    BASE TABLEs: cost_daily, findings_history, launches, ...
+
+**The fix is deliberately NOT to give the auditor OneLake read.** Contributor is the lowest
+Fabric role that carries it, and Contributor can write. Escalating the Verifier to make a
+criterion convenient trades a stated architectural boundary for a table list; a test asserts
+the audit never calls `Add-FabricWorkspaceRoleAssignment`.
+
+**One honest cost, recorded in the criterion rather than left to be discovered:** the SQL
+route cannot see an *extra* Delta table until the endpoint has synced it, so drift detection
+over the fallback lags OneLake's. `TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA = 'dbo'` was
+read off the live endpoint, not written from memory — it returns the ten seeded tables plus
+exactly one `sys` VIEW, so an unfiltered catalog read would report permanent drift against a
+correct lakehouse.
+
+Mutation-tested: pretending observability is always established fails six tests; dropping the
+`-Final` fails the window test on its own.
+
+### F172 — a G0 step documented as "once per tenant" was bound to an identity every rebuild replaces *(fixed 2026-09-03)*
+
+The same re-baseline, four layers later:
+
+    [FAIL] V7.6  The data API answers with rows, not merely with a status code
+                 observed: launch-ops http=502 rows=n/a; control-tower http=502 rows=n/a
+
+    upstream_unavailable (502) detail=ConnectionError: Login failed for user '<token-identified principal>'.
+
+`launches` is a **`sql`**-store table (`apps/data-api/src/contract/allowlist.ts`), so the 502
+is Azure SQL, not the lakehouse — and it is the same root cause as the silently-failing grant
+in the same job. **One defect, two symptoms.**
+
+`CREATE USER ... FROM EXTERNAL PROVIDER` makes the SQL engine resolve the principal in
+Microsoft Graph. An application cannot impersonate another application, so under CI the engine
+falls back to **the SQL server's own managed identity**, which must hold the Entra "Directory
+Readers" role. `docs/runbooks/g0-bootstrap.md` step 6 called that *"One assignment, once per
+tenant"*.
+
+**It was never once per tenant.** L6 creates the server in `mls-rg-data`; teardown deletes
+that resource group; the server's **system-assigned** identity dies with it and returns under
+the same NAME with a **new principal id**, and Entra removes the dangling role assignment
+along with the deleted service principal. The grant stops existing the first time the estate
+is rebuilt — the one thing this demo exists to do.
+
+Read after the rebuild, not inferred:
+
+    directory audit log   2026-09-01T12:23:23Z  success  mls-ops-demo-sql -> Directory Readers
+                                                         (appId 4d541df8-e920-4603-8aa9-2e1ac6da0ead)
+    current server identity principalId          031dbb19-9d2c-4832-bf78-be5480aa3a59
+    its directory role assignments               0
+    members of Directory Readers                 0
+
+**The class: a NAME survives a rebuild and a PRINCIPAL ID does not**, so every check keyed on
+the name still passes. The old F20 verification is exactly that check — it asked whether a
+principal of this name existed, which a user left behind by a *previous* identity of the same
+name satisfies while being unable to log in.
+
+**Fixed by removing the dependency, not by automating the privilege.** The contained user is
+now created with its SID supplied explicitly — for an application that SID is its
+**application (client) id**, resolved from Azure at deploy time with `az identity show` — so
+nothing asks Graph, no server identity is involved, and **no tenant-level privilege is needed
+anywhere**. `Set-SeedWorkloadUser` (`data/seed/sql/sql-seed.psm1`) creates it, drops and
+recreates a user whose SID belongs to a dead identity, adds `db_datareader`, then reads the
+user, its SID and its role membership back out of `sys.database_principals` and throws on any
+mismatch. `data/seed/sql/900-contained-users.sql` keeps only its `schema_version` row and the
+explanation: two mechanisms creating one user, one of which must be allowed to fail, is the
+two-copies-of-one-fact shape this repository keeps paying for.
+
+**The one constant here that names something in another system is client-id-versus-object-id,
+and this fix cannot verify it itself.** Comparing the SID we wrote against the value we wrote
+it from is a mirror, not a test. What settles it is **V7.6**, which asks the running data-api
+for a row over a real login — so a wrong SID leaves the criterion red rather than green. The
+deploy step prints both GUIDs beside the grant for whoever reads the log next.
+
+Automating the Directory Readers grant was considered and rejected: it needs Privileged Role
+Administrator, `mls-github-deployer` holds no `AppRoleAssignment.ReadWrite.All` either, and
+the runbook's own reasoning stands — *"an agent that can grant itself directory roles is
+demonstrating something nobody wants to buy."* The right answer was to stop needing it.
+
+### F173 — a step whose whole job is to announce a failure reported success *(fixed 2026-09-03)*
+
+The L7 deploy job of the same run, verbatim:
+
+    success  Apply the SQL contained-database user now that the identity exists (F20)
+    success  Report a failed F20 grant pass          <-- this step RAN
+    skipped  Report a failed F24 grant pass
+
+The second line's **presence** means the first one failed. Its `success` means it succeeded at
+saying so. The deploy job was green, and stayed green for the fifty minutes until V7.6 read a
+row and could not.
+
+`continue-on-error` on the grant step is **right** and stays: the `verify` job needs `deploy`
+to succeed, so a transient PSGallery hiccup in an idempotent remediation would otherwise
+starve the audit that would judge it — CLAUDE.md's own ruling on F119/F120. What it costs is
+visibility, and the run's **step list is the surface people actually read**. So the reporting
+steps now say what their presence means:
+
+    FAILURE: the F20/F172 SQL contained-user grant did not complete
+    FAILURE: the F24 Fabric workspace grant for data-api did not complete
+    FAILURE: the F19 Fabric workspace grant for cost-ingest did not complete
+    FAILURE: the Easy Auth redirect-URI registration did not complete
+
+That fourth one was found by the check, not by the eye. This is F162's rule — *evidence that
+cannot distinguish two states is not evidence* — applied to a run summary rather than a scan
+report.
+
+**Two things the fix turned up on the way, both worth more than the rename.**
+
+**A green check over prose describing its own removal.**
+`verification/tests/workload-rbac.Tests.ps1` asserted `900-contained-users.sql` matches `FROM
+EXTERNAL PROVIDER`. After the statement was deleted the test **still passed**, because the
+deleted statement is quoted verbatim in the comment explaining why it went. A capability moved
+out of a file and its check stayed green on the paragraph describing the move. That is F27's
+class — matching a string that lives only in a comment — and every assertion in the new sweep
+strips comments before reading, in both PowerShell (`<# … #>` and `#`) and SQL (`/* … */`).
+
+**Two copies of one fact, already diverged.** `workload-rbac.Tests.ps1` carried two private
+copies of `Get-JobBody`/`Get-StepBody`. One had lost the `\r?\n` in its regex to a pair of
+literal newline characters somewhere in an edit that went through a shell — CLAUDE.md's
+control-character class, still matching by accident on an LF file — and only one learned to
+accept a **quoted** step name, which YAML requires as soon as a name contains a colon. So the
+rename above was found by one copy and thrown by the other. Deduplicated to one.
 
 ### F169 — 45.9 minutes spent on a verdict that was settled at minute zero *(fixed 2026-09-03)*
 

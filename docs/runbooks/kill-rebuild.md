@@ -15,13 +15,40 @@ day-to-day operation.
 |---|---|
 | RGs `mls-rg-platform`, `mls-rg-apps`, `mls-rg-data`, `mls-rg-ops` — and everything in them (ACA env + apps, SQL, LAW/App Insights, storage, Key Vault, registry/images) | Entra users (5), groups (5, incl. break-glass), CA policies (2 report-only + 1 enforced MFA), app registrations (4) |
 | Fabric workspace **items** in `mls-operations` (lakehouse `mls_operations` + its 10 Delta tables) — **and, since 2026-08-24, the Fabric data agent, which is a workspace item too** | Purview labels (`<prefix>-public`/`-internal`/`-confidential`/`-export-controlled`) + their GUIDs |
-| Subscription-scope cost-export definition [derived — removed so it doesn't point at deleted storage] | Fabric workspace shell `mls-operations` + role assignments; the capacity itself |
+| Subscription-scope cost-export definition [derived — removed so it doesn't point at deleted storage] | Fabric workspace shell `mls-operations` + role assignments |
+| **A paid F2 capacity, if the estate is on one** — see the note below. `scripts/bootstrap/02-fabric-capacity.ps1` creates it in `mls-rg-platform`, which the teardown deletes | **The trial capacity**: Microsoft-managed, no ARM resource, no resource group, nothing for `az group delete` to reach |
 | | OIDC federation on `mls-github-deployer`; `mls-verifier`; MG `mls` + policy/NIST assignments; the $75 budget; the GitHub repo and all its config |
 | | **The Power Platform environment, its pay-as-you-go billing plan, and the Copilot Studio agent + its solution** (2026-08-24) — not RG-scoped, and re-import + republish + Direct Line reconfiguration does not fit inside the hour |
 
 Why the line sits here: tenant-level objects propagate in 15–45 minutes — churning
 them makes a <60-minute rebuild impossible (spec F6). Money is disposable; identity
 is not.
+
+> **The capacity row used to read "the capacity itself" under *persists*, without
+> qualification.** That is right on the trial and wrong on paid F2, and the difference
+> only becomes observable once someone starts spending money.
+>
+> `scripts/bootstrap/02-fabric-capacity.ps1 -Mode F2` defaults `-ResourceGroup` to
+> `mls-rg-platform`, which is the **first** entry in the teardown's RG list (the `naming`
+> composite action emits `<prefix>-rg-platform <prefix>-rg-apps <prefix>-rg-data
+> <prefix>-rg-ops`). Nothing recreates it: grep `.github/workflows/` for
+> `02-fabric-capacity` and there are zero hits — the script is G0-only, human-run, and its
+> F2 mode is G2-gated, so `infra-up.yml` has no path to it by design. So on the paid path
+> an ordinary § 2 step 4 RG delete destroys the capacity; `FABRIC_CAPACITY_ID` becomes a
+> dead ARM id; the surviving `mls-operations` workspace is stranded with no capacity to
+> attach to; and the *next* `infra-down` fails at its "Pause the Fabric capacity" step,
+> because that step matches `FABRIC_CAPACITY_ID` against `/subscriptions/*` and runs
+> `az resource invoke-action --ids <dead id> --action suspend`.
+>
+> **It arms itself on the first teardown after the G2 to paid F2** — that is, it goes off
+> immediately after someone starts paying, which is the worst moment for it to. It is
+> invisible today only because this estate is on the trial capacity, where there is no ARM
+> resource for the delete to reach.
+>
+> Where the capacity should live is a **sponsor decision, not an editorial one**, and this
+> runbook does not make it: moving it out of the four demo RGs, or teaching `infra-up.yml`
+> to recreate it, both change what the gate-free cycle is allowed to touch. Recorded here
+> so the paid-F2 switch is made with this in hand rather than discovered by the failure.
 
 ## 2. `down.ps1` — semantics
 

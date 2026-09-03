@@ -660,6 +660,12 @@ Describe 'the estate can be renamed from one place' {
                 Context = '^\[pscustomobject\]@\{\s*Label\s*='
                 Why     = 'Console display text in the workspace role-grant loop, sitting beside the unprefixed "data-api identity" and "mcp-tools identity". Nothing looks the string up - the grant is keyed on $VerifierPrincipalId - and the workspace NAME in this same file comes from Get-EstatePrefix. A rebrand makes this label stale, not the script wrong.'
             }
+            @{
+                Path    = 'scripts/bootstrap/02-fabric-capacity.ps1'
+                Literal = "$prefix-demo"
+                Context = "^else \{ '$prefix-demo' \}$"
+                Why     = 'The last-resort value of the `owner` TAG, after -Owner and $env:MLS_OWNER. A tag value, not a resource name: nothing in any other system resolves it, so a rebrand makes it stale rather than wrong - the same argument as the provision-workspace label above. This file became visible to the sweep only when a 2026-09-03 comment named MLS_COMPANY_PREFIX while recording that its RESOURCE GROUP and CAPACITY NAME defaults are hardcoded and are F90''s class; those two are the ones that matter, they are param() defaults the sweep deliberately does not gate, and changing a G0 bootstrap script on the critical path of a running rebuild is a decision for the sponsor rather than a drive-by (see F168''s closing note).'
+            }
         )
 
         $gated = [System.Collections.Generic.List[string]]::new()
@@ -2074,6 +2080,107 @@ credential nobody would rotate.
         $missing -join ', ' | Should -BeNullOrEmpty -Because @"
 gitleaks.yml's incident text is what someone follows at 3am after a leak. A credential absent
 from it is one that does not get rotated.
+"@
+    }
+}
+
+Describe 'a grant the estate depends on is not bound to a principal the rebuild replaces' {
+    # F172. `CREATE USER ... FROM EXTERNAL PROVIDER` makes the Azure SQL engine resolve the
+    # principal in Microsoft Graph. An application cannot impersonate another application, so
+    # under CI the engine falls back to the SQL SERVER'S OWN managed identity, which must hold
+    # the Entra "Directory Readers" role - and docs/runbooks/g0-bootstrap.md documented that
+    # grant as "One assignment, once per tenant".
+    #
+    # It was never once per tenant. L6 creates the server in mls-rg-data, teardown DELETES that
+    # resource group, and the server's SYSTEM-ASSIGNED identity dies with it and returns under
+    # the same NAME with a NEW principal id. Entra removes the dangling role assignment along
+    # with the deleted service principal. So the grant stopped existing the first time the
+    # estate was rebuilt, which is the one thing this demo exists to do.
+    #
+    # Measured on the 2026-09-03 re-baseline, not inferred: the directory audit log records
+    # `mls-ops-demo-sql` added to Directory Readers at 2026-09-01T12:23:23Z for a service
+    # principal that no longer exists; the current server identity holds zero directory role
+    # assignments; the Directory Readers role has zero members. Four layers later data-api
+    # answered 502 `Login failed for user '<token-identified principal>'` on every SQL-backed
+    # route and V7.6 went red.
+    #
+    # THE CLASS, stated so it outlives this instance: a NAME survives a rebuild and a PRINCIPAL
+    # ID does not. Every check keyed on the name still passes. So a one-time grant made against
+    # a resource-group-scoped identity is true exactly until the first teardown, and silent
+    # afterwards.
+
+    BeforeAll {
+        $script:Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:SeedSqlDir = Join-Path $script:Root 'data/seed/sql'
+        $script:Layer07Yml = Get-Content -LiteralPath (Join-Path $script:Root '.github/workflows/layer-07-apps.yml') -Raw
+    }
+
+    It 'creates the workload contained-database user from an explicit SID, never FROM EXTERNAL PROVIDER' {
+        # COMMENTS STRIPPED FIRST, AND THAT IS THE WHOLE POINT. The statement this forbids is
+        # quoted verbatim in the comment explaining its removal, so a naive grep over the raw
+        # files passes on prose describing its own departure - which is exactly what
+        # workload-rbac.Tests.ps1 did until today.
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in Get-ChildItem -LiteralPath $script:SeedSqlDir -Filter '*.sql' -File) {
+            $code = [regex]::Replace((Get-Content -LiteralPath $file.FullName -Raw), '(?s)/\*.*?\*/', '')
+            if ($code -match 'FROM\s+EXTERNAL\s+PROVIDER') { $offender.Add($file.Name) }
+        }
+        $moduleCode = [regex]::Replace(
+            (Get-Content -LiteralPath (Join-Path $script:SeedSqlDir 'sql-seed.psm1') -Raw), '(?s)<#.*?#>', '')
+        $moduleCode = (($moduleCode -split "`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+        if ($moduleCode -match 'FROM\s+EXTERNAL\s+PROVIDER') { $offender.Add('sql-seed.psm1') }
+
+        $offender -join ', ' | Should -BeNullOrEmpty -Because @"
+FROM EXTERNAL PROVIDER needs the SQL server's own managed identity to hold Directory Readers.
+That identity is destroyed with mls-rg-data on every teardown and returns with a new principal
+id, so the grant behind it is gone and no name-based check can tell. Create the user with
+CREATE USER ... WITH SID = <clientId>, TYPE = E instead - it asks Graph nothing, needs no
+tenant-level privilege, and a rebuild reproduces it.
+"@
+    }
+
+    It 'verifies the SID of the contained user, not merely that a principal of that name exists' {
+        # ASSERT THE CAPABILITY, NOT THE ARTEFACT. A user-assigned identity destroyed with its
+        # resource group and recreated under the same name gets a NEW clientId, so a database
+        # that outlived it holds a user nobody can log in as - and "a principal of this name
+        # exists" is satisfied by exactly that user. The SID is what the engine matches a
+        # presented token against, so the SID is what has to be read back.
+        # BOOLEANS, NOT -Match ON THE WHOLE FILE. A failed Should -Match prints its input,
+        # and these inputs are a 1,400-line workflow and a 900-line module - so the useful
+        # sentence ends up buried under the artefact it is about.
+        $module = Get-Content -LiteralPath (Join-Path $script:SeedSqlDir 'sql-seed.psm1') -Raw
+        [bool]($module -match 'CONVERT\(UNIQUEIDENTIFIER, \[sid\]\)') | Should -BeTrue `
+            -Because 'sql-seed.psm1 must read the stored SID back out of sys.database_principals'
+
+        [bool]($script:Layer07Yml -match 'CONVERT\(UNIQUEIDENTIFIER, \[sid\]\)') | Should -BeTrue `
+            -Because 'layer-07-apps.yml''s own independent read-back must compare the SID, not the name'
+        [bool]($script:Layer07Yml -match 'az identity show') | Should -BeTrue `
+            -Because 'the clientId written as the SID is read from Azure at deploy time, never stored'
+    }
+
+    It 'surfaces every continue-on-error grant step under a name that says a failure happened' {
+        # A STEP LIST IS EVIDENCE, AND IT MUST DISTINGUISH TWO STATES - F162's rule applied to
+        # the run summary. continue-on-error is right for an idempotent remediation: a
+        # transient blip must not red the deploy job and starve the Verifier that would judge
+        # it. But the 2026-09-03 rebuild then showed
+        #
+        #     success  Apply the SQL contained-database user ... (F20)
+        #     success  Report a failed F20 grant pass
+        #
+        # where the second line's PRESENCE means the first one failed. "Report a failed X"
+        # reporting success is indistinguishable at a glance from nothing being wrong, and the
+        # deploy job was read as green for fifty minutes while its grant had not landed.
+        $reporting = @([regex]::Matches($script:Layer07Yml, "(?m)^\s+- name: (['`"]?)(?<name>[^\r\n]*?)\1\r?$") |
+                ForEach-Object { $_.Groups['name'].Value } |
+                Where-Object { $_ -match '(?i)\bfail(ed|ure)\b' })
+
+        $reporting.Count | Should -BeGreaterOrEqual 3 `
+            -Because 'the F19, F20 and F24 grant steps each carry continue-on-error and each needs a reporting step'
+        $vague = @($reporting | Where-Object { $_ -notmatch '^FAILURE:' })
+        $vague -join ' | ' | Should -BeNullOrEmpty -Because @"
+A step whose only job is to announce that something broke must say so in its own name, because
+the run's step list is what a reader scans first. 'Report a failed X' beside a green tick reads
+as 'nothing to report'.
 "@
     }
 }

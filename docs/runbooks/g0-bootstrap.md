@@ -2,7 +2,9 @@
 
 Status as verified on 2026-08-22 from this machine; **section A re-verified and completed
 2026-08-26** — the local toolchain is now fully installed and every offline gate replays
-green. Items marked ⚠ are **missing/unverified** and block the layer noted.
+green. Items marked ⚠ are **missing/unverified** and block the layer noted. Items marked ○
+are **optional** — nothing in the deploy path needs them, and they are kept because someone
+may still want the capability they describe.
 
 > **2026-08-29 sponsor amendment — this runbook is no longer human-only.** It used to say
 > "Agents never execute these steps; where a step is scriptable, agents author the script
@@ -551,8 +553,11 @@ it is still about sign-in risk and auto-labeling, nothing else.
    environment — bookmark the environment-scoped URL
    (`.../environments/<environment-id>/home`) or it drops you into the tenant Default,
    which has no Dataverse and reports "Dataverse isn't set up in this environment".
-6. ⚠ **Directory Readers for the Azure SQL server identity** (blocks EVERY dashboard).
-   One assignment, once per tenant, and **nothing in the demo shows data without it**.
+6. ○ **Directory Readers for the Azure SQL server identity** — *optional fallback since
+   2026-09-03; the deploy path no longer needs it (F172).* This step used to be marked ⚠
+   **(blocks EVERY dashboard)** and to open with "One assignment, once per tenant, and
+   **nothing in the demo shows data without it**." The first half of that sentence was
+   false, and the second half was true only because of the first.
 
    `CREATE USER [<app identity>] FROM EXTERNAL PROVIDER` makes the SQL engine resolve the
    principal in Microsoft Graph. When a **user** runs it, Azure SQL impersonates that user
@@ -563,10 +568,44 @@ it is still about sign-in risk and auto-labeling, nothing else.
    query permissions or the operations fail."*
    ([docs](https://learn.microsoft.com/en-us/azure/azure-sql/database/authentication-aad-service-principal))
 
-   L6's template creates the server identity (`managedIdentities.systemAssigned`). Granting
-   it directory read needs **Privileged Role Administrator**, which is why it is here and
-   not in a pipeline - and deliberately so: an agent that can grant itself directory roles
-   is demonstrating something nobody wants to buy.
+   **It is not once per tenant.** L6 creates the server in `mls-rg-data`; teardown deletes
+   that resource group; the server's **system-assigned** identity dies with it and comes
+   back under the same NAME with a NEW principal id, and Entra removes the dangling role
+   assignment along with the deleted service principal. So the grant silently stops
+   existing the first time the estate is rebuilt - which is the one thing this demo exists
+   to do. Read on 2026-09-03, after the re-baseline rebuild:
+
+   - The directory audit log records `2026-09-01T12:23:23Z success` — `mls-ops-demo-sql`
+     added to Directory Readers, for a service principal with appId
+     `4d541df8-e920-4603-8aa9-2e1ac6da0ead`.
+   - The **current** server identity's principalId is
+     `031dbb19-9d2c-4832-bf78-be5480aa3a59` and it holds **zero** directory role
+     assignments.
+   - The Directory Readers role object `fa8f3064-7bdd-4b7b-865c-b1dd09155c1c` has **zero**
+     members.
+
+   Four layers later, L7 run `33712156088` logged `data/seed/sql/900-contained-users.sql
+   ran without throwing, but 'mls-data-api-demo-id' does not exist in
+   mls-ops-demo-sql.database.windows.net/mls-launch-ops-demo-sqldb`, the deploy job still
+   reported success, and every SQL-backed `/api/tables` route answered 502 `Login failed
+   for user '<token-identified principal>'`. L7's V7.6 is what caught it.
+
+   **What the deploy path does instead, and why you can skip this step.**
+   `Set-SeedWorkloadUser` (`data/seed/sql/sql-seed.psm1`) issues `CREATE USER [name] WITH
+   SID = <the identity's clientId>, TYPE = E` and then reads the user and its SID back out
+   of `sys.database_principals`. Azure SQL stores an application's SID as its application
+   (client) id, so supplying it explicitly asks Graph nothing: no server identity is
+   consulted, no Directory Readers assignment is needed, and no tenant-level privilege is
+   required anywhere. The estate rebuilds itself with no human in the loop, which is the
+   property this step could never have.
+
+   **The recipe below is kept for the EXTERNAL PROVIDER route**, which is still the only
+   way to create a contained user for a principal whose clientId you do not have. If you
+   take it, redo it after **every** teardown, not once. Granting directory read needs
+   **Privileged Role Administrator**, which is why it is here and not in a pipeline - and
+   deliberately so: an agent that can grant itself directory roles is demonstrating
+   something nobody wants to buy. L6's template still creates the server identity
+   (`managedIdentities.systemAssigned`), so the principal this recipe names exists.
 
    **Portal:** Entra ID -> Roles and administrators -> **Directory Readers** -> Add
    assignments -> search for the SQL server's name (the identity carries it).
@@ -595,10 +634,14 @@ it is still about sign-in risk and auto-labeling, nothing else.
    > it to confirm. And Azure SQL caches directory permissions, so allow a few minutes
    > after the assignment before the first `CREATE USER` succeeds.
 
-   L7's F20 step now *verifies* the contained user exists rather than reporting that a
-   script ran, so a missing assignment fails the layer loudly with this explanation instead
-   of leaving every `/api/tables` route answering 502 while the pipeline reports success
-   (F112).
+   L7's F20 step *verifies* rather than reporting that a script ran (F112) - and since
+   F172 it verifies that the contained user's **SID matches the identity's clientId**, not
+   that a user of that name exists. The name-only check it replaced would have passed on a
+   user left behind by a *previous* identity of the same name, whose SID belongs to a
+   principal that no longer exists and which therefore cannot log in: the artefact that
+   usually accompanies the capability, asserted in place of the capability. A grant that
+   does not take now fails the layer loudly with the reason attached, instead of leaving
+   every `/api/tables` route answering 502 while the pipeline reports success.
 
 7. ⚠ **Fabric data agent enablement** (blocks L8's knowledge source only — L8 has a
    documented fallback, see § B and `docs/runbooks/layers/L08.md`). In the Fabric admin

@@ -37,10 +37,13 @@ BeforeAll {
             [string]$Target = 'both',
             [switch]$AsWhatIf,
             [switch]$AsSkipGenerate,
-            [switch]$AsSchemaOnly
+            [switch]$AsSchemaOnly,
+            [string]$WorkloadUserName = '',
+            [string]$WorkloadUserClientId = ''
         )
         Invoke-Main -Target $Target -SchemaOnly:$AsSchemaOnly -SeedRoot $script:FakeSeedRoot `
             -SqlServerInstance 'srv' -SqlDatabase 'db' -SqlAccessToken 'tok-sql' `
+            -SqlWorkloadUserName $WorkloadUserName -SqlWorkloadUserClientId $WorkloadUserClientId `
             -Token 'tok-fabric' -OneLakeToken 'tok-onelake' `
             -SkipGenerate:$AsSkipGenerate -WhatIf:$AsWhatIf
     }
@@ -199,6 +202,28 @@ Describe 'seed.ps1' {
         It 'forwards -SchemaOnly to Invoke-SqlSeed' {
             Invoke-SeedForTest -Target 'sql' -AsSchemaOnly | Out-Null
             Should -Invoke Invoke-SqlSeed -Exactly -Times 1 -ParameterFilter { $SchemaOnly -eq $true }
+        }
+
+        It 'forwards the workload identity L7 supplies, so the contained-user grant can be applied (F172)' {
+            # THE PARAMETERS HAVE TO REACH Invoke-Main, NOT MERELY THE SCRIPT'S param BLOCK.
+            # The first version read $SqlWorkloadUserName out of the enclosing script scope,
+            # which works when seed.ps1 is RUN and is unreachable when it is TESTED - this
+            # suite sets MLS_SKIP_MAIN and calls Invoke-Main directly, so the grant would
+            # have been exercised with the empty string on every single run of this file.
+            Invoke-SeedForTest -Target 'sql' -AsSchemaOnly `
+                -WorkloadUserName 'mls-data-api-demo-id' `
+                -WorkloadUserClientId 'c1c1c1c1-0000-4000-8000-00000000c1d1' | Out-Null
+            Should -Invoke Invoke-SqlSeed -Exactly -Times 1 -ParameterFilter {
+                $WorkloadUserName -eq 'mls-data-api-demo-id' -and
+                $WorkloadUserClientId -eq 'c1c1c1c1-0000-4000-8000-00000000c1d1'
+            }
+        }
+
+        It 'forwards nothing when no identity was supplied - the L6 case, where there is none yet' {
+            Invoke-SeedForTest -Target 'sql' -AsSchemaOnly | Out-Null
+            Should -Invoke Invoke-SqlSeed -Exactly -Times 1 -ParameterFilter {
+                [string]::IsNullOrEmpty($WorkloadUserName) -and [string]::IsNullOrEmpty($WorkloadUserClientId)
+            }
         }
 
         It 'does not forward -SchemaOnly when it was not requested' {

@@ -258,7 +258,10 @@ Describe 'F36: L7 resolves its own Easy Auth client IDs rather than demanding th
         function Get-StepBody {
             param([string]$StepName, [string]$JobBody)
             $escaped = [regex]::Escape($StepName)
-            if ($JobBody -notmatch "(?ms)^\s{6}- name: $escaped\r?\n(.*?)(?=^\s{6}- name:|\z)") {
+            # Optional quotes: a step name containing a colon must be quoted in YAML, and a
+            # matcher that only accepts a bare name silently stops finding exactly the steps
+            # whose names say the most (F173).
+            if ($JobBody -notmatch "(?ms)^\s{6}- name: ['`"]?$escaped['`"]?\r?\n(.*?)(?=^\s{6}- name:|\z)") {
                 throw "Could not isolate step '$StepName' in its job body."
             }
             return $Matches[1]
@@ -270,7 +273,7 @@ Describe 'F36: L7 resolves its own Easy Auth client IDs rather than demanding th
         $script:RedirectStepName = "Register each dashboard's Easy Auth redirect URI now that its FQDN exists (F36)"
         $script:ResolveStep = Get-StepBody -StepName $script:ResolveStepName -JobBody $script:F36DeployJob
         $script:RedirectStep = Get-StepBody -StepName $script:RedirectStepName -JobBody $script:F36DeployJob
-        $script:RedirectReportStep = Get-StepBody -StepName 'Report a failed redirect-URI registration' -JobBody $script:F36DeployJob
+        $script:RedirectReportStep = Get-StepBody -StepName 'FAILURE: the Easy Auth redirect-URI registration did not complete' -JobBody $script:F36DeployJob
 
         $script:EntraManifestPath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'entra', 'manifest.json'
         # Resolved, not raw: the manifest ships tokenised, and a fixture asserting on

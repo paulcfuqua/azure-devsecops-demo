@@ -1,105 +1,60 @@
 /* =============================================================================
-   900-contained-users.sql — grants the data-api workload identity a contained
-   database user on the operational database (F13, Task 12:
-   compliance/findings/2026-08-26-prepublication-review.md#f13).
+   900-contained-users.sql — the workload contained-user grant USED to live here,
+   and could never survive a rebuild. It now lives in Set-SeedWorkloadUser
+   (data/seed/sql/sql-seed.psm1), called by data/seed/seed.ps1 with the identity's
+   clientId. This file keeps its schema_version row and this explanation.
 
-   Target: Azure SQL serverless (L6, mls-ops-demo-sql / mls-ops-demo-db), Entra-
-   only authentication (platform/main.bicep's sqlServer module sets
-   azureADOnlyAuthentication: true — there is no SQL login to fall back on).
-   `data-api` reads this database in cloud mode with no grant anywhere
-   expressing that access before this file; without it, as soon as G0 item C9
-   sets fabricSqlEndpoint (apps/main.bicep's dataApiMode resolves to 'cloud'),
-   every query 403s — the exact "dated failure" F13 describes.
+   WHAT WAS HERE, AND WHY IT HAD TO GO (F172).
 
-   Principal name is NOT parameterised: like every other file in this
-   directory, this script is static text, not a template. 'mls-data-api-demo-
-   id' is naming.bicep's userAssignedIdentityName('mls', 'data-api', 'demo') —
-   the company prefix and env this whole repo defaults to
-   (naming.bicep:20,24). If either default ever changes for a real deployment,
-   this literal needs to change with it; nothing here derives it automatically
-   because nothing in this directory derives anything automatically.
+   The statement was:
 
-   NOT BATCH-FATAL, DELIBERATELY (F20, filed alongside this finding rather
-   than folded into it — compliance/findings/2026-08-26-prepublication-
-   review.md#f20): data/seed/sql/sql-seed.psm1's Install-SeedSchema applies
-   every *.sql file in this directory unconditionally, with no error
-   tolerance, as ONE step of the L6 workflow (layer-06-platform.yml) — which
-   runs BEFORE L7 creates the data-api identity this script names. On that
-   first pass CREATE USER ... FROM EXTERNAL PROVIDER cannot resolve the
-   principal in Entra ID yet and would THROW (error 33131 or similar), and
-   because Install-SeedSchema has no per-statement recovery, an uncaught
-   throw here would abort DDL application before any of the ten operational
-   tables load — turning "one grant is pending" into "L6's entire SQL seed
-   failed". The TRY/CATCH below turns that into a loud, non-terminating
-   warning (RAISERROR severity 10 — below the batch-aborting threshold)
-   instead: the first pass logs "pending L7" and the schema seed completes
-   normally. Re-running the seed once the identity exists is what actually
-   completes this grant.
+       CREATE USER [mls-data-api-demo-id] FROM EXTERNAL PROVIDER;
 
-   F20 CLOSED (Task 22). That re-run now happens automatically:
-   .github/workflows/layer-07-apps.yml invokes
-   `data/seed/seed.ps1 -Target sql -SchemaOnly` after its "Deploy the apps"
-   step, once L7 has created mls-data-api-demo-id in Entra ID. -SchemaOnly
-   applies this directory's DDL without the dataset-completeness check and
-   without touching table data — that job has no Python toolchain to build
-   data/generated/, so a plain -Target sql re-run would throw in
-   Assert-SqlSeedPrerequisite before ever reaching this file. The step runs
-   after the V7.1 manifest is written and carries continue-on-error, so a
-   transient failure in this idempotent remediation cannot cost L7 its
-   Verifier sign-off.
+   FROM EXTERNAL PROVIDER makes the SQL engine resolve the principal in Microsoft
+   Graph. An application cannot impersonate another application, so when CI runs it
+   as a service principal the engine falls back to THE SQL SERVER'S OWN managed
+   identity, which must therefore hold directory read — the Entra "Directory
+   Readers" role (F112). That assignment was a G0 step, documented as "One
+   assignment, once per tenant".
 
-   The RAISERROR text below still tells a human to re-run the seed by hand.
-   That advice remains correct and is deliberately unchanged: it is what you
-   want if you ever read this message, whatever automated it.
+   IT IS NOT ONCE PER TENANT. L6 creates the server in mls-rg-data; teardown deletes
+   that resource group; the server's SYSTEM-ASSIGNED identity dies with it and comes
+   back under the same NAME with a NEW principal id, and Entra removes the dangling
+   role assignment along with the deleted service principal. So the grant silently
+   stops existing the first time the estate is rebuilt — which is the one thing this
+   demo exists to do.
 
-   Idempotent: guarded by sys.database_principals so a successful re-run
-   after L7 is a no-op, matching every other file in this directory.
-   Batches are separated by a line containing only GO (data/seed/seed.ps1
-   splits on that itself — Split-SqlBatch), same as every sibling file.
+   Read on 2026-09-03, after the re-baseline rebuild: the directory audit log records
+   `mls-ops-demo-sql` added to Directory Readers at 2026-09-01T12:23:23Z for a service
+   principal that no longer exists; the current server identity holds zero directory
+   role assignments; the Directory Readers role has zero members. Four layers later
+   data-api answered `Login failed for user '<token-identified principal>'` on every
+   SQL-backed route and L7's V7.6 went red.
+
+   TWO THINGS THIS FILE COULD NOT DO, WHICH IS WHY THE GRANT IS NOT A .sql FILE.
+
+   1. The replacement supplies the SID explicitly — for an application, that SID is
+      its APPLICATION (CLIENT) ID — so nothing asks Graph, no server identity is
+      involved, and no tenant-level privilege is needed anywhere. That value is
+      discovered from Azure at deploy time and cannot be written into static text.
+      Everything in this directory is static text by design (see README.md); a
+      templated .sql file would be a worse answer than a parameter.
+
+   2. This file's TRY/CATCH turned a real failure into a severity-10 warning, because
+      it had to: Install-SeedSchema applies every file here unconditionally, including
+      during L6, which runs BEFORE L7 creates the identity. A grant that must be
+      allowed to fail cannot also be the thing that reports whether it worked.
+      Set-SeedWorkloadUser is called only when a caller supplies an identity, so it is
+      allowed to throw — and it reads the user and its SID back out of
+      sys.database_principals before saying anything (F112: verify, do not announce).
+
+   Nothing here creates a principal any more, so there is no ordering constraint and
+   no guard to get wrong. The schema_version row is retained so an existing database's
+   history is unbroken; the version is bumped to 2 to record that this file changed
+   meaning rather than merely being edited.
    ============================================================================= */
-
-BEGIN TRY
-    IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE [name] = N'mls-data-api-demo-id')
-    BEGIN
-        CREATE USER [mls-data-api-demo-id] FROM EXTERNAL PROVIDER;
-    END
-END TRY
-BEGIN CATCH
-    -- RAISERROR takes constants or variables only: passing ERROR_MESSAGE()
-    -- directly is a syntax error, and this file had never executed against a
-    -- real database to find that out (F84).
-    DECLARE @mls_err NVARCHAR(2048) = ERROR_MESSAGE();
-    RAISERROR (
-        'Could not create contained user ''mls-data-api-demo-id'' (%s). Expected before L7 provisions the identity in Microsoft Entra ID — re-run data/seed/seed.ps1 -Target sql after L7 completes to finish this grant (see F20).',
-        10, 1, @mls_err) WITH NOWAIT;
-END CATCH;
-GO
-
-BEGIN TRY
-    IF EXISTS (SELECT 1 FROM sys.database_principals WHERE [name] = N'mls-data-api-demo-id')
-       AND NOT EXISTS (
-           SELECT 1
-           FROM sys.database_role_members AS rm
-           JOIN sys.database_principals AS r ON r.[principal_id] = rm.[role_principal_id]
-           JOIN sys.database_principals AS m ON m.[principal_id] = rm.[member_principal_id]
-           WHERE r.[name] = N'db_datareader' AND m.[name] = N'mls-data-api-demo-id'
-       )
-    BEGIN
-        ALTER ROLE db_datareader ADD MEMBER [mls-data-api-demo-id];
-    END
-END TRY
-BEGIN CATCH
-    -- RAISERROR takes constants or variables only: passing ERROR_MESSAGE()
-    -- directly is a syntax error, and this file had never executed against a
-    -- real database to find that out (F84).
-    DECLARE @mls_err NVARCHAR(2048) = ERROR_MESSAGE();
-    RAISERROR (
-        'Could not add ''mls-data-api-demo-id'' to db_datareader (%s). Expected before the user above exists — re-run data/seed/seed.ps1 -Target sql after L7 completes (see F20).',
-        10, 1, @mls_err) WITH NOWAIT;
-END CATCH;
-GO
 
 IF NOT EXISTS (SELECT 1 FROM dbo.schema_version WHERE [script_name] = N'900-contained-users.sql')
     INSERT dbo.schema_version ([script_name], [schema_version], [generator_seed])
-    VALUES (N'900-contained-users.sql', 1, 20260822);
+    VALUES (N'900-contained-users.sql', 2, 20260822);
 GO

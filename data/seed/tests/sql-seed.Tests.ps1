@@ -76,12 +76,32 @@ BeforeAll {
     # that does not call ShouldProcess trips PSUseSupportsShouldProcess, and lint-ci
     # fails on any warning.
     function Invoke-SqlSeedForTest {
-        param([switch]$AsWhatIf, [switch]$AsForce, [switch]$AsSchemaOnly, [string]$DataPath)
+        param(
+            [switch]$AsWhatIf, [switch]$AsForce, [switch]$AsSchemaOnly, [string]$DataPath,
+            [string]$WorkloadUserName = '', [string]$WorkloadUserClientId = ''
+        )
         if (-not $DataPath) { $DataPath = Join-Path -Path $TestDrive -ChildPath 'generated' }
         Invoke-SqlSeed -Connection $script:Connection -Manifest $script:TestManifest `
             -DataPath $DataPath -DdlPath (Join-Path -Path $TestDrive -ChildPath 'ddl') `
+            -WorkloadUserName $WorkloadUserName -WorkloadUserClientId $WorkloadUserClientId `
             -Force:$AsForce -SchemaOnly:$AsSchemaOnly -WhatIf:$AsWhatIf -Confirm:$false
     }
+
+    # THE THREE GUIDS THIS SUITE REFUSES TO CONFLATE. The whole of F172 turns on Azure SQL
+    # storing an APPLICATION's SID as its client id, so a fixture that used one value for
+    # two roles could not tell a correct grant from a wrong one.
+    #
+    # SYNTHETIC, AND DELIBERATELY SO. The first draft used the live 2026-09-03 clientId and
+    # principalId of mls-data-api-demo-id, on F114's reasoning that a fixture should be
+    # pinned to the estate. That is the wrong instinct HERE and it is F172's own class:
+    # a user-assigned identity is destroyed with its resource group and returns with new
+    # GUIDs on every rebuild, so those two values are rebuild-scoped and would have been
+    # committed stale within the hour. Nothing in these tests needs a real GUID - they need
+    # three that a reader cannot mistake for one another.
+    $script:DataApiClientId = 'c1c1c1c1-0000-4000-8000-00000000c1d1'
+    $script:DataApiPrincipalId = 'b0b0b0b0-0000-4000-8000-00000000b0b0'
+    # A previous identity of the same NAME - what a database that outlived a rebuild holds.
+    $script:DeadIdentityClientId = 'dead0000-0000-4000-8000-00000000dead'
 }
 
 AfterAll {
@@ -551,6 +571,201 @@ Describe 'Invoke-SqlSeed' {
             $result = Invoke-SqlSeedForTest -AsSchemaOnly
             @($result.Loaded).Count | Should -Be 0
             $result.SkippedAlreadySeeded | Should -BeFalse
+        }
+    }
+
+    Context 'the workload contained-user grant (F172)' {
+        BeforeEach {
+            # A tiny in-memory sys.database_principals: name -> the GUID its SID decodes
+            # to. Every statement the module issues is routed through the one mocked
+            # choke point and interpreted, so the tests exercise the SQL the module
+            # actually writes rather than a paraphrase of it.
+            $script:Principal = @{}
+            $script:RoleMember = @{}
+            $script:IssuedQuery = [System.Collections.Generic.List[string]]::new()
+            Mock Invoke-SeedSqlCommand -ModuleName $script:ModuleName {
+                $script:IssuedQuery.Add($Query)
+                if ($Query -match 'FROM sys\.database_principals\s*\r?\n?WHERE \[name\] = N''([^'']+)''') {
+                    $name = $Matches[1]
+                    if (-not $script:Principal.ContainsKey($name)) { return @() }
+                    return @(@{ type_desc = 'EXTERNAL_USER'; sid_guid = $script:Principal[$name] })
+                }
+                if ($Query -match 'SELECT COUNT_BIG\(\*\) AS n' -and $Query -match 'database_role_members') {
+                    $role = ([regex]::Match($Query, "r\.\[name\] = N'([^']+)'")).Groups[1].Value
+                    $member = ([regex]::Match($Query, "m\.\[name\] = N'([^']+)'")).Groups[1].Value
+                    return @(@{ n = [int64]$(if ($script:RoleMember["$role|$member"]) { 1 } else { 0 }) })
+                }
+                if ($Query -match "CREATE USER \[([^\]]+)\] WITH SID = ' \+ CONVERT") {
+                    # The module builds the literal in T-SQL, so the fixture reads the
+                    # GUID out of the DECLARE the same way the engine would.
+                    $name = $Matches[1]
+                    $guid = ([regex]::Match($Query, "CAST\(N'([0-9a-fA-F-]{36})' AS UNIQUEIDENTIFIER\)")).Groups[1].Value
+                    $script:Principal[$name] = $guid
+                    return @()
+                }
+                if ($Query -match 'DROP USER \[([^\]]+)\]') {
+                    $script:Principal.Remove($Matches[1]) | Out-Null
+                    return @()
+                }
+                if ($Query -match 'ALTER ROLE \[([^\]]+)\] ADD MEMBER \[([^\]]+)\]') {
+                    $script:RoleMember["$($Matches[1])|$($Matches[2])"] = $true
+                    return @()
+                }
+                return @()
+            }
+        }
+
+        It 'creates the user with the identity CLIENT id as its SID, and never asks Graph' {
+            $result = Set-SeedWorkloadUser -Connection $script:Connection `
+                -PrincipalName 'mls-data-api-demo-id' -ClientId $script:DataApiClientId -Confirm:$false
+            $result.Action | Should -Be 'created'
+            $script:Principal['mls-data-api-demo-id'] | Should -Be $script:DataApiClientId
+            # THE DEFECT, ENCODED. FROM EXTERNAL PROVIDER resolves the principal in
+            # Microsoft Graph via the SQL server's own managed identity, which teardown
+            # destroys and rebuilds with a new principal id - so the Directory Readers
+            # grant it depends on silently stops existing on the first rebuild (F172).
+            ($script:IssuedQuery -join ' ') | Should -Not -Match 'FROM EXTERNAL PROVIDER' `
+                -Because 'the grant must not depend on a tenant-level role assignment that a rebuild erases'
+        }
+
+        It 'adds the user to db_datareader and proves the membership rather than announcing it' {
+            Set-SeedWorkloadUser -Connection $script:Connection `
+                -PrincipalName 'mls-data-api-demo-id' -ClientId $script:DataApiClientId -Confirm:$false | Out-Null
+            $script:RoleMember['db_datareader|mls-data-api-demo-id'] | Should -BeTrue
+        }
+
+        It 'is a no-op on replay - the second run neither drops nor recreates' {
+            Set-SeedWorkloadUser -Connection $script:Connection `
+                -PrincipalName 'mls-data-api-demo-id' -ClientId $script:DataApiClientId -Confirm:$false | Out-Null
+            $script:IssuedQuery.Clear()
+            $again = Set-SeedWorkloadUser -Connection $script:Connection `
+                -PrincipalName 'mls-data-api-demo-id' -ClientId $script:DataApiClientId -Confirm:$false
+            $again.Action | Should -Be 'already correct'
+            ($script:IssuedQuery -join ' ') | Should -Not -Match 'DROP USER'
+            ($script:IssuedQuery -join ' ') | Should -Not -Match 'CREATE USER'
+        }
+
+        It 'repairs a user left behind by a PREVIOUS identity of the same name' {
+            # The rebuild case the old name-only check could not see: a user-assigned
+            # identity destroyed with its resource group and recreated under the same
+            # name gets a new clientId, and a database that outlived it holds a user
+            # nobody can log in as. "A principal of this name exists" passes on it.
+            $script:Principal['mls-data-api-demo-id'] = $script:DeadIdentityClientId
+            $result = Set-SeedWorkloadUser -Connection $script:Connection `
+                -PrincipalName 'mls-data-api-demo-id' -ClientId $script:DataApiClientId -Confirm:$false
+            $result.Action | Should -Be 'recreated'
+            ($script:IssuedQuery -join ' ') | Should -Match 'DROP USER'
+            $script:Principal['mls-data-api-demo-id'] | Should -Be $script:DataApiClientId
+        }
+
+        It 'treats an UPPERCASE SID from the engine as equal, because CONVERT returns one' {
+            # NOT A STYLE POINT. CONVERT(CHAR(36), CONVERT(UNIQUEIDENTIFIER, [sid])) returns
+            # an uppercase GUID; [guid]::ToString() produces a lowercase one. Observed on the
+            # live Fabric SQL analytics endpoint on 2026-09-03, where the same GUID compared
+            # UNEQUAL by case alone. PowerShell's -eq happens to be case-insensitive, so this
+            # was already correct - which is precisely the kind of accidental correctness that
+            # breaks the day someone tightens a comparison. The boundary normalises.
+            Mock Invoke-SeedSqlCommand -ModuleName $script:ModuleName {
+                if ($Query -match 'FROM sys\.database_principals\s*\r?\n?WHERE') {
+                    return @(@{ type_desc = 'EXTERNAL_USER'; sid_guid = $script:DataApiClientId.ToUpperInvariant() })
+                }
+                if ($Query -match 'COUNT_BIG') { return @(@{ n = [int64]1 }) }
+                return @()
+            }
+            $result = Set-SeedWorkloadUser -Connection $script:Connection `
+                -PrincipalName 'mls-data-api-demo-id' -ClientId $script:DataApiClientId -Confirm:$false
+            $result.Action | Should -Be 'already correct' `
+                -Because 'a correct grant read back in a different case is still a correct grant'
+
+            # AND THE ASSERTION THAT IS NOT A MIRROR. The line above passes with the
+            # normalisation REMOVED, because PowerShell's -eq is case-insensitive - so on
+            # its own it tests the language, not this code. What has to hold is that the
+            # boundary itself normalises, so a future -ceq or a T-SQL comparison against a
+            # BIN2 collation cannot resurrect the trap.
+            $read = Get-SeedWorkloadUser -Connection $script:Connection -PrincipalName 'mls-data-api-demo-id'
+            $read.SidGuid | Should -BeExactly $script:DataApiClientId.ToLowerInvariant() `
+                -Because 'Get-SeedWorkloadUser must hand back a normalised GUID whatever case the engine used'
+        }
+
+        It 'throws when the user exists with the wrong SID after the writes ran' {
+            # Assert the effect, not the exit code: every statement can run without
+            # throwing and leave the wrong thing behind.
+            Mock Invoke-SeedSqlCommand -ModuleName $script:ModuleName {
+                if ($Query -match 'FROM sys\.database_principals\s*\r?\n?WHERE') {
+                    return @(@{ type_desc = 'EXTERNAL_USER'; sid_guid = $script:DeadIdentityClientId })
+                }
+                return @()
+            }
+            { Set-SeedWorkloadUser -Connection $script:Connection -PrincipalName 'mls-data-api-demo-id' `
+                    -ClientId $script:DataApiClientId -Confirm:$false } |
+                Should -Throw "*exists with SID*$($script:DeadIdentityClientId)*"
+        }
+
+        It 'throws when the user is absent after CREATE USER ran without throwing' {
+            Mock Invoke-SeedSqlCommand -ModuleName $script:ModuleName { return @() }
+            { Set-SeedWorkloadUser -Connection $script:Connection -PrincipalName 'mls-data-api-demo-id' `
+                    -ClientId $script:DataApiClientId -Confirm:$false } |
+                Should -Throw '*does not exist after CREATE USER*'
+        }
+
+        It 'throws when the user exists with the right SID but holds no role membership' {
+            Mock Invoke-SeedSqlCommand -ModuleName $script:ModuleName {
+                if ($Query -match 'FROM sys\.database_principals\s*\r?\n?WHERE') {
+                    return @(@{ type_desc = 'EXTERNAL_USER'; sid_guid = $script:DataApiClientId })
+                }
+                if ($Query -match 'COUNT_BIG') { return @(@{ n = [int64]0 }) }
+                return @()
+            }
+            { Set-SeedWorkloadUser -Connection $script:Connection -PrincipalName 'mls-data-api-demo-id' `
+                    -ClientId $script:DataApiClientId -Confirm:$false } |
+                Should -Throw '*not a member of [[]db_datareader[]]*'
+        }
+
+        It 'refuses a principalId supplied where a clientId belongs, by refusing anything that is not a GUID' {
+            # The GUID guard cannot tell a principalId from a clientId - both are GUIDs -
+            # so this asserts the guard it CAN enforce, and V7.6 is what settles the other.
+            { Set-SeedWorkloadUser -Connection $script:Connection -PrincipalName 'mls-data-api-demo-id' `
+                    -ClientId 'mls-data-api-demo-id' -Confirm:$false } |
+                Should -Throw '*is not a GUID*'
+        }
+
+        It 'refuses a principal name that could close the bracket it is interpolated into' {
+            { Set-SeedWorkloadUser -Connection $script:Connection -PrincipalName 'evil]; DROP TABLE launches; --' `
+                    -ClientId $script:DataApiClientId -Confirm:$false } |
+                Should -Throw '*not a plain*'
+        }
+
+        It 'accepts the hyphenated estate naming convention Assert-SqlIdentifier rejects' {
+            # <prefix>-<role>-<env>-<type> per CLAUDE.md. Reusing Assert-SqlIdentifier
+            # here would reject every workload identity this estate has.
+            { Assert-SqlIdentifier -Name 'mls-data-api-demo-id' } | Should -Throw
+            Assert-SqlPrincipalName -Name 'mls-data-api-demo-id' | Should -Be 'mls-data-api-demo-id'
+        }
+
+        It 'grants nothing when the seed is invoked without an identity - the L6 case' {
+            Mock Set-SeedWorkloadUser -ModuleName $script:ModuleName {}
+            $result = Invoke-SqlSeedForTest -AsSchemaOnly
+            $result.WorkloadUser | Should -BeNullOrEmpty
+            Should -Invoke Set-SeedWorkloadUser -ModuleName $script:ModuleName -Exactly -Times 0
+        }
+
+        It 'grants when L7 supplies the identity, through the -SchemaOnly path' {
+            Mock Set-SeedWorkloadUser -ModuleName $script:ModuleName {
+                [pscustomobject]@{ PrincipalName = $PrincipalName; ClientId = $ClientId; Action = 'created'; Role = @('db_datareader') }
+            }
+            $result = Invoke-SqlSeedForTest -AsSchemaOnly -WorkloadUserName 'mls-data-api-demo-id' `
+                -WorkloadUserClientId $script:DataApiClientId
+            $result.WorkloadUser.ClientId | Should -Be $script:DataApiClientId
+            Should -Invoke Set-SeedWorkloadUser -ModuleName $script:ModuleName -Exactly -Times 1 -ParameterFilter {
+                $PrincipalName -eq 'mls-data-api-demo-id' -and $ClientId -eq $script:DataApiClientId
+            }
+        }
+
+        It 'refuses half a pair rather than skipping the grant silently' {
+            { Invoke-SqlSeedForTest -AsSchemaOnly -WorkloadUserName 'mls-data-api-demo-id' } |
+                Should -Throw '*are a pair*'
+            { Invoke-SqlSeedForTest -AsSchemaOnly -WorkloadUserClientId $script:DataApiClientId } |
+                Should -Throw '*are a pair*'
         }
     }
 

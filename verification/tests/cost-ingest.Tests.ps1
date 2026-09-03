@@ -87,7 +87,10 @@ BeforeAll {
     function Get-StepBody {
         param([string]$StepName, [string]$JobBody)
         $escaped = [regex]::Escape($StepName)
-        if ($JobBody -notmatch "(?ms)^\s{6}- name: $escaped\r?\n(.*?)(?=^\s{6}- name:|\z)") {
+        # Optional quotes: a step name containing a colon must be quoted in YAML, and a
+        # matcher that only accepts a bare name silently stops finding exactly the steps
+        # whose names say the most (F173).
+        if ($JobBody -notmatch "(?ms)^\s{6}- name: ['`"]?$escaped['`"]?\r?\n(.*?)(?=^\s{6}- name:|\z)") {
             throw "Could not isolate step '$StepName'."
         }
         return $Matches[1]
@@ -429,7 +432,7 @@ Describe 'F19: the Fabric write grant is wired, not merely available' {
     }
 
     It 'surfaces a failed grant in the run summary' {
-        $reportStep = Get-StepBody -StepName 'Report a failed F19 grant pass' -JobBody $script:L7Deploy
+        $reportStep = Get-StepBody -StepName 'FAILURE: the F19 Fabric workspace grant for cost-ingest did not complete' -JobBody $script:L7Deploy
         $reportStep | Should -Match "steps\.f19_grant\.outcome == 'failure'"
         $reportStep | Should -Match 'GITHUB_STEP_SUMMARY'
     }

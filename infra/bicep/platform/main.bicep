@@ -369,24 +369,37 @@ module sqlServer 'br/public:avm/res/sql/server:0.22.0' = {
     name: sqlName
     location: location
     tags: tagsSqlServer
-    // THE SERVER NEEDS ITS OWN IDENTITY, OR ENTRA USERS CANNOT BE CREATED BY AUTOMATION
-    // (F112). `CREATE USER ... FROM EXTERNAL PROVIDER` makes the SQL engine resolve the
-    // principal in Microsoft Graph. When a USER runs it, Azure SQL impersonates that user
-    // with delegated permissions - which is why it worked by hand and never in CI. An
-    // application cannot impersonate another application, so for a service principal the
-    // engine falls back to THE SERVER'S OWN identity, and Microsoft's documentation is
-    // explicit: "The server identity must exist and have the Microsoft Graph query
-    // permissions or the operations fail."
+    // THE CONTAINED-USER GRANT NO LONGER NEEDS THIS IDENTITY, AND THE IDENTITY STAYS
+    // ANYWAY (F172). This comment used to say the identity was REQUIRED, because
+    // `CREATE USER ... FROM EXTERNAL PROVIDER` makes the SQL engine resolve the principal
+    // in Microsoft Graph: a USER running it is impersonated with delegated permissions -
+    // which is why it worked by hand and never in CI - while an application cannot
+    // impersonate another application, so for a service principal the engine falls back
+    // to THE SERVER'S OWN identity, which must then hold directory read (F112).
     //
-    // This server had `identity: null`, so the F20 contained-user grant could never
-    // succeed unattended - and 900-contained-users.sql's TRY/CATCH turned that failure
-    // into a warning nobody read, which is why every SQL-backed /api/tables route
-    // answered 502 while the pipeline reported the grant "applied".
+    // That route was abandoned because the grant behind it could not survive a rebuild.
+    // The directory-read assignment was documented as "one assignment, once per tenant",
+    // and it is not: L6 creates this server in the data RG, teardown deletes that RG, the
+    // SYSTEM-ASSIGNED identity below dies with it and returns under the same NAME with a
+    // NEW principal id, and Entra drops the dangling role assignment along with the
+    // deleted service principal. Read 2026-09-03 after the re-baseline rebuild: the audit
+    // log records the grant at 2026-09-01T12:23:23Z against a principal that no longer
+    // exists, the current server identity holds zero directory role assignments, and the
+    // Directory Readers role has zero members. data-api answered 502 on every SQL-backed
+    // route four layers later and L7's V7.6 is what caught it.
     //
-    // Creating the identity is only half. It must also be granted directory read - the
-    // Directory Readers role, or the individual Graph permissions, which Microsoft
-    // prefers as least privilege. That assignment needs Privileged Role Administrator,
-    // so it is a G0 step a human performs once per tenant; see docs/runbooks/g0-bootstrap.md.
+    // The deploy path now supplies the SID explicitly - `Set-SeedWorkloadUser` in
+    // data/seed/sql/sql-seed.psm1 issues `CREATE USER ... WITH SID = <the identity's
+    // clientId>, TYPE = E` and reads it back - so nothing asks Graph, and no tenant-level
+    // privilege is needed anywhere.
+    //
+    // systemAssigned STAYS TRUE for three reasons, none of them "it is required": a
+    // system-assigned identity costs nothing; it is the principal the EXTERNAL PROVIDER
+    // fallback documented in docs/runbooks/g0-bootstrap.md step 6 needs, if anyone ever
+    // chooses that route for a principal whose clientId they do not have; and removing an
+    // identity from a running server is a change with its own blast radius - anything
+    // already granted to it stops resolving - which is not worth taking on to delete a
+    // line that does no harm.
     managedIdentities: {
       systemAssigned: true
     }
