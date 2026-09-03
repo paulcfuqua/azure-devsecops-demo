@@ -61,6 +61,11 @@ param alertNotificationEmail = readEnvironmentVariable('MLS_ALERT_EMAIL', '')
 // to point at. The Function deploys anyway and answers with a typed error.
 param directlineSecretName = readEnvironmentVariable('MLS_DIRECTLINE_SECRET_NAME', '')
 
+// Deployer object id, so L8's eval can read the Direct Line secret (F183). Empty
+// grants nothing; the workflow resolves it from AZURE_CLIENT_ID at deploy time
+// rather than anyone storing an object id in a variable.
+param deployerPrincipalId = readEnvironmentVariable('MLS_DEPLOYER_OBJECT_ID', '')
+
 // Origins the token endpoint will mint a token for. These become Direct Line's
 // `trustedOrigins` as well as the CORS allow-list, so a token minted for this
 // estate cannot be replayed from someone else's page. Empty means every origin

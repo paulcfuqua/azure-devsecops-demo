@@ -113,6 +113,9 @@ param functionDeploymentContainerName string = 'deployment-package'
 @description('Name of the Key Vault secret holding the Copilot Studio DIRECT LINE SECRET, which the directline-token Function exchanges server-side for a short-lived conversation token. EMPTY IS A SUPPORTED DEPLOYMENT and is the default: the Function still deploys and still answers, with a typed error saying the channel is not configured, which is the honest state before the agent is published. The value never enters this template - it is resolved from Key Vault at runtime by the Function\'s own managed identity.')
 param directlineSecretName string = ''
 
+@description('Object id of the DEPLOYER service principal (mls-github-deployer), so L8\'s golden-question eval can read the Direct Line secret and actually evaluate the agent. EMPTY IS SUPPORTED and grants nothing. Why this exists (F183): the eval reads that secret to open a Direct Line conversation, the deployer held no Key Vault data-plane role, and the read returned Forbidden on every run since the vault went RBAC. The step swallowed the error and announced the secret ABSENT, which suppressed its artifact, which made V8.2/V8.4/V8.5 record SKIP - so L8 reported green over a showpiece that answered nothing, and `layer-08-agent-eval` was never once uploaded. The grant is deliberately narrow: Secrets User on this vault only, and only when a Direct Line secret is actually named, because a standing grant for a secret nobody reads is access with no purpose. It is NOT a privilege escalation in substance - the deployer already holds subscription Contributor and could assign itself this role - it is that access made explicit, reviewable in a template, and reproduced by a rebuild rather than applied by hand.')
+param deployerPrincipalId string = ''
+
 @description('Origins the directline-token Function will mint a token for, comma-separated. These become the Direct Line trustedOrigins and the CORS allow-list, so a token minted for this estate cannot be replayed from someone else page. LEAVE IT EMPTY: the control tower origin is DERIVED from the Container Apps environment domain and the naming module, so it cannot go stale when the estate is rebuilt (F129). Set it only to add a custom domain or a second origin, and include the control tower itself when you do, because this REPLACES the derived value rather than adding to it. The previous text called this endpoint public and anonymous by design; it is no longer anonymous - it now verifies the caller Easy Auth token before minting.')
 param directlineAllowedOrigins string = ''
 
@@ -994,6 +997,20 @@ module directlineKvGrant '../apps/modules/key-vault-secrets-user-role.bicep' = i
   params: {
     keyVaultName: keyVault.outputs.name
     principalId: directlineIdentity.outputs.principalId
+  }
+}
+
+// Key Vault Secrets User for the DEPLOYER, so L8's eval can read the Direct Line
+// secret and actually evaluate the agent (F183). Same two guards as the grant above:
+// only when a secret is named, and only when a principal is supplied. Before this,
+// the eval's read returned Forbidden on every run, the step reported the secret
+// ABSENT, and V8.2/V8.4/V8.5 skipped on the artifact that was never produced.
+module directlineDeployerKvGrant '../apps/modules/key-vault-secrets-user-role.bicep' = if (!empty(directlineSecretName) && !empty(deployerPrincipalId)) {
+  name: 'l6-directline-kv-grant-deployer'
+  scope: resourceGroup(rgPlatformName)
+  params: {
+    keyVaultName: keyVault.outputs.name
+    principalId: deployerPrincipalId
   }
 }
 
