@@ -197,16 +197,38 @@ export class CloudFeedsBackend implements FeedsBackend {
     return projectWorkflowRuns(raw);
   }
 
+  /**
+   * EVERY state, not just open (F166). "88 alerts open" is the least flattering
+   * true sentence available about this repository: 323 findings have been closed
+   * and nothing surfaced them, so the board showed the backlog and hid the work.
+   *
+   * `state=all` for code scanning. NOT for Dependabot - see below.
+   */
   private async codeScanningAlerts(): Promise<CodeScanningAlert[]> {
     const raw = await this.github<unknown>(
-      `/repos/${this.deps.config.githubRepo}/code-scanning/alerts?state=open&per_page=100`,
+      `/repos/${this.deps.config.githubRepo}/code-scanning/alerts?state=all&per_page=100`,
     );
     return projectCodeScanningAlerts(raw);
   }
 
+  /**
+   * NO `state` PARAMETER AT ALL, DELIBERATELY (F166).
+   *
+   * `state=all` is valid for code scanning and NOT for Dependabot, and GitHub
+   * does not say so - it answers with an EMPTY LIST rather than an error:
+   *
+   *   dependabot/alerts?per_page=100             -> 10 alerts
+   *   dependabot/alerts?state=open&per_page=100  ->  8 alerts
+   *   dependabot/alerts?state=all&per_page=100   ->  0 alerts
+   *
+   * So the obvious symmetry with the call above silently returns nothing, and a
+   * board built on it would report zero dependency findings with no indication
+   * anything was wrong. Omitting `state` returns every state, which is what this
+   * needs. Checked against the live API before it was written.
+   */
   private async dependabotAlerts(): Promise<DependabotAlert[]> {
     const raw = await this.github<unknown>(
-      `/repos/${this.deps.config.githubRepo}/dependabot/alerts?state=open&per_page=100`,
+      `/repos/${this.deps.config.githubRepo}/dependabot/alerts?per_page=100`,
     );
     return projectDependabotAlerts(raw);
   }
@@ -522,6 +544,8 @@ export function projectCodeScanningAlerts(raw: unknown): CodeScanningAlert[] {
         number: num(alert.number),
         state: str(alert.state),
         created_at: str(alert.created_at),
+        fixed_at: optionalStr(alert.fixed_at),
+        dismissed_at: optionalStr(alert.dismissed_at),
         rule: {
           id: str(rule.id),
           severity: str(rule.severity),
