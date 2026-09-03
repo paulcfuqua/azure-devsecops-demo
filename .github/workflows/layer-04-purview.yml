@@ -67,7 +67,8 @@ jobs:
     environment: demo
     outputs:
       configured: ${{ steps.guard.outputs.configured }}
-      verifier: ${{ steps.verifier.outputs.configured }}
+      # No `verifier` output: it is decided inside the `verify` job now, the only
+      # one that can see MLS_VERIFIER_CERT_BASE64 at all (F170).
       scc: ${{ steps.scc.outputs.available }}
     steps:
       - uses: actions/checkout@v7
@@ -78,22 +79,12 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           layer: L4 Purview
-      # The audit opens its OWN read-only Security & Compliance session as
-      # mls-verifier (Exchange.ManageAsApp + View-Only Configuration), which is a
-      # different credential from the deployer's app-only cert above. All three
-      # inputs are required by Resolve-MlsInput, so guarding them here turns a
-      # missing one into a named NOTICE instead of an exit-2 stack trace.
-      - id: verifier
-        uses: ./.github/actions/demo-env-guard
-        with:
-          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          additional: |
-            MLS_TENANT_DOMAIN=${{ vars.MLS_TENANT_DOMAIN || vars.PURVIEW_ORGANIZATION }}
-            MLS_VERIFIER_APP_ID=${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
-            MLS_VERIFIER_CERT_BASE64=${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
-          layer: L4 verification (mls-verifier, Security & Compliance app-only)
+      # THE VERIFIER GUARD IS NOT HERE ANY MORE, AND THAT IS THE FIX (F170).
+      # It read `secrets.MLS_VERIFIER_CERT_BASE64` from a job declaring
+      # `environment: demo`, but that secret lives on `verify`. An absent GitHub secret is
+      # the empty string, so the guard reported "not configured" on every run and L4's
+      # independent audit took its degrade path unconditionally. It now runs inside the
+      # `verify` job, which declares `environment: verify` and can actually see it.
       - name: Check Security & Compliance app-only credentials
         id: scc
         env:
@@ -192,14 +183,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Decided HERE, not in preflight, because this job declares `environment: verify` and
+      # is the only one that can see MLS_VERIFIER_CERT_BASE64 (F170). The audit opens its
+      # OWN read-only Security & Compliance session as mls-verifier (Exchange.ManageAsApp +
+      # View-Only Configuration), a different credential from the deployer's app-only cert.
+      # All three inputs are required by Resolve-MlsInput, so guarding them turns a missing
+      # one into a named NOTICE instead of an exit-2 stack trace — but it has to guard on
+      # values it can actually read, or the NOTICE is what every run gets.
+      - id: verifier
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            MLS_TENANT_DOMAIN=${{ vars.MLS_TENANT_DOMAIN || vars.PURVIEW_ORGANIZATION }}
+            MLS_VERIFIER_APP_ID=${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
+            MLS_VERIFIER_CERT_BASE64=${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
+          layer: L4 verification (mls-verifier, Security & Compliance app-only)
+
       - name: Verifier Security & Compliance credentials not configured
-        if: ${{ needs.preflight.outputs.verifier != 'true' }}
+        if: ${{ steps.verifier.outputs.configured != 'true' }}
         run: |
           set -euo pipefail
           echo "::notice title=L4 not independently verified::verification/layer-04-audit.ps1 needs its own read-only S&C session as mls-verifier and one of AZURE_VERIFIER_CLIENT_ID / MLS_TENANT_DOMAIN / MLS_VERIFIER_APP_ID / MLS_VERIFIER_CERT_BASE64 is absent. S&C PowerShell has no OIDC path, so certificate app-only auth is the only unattended option; without it the label audit stays a human-run step under the sponsor's login, exactly as the L04 playbook's degrade path allows. Nothing was verified and nothing was faked."
 
       - name: Azure login (OIDC, mls-verifier)
-        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        if: ${{ steps.verifier.outputs.configured == 'true' }}
         uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
@@ -216,7 +226,7 @@ jobs:
       # in step, and the PFX is removed from disk immediately.
       - name: Install the mls-verifier certificate and install ExchangeOnlineManagement
         id: cert
-        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        if: ${{ steps.verifier.outputs.configured == 'true' }}
         shell: pwsh
         env:
           MLS_VERIFIER_CERT_BASE64: ${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
@@ -254,7 +264,7 @@ jobs:
       # and their GUIDs survived a kill/rebuild cycle.
       - name: Run verification/layer-04-audit.ps1
         id: audit
-        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        if: ${{ steps.verifier.outputs.configured == 'true' }}
         uses: ./.github/actions/layer-audit
         with:
           layer: '04'

@@ -203,7 +203,17 @@ jobs:
       # security_and_analysis and the vulnerability-alerts endpoint are admin-scoped
       # reads. The default GITHUB_TOKEN can come back with a null block, which is why
       # the step distinguishes "feature off" from "token cannot see it".
-      GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+      #
+      # `secrets.MLS_VERIFIER_GH_TOKEN` USED TO LEAD THIS CHAIN AND WAS DEAD CODE (F170).
+      # It is a `verify` ENVIRONMENT secret and this job declares no environment, so it
+      # resolved to the empty string on every run this workflow has ever had and the chain
+      # always fell through to SELF_HEAL_TOKEN. Removing it changes no behaviour - that is
+      # the point, and it is why nothing ever noticed. It is NOT re-added by declaring
+      # `environment: verify` here: this is a deploy-side job, and reaching for the
+      # Verifier's credential from the deploy path is the independence boundary CLAUDE.md
+      # draws, not a convenience. SELF_HEAL_TOKEN is a REPOSITORY secret (F123 made it one
+      # precisely so every job can see it) and carries the scope these reads need.
+      GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
     steps:
       - name: Read the repository's security_and_analysis block

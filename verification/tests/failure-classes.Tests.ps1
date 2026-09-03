@@ -1159,14 +1159,43 @@ Describe 'a teardown leaves nothing a rebuild will recover' {
             -Because 'purging after the resource group is gone finds nothing to purge, and the soft-deleted workspace survives to break the next rebuild'
     }
 
-    It 'reports what the next rebuild will find, whether or not the purge worked' {
+    It 'hands the next rebuild the one value that can tell a new workspace from a recovered one' {
         # F107 cost an hour precisely because "The workspace could not be found" against a
         # workspace az calls Succeeded explains nothing. A teardown that leaves a recoverable
-        # workspace behind must say so, at the moment it happens.
-        $script:Down | Should -Match 'list-deleted-workspaces' `
-            -Because 'the teardown should check what it left behind rather than assume the purge worked'
-        $script:Down | Should -Match 'Soft-deleted workspace remains' `
-            -Because 'the next rebuild inherits this, so the teardown is where it has to be said'
+        # workspace behind must say so, at the moment it happens. THAT INTENT IS UNCHANGED.
+        #
+        # What changed is the mechanism, because the old one could not do the job (F167).
+        # This used to require the string 'Soft-deleted workspace remains', emitted when
+        # `list-deleted-workspaces` still listed the workspace after the purge. That warning
+        # fired on EVERY teardown and was false every time: `--force` purges the workspace
+        # but leaves a tombstone in that list. Measured 2026-09-03 - the tombstone for
+        # customerId 5c967cf4 was still listed while a NEW same-name workspace (87f95e84)
+        # ran live in the same resource group, and both scheduled-query alert rules deployed
+        # clean. So the old assertion pinned a check that could only ever report the hazard
+        # as PRESENT, and this test kept it there.
+        #
+        # The value that DOES distinguish the two states is the workspace's customerId,
+        # which is what F107's own entry recorded ("its original customerId intact") and
+        # never encoded. The teardown must capture it BEFORE the delete - afterwards there
+        # is nothing to read it from - and publish it for the rebuild to compare against.
+        $script:Down | Should -Match 'customerId' `
+            -Because 'the customerId is the only observable that separates a genuinely new workspace from a recovered one, so a teardown claiming the estate rebuilds from code has to record it'
+
+        $capture = $script:Down.IndexOf('old_customer_id=')
+        $purge = $script:Down.IndexOf('--workspace-name "${LAW_NAME}" --force --yes')
+        $capture | Should -BeGreaterThan 0 `
+            -Because 'the pre-purge customerId has to be captured into a variable, not merely mentioned in prose'
+        $purge | Should -BeGreaterThan 0
+        $capture | Should -BeLessThan $purge `
+            -Because 'a customerId read AFTER the workspace is purged reads nothing, so the capture has to precede the delete'
+
+        $script:Down | Should -Match 'GITHUB_STEP_SUMMARY' `
+            -Because 'the value is useless if it stays in a log line nobody carries to the rebuild'
+
+        # THE REGRESSION GUARD, and the reason this test is not merely relaxed. Anyone
+        # re-adding a verdict derived from list-deleted-workspaces re-adds F167.
+        $script:Down | Should -Not -Match 'Soft-deleted workspace remains' `
+            -Because 'that warning is emitted on every teardown regardless of whether the purge worked, because --force leaves a tombstone in list-deleted-workspaces - an auditor that cannot see a control must not be able to report it as present either (F167)'
     }
 }
 
@@ -1495,6 +1524,83 @@ Describe 'a job that reads an estate setting declares the environment holding it
             -Because 'if no job reads a vars.MLS_* setting, this test asserts nothing and would pass over the very defect it exists to catch'
         $offender -join ' | ' | Should -BeNullOrEmpty `
             -Because 'an MLS_ variable lives in the demo environment, so a job that does not declare one reads the EMPTY STRING - silently, because an absent GitHub variable is not an error (F124)'
+    }
+
+    # F170, and declaring SOME environment is not enough - it has to be the RIGHT one.
+    #
+    # The test above catches a job that declares no environment at all. infra-down.yml's
+    # `preflight` declared `environment: demo` and read `secrets.MLS_VERIFIER_CERT_BASE64`,
+    # which lives on `verify`. It passed the test above and was broken anyway: the guard
+    # reported "not configured" on every run since it was written, the down-state audit was
+    # always invoked with `-SkipChildAudit`, and V11.2 - the criterion that proves a
+    # teardown did NOT cross the G3 tenant-object line - recorded SKIP every single time
+    # while the workflow went green and the scorecard read "verified".
+    #
+    # A reviewer scanning for "does this job declare an environment" would have seen yes.
+    # That is F124's own lesson one level up, and it is why this asserts the NAME.
+    #
+    # Writing this sweep immediately found two more, which is the point of writing sweeps:
+    #   layer-04-purview.yml   `preflight` reads the verifier cert under environment: demo
+    #   layer-09-devsecops.yml `ghas` reads MLS_VERIFIER_GH_TOKEN with no environment, so
+    #                          the first element of its token fallback chain is dead code
+    #                          and the job has only ever run on SELF_HEAL_TOKEN.
+    It 'declares the environment that actually HOLDS each environment-scoped secret it reads' {
+        # The authority for this map is the GitHub environment configuration, mirrored here
+        # because a test cannot query it. CLAUDE.md hard rule 5 enumerates the long-lived
+        # credentials; these are the ones that are environment-scoped rather than
+        # repository-scoped. SELF_HEAL_TOKEN is deliberately ABSENT: F123 made it a
+        # repository secret precisely so every job can see it, so it constrains nothing.
+        $holder = @{
+            'MLS_VERIFIER_CERT_BASE64'   = 'verify'
+            'MLS_VERIFIER_CERT_PASSWORD' = 'verify'
+            'MLS_VERIFIER_GH_TOKEN'      = 'verify'
+            'PURVIEW_CERT_BASE64'        = 'demo'
+            'PURVIEW_CERT_PASSWORD'      = 'demo'
+        }
+
+        $workflows = @(Get-ChildItem -Path (Join-Path $script:Root '.github/workflows') -Filter '*.yml' -File)
+        $scanned = 0
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($workflow in $workflows) {
+            $lines = Get-Content -LiteralPath $workflow.FullName
+            $job = ''
+            $declared = @{}
+            $readsSecret = @{}
+            $lineNumber = 0
+            foreach ($line in $lines) {
+                $lineNumber++
+                # Comment lines are skipped: this file documents the very defect it scans
+                # for, and a prose mention of a secret name is not a read of it.
+                if ($line -match '^\s*#') { continue }
+                if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') {
+                    $job = $Matches[1]
+                    continue
+                }
+                if ([string]::IsNullOrWhiteSpace($job)) { continue }
+                if ($line -match '^\s{3,}environment:\s*([A-Za-z0-9_-]+)\s*$') { $declared[$job] = $Matches[1] }
+                foreach ($match in [regex]::Matches($line, 'secrets\.([A-Z0-9_]+)')) {
+                    $name = $match.Groups[1].Value
+                    if (-not $holder.ContainsKey($name)) { continue }
+                    $key = "$job`n$name"
+                    if (-not $readsSecret.ContainsKey($key)) { $readsSecret[$key] = $lineNumber }
+                }
+            }
+            foreach ($key in $readsSecret.Keys) {
+                $jobName, $secretName = $key -split "`n", 2
+                $scanned++
+                $want = $holder[$secretName]
+                $got = if ($declared.ContainsKey($jobName)) { $declared[$jobName] } else { '<none>' }
+                if ($got -ne $want) {
+                    $offender.Add("$($workflow.Name):$($readsSecret[$key]) job '$jobName' reads $secretName with environment '$got', but it lives on '$want'")
+                }
+            }
+        }
+
+        $scanned | Should -BeGreaterThan 0 `
+            -Because 'if no job reads an environment-scoped secret, this test asserts nothing and would pass over the very defect it exists to catch'
+        $offender -join ' | ' | Should -BeNullOrEmpty `
+            -Because 'an absent GitHub secret is the EMPTY STRING, not an error, so a job declaring the WRONG environment reads nothing and degrades silently - which is how V11.2 never once had evidence while reporting green (F170)'
     }
 }
 
