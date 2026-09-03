@@ -183,7 +183,8 @@ jobs:
       # Decided HERE, not in preflight, because this job declares `environment: verify` and
       # is the only one that can see MLS_VERIFIER_CERT_BASE64 (F170). The audit opens its
       # OWN read-only Security & Compliance session as mls-verifier (Exchange.ManageAsApp +
-      # View-Only Configuration), a different credential from the deployer's app-only cert.
+      # a read-only compliance role), a different credential from the deployer's app-only
+      # cert. NOTE: that grant does not exist in the tenant yet - see g0 step 11d (F177).
       # All three inputs are required by Resolve-MlsInput, so guarding them turns a missing
       # one into a named NOTICE instead of an exit-2 stack trace — but it has to guard on
       # values it can actually read, or the NOTICE is what every run gets.
@@ -230,10 +231,10 @@ jobs:
           # was not. `-CertificateThumbprint` is a Windows-only DYNAMIC parameter of
           # Connect-IPPSSession -- the module adds it only `if($IsWindows)` -- so on
           # ubuntu-latest the audit died at parameter binding before opening a
-          # connection, and exited 2 without recording a criterion (F172). Nobody saw
+          # connection, and exited 2 without recording a criterion (F176). Nobody saw
           # it for the life of the project because this job's credential guard read a
           # `verify` secret from a job declaring `environment: demo`, so it skipped
-          # green on every run there has ever been (F170/F171).
+          # green on every run there has ever been (F170/F175).
           #
           # The apply job sixty lines above uses -Certificate / -CertificateFilePath,
           # which the module adds on EVERY platform, and it has always worked. This is

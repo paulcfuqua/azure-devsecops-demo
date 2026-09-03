@@ -17,12 +17,12 @@
 # expose certificate thumprint in Linux as it is not feasible there." CI is ubuntu-latest,
 # so the call died at parameter binding - "A parameter cannot be found that matches
 # parameter name 'CertificateThumbprint'" - before it opened a connection, and the audit
-# exited 2 having recorded no criterion (F172).
+# exited 2 having recorded no criterion (F176).
 #
 # Nobody saw it because the job that runs the audit had never once executed: its credential
 # guard read `secrets.MLS_VERIFIER_CERT_BASE64` from a job declaring `environment: demo`
 # while that secret lives on `verify`, so the guard reported "not configured" and the job
-# skipped green on every run in the repository's history (F170/F171).
+# skipped green on every run in the repository's history (F170/F175).
 #
 # THE WORKING IMPLEMENTATION WAS ALREADY IN THE REPO. L4's apply job connects to the same
 # service on the same runner with -Certificate / -CertificateFilePath, which the module
@@ -243,6 +243,69 @@ Describe 'Connect-MlsCompliance' {
             Should -Invoke Connect-IPPSSession -ModuleName 'MlsAudit' -Exactly -Times 1 -ParameterFilter {
                 $CertificateFilePath -and -not $PSBoundParameters.ContainsKey('CertificateThumbprint')
             }
+        }
+    }
+
+    Context 'the service refuses the session' {
+        # Fixing the parameter binding got the call all the way to Security & Compliance,
+        # which answered "UnAuthorized" - one word, from a script that exits 2 before
+        # recording a criterion. App-only S&C auth needs Exchange.ManageAsApp AND a
+        # directory role, and mls-verifier holds neither: appRoleAssignments carries no
+        # Office 365 Exchange Online entry and memberOf returns []. Both are human grants
+        # (F177), so the failure has to name them or the next operator re-derives it.
+
+        BeforeEach {
+            InModuleScope MlsAudit {
+                Set-Item -Path 'function:script:Connect-IPPSSession' -Value {
+                    param($AppId, $Organization, $Certificate, $CertificateFilePath,
+                        [SecureString]$CertificatePassword, $ShowBanner)
+                    $null = $AppId, $Organization, $Certificate, $CertificateFilePath,
+                        $CertificatePassword, $ShowBanner
+                }
+            }
+            Mock Get-Command {
+                return [pscustomobject]@{ Parameters = @{ CertificateFilePath = $null } }
+            } -ModuleName 'MlsAudit' -ParameterFilter { $Name -eq 'Connect-IPPSSession' }
+        }
+
+        It 'turns a bare UnAuthorized into the two grants it actually means' {
+            Mock Connect-IPPSSession { throw 'UnAuthorized' } -ModuleName 'MlsAudit'
+            $threw = { InModuleScope MlsAudit -Parameters @{ Pfx = $script:PlainPfx } {
+                    param($Pfx)
+                    Connect-MlsCompliance -Organization 'contoso.onmicrosoft.com' -AppId 'app-1' -CertificateFilePath $Pfx
+                } } | Should -Throw -PassThru
+            "$($threw.Exception.Message)" | Should -BeLike '*Exchange.ManageAsApp*'
+            "$($threw.Exception.Message)" | Should -BeLike '*directory role*'
+        }
+
+        It 'names the runbook step, because the fix is a human grant and not a code change' {
+            Mock Connect-IPPSSession { throw 'UnAuthorized' } -ModuleName 'MlsAudit'
+            { InModuleScope MlsAudit -Parameters @{ Pfx = $script:PlainPfx } {
+                    param($Pfx)
+                    Connect-MlsCompliance -Organization 'contoso.onmicrosoft.com' -AppId 'app-1' -CertificateFilePath $Pfx
+                } } | Should -Throw '*g0-bootstrap.md step 11d*'
+        }
+
+        It 'warns against the endpoint that lies about service principal membership' {
+            # GET /directoryRoles/{id}/members returns [] for a principal that IS a member.
+            # That cost a wrong conclusion at g0 step 11c; the message carries the antidote.
+            Mock Connect-IPPSSession { throw 'UnAuthorized' } -ModuleName 'MlsAudit'
+            { InModuleScope MlsAudit -Parameters @{ Pfx = $script:PlainPfx } {
+                    param($Pfx)
+                    Connect-MlsCompliance -Organization 'contoso.onmicrosoft.com' -AppId 'app-1' -CertificateFilePath $Pfx
+                } } | Should -Throw '*memberOf*'
+        }
+
+        It 'does not dress up an unrelated failure as a missing grant' {
+            # A DNS failure is not a permission problem, and a diagnosis that fires on
+            # every exception is a diagnosis nobody can trust.
+            Mock Connect-IPPSSession { throw 'The remote name could not be resolved' } -ModuleName 'MlsAudit'
+            $threw = { InModuleScope MlsAudit -Parameters @{ Pfx = $script:PlainPfx } {
+                    param($Pfx)
+                    Connect-MlsCompliance -Organization 'contoso.onmicrosoft.com' -AppId 'app-1' -CertificateFilePath $Pfx
+                } } | Should -Throw -PassThru
+            "$($threw.Exception.Message)" | Should -BeLike '*remote name*'
+            "$($threw.Exception.Message)" | Should -Not -BeLike '*Exchange.ManageAsApp*'
         }
     }
 

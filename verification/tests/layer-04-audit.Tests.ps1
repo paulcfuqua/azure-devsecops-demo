@@ -25,7 +25,7 @@ BeforeAll {
 
     # MLS_VERIFIER_CERT_PATH / _PASSWORD are here for the same reason as the rest: the
     # audit now resolves its S&C certificate from either of two forms, and a developer
-    # who has one exported would otherwise change what these tests exercise (F172).
+    # who has one exported would otherwise change what these tests exercise (F176).
     $script:EnvironmentVariable = @('TENANT_DOMAIN', 'MLS_TENANT_DOMAIN', 'MLS_VERIFIER_APP_ID',
         'MLS_VERIFIER_CERT', 'MLS_VERIFIER_CERT_PATH', 'MLS_VERIFIER_CERT_PASSWORD')
     $script:SavedEnvironment = @{}

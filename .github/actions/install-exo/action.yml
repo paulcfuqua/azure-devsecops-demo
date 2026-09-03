@@ -17,7 +17,7 @@ description: >-
 # has to be written down somewhere that all three callers share or it is three constants
 # that drift (CLAUDE.md: every value has one source).
 #
-# It is also the module whose PARAMETER SET differs by platform, which is what F172 was:
+# It is also the module whose PARAMETER SET differs by platform, which is what F176 was:
 # `Connect-IPPSSession -CertificateThumbprint` is a Windows-only dynamic parameter, so the
 # L4 audit could not start on ubuntu-latest. A version that moves under CI is a version
 # whose platform behaviour moves under CI too.

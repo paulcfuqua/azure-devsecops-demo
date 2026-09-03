@@ -24,9 +24,12 @@
     audit until now. L04.md's own Failure mode 5 already anticipated this exact
     supplementary check (`Get-LabelPolicy | Select -Expand ExchangeLocation`).
 
-    The S&C session is read-only: mls-verifier holds Exchange.ManageAsApp with the
-    View-Only Configuration role (L04.md Preconditions), so Get-Label works and nothing
-    else does.
+    The S&C session is READ-ONLY BY DESIGN, and as of 2026-09-03 it does not open at all:
+    mls-verifier is MEANT to hold Exchange.ManageAsApp with a read-only compliance role,
+    but G0 never granted either and the tenant refuses the session with UnAuthorized
+    (F177). That is a human grant, not a code defect - g0-bootstrap.md step 11d - and this
+    audit fails rather than skipping, because a green job that audited nothing is what hid
+    the problem for the life of the project (F175).
 
 .EXAMPLE
     ./layer-04-audit.ps1 -Organization contoso.onmicrosoft.com
@@ -37,7 +40,7 @@
 param(
     [string]$Organization,
     [string]$VerifierAppId,
-    # Windows only - Connect-IPPSSession gates -CertificateThumbprint on $IsWindows (F172).
+    # Windows only - Connect-IPPSSession gates -CertificateThumbprint on $IsWindows (F176).
     [string]$CertificateThumbprint,
     # The path CI uses: accepted on every platform.
     [string]$CertificateFilePath,
@@ -267,7 +270,7 @@ function Invoke-Main {
         -Hint 'App-only S&C auth for mls-verifier (Exchange.ManageAsApp + View-Only Configuration, granted at G0).'
     # EITHER credential form, but at least one - and the FILE is the one CI uses, because
     # -CertificateThumbprint is a Windows-only dynamic parameter of Connect-IPPSSession and
-    # every runner here is ubuntu-latest (F172; see Connect-MlsCompliance).
+    # every runner here is ubuntu-latest (F176; see Connect-MlsCompliance).
     #
     # Read DIRECTLY, not through Resolve-MlsInput: that helper THROWS when it resolves to
     # nothing, and an empty -DefaultValue does not make it optional (it treats empty as "no

@@ -16,7 +16,7 @@
 # least fails loudly when it drifts, because `npm ci` refuses to install. A PowerShell
 # module resolves silently and succeeds.
 #
-# For this module the risk is not hypothetical. F172 was `Connect-IPPSSession
+# For this module the risk is not hypothetical. F176 was `Connect-IPPSSession
 # -CertificateThumbprint` being a WINDOWS-ONLY DYNAMIC parameter - the module adds it only
 # inside `if ($IsWindows)` - so on ubuntu-latest the L4 audit died at parameter binding
 # having never opened a connection, and exited 2 for the life of the project. A module
@@ -217,7 +217,7 @@ Describe 'no CI job installs a PowerShell module unpinned' {
     It 'pins ExchangeOnlineManagement to an exact version wherever it is installed' {
         # No floor, no debt entry, no exception. This is the Verifier's dependency and the
         # one module in the estate whose PARAMETER SET is known to differ between platforms
-        # (F172), so "some version at or above X" is not a constraint that would have caught
+        # (F176), so "some version at or above X" is not a constraint that would have caught
         # anything: -CertificateThumbprint appears and disappears without the version moving
         # backwards at all.
         $exo = @($script:CiInstalls | Where-Object { $_.Module -eq 'ExchangeOnlineManagement' })
