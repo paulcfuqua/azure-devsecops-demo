@@ -82,6 +82,19 @@ outputs:
   app-insights:
     description: 'appInsightsName(prefix, env).'
     value: ${{ steps.resolve.outputs.app-insights }}
+  fabric-workspace:
+    description: >-
+      fabricWorkspaceName(prefix) — <prefix>-operations. HYPHEN. Fabric artefacts are not
+      ARM resources and take no env segment or type suffix. naming.bicep defines this
+      expressly so nothing hardcodes the company prefix; until 2026-09-03 this action
+      exposed no Fabric output at all, so every caller hardcoded it anyway.
+    value: ${{ steps.resolve.outputs.fabric-workspace }}
+  fabric-lakehouse:
+    description: >-
+      fabricLakehouseName(prefix) — <prefix>_operations. UNDERSCORE, not hyphen: lakehouse
+      names allow letters, digits and underscores only (provision-workspace.ps1's
+      ValidatePattern on -LakehouseName).
+    value: ${{ steps.resolve.outputs.fabric-lakehouse }}
 
 runs:
   using: composite
@@ -162,4 +175,9 @@ runs:
           echo "key-vault=${prefix}-sec-${envseg}-kv"
           echo "law=${prefix}-obs-${envseg}-law"
           echo "app-insights=${prefix}-obs-${envseg}-appi"
+          # Fabric: no env segment, no type suffix, and the lakehouse takes an UNDERSCORE
+          # where the workspace takes a hyphen. Both mirror naming.bicep's
+          # fabricWorkspaceName / fabricLakehouseName, which exist for exactly this reason.
+          echo "fabric-workspace=${prefix}-operations"
+          echo "fabric-lakehouse=${prefix}_operations"
         } >> "${GITHUB_OUTPUT}"
