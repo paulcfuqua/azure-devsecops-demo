@@ -47,6 +47,18 @@ Describe 'layer-05-audit' {
         Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
 
         $script:LiveTable = $script:Table
+        # THE SQL CATALOG IS A SEPARATE FIXTURE FROM THE FABRIC ONE, because the two
+        # routes are separate observations and V5.2 now chooses between them. Defaulting
+        # both to the correct ten means a test that moves one and not the other is
+        # asserting something about the route it moved.
+        $script:SqlCatalogTable = $script:Table
+        # 403, NOT 200, IS THE ESTATE'S REAL DEFAULT. mls-verifier holds the Fabric
+        # workspace VIEWER role - read-only by contract - and Viewer confers no OneLake
+        # data access. Read live on 2026-09-03: OneLake answered 403 to a caller without
+        # the role while the Fabric /tables route answered 200 with an empty list, in the
+        # same second. Pinning the fixture to the estate rather than to the convenient
+        # case is what F114 was about.
+        $script:OneLakeStatus = 403
         $script:RowCount = [ordered]@{}
         foreach ($name in $script:ExpectedCount.Keys) { $script:RowCount[$name] = $script:ExpectedCount[$name] }
         # The LIVE trial capacity reports FTL4, not the literal 'Trial'. Pinning the
@@ -68,6 +80,10 @@ Describe 'layer-05-audit' {
                             id          = 'lh-1'
                             displayName = 'mls_operations'
                             properties  = [pscustomobject]@{
+                                # Shaped like the live item, which carries its own OneLake
+                                # paths - V5.2 probes the one it is given rather than
+                                # building a DFS URL out of ids and a hostname.
+                                oneLakeTablesPath     = 'https://onelake.dfs.fabric.microsoft.com/ws-1/lh-1/Tables'
                                 sqlEndpointProperties = [pscustomobject]@{ connectionString = 'abc.datawarehouse.fabric.microsoft.com' }
                             }
                         })
@@ -86,12 +102,27 @@ Describe 'layer-05-audit' {
         }
 
         Mock Invoke-MlsSqlQuery {
+            if ($Query -like '*INFORMATION_SCHEMA*') {
+                return @($script:SqlCatalogTable | ForEach-Object { [pscustomobject]@{ t = $_ } })
+            }
             return @($script:RowCount.Keys | ForEach-Object {
                     [pscustomobject]@{ t = $_; n = $script:RowCount[$_] }
                 })
         }
 
-        Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
+        Mock Invoke-MlsHttp {
+            return [pscustomobject]@{ StatusCode = $script:OneLakeStatus; Content = ''; Headers = @{}; Error = $null }
+        } -ModuleName 'MlsAudit'
+        Mock Invoke-MlsHttp {
+            return [pscustomobject]@{ StatusCode = $script:OneLakeStatus; Content = ''; Headers = @{}; Error = $null }
+        }
+
+        Mock Invoke-MlsAz {
+            if (($Argument -join ' ') -like '*get-access-token*storage.azure.com*') {
+                return [pscustomobject]@{ accessToken = 'onelake-token' }
+            }
+            throw "unexpected az call: $($Argument -join ' ')"
+        }
     }
 
     Context 'all criteria pass' {
@@ -113,7 +144,7 @@ Describe 'layer-05-audit' {
             $context = Invoke-AuditForTest
             $context.Evidence['sqlEndpoint'] | Should -Be 'abc.datawarehouse.fabric.microsoft.com'
             Should -Invoke Invoke-MlsSqlQuery -Exactly -Times 1 -ParameterFilter {
-                $ServerName -eq 'abc.datawarehouse.fabric.microsoft.com' -and $Query -like 'SELECT*'
+                $ServerName -eq 'abc.datawarehouse.fabric.microsoft.com' -and $Query -like '*COUNT(*)*'
             }
         }
     }
@@ -130,32 +161,11 @@ Describe 'layer-05-audit' {
         }
 
         It 'fails V5.2 on table drift - an extra table the manifest does not declare' {
-            $script:LiveTable = $script:Table + 'scratch_tmp'
+            $script:SqlCatalogTable = $script:Table + 'scratch_tmp'
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V5.2'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -Match 'extra \[scratch_tmp\]'
-        }
-
-        It 'names denial rather than absence when the tables endpoint returns nothing' {
-            # Fabric answers /lakehouses/<id>/tables with [] - not 403 - to a caller
-            # without OneLake read, so a Viewer sees an empty lakehouse and a genuinely
-            # empty lakehouse looks identical. On 2026-09-01 V5.2 reported "missing [all
-            # ten]" against a lakehouse whose SQL endpoint had just returned
-            # launches = 1,200. Same class as F103: an audit announcing a thing is absent
-            # when it was refused the look.
-            $script:LiveTable = @()
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V5.2'
-            # Still FAILS - unobservable is not a sign-off - but it must not claim the
-            # tables are gone.
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -Match 'EMPTY LIST'
-            $row.Observed | Should -Not -Match 'missing \[' `
-                -Because 'an empty response from this endpoint is not evidence the tables are missing'
-            $row.Detail | Should -Match 'OneLake read'
-            $row.Detail | Should -Match 'V5.3' `
-                -Because 'the SQL endpoint fails loudly where this one fails silently, so the report must point at it'
         }
 
         It 'still fails V5.4 for a PAID capacity left running' {
@@ -181,6 +191,9 @@ Describe 'layer-05-audit' {
         It 'fails V5.4 when a paid capacity is left resumed' {
             Mock Invoke-MlsAz {
                 if (($Argument -join ' ') -like 'resource show*') { return 'Active' }
+                if (($Argument -join ' ') -like '*get-access-token*storage.azure.com*') {
+                    return [pscustomobject]@{ accessToken = 'onelake-token' }
+                }
                 throw "unexpected az call: $($Argument -join ' ')"
             }
             $armId = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Fabric/capacities/mlsf2'
@@ -191,30 +204,136 @@ Describe 'layer-05-audit' {
         }
     }
 
-    Context 'retry' {
-        It 'retries V5.2 while the SQL endpoint is still registering tables' {
-            $script:Calls = 0
+    Context 'V5.2 establishes that it could observe before reporting what it saw (F105/F171)' {
+        It 'reads the table list over the SQL analytics endpoint when OneLake refuses this identity' {
+            # THE ESTATE'S NORMAL CASE. mls-verifier holds Fabric workspace Viewer, which
+            # confers no OneLake data access, so /lakehouses/<id>/tables answers 200 with
+            # [] - indistinguishable from an empty lakehouse. The criterion must not read
+            # that as a table list at all; it reads the catalog the Viewer CAN see.
+            $script:OneLakeStatus = 403
+            $script:LiveTable = @()
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V5.2'
+            $row.Status | Should -Be 'PASS' `
+                -Because 'the ten tables are there and a route this identity can read says so'
+            $row.Observed | Should -Match 'HTTP 403' `
+                -Because 'one line of positive evidence about what could and could not be observed (F162)'
+            $row.Observed | Should -Match 'SQL analytics endpoint'
+            $row.Observed | Should -Not -Match 'missing \[' `
+                -Because 'an empty response from a route that may not look is never evidence the tables are missing'
+        }
+
+        It 'believes the Fabric table list once OneLake read is CONFIRMED' {
+            $script:OneLakeStatus = 200
+            $script:LiveTable = $script:Table
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V5.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -Match 'HTTP 200'
+            $row.Observed | Should -Match 'Fabric /tables'
+            Should -Invoke Invoke-MlsSqlQuery -Exactly -Times 0 -ParameterFilter { $Query -like '*INFORMATION_SCHEMA*' } `
+                -Because 'the SQL catalog is the FALLBACK route; a confirmed OneLake read makes it unnecessary'
+        }
+
+        It 'calls an empty lakehouse empty when OneLake read is CONFIRMED and the list is still empty' {
+            # The symmetric error is the worse one: an auditor that cannot see a control
+            # must not report it PRESENT either. Once the probe says this identity CAN
+            # read the data plane, [] is a real finding and must fail as one.
+            $script:OneLakeStatus = 200
+            $script:LiveTable = @()
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V5.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Match 'missing \['
+            $row.Detail | Should -Match 'CONFIRMED'
+        }
+
+        It 'reports UNOBSERVABLE, never "the tables are missing", when neither route can answer' {
+            $script:OneLakeStatus = 403
+            $script:LiveTable = @()
+            Mock Invoke-MlsRest {
+                if ($Uri -like '*/workspaces') {
+                    return [pscustomobject]@{ value = @([pscustomobject]@{ id = 'ws-1'; displayName = 'mls-operations'; capacityId = $script:TrialCapacityId }) }
+                }
+                if ($Uri -like '*/lakehouses') {
+                    # No sqlEndpointProperties at all: nothing to fall back to.
+                    return [pscustomobject]@{ value = @([pscustomobject]@{ id = 'lh-1'; displayName = 'mls_operations'
+                                properties = [pscustomobject]@{ oneLakeTablesPath = 'https://onelake.dfs.fabric.microsoft.com/ws-1/lh-1/Tables' }
+                            })
+                    }
+                }
+                if ($Uri -like '*/tables') { return [pscustomobject]@{ data = @() } }
+                if ($Uri -like '*/capacities') {
+                    return [pscustomobject]@{ value = @([pscustomobject]@{ id = $script:TrialCapacityId; sku = 'FTL4'; state = 'Active' }) }
+                }
+                throw "unexpected Fabric REST call: $Uri"
+            }
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V5.2'
+            $row.Status | Should -Be 'FAIL' -Because 'unobservable is never a sign-off'
+            $row.Observed | Should -Match '^UNOBSERVABLE'
+            $row.Observed | Should -Not -Match 'missing \['
+        }
+
+        It 'does not spend the retry window on a permission state that cannot change by waiting (F169)' {
+            # V5.2 burned 03:59:25 -> 04:29:33 on the 2026-09-03 rebuild re-asking a
+            # question answered on the first poll. A denial is not a propagation artifact.
+            $script:OneLakeStatus = 403
             Mock Invoke-MlsRest {
                 if ($Uri -like '*/workspaces') {
                     return [pscustomobject]@{ value = @([pscustomobject]@{ id = 'ws-1'; displayName = 'mls-operations'; capacityId = $script:TrialCapacityId }) }
                 }
                 if ($Uri -like '*/lakehouses') {
                     return [pscustomobject]@{ value = @([pscustomobject]@{ id = 'lh-1'; displayName = 'mls_operations'
-                                properties = [pscustomobject]@{ sqlEndpointProperties = [pscustomobject]@{ connectionString = 'abc.datawarehouse.fabric.microsoft.com' } }
+                                properties = [pscustomobject]@{ oneLakeTablesPath = 'https://onelake.dfs.fabric.microsoft.com/ws-1/lh-1/Tables' }
                             })
                     }
                 }
-                if ($Uri -like '*/tables') {
-                    $script:Calls++
-                    if ($script:Calls -lt 2) {
-                        return [pscustomobject]@{ data = @($script:Table | Select-Object -First 8 | ForEach-Object { [pscustomobject]@{ name = $_ } }) }
-                    }
-                    return [pscustomobject]@{ data = @($script:Table | ForEach-Object { [pscustomobject]@{ name = $_ } }) }
-                }
+                if ($Uri -like '*/tables') { return [pscustomobject]@{ data = @() } }
                 if ($Uri -like '*/capacities') {
-                    return [pscustomobject]@{ value = @([pscustomobject]@{ id = $script:TrialCapacityId; sku = 'Trial'; state = 'Active' }) }
+                    return [pscustomobject]@{ value = @([pscustomobject]@{ id = $script:TrialCapacityId; sku = 'FTL4'; state = 'Active' }) }
                 }
                 throw "unexpected Fabric REST call: $Uri"
+            }
+            $context = Invoke-AuditForTest
+            $row = Get-Row -Context $context -Id 'V5.2'
+            $row.Attempt | Should -Be 1
+            $row.SleptSeconds | Should -Be 0
+        }
+
+        It 'says it did not probe, rather than inventing a denial, when no OneLake token can be minted' {
+            # A probe that never ran has established nothing. It must not be reported as
+            # a denial, and it must not be reported as a grant either.
+            Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V5.2'
+            $row.Observed | Should -Match 'NOT PROBED'
+            $row.Status | Should -Be 'PASS' `
+                -Because 'the SQL route still answered, and the report says which route did'
+        }
+
+        It 'never escalates the Verifier past the read-only Fabric role to make itself observable' {
+            $onelake = Get-Content -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-05-audit.ps1') -Raw
+            $onelake | Should -Not -Match '(?m)^\s*[^#]*Add-FabricWorkspaceRoleAssignment' `
+                -Because 'the audit reads; a criterion that grants itself the permission it is checking is not a check'
+        }
+    }
+
+    Context 'retry' {
+        It 'retries V5.2 while the SQL analytics endpoint is still registering tables' {
+            # THE PROPAGATION THE WINDOW ACTUALLY EXISTS FOR, and now the only thing that
+            # consumes it: a Delta table lands in OneLake before the SQL endpoint syncs
+            # it, so the fallback route sees a short list for a few minutes.
+            $script:Calls = 0
+            Mock Invoke-MlsSqlQuery {
+                if ($Query -like '*INFORMATION_SCHEMA*') {
+                    $script:Calls++
+                    if ($script:Calls -lt 2) {
+                        return @($script:Table | Select-Object -First 8 | ForEach-Object { [pscustomobject]@{ t = $_ } })
+                    }
+                    return @($script:Table | ForEach-Object { [pscustomobject]@{ t = $_ } })
+                }
+                return @($script:RowCount.Keys | ForEach-Object { [pscustomobject]@{ t = $_; n = $script:RowCount[$_] } })
             }
             $context = Invoke-AuditForTest
             $row = Get-Row -Context $context -Id 'V5.2'

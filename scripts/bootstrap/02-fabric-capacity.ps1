@@ -35,9 +35,32 @@ param(
     [ValidatePattern('^$|^[0-9a-fA-F-]{36}$')]
     [string]$SubscriptionId = '',
 
+    # THIS RESOURCE GROUP IS DELETED BY THE ORDINARY TEARDOWN, SO A PAID F2 CAPACITY
+    # CREATED HERE DOES NOT SURVIVE A REBUILD - AND NOTHING RECREATES IT.
+    # `mls-rg-platform` is the first entry in infra-down.yml's RG list (the `naming`
+    # composite action emits `<prefix>-rg-platform <prefix>-rg-apps <prefix>-rg-data
+    # <prefix>-rg-ops`), and that teardown is gate-free by design. Grep
+    # `.github/workflows/` for `02-fabric-capacity`: zero hits. This script is G0-only and
+    # human-run, and -Mode F2 is G2-gated, so infra-up.yml has no path to it.
+    #
+    # Consequence on the paid path: the RG delete destroys the capacity, FABRIC_CAPACITY_ID
+    # becomes a dead ARM id, the surviving `mls-operations` workspace is stranded, and the
+    # NEXT infra-down fails on `az resource invoke-action --ids <dead id> --action suspend`.
+    # It arms itself on the first teardown after the G2 to paid F2 - i.e. it goes off right
+    # after someone starts spending money. It is invisible today only because this estate is
+    # on the trial capacity, which is Microsoft-managed with no ARM resource to delete.
+    # Where the capacity should live is a sponsor decision; see
+    # docs/runbooks/kill-rebuild.md section 1. Nothing here is changed on that account.
     [string]$ResourceGroup = 'mls-rg-platform',
 
     # Fabric capacity names: lowercase letters and digits only.
+    #
+    # THIS DEFAULT AND THE ONE ABOVE ARE HARDCODED `mls`, NOT DERIVED FROM
+    # infra/bicep/naming.bicep AND NOT OVERRIDDEN BY MLS_COMPANY_PREFIX /
+    # MLS_ENV_SEGMENT. That is F90's class: a rebrand reaches these two values through
+    # neither of its two sources, so it leaves the capacity and its resource group behind
+    # under the old name. Recorded, not fixed - changing a default that a human has already
+    # typed into a G2-approved capacity is a rename of a live resource, not an edit.
     [ValidatePattern('^[a-z][a-z0-9]{2,62}$')]
     [string]$CapacityName = 'mlsfabricdemo',
 

@@ -338,6 +338,208 @@ function Install-SeedSchema {
     return $applied
 }
 
+function Assert-SqlPrincipalName {
+    <#
+    .SYNOPSIS
+        Reject any database-principal name that is not a plain estate resource name.
+    .DESCRIPTION
+        Assert-SqlIdentifier is deliberately stricter than this and CANNOT be reused:
+        it forbids hyphens, and every workload identity in this estate is named
+        <prefix>-<role>-<env>-<type> (CLAUDE.md, Naming and tagging). The name reaches
+        the SQL text inside [brackets], so the thing that must be impossible is a `]`
+        closing them early; restricting to [A-Za-z0-9_-] makes that unreachable rather
+        than escaped.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Name)
+    if ($Name -notmatch '^[A-Za-z][A-Za-z0-9_-]{0,127}$') {
+        throw "Refusing to build SQL around the principal name '$Name': it is not a plain [A-Za-z][A-Za-z0-9_-]* estate resource name."
+    }
+    return $Name
+}
+
+function Get-SeedWorkloadUser {
+    <#
+    .SYNOPSIS
+        What the database currently holds for one principal name: its type and the GUID
+        its SID decodes to, or $null for both when no such principal exists.
+    .DESCRIPTION
+        DATALENGTH guards the conversion: a SQL-authenticated principal carries a
+        variable-length SID and CONVERT(UNIQUEIDENTIFIER, ...) would throw on it, which
+        would report "the database is broken" for "this name belongs to a different kind
+        of principal".
+    #>
+    param(
+        [Parameter(Mandatory)]$Connection,
+        [Parameter(Mandatory)][string]$PrincipalName,
+        [int]$TimeoutSeconds = 300
+    )
+    Assert-SqlPrincipalName -Name $PrincipalName | Out-Null
+    $query = @"
+SET NOCOUNT ON;
+SELECT TOP (1)
+    [type_desc] AS type_desc,
+    CASE WHEN DATALENGTH([sid]) = 16 THEN CONVERT(CHAR(36), CONVERT(UNIQUEIDENTIFIER, [sid])) END AS sid_guid
+FROM sys.database_principals
+WHERE [name] = N'$PrincipalName';
+"@
+    $result = Invoke-SeedSqlCommand -Connection $Connection -Query $query -TimeoutSeconds $TimeoutSeconds
+    $rows = @($result)
+    if ($rows.Count -eq 0 -or $null -eq $rows[0]) {
+        return [pscustomobject]@{ Exists = $false; TypeDescription = ''; SidGuid = '' }
+    }
+    return [pscustomobject]@{
+        Exists          = $true
+        TypeDescription = "$(Get-QueryScalar -Result $result -Name 'type_desc')".Trim()
+        SidGuid         = "$(Get-QueryScalar -Result $result -Name 'sid_guid')".Trim()
+    }
+}
+
+function Set-SeedWorkloadUser {
+    <#
+    .SYNOPSIS
+        Create - or repair - the contained-database user for one workload managed
+        identity, WITHOUT asking Microsoft Graph, and then prove it took.
+
+    .DESCRIPTION
+        THIS EXISTS BECAUSE `CREATE USER ... FROM EXTERNAL PROVIDER` CANNOT SURVIVE A
+        REBUILD, AND NOBODY NOTICED FOR AS LONG AS NOBODY REBUILT (F172).
+
+        FROM EXTERNAL PROVIDER makes the SQL engine resolve the principal in Microsoft
+        Graph. An application cannot impersonate another application, so under CI the
+        engine falls back to THE SQL SERVER'S OWN managed identity, which must therefore
+        hold directory read - the Entra "Directory Readers" role. That role assignment was
+        a G0 step documented as "One assignment, once per tenant".
+
+        It is not once per tenant. The server is created by L6 in `mls-rg-data`, teardown
+        deletes that resource group, and the server's SYSTEM-ASSIGNED identity dies with
+        it and comes back with a NEW principal id. Entra removes the dangling assignment
+        along with the deleted service principal. So the grant silently stops existing the
+        first time the estate is rebuilt - which is the one thing this demo exists to do.
+
+        Read on 2026-09-03, after the re-baseline rebuild: the directory audit log records
+        `mls-ops-demo-sql` added to Directory Readers on 2026-09-01T12:23:23Z for a service
+        principal that no longer exists, the current server identity holds zero directory
+        role assignments, and the Directory Readers role has zero members. Four layers
+        later data-api answered `Login failed for user '<token-identified principal>'` and
+        V7.6 went red.
+
+        SO THE GRANT NO LONGER ASKS GRAPH ANYTHING. Azure SQL stores an Entra principal's
+        SID, and for an application - a service principal or a managed identity - that SID
+        is its APPLICATION (CLIENT) ID, not its object id. Supplying it explicitly is the
+        documented route for exactly this case, and it needs no server identity, no
+        Directory Readers, and no tenant-level privilege anywhere. The estate rebuilds
+        itself with no human in the loop.
+
+        THE CLIENT-ID-VERSUS-OBJECT-ID CHOICE IS THE ONE CONSTANT HERE THAT NAMES
+        SOMETHING IN ANOTHER SYSTEM, and this function's own read-back CANNOT verify it -
+        comparing the SID we just wrote against the value we wrote it from is a mirror,
+        not a test (CLAUDE.md). What settles it is L7's V7.6, which asks the running
+        data-api for a row over a real login: a wrong SID leaves the criterion red. The
+        read-back below is for a different, real failure - a user of this name left behind
+        by a PREVIOUS identity, whose SID belongs to a principal that no longer exists.
+        The old check asked only whether a principal of this name existed and would have
+        accepted exactly that.
+
+    .PARAMETER ClientId
+        The managed identity's clientId (`az identity show --query clientId`), NOT its
+        principalId.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]$Connection,
+        [Parameter(Mandatory)][string]$PrincipalName,
+        [Parameter(Mandatory)][string]$ClientId,
+        [string[]]$DatabaseRole = @('db_datareader'),
+        [int]$TimeoutSeconds = 300
+    )
+    Assert-SqlPrincipalName -Name $PrincipalName | Out-Null
+    foreach ($role in $DatabaseRole) { Assert-SqlIdentifier -Name $role | Out-Null }
+    $parsed = [guid]::Empty
+    if (-not [guid]::TryParse($ClientId, [ref]$parsed)) {
+        throw "Refusing to create the contained user '$PrincipalName': '$ClientId' is not a GUID. This parameter takes the managed identity's clientId (az identity show --query clientId), not its name or its principalId."
+    }
+    $wanted = $parsed.ToString()
+
+    $before = Get-SeedWorkloadUser -Connection $Connection -PrincipalName $PrincipalName -TimeoutSeconds $TimeoutSeconds
+    $action = 'created'
+    if ($before.Exists -and $before.SidGuid -eq $wanted) {
+        $action = 'already correct'
+    }
+    elseif ($before.Exists) {
+        # A NAME COLLISION WITH A DEAD IDENTITY IS THE NORMAL RE-RUN CASE, NOT A CRISIS.
+        # A user-assigned identity destroyed with its resource group and recreated gets a
+        # new clientId under the same name, so a database that outlived it holds a user
+        # whose SID nobody can log in as. Dropping a contained database user is
+        # RG-scoped - the gate-free half of the teardown contract - and leaving it in
+        # place would block the grant permanently while every name-based check passed.
+        if ($PSCmdlet.ShouldProcess($PrincipalName, "DROP the existing contained user (SID '$($before.SidGuid)' does not match clientId '$wanted')")) {
+            Write-SeedStatus "  '$PrincipalName' exists with SID '$($before.SidGuid)', which is not this identity's clientId '$wanted' - dropping and recreating it (a previous identity of the same name)." -Color Yellow
+            Invoke-SeedSqlCommand -Connection $Connection -Query "DROP USER [$PrincipalName];" -TimeoutSeconds $TimeoutSeconds | Out-Null
+        }
+        $action = 'recreated'
+    }
+
+    if ($action -ne 'already correct') {
+        # T-SQL DOES THE BYTE ORDER, NOT POWERSHELL. CAST(uniqueidentifier AS varbinary(16))
+        # produces exactly the layout Azure SQL stores, so there is no hand-rolled encoding
+        # to get subtly wrong, and CONVERT(..., 1) renders it as the 0x literal CREATE USER
+        # wants. $wanted came out of [guid]::TryParse, so it cannot carry SQL.
+        $create = @"
+DECLARE @sid VARBINARY(16) = CAST(CAST(N'$wanted' AS UNIQUEIDENTIFIER) AS VARBINARY(16));
+DECLARE @cmd NVARCHAR(MAX) = N'CREATE USER [$PrincipalName] WITH SID = ' + CONVERT(NVARCHAR(64), @sid, 1) + N', TYPE = E;';
+EXEC sp_executesql @cmd;
+"@
+        if ($PSCmdlet.ShouldProcess($PrincipalName, "CREATE USER ... WITH SID (clientId $wanted), TYPE = E")) {
+            Invoke-SeedSqlCommand -Connection $Connection -Query $create -TimeoutSeconds $TimeoutSeconds | Out-Null
+        }
+    }
+
+    foreach ($role in $DatabaseRole) {
+        $addMember = @"
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.database_role_members AS rm
+    JOIN sys.database_principals AS r ON r.[principal_id] = rm.[role_principal_id]
+    JOIN sys.database_principals AS m ON m.[principal_id] = rm.[member_principal_id]
+    WHERE r.[name] = N'$role' AND m.[name] = N'$PrincipalName'
+)
+    ALTER ROLE [$role] ADD MEMBER [$PrincipalName];
+"@
+        if ($PSCmdlet.ShouldProcess($PrincipalName, "ALTER ROLE [$role] ADD MEMBER")) {
+            Invoke-SeedSqlCommand -Connection $Connection -Query $addMember -TimeoutSeconds $TimeoutSeconds | Out-Null
+        }
+    }
+
+    # VERIFY, DO NOT ANNOUNCE (F112). Every statement above can run without throwing and
+    # leave nothing behind; the only report worth making is one the database agreed to.
+    if (-not $PSCmdlet.ShouldProcess($PrincipalName, 'read back the contained user and its role membership')) {
+        return [pscustomobject]@{ PrincipalName = $PrincipalName; ClientId = $wanted; Action = 'skipped (-WhatIf)'; Role = @($DatabaseRole) }
+    }
+    $after = Get-SeedWorkloadUser -Connection $Connection -PrincipalName $PrincipalName -TimeoutSeconds $TimeoutSeconds
+    if (-not $after.Exists) {
+        throw "The contained user '$PrincipalName' does not exist after CREATE USER ... WITH SID ran without throwing. Nothing here asked Microsoft Graph, so this is not the Directory Readers problem (F172): check that the connection is the database data-api reads and that the caller is a Microsoft Entra admin on the server."
+    }
+    if ($after.SidGuid -ne $wanted) {
+        throw "The contained user '$PrincipalName' exists with SID '$($after.SidGuid)' but this identity's clientId is '$wanted'. A login presenting the identity's token will be refused. Drop the user and re-run, or check that -ClientId was given the clientId rather than the principalId."
+    }
+    foreach ($role in $DatabaseRole) {
+        $memberQuery = @"
+SET NOCOUNT ON;
+SELECT COUNT_BIG(*) AS n
+FROM sys.database_role_members AS rm
+JOIN sys.database_principals AS r ON r.[principal_id] = rm.[role_principal_id]
+JOIN sys.database_principals AS m ON m.[principal_id] = rm.[member_principal_id]
+WHERE r.[name] = N'$role' AND m.[name] = N'$PrincipalName';
+"@
+        $count = Get-QueryScalar -Result (Invoke-SeedSqlCommand -Connection $Connection -Query $memberQuery -TimeoutSeconds $TimeoutSeconds) -Name 'n'
+        if ([int64]$count -lt 1) {
+            throw "The contained user '$PrincipalName' exists with the right SID but is not a member of [$role], so every SELECT it issues will be denied."
+        }
+    }
+    Write-SeedStatus "  contained user '$PrincipalName' $action and VERIFIED: SID = clientId $wanted, member of $($DatabaseRole -join ', ')." -Color Green
+    return [pscustomobject]@{ PrincipalName = $PrincipalName; ClientId = $wanted; Action = $action; Role = @($DatabaseRole) }
+}
+
 function Get-SeedTableRowCount {
     <#
     .SYNOPSIS
@@ -451,11 +653,16 @@ function Invoke-SqlSeed {
         F20 (compliance/findings/2026-08-26-prepublication-review.md#f20): apply the DDL
         and return - no row-count probe, no wipe, no load, and (via
         Assert-SqlSeedPrerequisite -SchemaOnly) no requirement that data/generated/
-        exists. This is the post-L7 invocation that re-applies
-        data/seed/sql/900-contained-users.sql once the data-api identity exists: that
-        statement is idempotent DDL, not a data load, so it needs none of the machinery
-        a reseed does. Mutually exclusive with -Force in spirit (there is no data to wipe
-        or reload here); -Force is ignored when -SchemaOnly is set.
+        exists. This is the post-L7 invocation that applies the data-api contained-user
+        grant once that identity exists: a grant is idempotent DDL, not a data load, so it
+        needs none of the machinery a reseed does. Mutually exclusive with -Force in
+        spirit (there is no data to wipe or reload here); -Force is ignored when
+        -SchemaOnly is set.
+    .PARAMETER WorkloadUserName
+        Contained-database user to create for a workload managed identity, with
+        -WorkloadUserClientId. ABSENT IS THE NORMAL L6 CASE: L6 runs before L7 exists to
+        create the identity, so it passes neither and no grant is attempted. Supplying
+        one without the other is refused rather than half-done.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -465,6 +672,8 @@ function Invoke-SqlSeed {
         [string]$DdlPath = '',
         [int]$BatchSize = 250,
         [int]$TimeoutSeconds = 300,
+        [string]$WorkloadUserName = '',
+        [string]$WorkloadUserClientId = '',
         [switch]$Force,
         [switch]$SchemaOnly
     )
@@ -476,6 +685,21 @@ function Invoke-SqlSeed {
     Write-SeedStatus "Azure SQL: $(Get-MapValue -InputObject $Connection -Name 'ServerInstance') / $(Get-MapValue -InputObject $Connection -Name 'Database')" -Color Cyan
     Write-SeedStatus 'Applying DDL (data/seed/sql, filename order = dependency order)...' -Color Cyan
     $applied = @(Install-SeedSchema -Connection $Connection -DdlPath $DdlPath -TimeoutSeconds $TimeoutSeconds)
+
+    # THE WORKLOAD GRANT IS NOT A .sql FILE, AND THAT IS THE POINT (F172). It needs the
+    # identity's clientId, which is discovered from Azure at deploy time and cannot be
+    # written into static text - data/seed/sql/ holds no templates by design. Half a pair
+    # is refused: silently skipping on one supplied value is how a grant goes missing.
+    $wantWorkloadUser = -not [string]::IsNullOrWhiteSpace($WorkloadUserName) -or -not [string]::IsNullOrWhiteSpace($WorkloadUserClientId)
+    $workloadUser = $null
+    if ($wantWorkloadUser) {
+        if ([string]::IsNullOrWhiteSpace($WorkloadUserName) -or [string]::IsNullOrWhiteSpace($WorkloadUserClientId)) {
+            throw "-WorkloadUserName and -WorkloadUserClientId are a pair: got name '$WorkloadUserName' and clientId '$WorkloadUserClientId'. Pass both or neither."
+        }
+        Write-SeedStatus "Granting the workload contained-database user '$WorkloadUserName'..." -Color Cyan
+        $workloadUser = Set-SeedWorkloadUser -Connection $Connection -PrincipalName $WorkloadUserName `
+            -ClientId $WorkloadUserClientId -TimeoutSeconds $TimeoutSeconds
+    }
 
     if ($SchemaOnly) {
         # Install-SeedSchema gates each file on ShouldProcess, so under -WhatIf
@@ -492,6 +716,7 @@ function Invoke-SqlSeed {
         Write-SeedStatus "$summary; no row-count check and no data load - this mode never touches table data." -Color Green
         return [pscustomobject]@{
             AppliedDdl           = $applied
+            WorkloadUser         = $workloadUser
             Loaded               = @()
             SkippedAlreadySeeded = $false
             SchemaOnly           = $true
@@ -503,6 +728,7 @@ function Invoke-SqlSeed {
         Write-SeedStatus "(-WhatIf) Would load $($loadOrder.Count) table(s) in order: $($loadOrder -join ', '). No database call was made." -Color Yellow
         return [pscustomobject]@{
             AppliedDdl            = $applied
+            WorkloadUser          = $workloadUser
             Loaded                = @()
             SkippedAlreadySeeded  = $false
             SchemaOnly            = $false
@@ -524,6 +750,7 @@ function Invoke-SqlSeed {
         Write-SeedStatus "All $($loadOrder.Count) tables already hold their expected row counts - nothing to load." -Color Green
         return [pscustomobject]@{
             AppliedDdl           = $applied
+            WorkloadUser         = $workloadUser
             Loaded               = @()
             SkippedAlreadySeeded = $true
             SchemaOnly           = $false
@@ -552,6 +779,7 @@ function Invoke-SqlSeed {
     Write-SeedStatus "Azure SQL seeded: $($loadOrder.Count) tables, $total rows, all counts verified." -Color Green
     return [pscustomobject]@{
         AppliedDdl           = $applied
+        WorkloadUser         = $workloadUser
         Loaded               = @($loaded)
         SkippedAlreadySeeded = $false
         SchemaOnly           = $false
@@ -561,6 +789,9 @@ function Invoke-SqlSeed {
 
 Export-ModuleMember -Function @(
     'Assert-SqlIdentifier',
+    'Assert-SqlPrincipalName',
+    'Get-SeedWorkloadUser',
+    'Set-SeedWorkloadUser',
     'Split-SqlBatch',
     'ConvertTo-SqlLiteral',
     'New-SqlInsertStatement',

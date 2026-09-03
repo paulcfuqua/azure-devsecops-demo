@@ -40,12 +40,22 @@
 .PARAMETER SchemaOnly
     F20 (compliance/findings/2026-08-26-prepublication-review.md#f20): apply
     data/seed/sql/*.sql and stop - no dataset generation, no row-count check, no table
-    load. Valid only with -Target sql. This is the post-L7 invocation that re-applies
-    data/seed/sql/900-contained-users.sql once the data-api identity exists: that
-    statement is idempotent DDL guarded by sys.database_principals, not a data load, so
-    it needs neither the Python generators nor data/generated/ to be present - requiring
-    either would make the post-L7 grant pass depend on a checkout state it has no reason
-    to need.
+    load. Valid only with -Target sql. This is the post-L7 invocation that applies the
+    data-api contained-user grant once that identity exists: a grant is idempotent DDL,
+    not a data load, so it needs neither the Python generators nor data/generated/ to be
+    present - requiring either would make the post-L7 grant pass depend on a checkout
+    state it has no reason to need.
+
+.PARAMETER SqlWorkloadUserName
+    Contained-database user to create for a workload managed identity, paired with
+    -SqlWorkloadUserClientId. Passed by L7 AFTER it has created the identity; L6 passes
+    neither, because at L6 time there is no identity to grant to. See
+    Set-SeedWorkloadUser for why this is a parameter rather than a line in a .sql file:
+    the SID is the identity's clientId, discovered from Azure at deploy time, and
+    data/seed/sql/ is static text by design.
+
+.PARAMETER SqlWorkloadUserClientId
+    That identity's clientId (`az identity show --query clientId`) - NOT its principalId.
 
 .PARAMETER SqlServerInstance
     Azure SQL logical server FQDN, e.g. mls-ops-demo-sql.database.windows.net. Comes
@@ -97,6 +107,9 @@ param(
     [string]$SqlServerInstance = '',
     [string]$SqlDatabase = '',
     [string]$SqlAccessToken = '',
+    # F172: the post-L7 workload grant. Empty in L6, supplied by L7.
+    [string]$SqlWorkloadUserName = '',
+    [string]$SqlWorkloadUserClientId = '',
 
     # ---- Fabric (L5) --------------------------------------------------------------
     [string]$Token = '',
@@ -215,6 +228,14 @@ function Invoke-Main {
         [AllowEmptyString()][string]$SqlServerInstance = '',
         [AllowEmptyString()][string]$SqlDatabase = '',
         [AllowEmptyString()][string]$SqlAccessToken = '',
+        # DECLARED HERE, NOT INHERITED FROM THE SCRIPT SCOPE. The first version of this
+        # read $SqlWorkloadUserName straight out of the enclosing script's param block,
+        # which works when seed.ps1 is RUN and is invisible when it is TESTED - the suite
+        # sets MLS_SKIP_MAIN and calls Invoke-Main directly, so the grant could never have
+        # been exercised with a value. PSScriptAnalyzer found it as an unused script
+        # parameter, which is what it was.
+        [AllowEmptyString()][string]$SqlWorkloadUserName = '',
+        [AllowEmptyString()][string]$SqlWorkloadUserClientId = '',
         [AllowEmptyString()][string]$Token = '',
         [AllowEmptyString()][string]$OneLakeToken = '',
         [string]$WorkspaceName = 'mls-operations',
@@ -268,6 +289,7 @@ function Invoke-Main {
         $result.Sql = Invoke-SqlSeed -Connection $connection -Manifest $manifest -DataPath $dataPath `
             -DdlPath (Join-Path -Path $SeedRoot -ChildPath 'sql') -BatchSize $SqlBatchSize `
             -TimeoutSeconds $TimeoutSeconds -Force:$Force -SchemaOnly:$SchemaOnly `
+            -WorkloadUserName $SqlWorkloadUserName -WorkloadUserClientId $SqlWorkloadUserClientId `
             -WhatIf:$WhatIfPreference -Confirm:$false
     }
 
@@ -298,6 +320,7 @@ if (-not $env:MLS_SKIP_MAIN) {
 
     Invoke-Main -Target $Target -SchemaOnly:$SchemaOnly -SeedRoot $PSScriptRoot `
         -SqlServerInstance $SqlServerInstance -SqlDatabase $SqlDatabase -SqlAccessToken $SqlAccessToken `
+        -SqlWorkloadUserName $SqlWorkloadUserName -SqlWorkloadUserClientId $SqlWorkloadUserClientId `
         -Token $Token -OneLakeToken $OneLakeToken -WorkspaceName $WorkspaceName -LakehouseName $LakehouseName `
         -GeneratedDataPath $GeneratedDataPath -PythonExecutable $PythonExecutable `
         -SkipGenerate:$SkipGenerate -Force:$Force -SqlBatchSize $SqlBatchSize -TimeoutSeconds $TimeoutSeconds

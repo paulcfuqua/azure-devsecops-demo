@@ -765,13 +765,25 @@ jobs:
       # ---------------------------------------------------------------------
       # F20 (compliance/findings/2026-08-26-prepublication-review.md#f20): L6's
       # single `seed.ps1 -Target sql` pass (layer-06-platform.yml) runs before
-      # this layer creates the data-api identity, so
-      # data/seed/sql/900-contained-users.sql's CREATE USER / ALTER ROLE
-      # statements can't resolve the Entra principal yet and are guarded to log
-      # "pending L7" rather than abort the rest of L6's schema seed (see that
-      # file's header). Re-running the SQL seed now that the identity exists —
-      # created by the "Deploy the apps" step above — is what actually
-      # completes the grant.
+      # this layer creates the data-api identity, so the contained-user grant
+      # cannot be applied there — there is no principal to grant to yet.
+      # Applying it now that the identity exists — created by the "Deploy the
+      # apps" step above — is what actually completes the grant.
+      #
+      # AND IT NO LONGER ASKS MICROSOFT GRAPH ANYTHING (F172). The grant used to
+      # be `CREATE USER ... FROM EXTERNAL PROVIDER` in
+      # data/seed/sql/900-contained-users.sql, which needs the SQL SERVER's own
+      # managed identity to hold the Entra "Directory Readers" role — a G0 step
+      # documented as "once per tenant" and bound to a SYSTEM-ASSIGNED identity
+      # that teardown destroys with mls-rg-data and rebuilds with a NEW principal
+      # id. So it was true exactly until the first rebuild, and the 2026-09-03
+      # re-baseline is where that came due: Directory Readers had zero members,
+      # this step's own verification correctly reported the user absent, and
+      # data-api answered 502 `Login failed for user '<token-identified
+      # principal>'` on every SQL-backed route. The identity's clientId, resolved
+      # from Azure below, is now supplied as the user's SID instead — no Graph,
+      # no server identity, no tenant-level privilege, and a rebuild reproduces
+      # it. See Set-SeedWorkloadUser in data/seed/sql/sql-seed.psm1.
       #
       # PLACEMENT AND FAILURE POSTURE (Task 22 review, Important #1). This step
       # deliberately runs AFTER the V7.1 manifest is written and uploaded, and
@@ -799,7 +811,8 @@ jobs:
       # toolchain to build it — so a plain re-run would throw before the grant
       # ever applied. -SchemaOnly skips dataset generation and that check
       # entirely: it applies data/seed/sql/*.sql (every file there is guarded —
-      # IF NOT EXISTS / sys.database_principals — so this is a no-op on replay)
+      # IF NOT EXISTS — so this is a no-op on replay), then applies the workload
+      # contained-user grant because -SqlWorkloadUserName/-ClientId are supplied,
       # and touches no table data: no row-count probe, no wipe, no reload. That
       # is also why this is not `-Force`: -Force means wipe-and-reload, which
       # would re-load all ten operational tables against Azure SQL serverless
@@ -828,6 +841,11 @@ jobs:
           # SQL-backed table answered 502 "Login failed for user '<token-identified
           # principal>'".
           RG_DATA: ${{ steps.names.outputs.rg-data }}
+          # AND RG_APPS, because the grant needs the data-api identity's clientId and
+          # the identity lives in the apps RG, not the data one. Two resource groups in
+          # one step is unusual enough to be worth naming: F109 was this step reading the
+          # wrong one for days while reporting a plausible, wrong reason.
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -888,57 +906,89 @@ jobs:
             exit 1
           }
 
+          # THE NAME IS DERIVED, THE CLIENT ID IS READ FROM AZURE, AND NEITHER IS A
+          # LITERAL (F90). naming.bicep holds the DEFAULT and the environment overrides
+          # it, so an unset variable must resolve to the default rather than to an empty
+          # segment (F26/F90) - the same fallback shape as the Easy Auth resolver above.
+          $prefix = if ($env:MLS_COMPANY_PREFIX) { $env:MLS_COMPANY_PREFIX } else { 'mls' }
+          $envSeg = if ($env:MLS_ENV_SEGMENT) { $env:MLS_ENV_SEGMENT } else { 'demo' }
+          $identityName = "$prefix-data-api-$envSeg-id"
+
+          # clientId, NOT principalId. Azure SQL stores an APPLICATION's SID as its
+          # application (client) id, and the contained user is created with that SID
+          # explicitly so nothing has to resolve the principal in Microsoft Graph
+          # (F172). Both are printed because the distinction is the one constant here
+          # that names something in another system: if data-api still cannot log in,
+          # this pair is the first thing to compare against sys.database_principals.
+          $identityJson = az identity show --resource-group $env:RG_APPS --name $identityName --output json
+          Assert-AzSucceeded -What "az identity show --name $identityName"
+          $identity = $identityJson | ConvertFrom-Json
+          if (-not $identity.clientId) {
+            Write-Host "::error title=data-api identity has no clientId::az identity show returned no clientId for '$identityName' in $env:RG_APPS. The contained-database user cannot be created without it."
+            exit 1
+          }
+          Write-Host "F172: granting '$identityName'  clientId=$($identity.clientId)  principalId=$($identity.principalId)  (the SID written is the clientId)"
+
           ./data/seed/seed.ps1 `
             -Target sql `
             -SchemaOnly `
             -SqlServerInstance $sqlFqdn `
             -SqlDatabase $sqlDb `
             -SqlAccessToken $sqlToken `
+            -SqlWorkloadUserName $identityName `
+            -SqlWorkloadUserClientId $identity.clientId `
             -Confirm:$false
 
-          # VERIFY, DO NOT ANNOUNCE (F112). 900-contained-users.sql wraps CREATE USER in
-          # TRY/CATCH with RAISERROR severity 10 - deliberately non-batch-fatal, so an
-          # early L6 pass does not abort the whole schema seed. The cost is that a REAL
-          # failure also passes through as a warning, and this step then printed
-          # "grant pass applied" over a database where no user had been created. It said
-          # that for days while every SQL-backed /api/tables route answered 502.
+          # VERIFY, DO NOT ANNOUNCE (F112) - AND VERIFY THE SID, NOT JUST THE NAME.
           #
-          # So the step now ASKS THE DATABASE whether the user exists, rather than
-          # reporting that a script ran. Assert the capability, not the artefact.
-          # The name 900-contained-users.sql creates, derived the same way naming.bicep
-          # derives it rather than repeated as a literal a rename would strand (F90).
-          # Same fallback shape as the Easy Auth resolver above: naming.bicep holds the
-          # DEFAULT and the environment overrides it, so an unset variable must resolve to
-          # the default rather than to an empty segment (F26/F90).
-          $prefix = if ($env:MLS_COMPANY_PREFIX) { $env:MLS_COMPANY_PREFIX } else { 'mls' }
-          $envSeg = if ($env:MLS_ENV_SEGMENT) { $env:MLS_ENV_SEGMENT } else { 'demo' }
-          $identityName = "$prefix-data-api-$envSeg-id"
-          $checkQuery = "SET NOCOUNT ON; SELECT COUNT(*) AS n FROM sys.database_principals WHERE [name] = N'$identityName';"
-          $present = Invoke-Sqlcmd -ServerInstance $sqlFqdn -Database $sqlDb -AccessToken $sqlToken `
-            -Query $checkQuery -TrustServerCertificate -ErrorAction Stop | Select-Object -ExpandProperty n
+          # Set-SeedWorkloadUser already reads the user back and throws on a mismatch, so
+          # this is a second, independent read from a different client. It is worth the
+          # duplication because the previous version of this check asked only whether a
+          # principal of this NAME existed - and a user left behind by a PREVIOUS
+          # identity of the same name satisfies that while being unable to log in. The
+          # SID is what the engine matches a token against, so the SID is what is
+          # asserted: the capability, not the artefact that usually accompanies it.
+          $checkQuery = @"
+          SET NOCOUNT ON;
+          SELECT TOP (1) CASE WHEN DATALENGTH([sid]) = 16 THEN CONVERT(CHAR(36), CONVERT(UNIQUEIDENTIFIER, [sid])) END AS sid_guid
+          FROM sys.database_principals WHERE [name] = N'$identityName';
+          "@
+          $row = Invoke-Sqlcmd -ServerInstance $sqlFqdn -Database $sqlDb -AccessToken $sqlToken `
+            -Query $checkQuery -TrustServerCertificate -ErrorAction Stop
+          $sidGuid = if ($row) { "$($row.sid_guid)".Trim() } else { '' }
 
-          if ([int]$present -lt 1) {
-            Write-Host "::error title=F20 grant did not take effect::data/seed/sql/900-contained-users.sql ran without throwing, but '$identityName' does not exist in $sqlFqdn/$sqlDb. CREATE USER ... FROM EXTERNAL PROVIDER needs the SQL SERVER'S OWN managed identity to hold directory-read permission - an application cannot impersonate another application, so the engine falls back to the server identity (F112). Check: az sql server show -g <data rg> -n <server> --query identity  (must not be null), and that identity must be in the Directory Readers role. Running the statement by hand as a USER succeeds and proves nothing about CI."
+          if (-not $sidGuid) {
+            Write-Host "::error title=F20/F172 grant did not take effect::'$identityName' does not exist in $sqlFqdn/$sqlDb after the grant pass ran without throwing. Nothing in this path asks Microsoft Graph any more, so this is NOT the Directory Readers problem: check that mls-github-deployer is still the server's Microsoft Entra admin (L6 sets it) and that $sqlDb is the database data-api reads."
+            exit 1
+          }
+          if ($sidGuid -ne $identity.clientId) {
+            Write-Host "::error title=F172 contained user has the wrong SID::'$identityName' exists in $sqlFqdn/$sqlDb with SID $sidGuid, but this identity's clientId is $($identity.clientId). A login presenting its token will be refused. This is what a user left behind by a PREVIOUS identity of the same name looks like; Set-SeedWorkloadUser drops and recreates in that case, so seeing it here means the drop did not happen."
             exit 1
           }
 
-          Write-Host "F20: '$identityName' exists in $sqlFqdn/$sqlDb - grant verified, not merely applied."
+          Write-Host "F20/F172: '$identityName' exists in $sqlFqdn/$sqlDb with SID = clientId $sidGuid - grant verified, not merely applied."
 
-      # Surfaces the step above when it fails. continue-on-error keeps the job
-      # green on purpose, which also makes a failure easy to scroll past; this
-      # puts it in the run summary where the sponsor actually looks.
-      - name: Report a failed F20 grant pass
+      # SURFACES THE STEP ABOVE WHEN IT FAILS, AND SAYS SO IN ITS OWN NAME.
+      # continue-on-error keeps the job green on purpose (see the block above),
+      # which also makes a failure easy to scroll past - and the run's step list
+      # is the surface people actually read. A step called "Report a failed F20
+      # grant pass" showing `success` is indistinguishable at a glance from
+      # nothing being wrong; that is exactly how the 2026-09-03 rebuild reported
+      # a deploy job as green while its SQL grant had failed. The name now says
+      # what its presence MEANS, so a run list that contains it is a run list
+      # that says something broke.
+      - name: 'FAILURE: the F20/F172 SQL contained-user grant did not complete'
         if: ${{ !inputs.dry_run && steps.f20_grant.outcome == 'failure' }}
         shell: bash
         run: |
           set -euo pipefail
           {
-            echo "### F20 grant pass did not complete"
+            echo "### F20/F172 grant pass did not complete"
             echo
-            echo "The post-L7 contained-database user grant did not apply. The deployment itself succeeded and this does not block the Verifier, but \`data-api\` will fail its SQL routes until the grant lands."
+            echo "The post-L7 contained-database user grant did not apply. The deployment itself succeeded and this does not block the Verifier, but \`data-api\` will answer 502 on every SQL-backed \`/api/tables\` route until the grant lands — which is what L7's V7.6 will report."
             echo
             # shellcheck disable=SC2016  # backticks are markdown code-span syntax; no expansion wanted
-            echo 'Apply it by hand: `data/seed/seed.ps1 -Target sql -SchemaOnly -SqlServerInstance <fqdn> -SqlDatabase <db> -SqlAccessToken <token>`'
+            echo 'Apply it by hand: `data/seed/seed.ps1 -Target sql -SchemaOnly -SqlServerInstance <fqdn> -SqlDatabase <db> -SqlAccessToken <token> -SqlWorkloadUserName <identity> -SqlWorkloadUserClientId <clientId>`'
           } >> "${GITHUB_STEP_SUMMARY}"
 
       # ---------------------------------------------------------------------
@@ -1066,7 +1116,7 @@ jobs:
           Write-Host "F24: data-api holds the Fabric workspace Viewer role."
           if ($mcpPrincipalId) { Write-Host "F134: mcp-tools holds the Fabric workspace Viewer role." }
 
-      - name: Report a failed F24 grant pass
+      - name: 'FAILURE: the F24 Fabric workspace grant for data-api did not complete'
         if: ${{ !inputs.dry_run && steps.f24_grant.outcome == 'failure' }}
         shell: bash
         run: |
@@ -1170,7 +1220,7 @@ jobs:
 
           Write-Host "F19: cost-ingest holds the Fabric workspace Contributor role."
 
-      - name: Report a failed F19 grant pass
+      - name: 'FAILURE: the F19 Fabric workspace grant for cost-ingest did not complete'
         if: ${{ !inputs.dry_run && steps.f19_grant.outcome == 'failure' }}
         shell: bash
         run: |
@@ -1302,7 +1352,7 @@ jobs:
       # green on purpose, which also makes a failure easy to scroll past; this
       # puts it in the run summary where the sponsor actually looks - the same
       # companion the F20 and F24 steps carry.
-      - name: Report a failed redirect-URI registration
+      - name: 'FAILURE: the Easy Auth redirect-URI registration did not complete'
         if: ${{ !inputs.dry_run && steps.redirect_uris.outcome == 'failure' }}
         shell: bash
         run: |

@@ -5,7 +5,7 @@
 # (F13 documents seven in total; the two listed as NOT asserted below are a
 # different thing - they have no principalId available to a static test):
 #
-#   data-api  -> SQL contained-database user   (data/seed/sql/900-contained-users.sql)
+#   data-api  -> SQL contained-database user   (data/seed/sql/sql-seed.psm1 Set-SeedWorkloadUser)
 #   data-api  -> Fabric workspace Viewer        (infra/fabric/provision-workspace.ps1 + fabric-api.psm1)
 #   data-api  -> Log Analytics Reader           (infra/bicep/apps/main.bicep)
 #   data-api  -> Security Reader                (infra/bicep/apps/main.bicep)
@@ -65,12 +65,44 @@ BeforeAll {
     $script:MainBicepPath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'bicep', 'apps', 'main.bicep'
     $script:MainBicep = Get-Content -LiteralPath $script:MainBicepPath -Raw
     $script:ContainedUsersPath = Join-Path -Path $script:RepoRoot -ChildPath 'data' -AdditionalChildPath 'seed', 'sql', '900-contained-users.sql'
+    $script:SqlSeedModulePath = Join-Path -Path $script:RepoRoot -ChildPath 'data' -AdditionalChildPath 'seed', 'sql', 'sql-seed.psm1'
     $script:FabricApiPath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'fabric', 'fabric-api.psm1'
     $script:ProvisionWorkspacePath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'fabric', 'provision-workspace.ps1'
     $script:WorkloadRoleModulePath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'bicep', 'apps', 'modules', 'workload-role-assignments.bicep'
     $script:LawRoleModulePath = Join-Path -Path $script:RepoRoot -ChildPath 'infra' -AdditionalChildPath 'bicep', 'apps', 'modules', 'log-analytics-reader-role.bicep'
     $script:Layer07Path = Join-Path -Path $script:RepoRoot -ChildPath '.github' -AdditionalChildPath 'workflows', 'layer-07-apps.yml'
     $script:Layer07 = Get-Content -LiteralPath $script:Layer07Path -Raw
+
+    # ONE COPY, HOISTED. These two helpers existed TWICE - here and again inside the
+    # F24 Describe - and the copies had already diverged. The second had lost the
+    # backslash-r-backslash-n in its regex to a pair of literal newline characters,
+    # somewhere in an edit that went through a shell; it still matched, by accident, on
+    # an LF file. And only the first learned to accept a QUOTED step name, so renaming a
+    # step to 'FAILURE: ...' - which YAML requires quoting, because it contains a colon -
+    # was found by one copy and thrown by the other. Two copies of one fact with nothing
+    # keeping them equal, which is F151's and F163's shape in a test file.
+    function Get-JobBody {
+        param([string]$JobName, [string]$Source)
+        if ($Source -notmatch "(?ms)^  $JobName`:\r?\n(.*?)(?=^  \w\S*:\r?\n|\z)") {
+            throw "Could not isolate job '$JobName' in layer-07-apps.yml."
+        }
+        return $Matches[1]
+    }
+    function Get-StepBody {
+        param([string]$StepName, [string]$JobBody)
+        # THE QUOTES ARE OPTIONAL BECAUSE YAML MAKES THEM MANDATORY. A step name
+        # containing a colon - 'FAILURE: the F20/F172 ... grant did not complete' -
+        # must be quoted or the mapping is ambiguous, so a matcher that only accepts
+        # a bare name silently stops finding exactly the steps whose names say the
+        # most. It threw here rather than passing, which is the right direction, but
+        # a stricter matcher than the format allows is a test of the format.
+        $escaped = [regex]::Escape($StepName)
+        if ($JobBody -notmatch "(?ms)^\s{6}- name: ['`"]?$escaped['`"]?\r?\n(.*?)(?=^\s{6}- name:|\z)") {
+            throw "Could not isolate step '$StepName' in its job body."
+        }
+        return $Matches[1]
+        }
+
 
     # COMMENT-STRIPPED copies of every Bicep file these assertions read (F27).
     # Every occurrence of the strings 'Security Reader', 'Log Analytics Reader'
@@ -188,11 +220,45 @@ Describe 'workload identities have their grants expressed in code' {
         $script:MainBicep | Should -Match 'modules/log-analytics-reader-role\.bicep'
     }
 
-    It 'creates the SQL contained-database user in the seed' {
+    It 'creates the SQL contained-database user in the seed, without depending on Microsoft Graph' {
+        # THIS TEST USED TO MATCH `FROM EXTERNAL PROVIDER` IN 900-contained-users.sql,
+        # AND IT KEPT PASSING AFTER THE STATEMENT WAS DELETED - because the deleted
+        # statement is quoted verbatim in the comment explaining its removal. A green
+        # check over a capability that has moved out of the file, satisfied by prose
+        # describing its own departure. That is F27's class (matching a string that lives
+        # only in a comment) and it is exactly why the assertions below strip comments
+        # before reading, and assert the mechanism in the module that now owns it.
         Test-Path -LiteralPath $script:ContainedUsersPath | Should -BeTrue
-        $sql = Get-Content -LiteralPath $script:ContainedUsersPath -Raw
-        $sql | Should -Match 'FROM EXTERNAL PROVIDER'
-        $sql | Should -Match 'db_datareader'
+
+        # Block comments FIRST - PowerShell's <# .SYNOPSIS #> docstrings are where the
+        # history of this grant is written, and they are exactly what must not satisfy an
+        # assertion about the code. Then whole-line # comments; a trailing '#' inside a
+        # string is left alone, because stripping it would corrupt the SQL being asserted.
+        $sqlModule = Get-Content -LiteralPath $script:SqlSeedModulePath -Raw
+        $sqlModuleCode = [regex]::Replace($sqlModule, '(?s)<#.*?#>', '')
+        $sqlModuleCode = (($sqlModuleCode -split "`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+
+        # The grant exists, and the SID it writes is the identity's client id.
+        $sqlModuleCode | Should -Match 'function Set-SeedWorkloadUser'
+        $sqlModuleCode | Should -Match 'CREATE USER \[\$PrincipalName\] WITH SID = '
+        $sqlModuleCode | Should -Match 'db_datareader'
+
+        # AND IT ASKS GRAPH NOTHING. FROM EXTERNAL PROVIDER resolves the principal through
+        # the SQL server's own managed identity, which needs the Entra "Directory Readers"
+        # role - a grant bound to a SYSTEM-ASSIGNED identity that teardown destroys with
+        # mls-rg-data and rebuilds with a new principal id, so it silently stops existing
+        # on the first rebuild (F172). Comments are stripped first precisely so the
+        # explanation of that history cannot satisfy this assertion.
+        $sqlModuleCode | Should -Not -Match 'FROM EXTERNAL PROVIDER' `
+            -Because 'the contained-user grant must not depend on a tenant role assignment a rebuild erases'
+        $ddl = (Get-ChildItem -LiteralPath (Split-Path -Path $script:ContainedUsersPath -Parent) -Filter '*.sql' -File)
+        foreach ($file in $ddl) {
+            $body = Get-Content -LiteralPath $file.FullName -Raw
+            # Block comments are the only comment form these files use.
+            $code = [regex]::Replace($body, '(?s)/\*.*?\*/', '')
+            $code | Should -Not -Match 'FROM EXTERNAL PROVIDER' `
+                -Because "$($file.Name) is applied unconditionally by Install-SeedSchema, including during L6 when the identity does not exist yet - a grant there must be allowed to fail, and a grant that must be allowed to fail cannot also report whether it worked"
+        }
     }
 
     It 'provisions the Fabric workspace role-assignment REST path' {
@@ -236,22 +302,6 @@ Describe 'F20: the SQL contained-user grant is re-applied once the identity exis
         # whole file, so a grant invocation that leaked into the wrong job or
         # the wrong step would make these tests fail, not merely leave a string
         # sitting somewhere harmless.
-        function Get-JobBody {
-            param([string]$JobName, [string]$Source)
-            if ($Source -notmatch "(?ms)^  $JobName`:\r?\n(.*?)(?=^  \w\S*:\r?\n|\z)") {
-                throw "Could not isolate job '$JobName' in layer-07-apps.yml."
-            }
-            return $Matches[1]
-        }
-        function Get-StepBody {
-            param([string]$StepName, [string]$JobBody)
-            $escaped = [regex]::Escape($StepName)
-            if ($JobBody -notmatch "(?ms)^\s{6}- name: $escaped\r?\n(.*?)(?=^\s{6}- name:|\z)") {
-                throw "Could not isolate step '$StepName' in its job body."
-            }
-            return $Matches[1]
-        }
-
         $script:DeployJob = Get-JobBody -JobName 'deploy' -Source $script:Layer07
         $script:VerifyJob = Get-JobBody -JobName 'verify' -Source $script:Layer07
         $script:GrantStep = Get-StepBody -StepName 'Apply the SQL contained-database user now that the identity exists (F20)' -JobBody $script:DeployJob
@@ -355,36 +405,24 @@ Describe 'F20: the SQL contained-user grant is re-applied once the identity exis
         $script:GrantStep | Should -Match '(?m)::error.*Ambiguous Azure SQL database'
     }
 
-    It 'surfaces a failed grant in the run summary, since continue-on-error keeps the job green' {
-        $reportStep = Get-StepBody -StepName 'Report a failed F20 grant pass' -JobBody $script:DeployJob
+    It 'surfaces a failed grant in the run summary, and SAYS SO IN THE STEP NAME' {
+        # THE RUN'S STEP LIST IS THE SURFACE PEOPLE ACTUALLY READ, and a step called
+        # "Report a failed F20 grant pass" showing `success` is indistinguishable at a
+        # glance from nothing being wrong. That is how the 2026-09-03 rebuild reported a
+        # deploy job as green while its SQL grant had failed: the reporting step existed,
+        # fired, and reported success at reporting a failure. The name must say what its
+        # PRESENCE means, so a run list that contains it is a run list that says
+        # something broke.
+        $name = 'FAILURE: the F20/F172 SQL contained-user grant did not complete'
+        $reportStep = Get-StepBody -StepName $name -JobBody $script:DeployJob
         $reportStep | Should -Match "steps\.f20_grant\.outcome == 'failure'"
         $reportStep | Should -Match 'GITHUB_STEP_SUMMARY'
+        $name | Should -BeLike 'FAILURE:*'
     }
 }
 
 Describe 'F24: data-api is granted the Fabric workspace Viewer role after L7 creates its identity' {
     BeforeAll {
-        function Get-JobBody {
-            param([string]$JobName, [string]$Source)
-            if ($Source -notmatch "(?ms)^  $JobName`:
-?
-(.*?)(?=^  \w\S*:
-?
-|\z)") {
-                throw "Could not isolate job '$JobName' in layer-07-apps.yml."
-            }
-            return $Matches[1]
-        }
-        function Get-StepBody {
-            param([string]$StepName, [string]$JobBody)
-            $escaped = [regex]::Escape($StepName)
-            if ($JobBody -notmatch "(?ms)^\s{6}- name: $escaped
-?
-(.*?)(?=^\s{6}- name:|\z)") {
-                throw "Could not isolate step '$StepName' in its job body."
-            }
-            return $Matches[1]
-        }
         $script:F24DeployJob = Get-JobBody -JobName 'deploy' -Source $script:Layer07
         $script:F24Step = Get-StepBody -StepName 'Grant data-api the Fabric workspace Viewer role now that the identity exists (F24)' -JobBody $script:F24DeployJob
     }
@@ -444,10 +482,12 @@ Describe 'F24: data-api is granted the Fabric workspace Viewer role after L7 cre
         $script:F24Step | Should -Match '(?m)^\s*continue-on-error:\s*true\s*$'
     }
 
-    It 'surfaces a failed grant in the run summary, since continue-on-error keeps the job green' {
-        $reportStep = Get-StepBody -StepName 'Report a failed F24 grant pass' -JobBody $script:F24DeployJob
+    It 'surfaces a failed grant in the run summary, and SAYS SO IN THE STEP NAME' {
+        $name = 'FAILURE: the F24 Fabric workspace grant for data-api did not complete'
+        $reportStep = Get-StepBody -StepName $name -JobBody $script:F24DeployJob
         $reportStep | Should -Match "steps\.f24_grant\.outcome == 'failure'"
         $reportStep | Should -Match 'GITHUB_STEP_SUMMARY'
+        $name | Should -BeLike 'FAILURE:*'
     }
 }
 

@@ -102,3 +102,15 @@ f9d5432e-6b1a-4f02-9c47-8a3d21e6b7c4  # apps/control-tower/src/fixtures/defender
 # none could be. Its sibling 11111111-2222-... (the fake tenant) is already listed above
 # for the same reason. Reviewed 2026-09-01.
 aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee  # apps/directline-token/tests - fake Easy Auth audience
+
+# Synthetic identity ids for the F172 contained-user grant tests. Azure SQL stores an
+# APPLICATION's SID as its client id, and the whole point of these tests is that the three
+# roles - this identity's clientId, its principalId, and the clientId of a PREVIOUS identity
+# of the same name left behind by a rebuild - are never conflated. They are invented rather
+# than pinned to the estate on purpose: a user-assigned identity is destroyed with its
+# resource group and returns with new GUIDs on every rebuild, so the live values are
+# rebuild-scoped and would be committed stale within the hour. That is F172's own class.
+# Reviewed 2026-09-03.
+c1c1c1c1-0000-4000-8000-00000000c1d1  # data/seed/tests - synthetic data-api clientId
+b0b0b0b0-0000-4000-8000-00000000b0b0  # data/seed/tests - synthetic data-api principalId
+dead0000-0000-4000-8000-00000000dead  # data/seed/tests - clientId of a dead identity of the same name
