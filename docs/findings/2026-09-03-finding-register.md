@@ -52,6 +52,52 @@ across `docs/`, `CLAUDE.md`, the layer runbooks and `verification/tests/`.
 
 ---
 
+### F182 — V6.2 reports "no result" where its sibling reports an expired credential *(open, 2026-09-03)*
+
+L6's verify has failed on the rebuilt estate twice, ~3 hours apart, on the same criterion:
+
+    [PASS   ] V6.1  ARM GET on each resource: SKU/serverless/auto-pause/minReplicas match
+    [FAIL   ] V6.2  KQL query against LAW succeeds as verifier
+               observed: the query returned no result (HTTP error, or the Reader identity
+                         cannot query this workspace)
+    [PENDING] V6.3  First cost export file lands within 24 h
+               observed: check threw: ... could not authenticate: the federated client
+                         assertion has EXPIRED (AADSTS700024), and re-authenticating did not
+                         recover it. This is NOT a permissions problem and not a missing
+                         resource, and it will look like both. The CI login's assertion lives
+                         about five minutes; this call asked for a token az had not already
+                         cached, later than that.
+    [PASS   ] V6.5  V6.7  V6.8
+
+**Not a fresh-workspace timing artifact.** The workspace was created 12:34:31Z; the second
+failure ran 15:58 -> 16:14Z, ninety minutes later, and failed identically. It also PASSED once
+on a workspace fourteen minutes old (the 2026-09-03 03:33Z L6 probe), so "new workspace" does
+not separate the passing case from the failing ones.
+
+**What does separate them is job duration.** The probe run's verify took **0.9 minutes**. Both
+failing runs took **14-16 minutes**. V6.3, in the same job and the same file, names the
+mechanism exactly: the CI federated assertion lives about five minutes, and a call needing a
+token `az` has not already cached, made later than that, cannot authenticate — while anything
+already cached keeps working, "which is why the run got this far".
+
+**LEADING HYPOTHESIS, EXPLICITLY UNPROVEN: V6.2 retries past the assertion's lifetime and its
+later attempts fail to authenticate, which it reports as "the query returned no result".** The
+alternative — that `mls-verifier` genuinely cannot query the rebuilt workspace — is not ruled
+out, and the criterion as written cannot tell me which, because its own message offers both
+readings in one breath and commits to neither.
+
+That is the point worth recording regardless of which hypothesis wins. **V6.3 diagnoses this
+condition precisely and V6.2 cannot**, and they sit in the same file. One criterion was taught
+to distinguish "I could not authenticate" from "the thing is absent"; its neighbour reports the
+union of "HTTP error" and "cannot query" and calls it a result. It is F102/F103/F105's class in
+the component that exists to catch F102/F103/F105 — an audit that cannot see, reporting absence.
+
+**Not chased in this session**, and deliberately not diagnosed further from two samples: the
+last confident single-sample diagnosis in this register was mine, about my own fix, and it was
+wrong twice (F180). What the next session needs is not a guess but the observation V6.2 refuses
+to make — establish whether the token can be obtained at the moment of the query, then report
+UNOBSERVABLE rather than FAIL when it cannot. F105's rule already says exactly that.
+
 ### F181 — a transient in L4's supplementary step skipped four layers *(noted 2026-09-03, not chased)*
 
 Rebuild 3, first attempt. L4's apply failed and took the rest of the estate with it:
