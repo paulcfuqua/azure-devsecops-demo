@@ -168,9 +168,28 @@ jobs:
           # design. Say so and stop — failing every push to main because the demo
           # is currently torn down would be noise, and the L10 audit already
           # reports a missing deploy stage as the FAIL it is.
-          if ! az containerapp show --name "${WITNESS_APP}" --resource-group "${RG_APPS}" --output none 2>/dev/null; then
+          # SAY WHICH OF THE TWO THIS IS (F183). This discarded stderr and then announced
+          # "does not exist", so a refusal, a throttle or a wrong-subscription login all
+          # arrived here as absence and the operator was sent to redeploy an estate that
+          # might be standing. Absence really is a normal state for this workflow - down.ps1
+          # deletes the four RGs by design - which is exactly why the message has to earn
+          # the word.
+          witness_err="$(mktemp)"
+          set +e
+          az containerapp show --name "${WITNESS_APP}" --resource-group "${RG_APPS}" --output none 2>"${witness_err}"
+          witness_rc=$?
+          set -e
+          witness_msg="$(cat "${witness_err}")"
+          rm -f "${witness_err}"
+
+          if [ "${witness_rc}" -ne 0 ]; then
+            if printf '%s' "${witness_msg}" | grep -qiE 'forbidden|authoriz|access denied|expired'; then
+              echo "stamped=false" >> "${GITHUB_OUTPUT}"
+              echo "::error title=Cannot see the witness::UNOBSERVABLE, not absent. The caller was REFUSED when reading ${WITNESS_APP} in ${RG_APPS}, so this workflow cannot say whether the witness exists and will not guess. Azure said: ${witness_msg}"
+              exit 1
+            fi
             echo "stamped=false" >> "${GITHUB_OUTPUT}"
-            echo "::notice title=Witness not provisioned::${WITNESS_APP} does not exist in ${RG_APPS}, so no revision was rolled. It is created by infra/bicep/apps/main.bicep at L7; deploy the estate (layer-07-apps.yml) and re-run this workflow with workflow_dispatch to stamp commit ${COMMIT}."
+            echo "::notice title=Witness not provisioned::${WITNESS_APP} is genuinely absent from ${RG_APPS} — the read succeeded and found nothing — so no revision was rolled. It is created by infra/bicep/apps/main.bicep at L7; deploy the estate (layer-07-apps.yml) and re-run this workflow with workflow_dispatch to stamp commit ${COMMIT}."
             exit 0
           fi
 
