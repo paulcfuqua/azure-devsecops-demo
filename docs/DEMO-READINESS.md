@@ -12,6 +12,43 @@ Nothing was removed from it.
 
 ---
 
+## WHAT CHANGED ON 2026-09-03, FIXED AND NOT
+
+*The re-baseline run and the two teardown/rebuild cycles inside it. Eighteen findings,
+F167–F184. This section is the short answer; the tables below are the state it produced.*
+
+### Fixed and merged
+
+| | |
+|---|---|
+| **F167–F169** | L3's drift sweep failed on a legitimate G0 identity, hardcoded the company prefix, and burned 45.9 min on a verdict settled at minute zero. Verify now takes **0.9 min** |
+| **F170** | V11.2's guard read a `verify` secret from a `demo` job — the criterion proving a teardown did not cross the G3 line had **never had evidence** |
+| **F171–F173** | L5's V5.2 read a route it had been refused; L7's SQL grant died on a principal id no rebuild preserves; a step whose only job is to announce a failed grant reported success |
+| **F174** | The Log Analytics purge check warned of an F107 regression on **every** teardown — `--force` leaves a tombstone the check misread |
+| **F175–F177** | L4's audit had **never once executed**; `-CertificateThumbprint` is Windows-only; `mls-verifier` held no S&C grant. L4 now has its **first verdict ever** |
+| **F178** | The documented consent command **revoked three grants and created nothing**. Runbook corrected; repaired via the deploy path |
+| **F180** | `cond && '' \|\| 'X'` can never yield the empty string — so V11.2 stayed SKIP even after F170. **V11.2 now PASSES, first time ever** |
+| **F183** | The agent eval reported a secret *absent* when it was only *forbidden* to read it, suppressing its own artifact. Fixed, plus the Key Vault grant that lets it run — **`layer-08-agent-eval` now uploads** |
+| **BLOCKER-E** | A paid Fabric capacity was created into a resource group teardown deletes, arming on the first teardown after the G2 |
+
+### Not fixed, and known
+
+| | |
+|---|---|
+| **F184** | The eval runs but **cannot interpret its own 0/10** — it connects with no user token against an agent that authenticates manually. Open |
+| **L8 import** | Prints *"imported, NOT yet live"*, lists seven manual steps, **reports success**. A green L8 has never meant a live agent |
+| **F182** | L6's V6.2 fails on a rebuilt estate and cannot tell "cannot see" from "not there". Leading hypothesis (an expired federated assertion mid-audit) explicitly unproven |
+| **F181** | A transient in L4's supplementary step skipped four layers. Noted, **not chased**, by sponsor decision |
+| **F120** | The nightly compliance state still cannot merge, so `compliance/state/` is stale |
+| **F126** | Self-healing still has no subject — Dependabot opens no security PR for the seeded CVEs |
+| **V11.3–V11.5** | The L11 up-phase audit has still never completed a run |
+
+**The pattern, stated once:** of the eighteen, almost none were broken infrastructure. They
+were **checks reporting verdicts they had not earned** — and three of those were my own
+repairs, caught only because a second teardown was run against them.
+
+---
+
 ## THE SCORECARD
 
 *Standing section. Update it when a status changes; do not let it drift. A new agent, or a
@@ -53,7 +90,7 @@ that section's model does not represent at all.
 |---|---|---|---|
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working, and re-proven on the rebuilt estate** | **V7.6 PASSES**: the data API answers with rows, not merely a status code. This is the criterion that exists because an empty estate once signed off 5/5; it failed on the rebuild, was root-caused and fixed in the deploy path, and now passes. **Not re-opened in a browser since the rebuild** — the API is verified, the pixels are inferred |
 | **4** | **Compliance platform** — NIST 800-171 | 🟡 **shipped, and its state is five days stale** | `verification/layer-12-audit.ps1` reported 4 PASS + 2 SKIP on 2026-09-01 and **has not been re-run since the rebuild**. `compliance/state/` holds exactly two snapshots, newest **2026-08-29**, because F120 is still open — PR #147 has carried newer state since 2026-09-01 with **zero checks** and cannot merge. Committed figures: 110 requirements, **0 COMPLIANT**, 15 PARTIAL, 1 GAP, 94 NOT_ASSESSED; provenance **0 machine-verified**, 16 asserted |
-| **1** | **Copilot service** — Ask tab over Direct Line | 🔴 **transport works, the agent answers nothing** | **Opened in a browser on the rebuilt estate 2026-09-03 (F183).** Direct Line is fully live — the page forwards its Easy Auth token, the Function verifies it, exchanges the Key Vault secret and allocates a conversation. Asked the golden question and a simpler rephrasing, the agent replied to **both** with *"I'm sorry, I'm not sure how to help with that"*. On 2026-09-02 that same question returned *"Saturday had the most launches, with 309 launches recorded in the launches table"*. **L8 went green in the same rebuild**: its eval step exits 0 reporting the Direct Line secret absent when it was merely forbidden to read it, which suppresses the artifact, which makes V8.2/V8.4/V8.5 SKIP. Every layer of the check agreed and the estate was broken |
+| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **agent survives the rebuild; the eval cannot yet grade it** | **F183 fixed and merged, so the eval finally runs**: it read the Direct Line secret as an identity holding no Key Vault role, reported the secret ABSENT rather than UNOBSERVABLE, and suppressed its own artifact — V8.2/V8.4/V8.5 skipped and L8 stayed green over an ungraded agent for the life of the project. **`layer-08-agent-eval` now uploads**, reporting 0/10, p95 4.0s, **0 tool calls**, no transport errors. **That result is not yet interpretable (F184)**: the eval connects with the Direct Line secret and no user token, and this agent authenticates manually (Entra ID V2, see F128), so a healthy agent may decline tools to an unauthenticated caller and produce exactly this signature. **The agent itself survives the rebuild** — sponsor-confirmed; the browser failure was an expired minted token with the sign-in button correctly offered, which is F142/F150 working. Next: can the eval authenticate as a user, and if not, should it report UNOBSERVABLE rather than 0/10 |
 | **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | The token half is done and proven; V10.3 passes and the Dependabot lane runs. What is missing is a **subject**: Dependabot opens no *security* PR for the three seeded CVEs (**F126**, cause unresolved). It does open version-update PRs — #173 and #174 are open now — so the distinction is specifically about security advisories. **Not re-run since the rebuild** |
 
 ### The twelve layers
@@ -67,7 +104,7 @@ that section's model does not represent at all.
 | L5 Fabric | ✅ verified | **4 of 4**, first clean sign-off since F104/F105/F114. Seed took 4.0 min against a claimed 20–25 |
 | L6 platform | 🟡 **6 of 8, V6.2 failing on the rebuilt estate** | V6.1, V6.5, V6.7, V6.8 PASS; V6.3 and V6.4 PENDING by design (24 h cost-export window, 75 min SQL auto-pause). **V6.2 — a KQL query against the workspace — fails, twice, three hours apart (F182).** It reports *"the query returned no result (HTTP error, or the Reader identity cannot query this workspace)"*, which is two different diagnoses in one sentence and commits to neither. Its sibling V6.3, in the same file, names the likely mechanism exactly: the CI federated assertion expires after ~5 minutes and these audits run 14–16. **Unproven, deliberately** — see F182. V6.8 still confirms Key Vault references resolve and V6.7 that the Function Apps hold code |
 | L7 apps | ✅ **verified 7 of 7, and it is the session's strongest result** | Including **V7.6** — the data API answers with rows — against a data-api identity whose client id had just changed from `3dadafd7` to `ba91c8ea`, with **Directory Readers holding zero members**. The old path needed that privilege, bound to an identity destroyed with its resource group every teardown (F172). The fix removed the dependency rather than automating it, and the step whose job is to announce a failed grant **skipped**, where in cycle 1 it fired. A change is finished when a rebuild reproduces it; this one now is |
-| L8 Copilot Studio | 🟡 partial | **V8.1 PASS**; V8.2/V8.3/V8.4/V8.5 SKIP. Three of those skip on `no eval artifact` — the eval job succeeds and its result never reaches the audit |
+| L8 Copilot Studio | 🟡 partial, and for a different reason than before | **V8.1 PASS**; V8.2–V8.5 still short of a verdict, but **no longer for want of an artifact** — F183 is fixed and `layer-08-agent-eval` now uploads, having never done so once. The eval reports 0/10 with **zero tool calls**, which **F184 says is not yet interpretable**: it connects with the Direct Line secret and no user token against an agent that authenticates manually. Also true regardless: the import job prints **"L8 — imported, NOT yet live"** with seven manual steps and reports **success** anyway, so a green L8 has never meant a live agent |
 
 **Blocked, and honestly so:**
 
@@ -122,10 +159,18 @@ grant-failure reporter that reported success. A rebuild is the only thing that f
   `layer-03-entra.yml` — the deploy path fixing damage done from a terminal — and step 11d
   now uses a direct additive POST with a warning block.
 
-- **BLOCKER-B — L8's eval result never reaches its audit.** The golden-question eval runs
-  and goes green; V8.2, V8.4 and V8.5 all report `no eval artifact`. Three criteria that
-  would independently re-derive the agent's answers are therefore silent, and the
-  showpiece rests on a job's exit code. This is F102's shape.
+- **BLOCKER-B is HALF CLOSED (2026-09-03).** The eval's result now *reaches* the audit:
+  F183 is fixed, `layer-08-agent-eval` uploads for the first time ever, and V8.2/V8.4/V8.5
+  can stop skipping on "no eval artifact". What replaces it is a sharper question — the
+  eval reports 0/10 with zero tool calls, and **cannot tell an unhealthy agent from an eval
+  that is not allowed to reach a healthy one** (F184). Next: can the eval authenticate as a
+  user, and if not, should it report UNOBSERVABLE rather than a grade of zero.
+
+  A second gap sits beside it and is independent of the agent's health: the import job
+  prints **"L8 — imported, NOT yet live"**, lists seven manual not-solution-aware steps
+  (publish, Entra ID V2 auth, MCP connection, generative orchestration, channel security,
+  sharing), and **reports success regardless**. A green L8 does not mean a live agent, and
+  nothing currently asserts the difference.
 
 - **BLOCKER-C — the nightly compliance state cannot merge (F120).** PR #147, open since
   2026-09-01, **zero checks**, blocked. A `GITHUB_TOKEN` push triggers no workflow runs, so
