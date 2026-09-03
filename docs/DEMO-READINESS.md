@@ -601,7 +601,7 @@ the other thing a pass.** The estate's real external surface, enumerated:
 UNOBSERVABLE** when nothing but a redirect was assessed. A "0 High" that describes a login page
 can no longer be recorded as a pass.
 
-### F151 — the closed credential list was not closed *(open — needs a decision)*
+### F151 — the closed credential list was not closed *(closed 2026-09-02)*
 
 CLAUDE.md rule 5 states "the complete list of long-lived credentials" and names two Key Vault
 entries. **The vault holds four.** Alongside the Direct Line secret and `mcp-auth-token` it
@@ -622,6 +622,21 @@ that a value can be read under a name no static search will match.
 Found by taking a census rather than by a check, which is itself the finding: nothing asserts
 that the vault's contents match the documented inventory. That is a cheap check nobody has
 written.
+
+
+**RESOLVED 2026-09-02.** Both secrets are accounted for, and the sponsor confirmed the GitHub
+side independently: repository and environment secrets are **exactly the six** rule 5 documents,
+with nothing extra. The discrepancy was Key Vault only.
+
+- `mls-data-api-github-token` — legitimate. G0 step 11b creates it for F116; it is the read-only
+  GitHub PAT behind the control tower's Dev and Sec tabs. Now named in rule 5 with that reason.
+- `mls-github-token` — its own pre-rename name. The timestamps settle it: 13:53 versus 18:09 the
+  same day. **Key Vault has no rename**, so a rename is create-new plus delete-old and only the
+  first half happened. Nothing read it. **Deleted**; soft-delete retains it until 2026-12-02.
+
+The vault now holds three secrets and rule 5 names all three. What makes this closed rather than
+merely tidied is F164's sweep: every secret a runbook creates must be named in rule 5 *and* in
+gitleaks.yml's rotation table, so the list cannot quietly stop being complete again.
 
 ### F150 — my recovery link signed the user out and left no way back *(fixed 2026-09-02)*
 
