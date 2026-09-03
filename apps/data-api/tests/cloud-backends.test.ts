@@ -546,7 +546,7 @@ describe("CloudFeedsBackend", () => {
     });
   });
 
-  it("requests open alerts from both GitHub security endpoints", async () => {
+  it("requests EVERY alert state, and never sends state=all to Dependabot", async () => {
     const { impl, calls } = recordingFetch(() => ({ body: [] }));
     const backend = new CloudFeedsBackend({
       config: cloudConfig(),
@@ -555,10 +555,20 @@ describe("CloudFeedsBackend", () => {
     });
     await backend.getFeed("code-scanning-alerts");
     await backend.getFeed("dependabot-alerts");
+    // state=all for code scanning; NO state parameter for Dependabot (F166).
+    // `state=all` is valid for one and not the other, and GitHub answers the
+    // invalid case with an EMPTY LIST rather than an error - so the obvious
+    // symmetry silently returns zero dependency findings. Verified live:
+    //   dependabot/alerts             -> 10
+    //   dependabot/alerts?state=open  ->  8
+    //   dependabot/alerts?state=all   ->  0
     expect(calls.map((call) => call.url)).toEqual([
-      "https://api.github.com/repos/paulcfuqua/azure-devsecops-demo/code-scanning/alerts?state=open&per_page=100",
-      "https://api.github.com/repos/paulcfuqua/azure-devsecops-demo/dependabot/alerts?state=open&per_page=100",
+      "https://api.github.com/repos/paulcfuqua/azure-devsecops-demo/code-scanning/alerts?state=all&per_page=100",
+      "https://api.github.com/repos/paulcfuqua/azure-devsecops-demo/dependabot/alerts?per_page=100",
     ]);
+    expect(calls.some((c) => c.url.includes("dependabot") && c.url.includes("state=all"))).toBe(
+      false,
+    );
   });
 
   it("fails closed, and makes no request, when no GitHub token is injected", async () => {

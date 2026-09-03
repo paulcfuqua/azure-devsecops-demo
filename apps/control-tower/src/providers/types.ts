@@ -60,6 +60,14 @@ export interface CodeScanningAlert {
   number: number;
   state: string; // open | dismissed | fixed
   created_at: string;
+  /**
+   * When the finding was CLOSED, if it has been. Carried so the board can show
+   * posture over time rather than a backlog: 323 of this repository's 411 code
+   * scanning findings are closed, and a panel that only counts `open` reports
+   * the 88 and silently discards the work (F166).
+   */
+  fixed_at?: string | null;
+  dismissed_at?: string | null;
   rule: {
     id: string;
     severity: string;

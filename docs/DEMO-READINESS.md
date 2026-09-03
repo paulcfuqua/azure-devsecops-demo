@@ -117,6 +117,51 @@ See **F143**. The calendar is still the tighter constraint, but not by the margi
 - **One open sub-item, not a blocker:** V8.1 needs a Dataverse read role for
   `mls-verifier` - see BLOCKER-2's resolved entry for what has been tried.
 
+### F166 — the board reported a backlog and called it posture *(fixed 2026-09-02)*
+
+The Sec tab said **88 open** and stopped there. The repository had also **closed 323 findings**,
+and nothing surfaced it — the least flattering true sentence available was the only one on the
+page. A backlog count answers *"what is wrong"*; the reader's actual question is *"are we
+winning"*.
+
+Two changes, both prompted by the sponsor:
+
+**1. Posture over time.** The feeds now fetch every alert state, carry `fixed_at` / `dismissed_at`,
+and the board charts opened against closed by date, with the totals in a **Findings closed** KPI.
+The shape is lumpy — most findings arrived and were closed the day CodeQL first swept every image
+— and that is the truth about a twelve-day-old repository rather than a reason to draw something
+smoother.
+
+**2. The seeded CVEs are a test feature, and now say so.** They live in `apps/vuln-lab` because
+**V9.2 asserts CI FAILS on them** and passes once pinned. They are the evidence the pipeline
+blocks vulnerable builds, so a board listing them beside real exposure reports the proof as though
+it were the problem. The KPI is now **"Seeded CVEs (pipeline test)"**, and the sponsor's framing is
+the right one: *"show that the CVE is purposeful as a test feature and not a break in our
+security."* **Not closed, deliberately** — closing them would break V9.2 to improve a number.
+
+**And the discrepancy a reader spotted is fixed.** The chart said 1 critical and the table said 2.
+Both were right — the chart excludes seeded fixtures, the table listed everything — and nothing on
+screen explained the gap, which is the F156 defect in a different panel. Seeded rows are now
+marked `Dependabot (seeded)`. Mutation-tested, because the first version of this fix passed all
+132 tests with the marking removed.
+
+**The Dependabot trap, encoded.** `state=all` is valid for code scanning and **not** for
+Dependabot, and GitHub answers the invalid case with an **empty list rather than an error**:
+
+    dependabot/alerts             -> 10
+    dependabot/alerts?state=open  ->  8
+    dependabot/alerts?state=all   ->  0
+
+The obvious symmetry with the code-scanning call would have silently reported zero dependency
+findings. Checked against the live API before the code was written, and a test now asserts the
+Dependabot URL never carries `state=all`.
+
+**Future opportunity, noted not planned:** self-heal has two lanes, `dependabot` and
+`code-scanning`, both application-facing. Infrastructure findings — the Defender assessments and
+Azure Policy non-compliance lit up today — have no lane at all. An infra lane would need a
+**what-if gate rather than a lint gate**, since F141 showed a Bicep change can pass every lint and
+still fail at deploy.
+
 ### F165 — V9.5 asserted the security control should be OFF *(fixed 2026-09-02)*
 
 Enabling Defender for Containers so the estate would produce posture (F153) made V9.5 fail, and

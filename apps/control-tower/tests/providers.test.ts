@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveDataMode } from "../src/providers";
 import { ApiProvider } from "../src/providers/ApiProvider";
 import { localFixtures, LocalProvider } from "../src/providers/LocalProvider";
-import { donutWithRemainder, buildDevSpec, buildOpsSpec, buildSecSpec } from "../src/providers/specs";
+import { closedOn, postureByDate, donutWithRemainder, buildDevSpec, buildOpsSpec, buildSecSpec } from "../src/providers/specs";
 import { sampleAzureCost, stubLoader } from "./sampleData";
 
 describe("buildDevSpec (Dev pillar)", () => {
@@ -77,7 +77,12 @@ describe("buildSecSpec (Sec pillar)", () => {
     if (kpi?.type !== "kpiRow") throw new Error("no kpiRow");
     expect(kpi.items.find((i) => i.label === "Open findings (distinct)")?.value).toBe(10);
     expect(kpi.items.find((i) => i.label === "Alert instances")?.value).toBe(10);
-    expect(kpi.items.find((i) => i.label === "Seeded for the demo")?.value).toBe(1);
+    // Renamed (F166): these CVEs are a pipeline TEST FIXTURE, not a gap. V9.2
+    // asserts CI fails on them, so the board must not list them as exposure.
+    expect(kpi.items.find((i) => i.label === "Seeded CVEs (pipeline test)")?.value).toBe(1);
+    // Two closed in each fixture feed - one fixed, one dismissed. Counting them is
+    // the whole point: the board used to show only the 88 that remained.
+    expect(kpi.items.find((i) => i.label === "Findings closed")?.value).toBe(4);
     expect(kpi.items.find((i) => i.label === "Critical (open)")?.value).toBe(2);
     expect(kpi.items.find((i) => i.label === "Defender secure score")?.value).toBe(71.6);
   });
@@ -92,6 +97,19 @@ describe("buildSecSpec (Sec pillar)", () => {
     if (chart?.type !== "barChart") throw new Error("no severity barChart");
     expect(chart.data.find((p) => p.x === "High")?.y).toBe(1);
     expect(chart.description).toContain("1 deliberately seeded");
+  });
+
+  it("marks a seeded row in the table, so it reconciles with the chart (F166)", () => {
+    // THE DISCREPANCY A READER SPOTTED: the chart said 1 critical, the table said
+    // 2. Both were right - the chart excludes seeded fixtures and the table listed
+    // everything - and nothing on screen explained the gap. Marking the row
+    // reconciles them without hiding the finding.
+    const table = spec.components.find((c) => c.type === "dataTable");
+    if (table?.type !== "dataTable") throw new Error("no dataTable");
+    const seeded = table.rows.filter((r) => String(r.source).includes("seeded"));
+    expect(seeded.length).toBeGreaterThan(0);
+    // And a real one must NOT be marked, or the label means nothing.
+    expect(table.rows.some((r) => r.source === "Dependabot")).toBe(true);
   });
 
   it("colours severity semantically - High is never green", () => {
@@ -514,5 +532,50 @@ describe("donutWithRemainder (F156)", () => {
     const total = withTiny.reduce((sum, s) => sum + s.cost, 0);
     const slices = donutWithRemainder(withTiny, 8, money);
     expect(slices.reduce((sum, s) => sum + s.value, 0)).toBeCloseTo(total, 2);
+  });
+});
+
+
+describe("posture over time (F166)", () => {
+  const alert = (created: string, closed?: string) => ({
+    created_at: `${created}T09:00:00Z`,
+    ...(closed ? { fixed_at: `${closed}T17:00:00Z` } : {}),
+  });
+
+  it("counts an opening and a closing on their own days", () => {
+    // The defect this replaces: the board reported "88 open" and nothing else,
+    // while 323 findings had been closed. A backlog answers "what is wrong";
+    // posture answers "are we winning".
+    const series = postureByDate([
+      alert("2026-08-28", "2026-08-29"),
+      alert("2026-08-29"),
+    ]);
+    expect(series).toEqual([
+      { date: "2026-08-28", opened: 1, closed: 0 },
+      { date: "2026-08-29", opened: 1, closed: 1 },
+    ]);
+  });
+
+  it("treats a dismissal as a closure, because it is one", () => {
+    const series = postureByDate([
+      { created_at: "2026-09-01T09:00:00Z", dismissed_at: "2026-09-02T09:00:00Z" },
+    ]);
+    expect(series.find((d) => d.date === "2026-09-02")?.closed).toBe(1);
+  });
+
+  it("leaves an open finding out of the closed series entirely", () => {
+    const series = postureByDate([alert("2026-09-01")]);
+    expect(series).toEqual([{ date: "2026-09-01", opened: 1, closed: 0 }]);
+  });
+
+  it("returns days oldest first, so the chart reads left to right", () => {
+    const series = postureByDate([alert("2026-09-03"), alert("2026-08-28")]);
+    expect(series.map((d) => d.date)).toEqual(["2026-08-28", "2026-09-03"]);
+  });
+
+  it("closedOn prefers a fix over a dismissal, and null while open", () => {
+    expect(closedOn({ fixed_at: "a", dismissed_at: "b" })).toBe("a");
+    expect(closedOn({ dismissed_at: "b" })).toBe("b");
+    expect(closedOn({})).toBeNull();
   });
 });

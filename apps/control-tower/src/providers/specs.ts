@@ -255,6 +255,45 @@ function severityLabel(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+/**
+ * When a finding was closed, or null while it is open (F166).
+ * `fixed_at` for a remediated alert, `dismissed_at` for one triaged away.
+ */
+export function closedOn(alert: {
+  fixed_at?: string | null;
+  dismissed_at?: string | null;
+}): string | null {
+  return alert.fixed_at ?? alert.dismissed_at ?? null;
+}
+
+/**
+ * Opened and closed counts per day, oldest first.
+ *
+ * WHY THIS EXISTS. The board reported "88 open" and nothing else, which is the
+ * least flattering true sentence available about this repository: 323 findings
+ * have been closed. A backlog count answers "what is wrong"; posture over time
+ * answers "are we winning", and the second is the question a reader actually
+ * has.
+ */
+export function postureByDate(
+  alerts: readonly { created_at: string; fixed_at?: string | null; dismissed_at?: string | null }[],
+): { date: string; opened: number; closed: number }[] {
+  const byDay = new Map<string, { opened: number; closed: number }>();
+  const bump = (day: string, key: "opened" | "closed"): void => {
+    const row = byDay.get(day) ?? { opened: 0, closed: 0 };
+    row[key] += 1;
+    byDay.set(day, row);
+  };
+  for (const a of alerts) {
+    if (a.created_at) bump(a.created_at.slice(0, 10), "opened");
+    const closed = closedOn(a);
+    if (closed) bump(closed.slice(0, 10), "closed");
+  }
+  return [...byDay.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, v]) => ({ date, ...v }));
+}
+
 export function buildSecSpec(
   codeAlerts: CodeScanningAlert[] | null,
   depAlerts: DependabotAlert[] | null,
@@ -262,8 +301,18 @@ export function buildSecSpec(
   controls: SecureScoreControlsResponse | null,
   outages: readonly FeedOutage[] = [],
 ): Spec {
-  const openCode = (codeAlerts ?? []).filter((a) => a.state === "open");
-  const openDep = (depAlerts ?? []).filter((a) => a.state === "open");
+  // The feeds now carry EVERY state (F166), so "open" is a filter here rather
+  // than something the API decided for us - and the closed ones are the half of
+  // the story the board used to throw away.
+  const allCode = codeAlerts ?? [];
+  const allDep = depAlerts ?? [];
+  const openCode = allCode.filter((a) => a.state === "open");
+  const openDep = allDep.filter((a) => a.state === "open");
+  const closedCount =
+    allCode.filter((a) => a.state !== "open").length +
+    allDep.filter((a) => a.state !== "open").length;
+  const totalEverSeen = allCode.length + allDep.length;
+  const openCount = openCode.length + openDep.length;
 
   const isSeeded = (a: DependabotAlert): boolean =>
     (a.dependency.manifest_path ?? "").startsWith(SEEDED_PATH_PREFIX);
@@ -327,7 +376,11 @@ export function buildSecSpec(
       since: a.created_at.slice(0, 10),
     })),
     ...openDep.map((a) => ({
-      source: "Dependabot",
+      // THE CHART SAID 1 CRITICAL AND THE TABLE SAID 2 (F166). Both were right:
+      // the chart excludes seeded fixtures, the table listed everything, and
+      // nothing on screen explained the difference. Marking the row reconciles
+      // them without hiding anything.
+      source: isSeeded(a) ? "Dependabot (seeded)" : "Dependabot",
       reference: a.security_advisory.cve_id ?? a.security_advisory.ghsa_id,
       severity: normalizeSeverity(a.security_advisory.severity),
       detail: `${a.dependency.package.ecosystem}/${a.dependency.package.name}: ${a.security_advisory.summary}`,
@@ -361,9 +414,22 @@ export function buildSecSpec(
         codeAlerts === null || depAlerts === null
           ? { label: "Alert instances", value: "not reported" }
           : { label: "Alert instances", value: instanceCount },
+        // NOT A GAP IN THE POSTURE - A TEST FIXTURE (F166). These CVEs are planted
+        // in apps/vuln-lab on purpose, and V9.2 asserts that CI FAILS on them and
+        // passes once pinned. They are the evidence the pipeline blocks vulnerable
+        // builds, so a board that lists them beside real exposure reports the proof
+        // as though it were the problem. Labelled as what they are, and excluded
+        // from the severity counts above.
         depAlerts === null
-          ? { label: "Seeded for the demo", value: "not reported" }
-          : { label: "Seeded for the demo", value: seededDistinct.size },
+          ? { label: "Seeded CVEs (pipeline test)", value: "not reported" }
+          : {
+              label: "Seeded CVEs (pipeline test)",
+              value: seededDistinct.size,
+              trend: "flat",
+            },
+        codeAlerts === null || depAlerts === null
+          ? { label: "Findings closed", value: "not reported" }
+          : { label: "Findings closed", value: closedCount, trend: "down" },
         codeAlerts === null || depAlerts === null
           ? { label: "Critical (open)", value: "not reported" }
           : {
@@ -405,6 +471,34 @@ export function buildSecSpec(
       unit: "%",
     });
   }
+  // POSTURE OVER TIME, not a backlog snapshot (F166). Two series on one chart:
+  // what arrived, and what was dealt with. The shape is lumpy - most of this
+  // estate's findings arrived and were closed on the day CodeQL first swept every
+  // image - and that is the truth about a repository twelve days old rather than
+  // a reason to draw something smoother.
+  const posture = postureByDate([...allCode, ...allDep]);
+  if (posture.length >= 2) {
+    components.push({
+      type: "barChart",
+      title: "Findings opened and closed, by date",
+      description:
+        `${totalEverSeen} findings seen in total: ${closedCount} closed, ${openCount} still open. ` +
+        "Opened in amber, closed in green.",
+      data: [
+        ...posture.map((p) => ({
+          x: `${p.date} opened`,
+          y: p.opened,
+          color: SEVERITY_COLOR.high,
+        })),
+        ...posture.map((p) => ({
+          x: `${p.date} closed`,
+          y: p.closed,
+          color: "#2c6f52",
+        })),
+      ],
+    });
+  }
+
   if (openRows.length > 0) {
     components.push({
       type: "dataTable",
