@@ -67,7 +67,7 @@ that section's model does not represent at all.
 
 | Layer | Status | Note |
 |---|---|---|
-| L4 Purview labels | ⛔ **applied, never independently verified** | The labels *are* applied — the `apply` job connects S&C PowerShell and succeeds. The **audit has never run, on any run in this repository's history**. Three defects stacked behind one another: **F170** (the guard read a `verify` secret from a job declaring `environment: demo`, so it reported "not configured" every time and the job went green in six seconds having skipped everything), **F176** (`Connect-IPPSSession`'s `-CertificateThumbprint` is a Windows-only dynamic parameter, so on ubuntu the call died at binding), and **F177** (`mls-verifier` holds neither `Exchange.ManageAsApp` nor any directory role). The first two are fixed. **The third is a human G0 step** — `docs/runbooks/g0-bootstrap.md` step 11d. Until someone performs it, L4 has no verdict, and GAPs afterwards would be the correct outcome rather than a green |
+| L4 Purview labels | ✅ **verified 2026-09-03 — the first verdict it has ever had** | `[PASS] V4.1` the four labels with expected GUIDs · `[SKIP] V4.2` survival across a kill/rebuild, deferred to L11 by design · `[PASS] V4.3` the label policy publishes the taxonomy. **2 PASS + 1 by-design SKIP.** The labels were always real; nothing could prove it. Three defects stacked behind one another and each hid the next — **F175** (the guard read a `verify` secret from a `demo` job, so the job went green in six seconds having skipped the audit), **F176** (`Connect-IPPSSession`'s `-CertificateThumbprint` is Windows-only, so on ubuntu the call died at binding), and **F177** (`mls-verifier` held neither `Exchange.ManageAsApp` nor any directory role). The first two were fixed in the repo; the third needed a human tenant grant, authorised by the sponsor and performed 2026-09-03 as g0-bootstrap step 11d. See **F179**. **V4.2 is still unproven by machine** — it is deferred to L11, whose V11.2 is the criterion that had never had evidence |
 
 **Not re-run since the rebuild — no current verdict:**
 
@@ -101,13 +101,20 @@ grant-failure reporter that reported success. A rebuild is the only thing that f
 
 *Ordered by how much each unblocks.*
 
-- **BLOCKER-A — L4 needs a human.** `mls-verifier` cannot open a Security & Compliance
-  session because it holds neither `Exchange.ManageAsApp` consent nor a directory role.
-  This is not fixable in the repository: granting it is a tenant change and G3. The steps
-  are written up as **g0-bootstrap.md step 11d**, which deliberately proposes **Global
-  Reader** rather than copying `mls-purview`'s Compliance Administrator — a Verifier
-  credential that can *write* labels would itself be a finding. **Nobody has run that
-  sequence end to end**; the step says so rather than reading like a tested recipe.
+- **BLOCKER-A is CLOSED (2026-09-03).** `mls-verifier` now holds `Exchange.ManageAsApp`
+  and **Global Reader** — read-only, deliberately not the Compliance Administrator role
+  `mls-purview` carries, because a Verifier credential that can *write* labels would itself
+  be a finding. The sponsor authorised the grant; it was performed as g0-bootstrap step 11d
+  and read back. L4 returned 2 PASS + 1 SKIP.
+
+  **Performing it surfaced F178, which is the more useful outcome.** The step as written
+  told the operator to run `az ad app permission admin-consent`, which **removed three
+  `Telemetry.Probe` grants and created nothing** — it reconciles against the app
+  registration's declared permissions rather than adding to what is there. Those three roles
+  are how the authenticated DAST gets past Easy Auth, so a documentation step would have
+  silently reverted L9's scan to scanning a login page. Repaired by re-running
+  `layer-03-entra.yml` — the deploy path fixing damage done from a terminal — and step 11d
+  now uses a direct additive POST with a warning block.
 
 - **BLOCKER-B — L8's eval result never reaches its audit.** The golden-question eval runs
   and goes green; V8.2, V8.4 and V8.5 all report `no eval artifact`. Three criteria that
@@ -126,14 +133,19 @@ grant-failure reporter that reported success. A rebuild is the only thing that f
   is asserted in a comment and has never been verified. **Do not edit that limit casually**
   — raising it also enables version-update PRs that would disarm the seed.
 
-- **BLOCKER-E — a paid Fabric capacity is created into a resource group teardown deletes.**
-  `scripts/bootstrap/02-fabric-capacity.ps1` creates the capacity into `mls-rg-platform`.
-  Teardown deletes that group and **nothing recreates the capacity** — there are zero
-  references to that script under `.github/workflows/` — while `kill-rebuild.md` lists the
-  capacity among the things that persist. Invisible today because the estate is on the
-  trial capacity. **It arms on the first teardown after the G2 move to paid F2**, which is
-  to say the moment money starts being spent. Where the capacity should live is a sponsor
-  decision, not an agent's.
+- **BLOCKER-E is CLOSED (2026-09-03), by sponsor decision.**
+  `scripts/bootstrap/02-fabric-capacity.ps1` defaulted `-ResourceGroup` to
+  `<prefix>-rg-platform`, which teardown deletes and nothing recreates — so on the paid path
+  an ordinary teardown destroyed the capacity, stranded the workspace, and made the *next*
+  teardown fail suspending a dead ARM id. It armed on the first teardown after the G2 move to
+  paid F2, i.e. the moment the estate starts costing money.
+
+  The default is now `<prefix>-rg-fabric`, outside the four groups the teardown deletes by
+  name, which makes `kill-rebuild.md` § 1's long-standing claim that the capacity *persists*
+  true rather than aspirational. Teaching `infra-up.yml` to recreate it was rejected: that
+  puts a paid capacity creation on every rebuild, which is a G2 spend action happening
+  automatically. A test asserts the default is never one of the four, derived from
+  `naming.bicep` so a rebrand cannot move it back inside the blast radius.
 
 - **One open sub-item, not a blocker:** V8.1 now passes, but V8.3 still needs a Dataverse
   read role for `mls-verifier`.

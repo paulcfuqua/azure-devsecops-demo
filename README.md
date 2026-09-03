@@ -21,10 +21,12 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 >   infrastructure but **green checks that were verifying nothing**: L4's audit had never
 >   once executed, V11.2 had never had evidence on any teardown ever run, and a step whose
 >   only job is to announce a failed grant was reporting success.
-> - **L4 is blocked on a human.** The Purview labels are applied and real; the independent
->   audit of them cannot run, because `mls-verifier` was never granted Security &
->   Compliance access. That is a tenant change, so no agent may do it — the steps are in
->   `docs/runbooks/g0-bootstrap.md` step 11d. Until someone runs it, L4 has no verdict.
+> - **L4 now has a verdict — its first ever.** The Purview labels were always real; nothing
+>   could prove it, because three defects sat stacked behind one another and each hid the
+>   next. Two were fixed in the repo; the third needed a human tenant grant, which the
+>   sponsor authorised. `verify L4` reports 2 PASS + 1 by-design SKIP. Performing that grant
+>   surfaced a further finding (F178): the documented consent command silently **revoked**
+>   three existing grants, and re-running the L3 deploy path repaired it.
 > - **Two showpieces are qualified, not green.** The copilot survives a rebuild but three
 >   of its criteria skip on a missing eval artifact; the compliance board's state is five
 >   days stale because its nightly PR cannot merge (F120).

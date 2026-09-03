@@ -52,6 +52,81 @@ across `docs/`, `CLAUDE.md`, the layer runbooks and `verification/tests/`.
 
 ---
 
+### F179 — L4 has a verdict, and it took three stacked defects to get one *(2026-09-03)*
+
+`verify L4 (mls-verifier)` reported real criteria for the first time in the project's
+history:
+
+    [PASS] V4.1  Get-Label returns the 4 labels with expected GUIDs recorded to verification/reports/
+    [SKIP] V4.2  Labels survive a kill/rebuild cycle (checked again at L11)
+    [PASS] V4.3  Label policy exists, publishing the taxonomy to the demo groups
+
+**2 PASS + 1 by-design SKIP.** The labels were real the whole time — `apply` had been
+creating them correctly since 2026-09-01. What did not exist was any way to prove it.
+
+Three defects sat between the green job and this one, each hiding the next:
+
+| | |
+|---|---|
+| **F175** | the guard read a `verify` secret from a job declaring `environment: demo`, so it reported "not configured" and the audit was skipped — green in six seconds |
+| **F176** | with the guard fixed, `Connect-IPPSSession` died at parameter binding: `-CertificateThumbprint` is Windows-only and CI is ubuntu |
+| **F177** | with binding fixed, the service returned `UnAuthorized` — `mls-verifier` held neither `Exchange.ManageAsApp` nor any directory role |
+
+Only the first two were fixable in the repository. F177 needed a human to perform a tenant
+grant (g0-bootstrap step 11d), which the sponsor authorised and which was then performed
+and read back.
+
+**What this cost is the point.** A layer sat at "verified" for two days on the strength of a
+job that ran nothing, and the only reason anyone looked was a teardown-and-rebuild. Each
+fix revealed the next, and none of the three was visible from the outside — the job was
+green at every stage.
+
+**V4.2 remains unproven by machine.** It is deferred to L11, and L11's V11.2 is the
+criterion that had never had evidence (F170). The labels were confirmed to survive the
+2026-09-03 teardown by hand; *confirmed by hand* is not what the criterion is for.
+
+### F178 — the documented consent command silently revoked three grants *(fixed 2026-09-03)*
+
+Performing g0-bootstrap step 11d exactly as written destroyed part of the estate's identity
+configuration:
+
+    BEFORE (5):  Graph Directory.Read.All · Graph Policy.Read.All
+                 Telemetry.Probe × 3  (launch-ops, control-tower, compliance)
+    AFTER  (2):  Graph Directory.Read.All · Graph Policy.Read.All
+
+`az ad app permission admin-consent` **removed three grants and created nothing** — not even
+the `Exchange.ManageAsApp` role it exists to add. Both commands exited 0.
+
+**Why.** `admin-consent` does not add; it **reconciles** the principal's app-role assignments
+against the app registration's declared `requiredResourceAccess`. The three `Telemetry.Probe`
+roles are assigned directly by `Initialize-VerifierProbeRole` in `infra/entra/apply-entra.ps1`
+and appear in no manifest, so consent classified them as drift and deleted them.
+
+**What it would have broken.** Those three roles are how the authenticated DAST mints a token
+that gets past Easy Auth (F161). Without them every Easy Auth app reclassifies as `auth-wall`
+and L9's scan silently reverts to scanning a login page — the exact regression that F152
+through F163 were spent eliminating, re-introduced by a *documentation step*.
+
+**How it was repaired, and this matters more than the fix.** Not by hand: re-running
+`layer-03-entra.yml` restored all three, because `apply-entra.ps1` creates those assignments
+and calls no consent of its own. The deploy path repaired damage done from a terminal — which
+is the estate's central claim working in the direction nobody designs for.
+
+**The runbook was the defect.** Step 11d told the operator to run this. It now carries a
+warning block, uses a direct additive POST to `appRoleAssignments` instead, and records that
+the POST was confirmed working with the probe roles intact afterwards. The old text is kept
+above the correction rather than deleted.
+
+**The class, and it is not "read the docs more carefully":** a command whose name is
+*consent* — which reads as additive, granting, permissive — performs a **reconcile**, and a
+reconcile is a delete for anything not declared. The register already holds a family of
+findings about checks that could not see what they claimed to (F102, F103, F105); this is the
+inverse: an action that did more than its name admits. Both are cured by the same habit —
+read back the state afterwards and compare it to what you had, rather than trusting an exit
+code. The step already said *"VERIFY THE CONSENT, DO NOT TRUST ITS EXIT CODE"*. It was right,
+and it was still not paranoid enough: it told the reader to check whether the grant had been
+*added*, and nobody thought to check whether something had been *taken away*.
+
 ### F177 — L4's audit could never have authenticated, and nothing in the repo can fix it *(open, needs a human — 2026-09-03)*
 
 With F170 and F176 fixed, `verification/layer-04-audit.ps1` was reached for the first time

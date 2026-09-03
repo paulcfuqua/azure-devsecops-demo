@@ -275,9 +275,17 @@ any run in the repository's history, V11.2 had never had evidence on any teardow
 and a step whose only job is to announce a failed grant was reporting success. Nothing but a
 real teardown finds those.
 
-**Still open from phase 1:** L4 cannot be independently audited until a human performs
-g0-bootstrap step 11d (`mls-verifier` holds no Security & Compliance grant — a tenant change,
-so G3); and V11.2's fix is itself untested, because no teardown has happened since it landed.
+**Closed since:** L4's grant was authorised by the sponsor and performed on 2026-09-03, and
+`verify L4` returned its first verdict ever — 2 PASS + 1 by-design SKIP. Performing it
+surfaced **F178**: `az ad app permission admin-consent` RECONCILES rather than adds, so it
+silently removed the three `Telemetry.Probe` grants the authenticated DAST depends on and
+created nothing. Re-running `layer-03-entra.yml` repaired it; g0-bootstrap step 11d now uses
+a direct additive POST and carries a warning. **Never run `admin-consent` against
+`mls-verifier`** — and if someone has, re-run L3.
+
+**Still open:** V11.2's fix is untested, and so are the L5/L7 fixes from 2026-09-03 — all
+three were verified against a LIVE estate, not through a teardown. L7's especially: it fixes
+a principal id that does not survive a rebuild, so only a rebuild can prove it.
 
 **2. The apps tell the truth about what is there.** The dashboards render real rows from the
 lakehouse, and what they display matches what the estate actually contains. *F101 was the

@@ -951,24 +951,50 @@ it is still about sign-in risk and auto-labeling, nothing else.
     Office 365 Exchange Online (`00000002-0000-0ff1-ce00-000000000000`, whose service
     principal here is `b07fd90c-9aca-4b3b-bda2-28ea3eabeefe`).
 
+    > ## DO NOT RUN `az ad app permission admin-consent` ON THIS PRINCIPAL (F178)
+    >
+    > This step used to tell you to. **It is destructive here**, and it was run on
+    > 2026-09-03 exactly as written below, with this result:
+    >
+    > ```
+    > BEFORE (5):  Graph Directory.Read.All · Graph Policy.Read.All
+    >              Telemetry.Probe × 3  (launch-ops, control-tower, compliance)
+    > AFTER  (2):  Graph Directory.Read.All · Graph Policy.Read.All
+    > ```
+    >
+    > It **removed three grants and created nothing** — not even the Exchange role it
+    > exists to add. `admin-consent` RECONCILES the principal's app-role assignments
+    > against the app registration's declared `requiredResourceAccess`. The three
+    > `Telemetry.Probe` roles are assigned directly by
+    > `Initialize-VerifierProbeRole` in `infra/entra/apply-entra.ps1` and are declared
+    > in no manifest, so consent treats them as drift and deletes them.
+    >
+    > Those three roles are what the authenticated DAST uses to get past Easy Auth
+    > (F161). Losing them silently breaks L9's scan into a login-page scan again — the
+    > exact regression F152 through F163 were spent fixing.
+    >
+    > **If it has already been run:** re-run `layer-03-entra.yml`. `apply-entra.ps1`
+    > recreates the three assignments and calls no consent of its own, so the deploy
+    > path repairs this without a hand-patch. Verified 2026-09-03.
+
+    Declare the permission — this part is safe and is what puts Exchange Online into
+    `requiredResourceAccess` — then grant it with a **direct, additive POST**:
+
     ```bash
     az ad app permission add --id "$APP_ID" \
       --api 00000002-0000-0ff1-ce00-000000000000 \
       --api-permissions dc50a0fb-09a3-484d-be87-e023b12c6440=Role
-    az ad app permission admin-consent --id "$APP_ID"
-    ```
 
-    **VERIFY THE CONSENT, DO NOT TRUST ITS EXIT CODE** — on step 11c `admin-consent`
-    exited 0 and created nothing. Re-run the `appRoleAssignments` read above; if it is
-    still empty, POST the assignment directly, which works:
-
-    ```bash
     EXO_SP=$(az ad sp show --id 00000002-0000-0ff1-ce00-000000000000 --query id -o tsv)
     az rest --method post \
       --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/appRoleAssignments" \
       --headers "Content-Type=application/json" \
       --body "{\"principalId\":\"$SP_ID\",\"resourceId\":\"$EXO_SP\",\"appRoleId\":\"dc50a0fb-09a3-484d-be87-e023b12c6440\"}"
     ```
+
+    A POST to `appRoleAssignments` creates exactly one assignment and touches nothing
+    else. Confirmed working 2026-09-03 — it returned `Office 365 Exchange Online` and
+    the three probe roles were still present afterwards.
 
     **(2) A READ-ONLY role.** The permission authenticates the app; it grants it nothing to
     do. Assign **Global Reader** — directory role template
