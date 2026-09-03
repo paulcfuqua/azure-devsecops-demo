@@ -658,6 +658,35 @@ Describe 'Invoke-SqlSeed' {
             $script:Principal['mls-data-api-demo-id'] | Should -Be $script:DataApiClientId
         }
 
+        It 'treats an UPPERCASE SID from the engine as equal, because CONVERT returns one' {
+            # NOT A STYLE POINT. CONVERT(CHAR(36), CONVERT(UNIQUEIDENTIFIER, [sid])) returns
+            # an uppercase GUID; [guid]::ToString() produces a lowercase one. Observed on the
+            # live Fabric SQL analytics endpoint on 2026-09-03, where the same GUID compared
+            # UNEQUAL by case alone. PowerShell's -eq happens to be case-insensitive, so this
+            # was already correct - which is precisely the kind of accidental correctness that
+            # breaks the day someone tightens a comparison. The boundary normalises.
+            Mock Invoke-SeedSqlCommand -ModuleName $script:ModuleName {
+                if ($Query -match 'FROM sys\.database_principals\s*\r?\n?WHERE') {
+                    return @(@{ type_desc = 'EXTERNAL_USER'; sid_guid = $script:DataApiClientId.ToUpperInvariant() })
+                }
+                if ($Query -match 'COUNT_BIG') { return @(@{ n = [int64]1 }) }
+                return @()
+            }
+            $result = Set-SeedWorkloadUser -Connection $script:Connection `
+                -PrincipalName 'mls-data-api-demo-id' -ClientId $script:DataApiClientId -Confirm:$false
+            $result.Action | Should -Be 'already correct' `
+                -Because 'a correct grant read back in a different case is still a correct grant'
+
+            # AND THE ASSERTION THAT IS NOT A MIRROR. The line above passes with the
+            # normalisation REMOVED, because PowerShell's -eq is case-insensitive - so on
+            # its own it tests the language, not this code. What has to hold is that the
+            # boundary itself normalises, so a future -ceq or a T-SQL comparison against a
+            # BIN2 collation cannot resurrect the trap.
+            $read = Get-SeedWorkloadUser -Connection $script:Connection -PrincipalName 'mls-data-api-demo-id'
+            $read.SidGuid | Should -BeExactly $script:DataApiClientId.ToLowerInvariant() `
+                -Because 'Get-SeedWorkloadUser must hand back a normalised GUID whatever case the engine used'
+        }
+
         It 'throws when the user exists with the wrong SID after the writes ran' {
             # Assert the effect, not the exit code: every statement can run without
             # throwing and leave the wrong thing behind.

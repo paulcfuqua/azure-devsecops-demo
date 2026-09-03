@@ -955,13 +955,19 @@ jobs:
           "@
           $row = Invoke-Sqlcmd -ServerInstance $sqlFqdn -Database $sqlDb -AccessToken $sqlToken `
             -Query $checkQuery -TrustServerCertificate -ErrorAction Stop
-          $sidGuid = if ($row) { "$($row.sid_guid)".Trim() } else { '' }
+          # LOWERCASED BOTH SIDES. CONVERT(CHAR(36), ...) returns an UPPERCASE GUID while
+          # az returns a lowercase one; PowerShell -ne is case-insensitive so this is
+          # already correct, and normalising makes it correct BY CONSTRUCTION rather than
+          # by a default someone could reasonably tighten. Observed on the live SQL
+          # analytics endpoint on 2026-09-03: the same GUID compares unequal by case alone.
+          $sidGuid = if ($row) { "$($row.sid_guid)".Trim().ToLowerInvariant() } else { '' }
+          $wantedSid = "$($identity.clientId)".Trim().ToLowerInvariant()
 
           if (-not $sidGuid) {
             Write-Host "::error title=F20/F172 grant did not take effect::'$identityName' does not exist in $sqlFqdn/$sqlDb after the grant pass ran without throwing. Nothing in this path asks Microsoft Graph any more, so this is NOT the Directory Readers problem: check that mls-github-deployer is still the server's Microsoft Entra admin (L6 sets it) and that $sqlDb is the database data-api reads."
             exit 1
           }
-          if ($sidGuid -ne $identity.clientId) {
+          if ($sidGuid -ne $wantedSid) {
             Write-Host "::error title=F172 contained user has the wrong SID::'$identityName' exists in $sqlFqdn/$sqlDb with SID $sidGuid, but this identity's clientId is $($identity.clientId). A login presenting its token will be refused. This is what a user left behind by a PREVIOUS identity of the same name looks like; Set-SeedWorkloadUser drops and recreates in that case, so seeing it here means the drop did not happen."
             exit 1
           }

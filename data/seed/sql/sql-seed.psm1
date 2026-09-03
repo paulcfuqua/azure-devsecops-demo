@@ -387,10 +387,19 @@ WHERE [name] = N'$PrincipalName';
     if ($rows.Count -eq 0 -or $null -eq $rows[0]) {
         return [pscustomobject]@{ Exists = $false; TypeDescription = ''; SidGuid = '' }
     }
+    # LOWERCASED HERE, ON PURPOSE. CONVERT(CHAR(36), ...) returns an UPPERCASE GUID and
+    # [guid]::ToString() produces a lowercase one, so the two never match textually. Every
+    # comparison in this module happens to be a PowerShell -eq/-ne, which is
+    # case-insensitive and so correct today - but that is luck rather than design: the
+    # moment someone writes -ceq, or moves the comparison into T-SQL against a Fabric
+    # warehouse's default BIN2 collation, a CORRECT grant reports as a wrong SID.
+    # Observed on the live SQL analytics endpoint, 2026-09-03: the same GUID compared
+    # unequal by case alone. Normalising at the boundary removes the trap instead of
+    # documenting it.
     return [pscustomobject]@{
         Exists          = $true
         TypeDescription = "$(Get-QueryScalar -Result $result -Name 'type_desc')".Trim()
-        SidGuid         = "$(Get-QueryScalar -Result $result -Name 'sid_guid')".Trim()
+        SidGuid         = "$(Get-QueryScalar -Result $result -Name 'sid_guid')".Trim().ToLowerInvariant()
     }
 }
 
