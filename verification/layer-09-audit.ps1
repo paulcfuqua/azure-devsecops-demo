@@ -11,13 +11,14 @@
       V9.2  A seeded CRITICAL image fails CI (negative test) then passes after pin.
       V9.3  SBOM artifact present + SPDX-valid.
       V9.4  ZAP report artifact exists with 0 High.
-      V9.5  Defender plan toggles on -> off leaving state Off.
+      V9.5  Defender for Containers is ENABLED (the plan protects the estate).
       V9.6  Defender for Cloud actually produces posture for this subscription.
 
     GitHub is read with the Verifier's own read token (spec F8); Defender state is read
-    with Reader. The Defender enable/disable round-trip itself is the deploy workflow's
-    G2-gated action - this audit only observes its Activity Log trail, which is what
-    proves the toggle was exercised rather than merely never-enabled.
+    with Reader. Enabling or disabling a plan is the deploy workflow's G2-gated action -
+    this audit only observes the resulting state, and reports the Activity Log trail
+    beside it without requiring one (F165: a quiet day with no pricings writes is the
+    normal case, not a failure).
 
 .EXAMPLE
     ./layer-09-audit.ps1 -SubscriptionId <sub> -LayerRunId 123 -ReleaseTag v0.9.0 -ZapRunId 124
@@ -359,8 +360,27 @@ function Test-DefenderPosture {
 }
 
 function Test-DefenderPlanState {
-    <# V9.5 - current tier Free (the ARM representation of Off) AND the paired
-       Standard-then-Free writes in the Activity Log, proving the toggle was exercised. #>
+    <#
+    V9.5 - Defender for Containers is enabled.
+
+    THIS CRITERION WAS BUILT ON A FALSE PREMISE (F165), and the sponsor named it.
+    It required the plan to end in `Free` - the ARM representation of OFF - plus
+    paired Standard-then-Free writes proving a toggle round-trip. That encoded an
+    assumption nobody had stated: that this estate's normal condition is Defender
+    switched OFF, and the plan is turned on only briefly to demonstrate that
+    turning it on works.
+
+    For a security demo that is backwards. Decision, 2026-09-02: the plan stays on.
+    It costs ~USD 0.29/day, is on a free trial until 2026-10-01 which outlasts the
+    demo window, and is one of the five plans whose enablement took Defender's
+    assessment surface from 0 to 6 findings in seconds (F153). The old text even
+    called an enabled security control "a cost leak".
+
+    So it now asserts what the estate actually intends: the plan is Standard. A
+    DISABLED plan is the failure, and the remedy is to enable it - a G2 spend
+    decision, so the message says so rather than telling someone to switch the
+    protection off immediately.
+    #>
     param(
         [Parameter(Mandatory)][string]$PlanName,
         [Parameter(Mandatory)][string]$ActivityLogOffset
@@ -375,17 +395,17 @@ function Test-DefenderPlanState {
             '--output', 'json'
         ))
     $writes = @($events | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'op')" -like '*write*' })
-    if ($tier -ne 'Free') {
-        return New-MlsCheckResult -Passed $false -Observed "pricingTier = '$tier', expected 'Free'" -Final `
-            -Detail 'Defender left on is a cost leak: disable immediately with scripts/defender/toggle-containers-plan.ps1 -Disable (a spend decrease needs no gate), then root-cause why the layer''s disable step failed (L09.md Rollback).'
+    if ($tier -ne 'Standard') {
+        return New-MlsCheckResult -Passed $false -Observed "pricingTier = '$tier', expected 'Standard'" -Final `
+            -Detail 'Defender for Containers is not protecting this estate. Enable it with scripts/defender/toggle-containers-plan.ps1 -Enable. That is a SPEND INCREASE and therefore G2: state the cost delta (~USD 0.29/day, prorated) and the duration, then wait for a human. Check the free trial first - az security pricing show -n Containers --query freeTrialRemainingTime - because while it runs the delta is zero.'
     }
-    if ($writes.Count -lt 2) {
-        return New-MlsCheckResult -Passed $false `
-            -Observed "pricingTier = Free, but only $($writes.Count) Microsoft.Security/pricings write event(s) in the last $ActivityLogOffset" `
-            -Detail 'The paired Standard-then-Free writes prove the toggle was exercised rather than merely never-enabled. Foundational CSPM stays on (free, spec F10) and is out of scope for this check.'
-    }
+    # The Activity Log window is REPORTED, not asserted. It used to be the proof
+    # that the plan could be toggled, which mattered while the plan was expected
+    # to be off. Now that it is deliberately on, a run with no pricings writes is
+    # the NORMAL case - nobody changed anything - and failing on that would make
+    # the criterion red on every quiet day.
     return New-MlsCheckResult -Passed $true `
-        -Observed "pricingTier = Free with $($writes.Count) pricings write event(s) in the layer window (toggle exercised)"
+        -Observed "pricingTier = Standard (enabled); $($writes.Count) pricings write event(s) in the last $ActivityLogOffset"
 }
 
 function Invoke-Main {
@@ -462,9 +482,9 @@ function Invoke-Main {
     # toggle, exercised then disabled) - the opposite of a protection being in place, so
     # mapping it to a scanning/detection requirement would misrepresent what it proves.
     Invoke-MlsCriterion -Context $context -Id 'V9.5' -Control @() `
-        -Description 'Defender plan toggles on -> off leaving state Off' `
+        -Description 'Defender for Containers is enabled (the plan protects the estate)' `
         -Command "az security pricing show --name $DefenderPlanName --query `"{tier:pricingTier}`"`naz monitor activity-log list --offset $ActivityLogOffset --query `"[?contains(operationName.value,'Microsoft.Security/pricings')].{op:operationName.value, status:status.value, time:eventTimestamp}`"" `
-        -Expected 'pricingTier == "Free" AND the paired Standard-then-Free write events inside the layer window' `
+        -Expected 'pricingTier == "Standard" - the estate deliberately runs this plan (F165); pricings write events are reported, not required' `
         -RetryWindowMinutes 5 `
         -Test { Test-DefenderPlanState -PlanName $DefenderPlanName -ActivityLogOffset $ActivityLogOffset } | Out-Null
 
