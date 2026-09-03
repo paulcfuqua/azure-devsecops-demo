@@ -139,6 +139,27 @@ Describe 'infra/entra/teardown.ps1' {
             $userDeletes.Count | Should -Be $script:UserCount
         }
 
+        It 'never targets a G0 bootstrap identity, whatever the manifest gains' {
+            # bootstrapAppRegistrations declares the OIDC deployer, the verifier and the
+            # certificate-bearing Purview app so L3's V3.1 drift sweep can tell them from
+            # an undeclared registration. This teardown reads appRegistrations ONLY, and
+            # that has to stay true: deleting the deployer would remove the identity every
+            # future deploy authenticates as, and deleting mls-purview would destroy a
+            # hand-minted X.509 credential no script in this repository can reissue.
+            # Neither is recoverable by re-running anything.
+            Invoke-TeardownForTest | Out-Null
+            $manifest = Get-FreshManifest
+            $bootstrap = @($manifest.bootstrapAppRegistrations)
+            $bootstrap.Count | Should -BeGreaterThan 0 -Because 'the guard is vacuous if the manifest declares none'
+            foreach ($identity in $bootstrap) {
+                $script:DeleteLog | Should -Not -Contain "applications/id-$($identity.displayName)"
+                foreach ($deleted in $script:DeleteLog) {
+                    $deleted | Should -Not -BeLike "*$($identity.displayName)*" `
+                        -Because "$($identity.displayName) is created out of band at G0 and cannot be recreated by any deploy"
+                }
+            }
+        }
+
         It 'deletes the exact object matching each manifest entry''s identity, not merely the right COUNT' {
             # The missing test class the review named directly: a lookup that
             # returns an arbitrary object of the right count is indistinguishable

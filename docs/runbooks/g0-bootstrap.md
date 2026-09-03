@@ -186,8 +186,16 @@ path ($0).
 > **Real presenters** (colleagues signing in during a live demo) are added in the M365
 > admin center **only**, never to `manifest.json` — that file is committed to a public
 > repo and CLAUDE.md hard rule 4 keeps it fictional. This is safe for verification: V3.1's
-> drift sweep covers `mls`-prefixed *groups and app registrations* only and never sweeps
+> drift sweep covers prefixed *groups and app registrations* only and never sweeps
 > users, so extra real accounts do not trip it.
+>
+> **A prefixed group or app registration created out of band is a different matter — it
+> trips the sweep, and is meant to.** The three identities this runbook creates by hand
+> (`mls-github-deployer`, `mls-verifier` at item C3, `mls-purview` at 11c) are exempt only
+> because `infra/entra/manifest.json` declares them under `bootstrapAppRegistrations`, a
+> key L3 never applies. Create a fourth and you must declare it there too, or L3 stops
+> (F167). The prefix itself is resolved from `MLS_COMPANY_PREFIX`, not written into the
+> audit — a hardcoded `mls` in that exemption list was F168.
 
 Recommended sequence: activate **every trial on day 0**, alongside the subscription. Under
 the 30-day master clock there is no reason to stagger — M365 E5 (30 days) matches the
@@ -841,6 +849,26 @@ it is still about sign-in risk and auto-labeling, nothing else.
     gh secret   set PURVIEW_CERT_PASSWORD --env demo
     ```
 
+    **AND DECLARE IT IN `infra/entra/manifest.json` UNDER `bootstrapAppRegistrations`,
+    or L3 fails.** V3.1 sweeps the tenant for prefixed groups and app registrations the
+    manifest does not declare, and this one is prefixed. It was created here on
+    2026-09-01 and declared nowhere a check could read, so the next run of that sweep —
+    the 2026-09-03 rebuild — reported it as drift and stopped L3 (**F167**). The
+    declaration *is* the exemption: the sweep exempts per name, not per pattern, so
+    adding a bootstrap identity stays a deliberate act with a diff.
+
+    **Do NOT add it to `appRegistrations`.** `apply-entra.ps1` iterates that array and
+    create-if-absents every entry, which would mean two things and both are worse than
+    the drift. On a tenant where `mls-purview` exists, `mls-github-deployer` holds
+    `Application.ReadWrite.OwnedBy` — covering only registrations **it** created — and
+    gets a 403 updating one it does not own. On a tenant where it does not (a fresh
+    clone, or after a G3 teardown), L3 mints an **impostor**: an `mls-purview` with no
+    certificate, no `Exchange.ManageAsApp` and no Compliance Administrator role, while
+    `PURVIEW_APP_ID` still names the old GUID — and **V3.1 would go green on it**,
+    because a registration resolving to exactly one object is all the count asserts.
+    `bootstrapAppRegistrations` is a key L3 never applies, and
+    `Assert-ManifestSchema` refuses a name that appears in both arrays.
+
 12. ⚠ **Entra ID `SignInLogs`/`AuditLogs` diagnostic setting** — *added 2026-08-26 for
     finding F9* (`compliance/findings/2026-08-26-prepublication-review.md#f9`);
     *deliberately a human step, not a pipeline step — see below.* **Out of sequence
@@ -1072,10 +1100,18 @@ has run. Each one is an audit input that cannot be derived from ARM:
 
 > **All three dashboards are login-gated, and you do not have to configure that
 > (F25/F26/F36, 2026-08-28).**
-> `infra/entra/manifest.json` declares four app registrations — `mls-launch-ops-demo-app`,
-> `mls-control-tower-demo-app`, `mls-mcp-tools-demo-app` and `mls-compliance-demo-app`.
+> `infra/entra/manifest.json` declares four app registrations **under
+> `appRegistrations`** — `mls-launch-ops-demo-app`, `mls-control-tower-demo-app`,
+> `mls-mcp-tools-demo-app` and `mls-compliance-demo-app`.
 > Creating them is the **Identity & Governance workstream's** job (L3); the L7 template
 > deliberately owns no Entra writes.
+>
+> The file also declares three registrations under **`bootstrapAppRegistrations`** —
+> `mls-github-deployer`, `mls-verifier` and `mls-purview`. Those are **not** L3's to
+> create: they are the identities this runbook makes by hand, each carrying a credential
+> no pipeline can mint, and `apply-entra.ps1` never iterates that key. They are declared
+> so V3.1's drift sweep can exempt them by name rather than by a literal in the audit
+> (F167, F168). Seven names in the file, four registrations created by L3.
 >
 > **The three variables above are overrides, not prerequisites.** On a normal
 > `infra-up` the flow is entirely automatic:

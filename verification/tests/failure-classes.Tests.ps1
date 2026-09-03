@@ -588,6 +588,152 @@ Describe 'the estate can be renamed from one place' {
             -Because 'a resolver that reads naming.bicep but ignores MLS_COMPANY_PREFIX disagrees with every one that honours it'
     }
 
+    It 'no file that resolves the prefix then writes a prefixed name by hand' {
+        # The check above asks whether a file resolves the prefix AT ALL. This one asks the
+        # harder question: having resolved it, does the file then ignore its own answer?
+        #
+        # V3.1's drift sweep resolved the prefix through Get-MlsEstateNaming, threaded it
+        # into a -NamingPrefix parameter, and used it in the very message it printed two
+        # lines below - then exempted the bootstrap identities with the hardcoded literal
+        # @('mls-github-deployer', 'mls-verifier'). After MLS_COMPANY_PREFIX=acme the sweep
+        # would enumerate acme-prefixed apps, find acme-github-deployer, match neither
+        # literal, and V3.1 would fail PERMANENTLY on a correct estate. That is F90's class
+        # one turn in: not a file that forgot to resolve the prefix, but one that resolved
+        # it correctly and was then outvoted by a string sitting beside it.
+        #
+        # THE RULE, written out so it can be argued with rather than guessed at:
+        #
+        #   IN SCOPE     a non-test .ps1/.psm1 under verification/, infra/ or scripts/ that
+        #                already resolves the prefix - it names Get-MlsEstateNaming,
+        #                MLS_COMPANY_PREFIX or defaultCompanyPrefix. The right value is in
+        #                that file's hands, so a literal beside it is a second answer to a
+        #                question the file has already settled.
+        #   FLAGGED      a string found in the ABSTRACT SYNTAX TREE in one of two shapes.
+        #                (a) The WHOLE value is a prefixed name - '<prefix>-rg-apps' - which
+        #                is a name and can be nothing else. (b) The value EMBEDS a quoted
+        #                prefixed name - "displayName eq '<prefix>-verifier'" - which is the
+        #                Graph/OData, KQL and SQL filter shape, and the one this sweep first
+        #                missed. Every real filter in this repo interpolates a variable
+        #                ("...eq '$DisplayName'"), so a quoted literal there is drift by
+        #                construction.
+        #                Parsing rather than grepping is what makes the scope cheap to
+        #                defend: comments and comment-based help are not in the AST at all,
+        #                so the prose explaining this very finding in layer-03-audit.ps1,
+        #                and purview/labels.ps1's verbatim transcript of a Graph error
+        #                naming mls-flight-operations, cost nothing to exclude.
+        #   NOT FLAGGED  a prefixed name mentioned inside a longer PROSE string - a -Hint, a
+        #                -Detail, a Write-Status line. Widening (a) from "is a name" to
+        #                "contains a name" was tried and produced twelve of these and no new
+        #                defect: "read as mls-verifier (Reader covers */read)" is a sentence,
+        #                not a lookup. The two shapes above are what a NAME looks like; a
+        #                sweep that also flags English is a sweep somebody deletes.
+        #   NOT FLAGGED  a param() default. That is the override POINT, not a bypass of one -
+        #                CI passes the resolved name in, and layer-12-audit.ps1 says exactly
+        #                that where its default is written. Detected as an ancestor
+        #                ParameterAst, which covers script and function param blocks alike.
+        #   OUT          *.Tests.ps1, which assert against literal names on purpose; .md,
+        #                .yml and .json; MLS_* environment-variable and GitHub-secret
+        #                identifiers, which are their own names and not resource names; the
+        #                MlsAudit module and its Mls* functions; and naming.bicep, which is
+        #                the one place the literal belongs.
+        #
+        # WHAT THIS DOES NOT COVER, so a green run is not mistaken for total coverage: a
+        # file that never resolves the prefix is invisible here - every scripts/bootstrap
+        # param default among them. That is deliberate rather than an oversight. Whether a
+        # file resolves at all is the preceding check's question; this one holds a file to
+        # an answer it already has.
+        $prefix = Get-NamingLiteral -Name 'defaultCompanyPrefix'
+        $prefix | Should -Not -BeNullOrEmpty `
+            -Because 'the sweep must learn the prefix from naming.bicep; a sweep carrying its own copy is the defect it is looking for'
+        $escaped = [regex]::Escape($prefix)
+        # (a) the whole value is a name; (b) the value embeds a quoted name (a filter clause).
+        $wholeName = "^$escaped-[A-Za-z0-9][A-Za-z0-9._-]*$"
+        $quotedName = "['`"]$escaped-[A-Za-z0-9][A-Za-z0-9._-]*['`"]"
+
+        # Each entry exempts ONE literal, in ONE file, on ONE line shape. Context is matched
+        # against the trimmed source line, so the exemption cannot be inherited by a
+        # different use of the same name added to the same file later.
+        $allowed = @(
+            @{
+                Path    = 'infra/fabric/provision-workspace.ps1'
+                Literal = "$prefix-verifier"
+                Context = '^\[pscustomobject\]@\{\s*Label\s*='
+                Why     = 'Console display text in the workspace role-grant loop, sitting beside the unprefixed "data-api identity" and "mcp-tools identity". Nothing looks the string up - the grant is keyed on $VerifierPrincipalId - and the workspace NAME in this same file comes from Get-EstatePrefix. A rebrand makes this label stale, not the script wrong.'
+            }
+        )
+
+        $gated = [System.Collections.Generic.List[string]]::new()
+        $offender = [System.Collections.Generic.List[string]]::new()
+        $used = [System.Collections.Generic.HashSet[string]]::new()
+        $literalsSeen = 0
+
+        $roots = @('verification', 'infra', 'scripts') |
+            ForEach-Object { Join-Path $script:Root $_ } | Where-Object { Test-Path $_ }
+        foreach ($file in (Get-ChildItem -Path $roots -Recurse -Include *.ps1, *.psm1 -File)) {
+            if ($file.Name -like '*.Tests.ps1') { continue }
+            if ($file.FullName -match '[\\/](node_modules|\.git)[\\/]') { continue }
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -notmatch 'Get-MlsEstateNaming|MLS_COMPANY_PREFIX|defaultCompanyPrefix') { continue }
+            $relative = $file.FullName.Substring($script:Root.Length).TrimStart('\', '/').Replace('\', '/')
+            $gated.Add($relative)
+
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                $file.FullName, [ref]$null, [ref]$parseErrors)
+            if ($parseErrors -and $parseErrors.Count -gt 0) {
+                # A file the sweep cannot read is reported as unobservable, never as clean.
+                $offender.Add("${relative} (does not parse)")
+                continue
+            }
+
+            $strings = $ast.FindAll({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+                    $node -is [System.Management.Automation.Language.ExpandableStringExpressionAst]
+                }, $true)
+            foreach ($string in $strings) {
+                if ($string.Value -notmatch $wholeName -and $string.Value -notmatch $quotedName) { continue }
+                $literalsSeen++
+                $ancestor = $string.Parent
+                $isParameterDefault = $false
+                while ($null -ne $ancestor) {
+                    if ($ancestor -is [System.Management.Automation.Language.ParameterAst]) {
+                        $isParameterDefault = $true
+                        break
+                    }
+                    $ancestor = $ancestor.Parent
+                }
+                if ($isParameterDefault) { continue }
+                $line = $string.Extent.StartScriptPosition.Line.Trim()
+                $exemption = @($allowed | Where-Object {
+                        $_.Path -eq $relative -and $_.Literal -eq $string.Value -and $line -match $_.Context
+                    })[0]
+                if ($exemption) {
+                    $null = $used.Add("$($exemption.Path)|$($exemption.Literal)")
+                    continue
+                }
+                $offender.Add("${relative}:$($string.Extent.StartLineNumber) '$($string.Value)'")
+            }
+        }
+
+        # Non-vacuity, both halves of it. The sweep must reach the resolvers, AND the AST
+        # walk must actually see prefixed literals - a walk that matched nothing would
+        # report a clean repository in precisely the voice of a working one.
+        $gated.Count | Should -BeGreaterThan 8 `
+            -Because 'the sweep must reach every file that resolves the prefix; finding almost none means it is broken, not that the repo is clean'
+        $literalsSeen | Should -BeGreaterThan 3 `
+            -Because 'the AST walk must find prefixed literals at all - most are legitimate param() defaults, and seeing none means it matched nothing'
+
+        foreach ($entry in $allowed) {
+            $entry.Why | Should -Not -BeNullOrEmpty -Because 'an exemption without a reason is an oversight with a checkbox'
+            $used.Contains("$($entry.Path)|$($entry.Literal)") | Should -BeTrue `
+                -Because "the exemption for $($entry.Path) matches nothing any more; a stale allowance is an exemption nobody is deciding about"
+        }
+
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because 'a file that resolved the prefix and then wrote one out by hand disagrees with itself the moment MLS_COMPANY_PREFIX changes, and the literal is the half that wins (F90)'
+    }
+
     It 'every consumer that PARSES the entra manifest resolves its tokens' {
         # F91 swept for files naming defaultCompanyPrefix. That was the wrong signal, and
         # the miss took the estate offline: .github/workflows/layer-07-apps.yml parses the
