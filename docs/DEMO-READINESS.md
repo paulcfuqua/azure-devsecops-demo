@@ -24,15 +24,21 @@ below and know what to do next.*
 
 This is the claim the repository exists to make, so it goes first.
 
+**Two full cycles were run on 2026-09-03.** The second existed because the fixes from the
+first had never been through a teardown — and it found four more defects, two of them in
+the repairs the first cycle produced.
+
 | | |
 |---|---|
-| Teardown | **clean, 14 minutes** (01:58:37 → 02:12:23Z). All stages green |
+| Teardowns | **clean, ~14 minutes each** — identical both times. All stages green |
 | Rebuild wall clock | **87 minutes** for the full ordered run |
 | Deploy work inside that | **~30 minutes** |
 | Verification inside that | **~84 minutes** |
-| Resources before / after | **30 / 30** — four resource groups, one region, reproduced exactly |
-| Container apps before / after | **6 / 6**, same names and ingress shape |
-| ACA domain suffix | `happymeadow-9e15a087` → `graywave-0cb7cffc` — regenerates every rebuild, so no stored FQDN survives (F129's class) |
+| Resources before / after | **30 / 30 / 30** across both cycles — four resource groups, one region, reproduced exactly each time |
+| Container apps | **6 / 6**, same names and ingress shape |
+| ACA domain suffix | regenerates every rebuild, so no stored FQDN survives (F129's class) |
+| Log Analytics workspace | **three distinct identities across three builds** — `5c967cf4` → `87f95e84` → `e26c9dcb`. F107's purge holding across repeated cycles rather than once |
+| Managed identities | **all recreated with new principal ids**, e.g. the SQL server's `031dbb19` → `5e231db9` and data-api's client id `3dadafd7` → `ba91c8ea`. This is the condition F172 exists for, and the reason cycle 2 was worth running |
 
 **The estate deploys in half an hour and takes three times that to verify.**
 `docs/runbooks/kill-rebuild.md` § 5 budgets "~8–10 min" for the audits and attributes the
@@ -59,8 +65,8 @@ that section's model does not represent at all.
 | L2 landing zone | ✅ verified | deploy 8.3 min + verify 0.5 min. The runbook calls this an "idempotent no-op, ~1–2 min"; it is a no-op logically and still costs nine minutes of wall clock |
 | L3 Entra | ✅ verified | 4 of 4. Verify went **45.9 min → 0.9 min** once the drift sweep stopped inheriting a propagation window it could never need (F169) |
 | L5 Fabric | ✅ verified | **4 of 4**, first clean sign-off since F104/F105/F114. Seed took 4.0 min against a claimed 20–25 |
-| L6 platform | ✅ verified | 5 PASS + 2 PENDING, both PENDING by design (24 h cost-export window, 75 min SQL auto-pause). V6.8 confirms Key Vault references actually resolve; the vault recovered from soft-delete with its secrets and no human flipped anything |
-| L7 apps | ✅ verified | **7 of 7**, including V7.6. Deploy 3.8 min against a claimed 10–15 |
+| L6 platform | 🟡 **6 of 8, V6.2 failing on the rebuilt estate** | V6.1, V6.5, V6.7, V6.8 PASS; V6.3 and V6.4 PENDING by design (24 h cost-export window, 75 min SQL auto-pause). **V6.2 — a KQL query against the workspace — fails, twice, three hours apart (F182).** It reports *"the query returned no result (HTTP error, or the Reader identity cannot query this workspace)"*, which is two different diagnoses in one sentence and commits to neither. Its sibling V6.3, in the same file, names the likely mechanism exactly: the CI federated assertion expires after ~5 minutes and these audits run 14–16. **Unproven, deliberately** — see F182. V6.8 still confirms Key Vault references resolve and V6.7 that the Function Apps hold code |
+| L7 apps | ✅ **verified 7 of 7, and it is the session's strongest result** | Including **V7.6** — the data API answers with rows — against a data-api identity whose client id had just changed from `3dadafd7` to `ba91c8ea`, with **Directory Readers holding zero members**. The old path needed that privilege, bound to an identity destroyed with its resource group every teardown (F172). The fix removed the dependency rather than automating it, and the step whose job is to announce a failed grant **skipped**, where in cycle 1 it fired. A change is finished when a rebuild reproduces it; this one now is |
 | L8 Copilot Studio | 🟡 partial | **V8.1 PASS**; V8.2/V8.3/V8.4/V8.5 SKIP. Three of those skip on `no eval artifact` — the eval job succeeds and its result never reaches the audit |
 
 **Blocked, and honestly so:**
@@ -76,7 +82,7 @@ that section's model does not represent at all.
 | L1 repo / IaC / OIDC | ✅ | `oidc-login` passed inside the rebuild (V1.1); the full L1 audit has not been re-run |
 | L9 DevSecOps chain | 🟡 partial | **The DAST was re-run on the rebuilt estate and is real**: six targets *derived from Azure*, three of them authenticated, **zero High-risk alerts**. V9.5 remains the gap (needs a Defender toggle round-trip, a G2 action) |
 | L10 self-healing | ❌ chain never executed | See showpiece 3 |
-| L11 teardown / rebuild | 🟡 **down half verified, V11.2 never had evidence** | V11.1 PASSED (all resource groups absent). **V11.2 recorded SKIP** — and had done on every teardown ever run, because of F170. The criterion that proves a teardown did *not* cross the G3 tenant-object line has never once reported. Fixed 2026-09-03; **untested, because no teardown has happened since** |
+| L11 teardown / rebuild | ✅ **V11.1 and V11.2 both PASS — V11.2 for the first time ever** | The criterion proving a teardown did not cross the G3 tenant-object line has finally reported. **It took three attempts and three distinct causes**: F170 (guard read a `verify` secret from a `demo` job), F180 (`cond && '' || '-Skip…'` can never yield the empty string, so the flag was always passed), and F180's own fix (an explanatory comment inside an `args: |` literal block reached the script as argv). Each was invisible without performing a teardown. V11.3–V11.5 remain unreported — the up-phase audit has not completed a run |
 | L12 compliance | ✅ (2026-09-01) | Not re-run since the rebuild |
 
 ### The mission itself
