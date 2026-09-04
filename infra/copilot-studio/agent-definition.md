@@ -603,10 +603,35 @@ generated UI code**. That is preserved here in Microsoft's idiom.
 | Multiple cards render as **Carousel** (default) or **List** | Choose deliberately; carousel hides content on narrow viewports. |
 | No HTML, no script, no `<style>` | The whole point. A card is data. |
 
-**Where cards come from — an unresolved gap.** The two documented ways an agent emits a
-card are both authoring-canvas constructs: an **Adaptive card** attached to a Message
-node, and the interactive **Adaptive Card node**. A path where an *MCP tool returns raw
-Adaptive Card JSON that Copilot Studio auto-renders* is **not documented and was not
+**RESOLVED IN THE CLIENT, 2026-09-04 — and the gap below was right.** A generative answer
+in Copilot Studio has exactly one output channel: the **message text**. The instructions
+above tell the agent to emit an Adaptive Card, so it writes valid 1.6 card JSON into that
+text, and nothing on the Copilot Studio side promotes it to a Direct Line *attachment*.
+What reached the Ask tab was a paragraph of prose followed by a wall of raw JSON —
+observed on the deployed agent, not hypothesised.
+
+The card was real, valid and declarative the whole time; only its **transport** was text.
+`apps/control-tower/src/agent/transcript.ts` now lifts it out (`extractCardsFromText`) and
+renders it through the existing `AdaptiveCardView`. That is done in code we own rather
+than by asking Copilot Studio for a path it does not document, and it **changes nothing
+about the governance claim**: the agent still emits declarative data and never generated UI
+code. JSON that parses but is not a card is deliberately left in the prose — an agent
+quoting a tool result is saying something, and deleting it would be worse than the wall of
+JSON this fixes.
+
+**What this does NOT fix: V8.4.** The eval collects cards from `activity.attachments`
+(`apps/mcp-tools/evals/directline.ts`), which is still empty, so V8.4 continues to report
+*"no Adaptive Card payload was recorded for any question"* — correctly, because the agent
+genuinely does not send card attachments. Making V8.4 green means either sharing
+`extractCardsFromText` with the eval (it lives in `control-tower`, and `mcp-tools` depends
+on no shared package today) or authoring the card templates in topics as below. Do not
+duplicate the parser into the verification path: two copies of a parser drift, and the
+criterion would then be graded by a different implementation than the one users see.
+
+**The original gap, which stands as the durable fix.** The two documented ways an agent
+emits a card are both authoring-canvas constructs: an **Adaptive card** attached to a
+Message node, and the interactive **Adaptive Card node**. A path where an *MCP tool returns
+raw Adaptive Card JSON that Copilot Studio auto-renders* is **not documented and was not
 verified**. Two consequences:
 
 1. Do not design `apps/mcp-tools/` around returning card JSON as its primary contract

@@ -562,6 +562,98 @@ describe("transcript shaping", () => {
     expect(turn?.otherAttachments).toHaveLength(1);
   });
 
+  // A generative Copilot Studio answer has exactly ONE output channel: the message
+  // text. The agent's instructions tell it to emit an Adaptive Card, so it writes the
+  // card JSON into that text, and nothing on the Copilot Studio side promotes it to a
+  // Direct Line attachment - agent-definition.md section 8 flagged that path as an
+  // unresolved gap before any of this shipped. The result on screen is a paragraph of
+  // prose followed by a wall of raw JSON. The card is real and valid; only its
+  // transport is text, so the transcript lifts it out here.
+  const CARD_IN_TEXT =
+    'The launches table shows 227 launches in 2021 and 92 in 2026. ' +
+    '{ "$schema": "http://adaptivecards.io/schemas/adaptive-card.json", ' +
+    '"type": "AdaptiveCard", "version": "1.6", "body": [ { "type": "TextBlock", ' +
+    '"text": "Launches by Year", "weight": "Bolder" } ], "actions": [ { "type": ' +
+    '"Action.Submit", "title": "Launch Count Details", "data": { "cardId": ' +
+    '"launches-by-year" } } ] }';
+
+  it("lifts a card the agent wrote into the message text out of the prose", () => {
+    const turn = activityToTurn({ type: "message", id: "t1", text: CARD_IN_TEXT });
+    expect(turn?.text).toBe(
+      "The launches table shows 227 launches in 2021 and 92 in 2026.",
+    );
+    expect(turn?.cards).toHaveLength(1);
+    expect(turn?.cards[0]?.type).toBe("AdaptiveCard");
+    expect(turn?.cards[0]?.version).toBe("1.6");
+  });
+
+  it("lifts a card out of a fenced json block", () => {
+    const turn = activityToTurn({
+      type: "message",
+      id: "t2",
+      text: 'Here you go.\n```json\n{ "type": "AdaptiveCard", "version": "1.6" }\n```',
+    });
+    expect(turn?.text).toBe("Here you go.");
+    expect(turn?.cards).toHaveLength(1);
+  });
+
+  it("leaves JSON that is not an Adaptive Card in the text", () => {
+    // Only a card is lifted. An agent quoting a config blob or a tool result is
+    // saying something, and silently deleting it from the answer would be worse
+    // than the wall of JSON this fixes.
+    const turn = activityToTurn({
+      type: "message",
+      id: "t3",
+      text: 'The tool returned { "rows": 12, "table": "launches" } for that query.',
+    });
+    expect(turn?.cards).toHaveLength(0);
+    expect(turn?.text).toBe(
+      'The tool returned { "rows": 12, "table": "launches" } for that query.',
+    );
+  });
+
+  it("does not mistake a brace inside a string literal for the end of the card", () => {
+    const turn = activityToTurn({
+      type: "message",
+      id: "t4",
+      text: 'Done. { "type": "AdaptiveCard", "body": [ { "type": "TextBlock", ' +
+        '"text": "a } brace and a { brace" } ] }',
+    });
+    expect(turn?.text).toBe("Done.");
+    expect(turn?.cards).toHaveLength(1);
+    expect(turn?.cards[0]?.body).toHaveLength(1);
+  });
+
+  it("leaves an ordinary prose answer untouched", () => {
+    const turn = activityToTurn({
+      type: "message",
+      id: "t5",
+      text: "There are 1,200 launches in the lakehouse.",
+    });
+    expect(turn?.cards).toHaveLength(0);
+    expect(turn?.text).toBe("There are 1,200 launches in the lakehouse.");
+  });
+
+  it("prefers a real attachment and does not double-count the same card", () => {
+    // If Copilot Studio ever starts sending attachments properly, the text path
+    // must not add a second copy of the card beside it.
+    const turn = activityToTurn({
+      type: "message",
+      id: "t6",
+      text: CARD_IN_TEXT,
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: { type: "AdaptiveCard", version: "1.6" },
+        },
+      ],
+    });
+    expect(turn?.cards).toHaveLength(1);
+    expect(turn?.text).toBe(
+      "The launches table shows 227 launches in 2021 and 92 in 2026.",
+    );
+  });
+
   it("ignores activities the transcript does not show", () => {
     expect(activityToTurn({ type: "typing" })).toBeNull();
     expect(activityToTurn({ type: "conversationUpdate" })).toBeNull();
