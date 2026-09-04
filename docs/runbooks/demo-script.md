@@ -414,14 +414,15 @@ Likely questions and where the receipts live:
   two-failure G4 escalation rule.
 - *"So what percentage compliant are you?"* → **there is no such number, on purpose.**
   Counts by status and by provenance, and the cross-tab of the two. A figure blending
-  fifteen controls a human asserted with ninety-five nobody has looked at is the number
+  sixteen controls a human asserted with ninety-four nobody has looked at is the number
   you would quote to an auditor and the number that would be wrong. CI greps the emitted
   bytes for a score-shaped field and fails the run if one appears
   (`.github/workflows/compliance.yml`).
 - *"Are you claiming this estate is 800-171 compliant?"* → no, and the board will not let
-  us. Zero controls are `COMPLIANT`, nothing has been deployed, and the strongest word in
-  our register — `CLOSED` — means only *no known open finding stands against this
-  control*, which derives to `PARTIAL`. `compliance/README.md` § **Register vocabulary**
+  us. Zero controls are `COMPLIANT` **on a fully deployed and independently audited
+  estate**, and zero are machine-verified. The strongest word in our register — `CLOSED`
+  — means only *no known open finding stands against this control*, which derives to
+  `PARTIAL`. `compliance/README.md` § **Register vocabulary**
   is the written contract for that distinction.
 - *"Where did the gaps come from — are they made up?"* → a real pre-publication security
   review of this repository: 24 findings with severity, confidence, `file:line`, attack

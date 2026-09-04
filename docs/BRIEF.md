@@ -1,14 +1,13 @@
 # Project Brief: Agent-Team-Built Enterprise Azure DevSecOps Demo
 
-> This is the founding brief and the record of decisions already made, as provided by the
-> human sponsor (Paul Fuqua) on 2026-08-22. Treat it as authoritative. Amendments require
-> sponsor sign-off and are recorded in `docs/superpowers/specs/`.
+> The authoritative statement of what this project is for and what was decided. Changes
+> require sponsor sign-off and are recorded in `docs/superpowers/specs/`.
 >
-> **The founding text below is unedited.** Where a later sponsor-approved amendment
-> changes it, the amendment is listed immediately under this box and the original wording
-> is left standing — a decision record that quietly rewrites itself is not a record.
+> **Superseded wording is left standing rather than edited away**, with the change recorded
+> beneath it — a decision record that quietly rewrites itself is not a record. For what the
+> estate actually does today, read [DEMO-READINESS.md](DEMO-READINESS.md).
 
-## Amendments in force
+## Decisions in force
 
 | Date | Amendment | What it changes below |
 |---|---|---|
@@ -39,11 +38,12 @@ Three constraints on it are non-negotiable, and are the reason it is worth havin
    worse than no tool: it launders a gap into a green box.
 2. **No blended percentage, ever.** Counts by status and by provenance, and the
    cross-tabulation of the two. No score, no ratio, no "% compliant".
-3. **The board must be allowed to look bad.** On an estate that has never been deployed it
-   reports **0 COMPLIANT / 94 NOT_ASSESSED / 1 GAP of 110**, and says on its own face that
-   nothing has been deployed. That is the deliverable, not a defect to fix before showing anyone.
+3. **The board must be allowed to look bad.** On a fully deployed, independently audited
+   estate it reports **0 COMPLIANT / 15 PARTIAL / 1 GAP / 94 NOT_ASSESSED of 110**, with
+   **0 machine-verified**, and says on its own face what it could not observe. That is the
+   deliverable, not a defect to fix before showing anyone.
 
-This adds no gate. It is read-only, needs no credential, and runs pre-tenant — so it
+This adds no gate. It is read-only, needs no credential, and runs without a tenant — so it
 touches none of principles 1–5 below and none of the five gates.
 
 ## Mission

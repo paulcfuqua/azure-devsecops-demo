@@ -21,11 +21,9 @@ may still want the capability they describe.
 > `01-root-oidc.ps1`, `02-fabric-capacity.ps1` and `03-budget.ps1` — not the existence of
 > the portal work.
 
-> **2026-08-22 amendment (sponsor decision):** tenant activation is deliberately
-> deferred. Phase P (pre-tenant scaffold, see
-> `docs/superpowers/plans/2026-08-22-phase-p-pre-tenant-scaffold.md`) proceeds now;
-> this runbook executes when you are ready to switch the tenant on. The trial-rate
-> strategy below is designed so the entire demo window can run at ~$0 licensing cost.
+> **This runbook has been executed.** It is kept as the reproducible procedure for standing
+> the estate up in a new tenant, and every step below is the one that was actually run. The
+> trial-rate strategy is designed so the entire demo window runs at ~$0 licensing cost.
 >
 > **2026-08-24 amendment (sponsor decision, `specs/2026-08-24-amendment-copilot-studio.md`):**
 > the **Anthropic API key item is gone** — there is no LLM key anywhere in the system.
