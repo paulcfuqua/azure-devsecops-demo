@@ -53,6 +53,59 @@ export const AGENT_PASS_BAR = 9;
  */
 export const WARM_UP_QUESTION = "Hello — are your tools available?";
 
+/**
+ * Copilot Studio service errors that mean **the agent was never asked**, as
+ * opposed to asking and getting it wrong.
+ *
+ * These arrive as a normal agent *reply* whose text is an error banner, not as a
+ * thrown transport error — so without this the harness scores them as ordinary
+ * wrong answers. Measured 2026-09-03: the agent answered the first four golden
+ * questions correctly from the lakehouse, then the tool planner rate-limited and
+ * the remaining six returned `GenAIToolPlannerRateLimitReached` seconds apart.
+ * The artifact recorded `4/10` with `missingFacts: ['LC-39A']` and friends,
+ * which reads as an agent that does not know its own data. It knew; it was never
+ * asked.
+ *
+ * A grade of zero from a caller that was refused is the error this repository has
+ * now recorded in four subsystems (F102, F103, F105, F183). Not scoring it is the
+ * whole point: UNOBSERVABLE, never a fail.
+ */
+export const SERVICE_ERROR_PATTERNS = [
+  /RateLimitReached/i,
+  /GenAIToolPlanner\w*Error/i,
+  /\bthrottl/i,
+  /service is unavailable/i,
+] as const;
+
+/** True when a reply is the service refusing, rather than the agent answering. */
+export function isServiceError(text: readonly string[] | undefined): boolean {
+  if (!text || text.length === 0) return false;
+  return text.some((t) => SERVICE_ERROR_PATTERNS.some((p) => p.test(t)));
+}
+
+/**
+ * Pause between golden questions, so ten back-to-back turns do not trip the tool
+ * planner's quota in the first place.
+ *
+ * DECLARED, not inherited (CLAUDE.md: a check declares how long it is willing to
+ * wait, and why). Ten questions at this spacing add ~20s to a run that already
+ * takes minutes, and it is the difference between measuring the agent and
+ * measuring the quota.
+ */
+export const INTER_QUESTION_DELAY_MS = 2_000;
+
+/**
+ * How many times a throttled question is retried before it is called
+ * UNOBSERVABLE, and how long the backoff waits. Retrying converts "could not
+ * observe" into an observation where the limit is momentary; the cap stops it
+ * spending a run's budget insisting.
+ */
+export const THROTTLE_RETRIES = 2;
+export const THROTTLE_BACKOFF_MS = 15_000;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 export interface AgentEvalOptions {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
@@ -165,43 +218,76 @@ export async function runAgentEval(options: AgentEvalOptions = {}): Promise<numb
 
   const results = [];
   let passed = 0;
+  let unobservable = 0;
+  let first = true;
+  // Injectable so the unit suite does not actually wait out the pacing and the
+  // throttle backoff — the same channel the Direct Line poller already uses.
+  const pause = options.sleep ?? sleep;
 
   for (const question of goldenQuestions) {
     // Expectations are re-derived from the lakehouse with independent SQL, the
     // same way the tool suite does it — the agent is never compared to itself.
     const expected: ExpectedFact[] = await question.expected();
 
+    // Spacing, not politeness: ten back-to-back turns trip the tool planner quota.
+    if (!first) await pause(INTER_QUESTION_DELAY_MS);
+    first = false;
+
     let reply: AgentReply | undefined;
     let error: string | undefined;
-    try {
-      reply = await client.ask(question.question);
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+    let throttled = false;
+
+    for (let attempt = 0; attempt <= THROTTLE_RETRIES; attempt += 1) {
+      reply = undefined;
+      error = undefined;
+      try {
+        reply = await client.ask(question.question);
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+      throttled = error === undefined && isServiceError(reply?.text);
+      if (!throttled) break;
+      if (attempt < THROTTLE_RETRIES) {
+        log(
+          `WAIT  ${question.id.padEnd(18)} service throttled the tool planner; ` +
+            `retrying in ${(THROTTLE_BACKOFF_MS / 1000).toFixed(0)}s ` +
+            `(attempt ${attempt + 2}/${THROTTLE_RETRIES + 1})`,
+        );
+        await pause(THROTTLE_BACKOFF_MS);
+      }
     }
 
     const payload = reply ? replyPayload(reply) : undefined;
     const scoped = payload === undefined ? undefined : scopePayload(payload, question.factScope);
     const missing =
       scoped === undefined ? expected : expected.filter((fact) => !resultContains(scoped, fact));
-    const pass = error === undefined && reply?.timedOut !== true && missing.length === 0;
+    // UNOBSERVABLE IS NOT A FAIL. The agent was never asked, so it cannot be
+    // graded — scoring it would report a service quota as ignorance (F186).
+    const pass = !throttled && error === undefined && reply?.timedOut !== true && missing.length === 0;
     if (pass) passed += 1;
+    if (throttled) unobservable += 1;
 
     const latencySeconds = reply?.latencySeconds ?? 0;
     log(
-      `${pass ? "PASS" : "FAIL"}  ${question.id.padEnd(18)} ${latencySeconds.toFixed(2)}s  ` +
+      `${pass ? "PASS " : throttled ? "UNOBS" : "FAIL "} ${question.id.padEnd(18)} ${latencySeconds.toFixed(2)}s  ` +
         (pass
           ? `facts: ${expected.map((f) => f.value).join(", ")} (${reply?.cards.length ?? 0} card(s))`
-          : error
-            ? `direct line error: ${error.slice(0, 160)}`
-            : reply?.timedOut
-              ? "no agent reply before the timeout"
-              : `missing facts: ${missing.map((f) => f.value).join(", ")}`),
+          : throttled
+            ? `service refused to plan a tool call, so the agent was never asked: ${(reply?.text ?? []).join(" ").slice(0, 120)}`
+            : error
+              ? `direct line error: ${error.slice(0, 160)}`
+              : reply?.timedOut
+                ? "no agent reply before the timeout"
+                : `missing facts: ${missing.map((f) => f.value).join(", ")}`),
     );
 
     results.push({
       id: question.id,
       question: question.question,
       pass,
+      // Distinguishes "asked and wrong" from "never asked" (F186). A consumer
+      // that treats unobservable as a failure re-introduces the defect.
+      unobservable: throttled,
       latencySeconds,
       factScope: question.factScope,
       expectedFacts: expected,
@@ -228,6 +314,7 @@ export async function runAgentEval(options: AgentEvalOptions = {}): Promise<numb
     ranAt: new Date().toISOString(),
     conversationId,
     passed,
+    unobservable,
     total: goldenQuestions.length,
     passBar: AGENT_PASS_BAR,
     p95LatencySeconds: Number(p95.toFixed(3)),
@@ -237,9 +324,19 @@ export async function runAgentEval(options: AgentEvalOptions = {}): Promise<numb
   fs.writeFileSync(outPath, JSON.stringify(artifact, null, 2));
 
   log(
-    `\n${passed}/${goldenQuestions.length} passed (bar: ${AGENT_PASS_BAR}). ` +
-      `p95 ${p95.toFixed(2)}s (V8.5 budget 20s). Artifact: ${outPath}`,
+    `\n${passed}/${goldenQuestions.length} passed (bar: ${AGENT_PASS_BAR})` +
+      (unobservable > 0 ? `, ${unobservable} UNOBSERVABLE (service throttled)` : "") +
+      `. p95 ${p95.toFixed(2)}s (V8.5 budget 20s). Artifact: ${outPath}`,
   );
+  if (unobservable > 0) {
+    log(
+      `\n${unobservable} question(s) could not be asked, so this run has NO VERDICT on them. ` +
+        `That is not the agent failing — it is the service declining to plan a tool call. ` +
+        `Re-run when the quota recovers; do not read the score as an agent grade.`,
+    );
+  }
 
-  return passed >= AGENT_PASS_BAR ? 0 : 1;
+  // Unobservable questions cannot count toward the bar, and must not be silently
+  // tolerated either: a run that could not ask every question has not cleared it.
+  return unobservable === 0 && passed >= AGENT_PASS_BAR ? 0 : 1;
 }

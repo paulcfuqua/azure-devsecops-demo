@@ -477,6 +477,124 @@ describe("runAgentEval against a scripted agent", () => {
     expect(typeof artifact.p95LatencySeconds).toBe("number");
   });
 
+  it("scores a rate-limited reply UNOBSERVABLE, not a failure (F186)", async () => {
+    // Measured 2026-09-03: the agent answered four golden questions correctly and
+    // the service then rate-limited its tool planner. The harness recorded 4/10
+    // with `missingFacts: ['LC-39A']` and friends - reading a service quota as an
+    // agent that does not know its own data. It knew; it was never asked.
+    const expectations = await expectationsByQuestion();
+    const throttleAfter = 4;
+    let answered = 0;
+    const mock = directLineMock({
+      reply: (question: string): Array<Record<string, unknown>> => {
+        if (answered >= throttleAfter) {
+          return [
+            {
+              type: "message",
+              from: { id: "bot" },
+              text:
+                "An error has occurred.\nError code: GenAIToolPlannerRateLimitReached\n" +
+                "Conversation Id: X-us",
+            },
+          ];
+        }
+        answered += 1;
+        const facts = expectations.get(question) ?? [];
+        return [
+          {
+            type: "message",
+            from: { id: "bot" },
+            attachments: [
+              {
+                contentType: ADAPTIVE_CARD_CONTENT_TYPE,
+                content: card(facts.map((f) => ["fact", f])),
+              },
+            ],
+          },
+        ];
+      },
+    });
+    const outPath = tempArtifact();
+    const messages: string[] = [];
+    const code = await runAgentEval({
+      env: { DIRECTLINE_SECRET: SECRET } as NodeJS.ProcessEnv,
+      fetchImpl: mock.fetch,
+      sleep: noSleep,
+      settleMs: 0,
+      outPath,
+      log: (m) => messages.push(m),
+      logError: (m) => messages.push(m),
+    });
+
+    const artifact = JSON.parse(fs.readFileSync(outPath, "utf-8"));
+    const throttled = artifact.questions.filter((q: { unobservable: boolean }) => q.unobservable);
+
+    // The warm-up consumes one answer, so the exact split is not the point; what
+    // matters is that throttled turns are NOT counted as wrong answers.
+    expect(throttled.length).toBeGreaterThan(0);
+    expect(artifact.unobservable).toBe(throttled.length);
+    for (const q of throttled) {
+      expect(q.pass).toBe(false);
+      // The defect being fixed: these used to carry the expected values as
+      // "missing", which reads as a wrong answer.
+      expect(q.unobservable).toBe(true);
+    }
+    // No verdict is not a pass.
+    expect(code).toBe(1);
+    const text = messages.join("\n");
+    expect(text).toContain("UNOBSERVABLE");
+    expect(text).toContain("NO VERDICT");
+  });
+
+  it("retries a throttled question before calling it unobservable", async () => {
+    // Retrying converts "could not observe" into an observation where the limit is
+    // momentary. A question that recovers on retry must score as a normal PASS.
+    const expectations = await expectationsByQuestion();
+    const attempts = new Map<string, number>();
+    const mock = directLineMock({
+      reply: (question: string): Array<Record<string, unknown>> => {
+        const n = (attempts.get(question) ?? 0) + 1;
+        attempts.set(question, n);
+        if (n === 1 && question !== WARM_UP_QUESTION) {
+          return [
+            {
+              type: "message",
+              from: { id: "bot" },
+              text: "Error code: GenAIToolPlannerRateLimitReached",
+            },
+          ];
+        }
+        const facts = expectations.get(question) ?? [];
+        return [
+          {
+            type: "message",
+            from: { id: "bot" },
+            attachments: [
+              {
+                contentType: ADAPTIVE_CARD_CONTENT_TYPE,
+                content: card(facts.map((f) => ["fact", f])),
+              },
+            ],
+          },
+        ];
+      },
+    });
+    const outPath = tempArtifact();
+    const code = await runAgentEval({
+      env: { DIRECTLINE_SECRET: SECRET } as NodeJS.ProcessEnv,
+      fetchImpl: mock.fetch,
+      sleep: noSleep,
+      settleMs: 0,
+      outPath,
+      log: () => {},
+      logError: () => {},
+    });
+    const artifact = JSON.parse(fs.readFileSync(outPath, "utf-8"));
+    expect(artifact.unobservable).toBe(0);
+    expect(artifact.passed).toBe(10);
+    expect(code).toBe(0);
+  });
+
   it("asks a discarded warm-up question first, so p95 excludes the cold start", async () => {
     const asked: string[] = [];
     const mock = directLineMock({
