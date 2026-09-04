@@ -59,8 +59,26 @@ Describe 'self-heal alert selection is not spoofable by a fork PR (F14)' {
         # Without a ref= filter, an alert whose most recent instance is a
         # fork PR's own CodeQL analysis (codeql.yml runs on pull_request) is
         # "open" and in scope for healing -- the second half of F14.
-        $hits = Select-String -Path $script:WorkflowPath -Pattern 'code-scanning/alerts\?state=open&ref='
-        $hits | Should -Not -BeNullOrEmpty
+        #
+        # Matched by INTENT, not by adjacency. This asserted the literal
+        # `state=open&ref=`, so inserting tool_name=CodeQL between the two
+        # (F188) failed it without weakening the ref filter by one character.
+        # A test that breaks when a query string gains an unrelated parameter
+        # is testing the spelling, not the control.
+        Select-String -Path $script:WorkflowPath -Pattern 'code-scanning/alerts\?\S*state=open' |
+            Should -Not -BeNullOrEmpty
+        Select-String -Path $script:WorkflowPath -Pattern 'code-scanning/alerts\?\S*ref=' |
+            Should -Not -BeNullOrEmpty
+    }
+
+    It 'restricts the code-scanning listing to CodeQL, the only tool Autofix covers' {
+        # F188: this surface also carries Trivy's uploaded SARIF - the large
+        # majority of open alerts on main - and Copilot Autofix covers CodeQL
+        # alerts only. Without the filter the lane can select an alert Autofix
+        # can never fix and report "no autofix suggestion" indefinitely, which
+        # is indistinguishable from the capability being absent.
+        Select-String -Path $script:WorkflowPath -Pattern 'code-scanning/alerts\?\S*tool_name=CodeQL' |
+            Should -Not -BeNullOrEmpty
     }
 
     It 'asserts most_recent_instance.ref before the alert can drive Autofix' {

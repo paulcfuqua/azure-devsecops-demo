@@ -61,6 +61,9 @@ Describe 'layer-10-audit' {
         $script:CodeQlState = 'fixed'
         $script:DependabotState = 'fixed'
         $script:MergedBy = $script:Automation
+        # Merged by default. Set to '' for the state the chain is actually in for most of
+        # its life: auto-merge armed, PR still open, nothing merged yet.
+        $script:MergedAt = '2026-08-24T10:30:00Z'
         $script:AutoMerge = [pscustomobject]@{ enabledBy = 'github-actions[bot]' }
         $script:CheckConclusion = 'success'
         $script:PrBody = "Autofix says: $($script:AutofixDescription)"
@@ -102,7 +105,7 @@ Describe 'layer-10-audit' {
                     headRefOid       = 'autofixsha'
                     body             = $script:PrBody
                     commits          = @([pscustomobject]@{ oid = 'autofixsha' })
-                    mergedAt         = '2026-08-24T10:30:00Z'
+                    mergedAt         = $script:MergedAt
                     mergedBy         = [pscustomobject]@{ login = $script:MergedBy }
                     autoMergeRequest = $script:AutoMerge
                     mergeCommit      = $script:MergeCommit
@@ -291,6 +294,39 @@ Describe 'layer-10-audit' {
         It 'PASSES when the surface was readable, so the guard is not a blanket fail' {
             $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable 'true'
             (Get-Row -Context $context -Id 'V10.3').Status | Should -Be 'PASS'
+        }
+    }
+
+    Context 'the PR is armed but not merged yet - the state the chain is in most of the time' {
+        # Run 33845069050 (2026-09-04): the Dependabot lane armed auto-merge on PR #174 and
+        # the audit ran 35 seconds later. mergedAt was empty, so both trails passed $null to
+        # Get-RevisionAfter -MergedUtc, whose [AllowNull()][datetime] waives the null CHECK
+        # but not the type COERCION - the binder threw before the function's own
+        # `if ($null -eq $MergedUtc)` guard could run. The exception text then replaced every
+        # stage this trail had already diagnosed, so a run that knew "PR not merged" reported
+        # a PowerShell type error instead.
+        It 'reports V10.2 as not merged rather than throwing a type-conversion error' {
+            $script:MergedAt = ''
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Not -BeLike '*Cannot convert null*'
+            $row.Observed | Should -BeLike '*not merged*'
+        }
+
+        It 'reports V10.1 as not merged rather than throwing a type-conversion error' {
+            $script:MergedAt = ''
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -Not -BeLike '*Cannot convert null*'
+            $row.Observed | Should -BeLike '*not merged*'
+        }
+
+        It 'still reports the deploy stage it could not bind, so the trail is diagnosed in full' {
+            $script:MergedAt = ''
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*no new container app revision*'
         }
     }
 
