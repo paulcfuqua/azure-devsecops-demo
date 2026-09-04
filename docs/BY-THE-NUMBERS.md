@@ -81,12 +81,26 @@ strongest written claim *cannot* derive to `COMPLIANT`, and so that no blended p
 exists anywhere to paper over the difference — CI greps the emitted bytes to keep it that
 way.
 
-**Four criteria are currently red or unproven, stated here rather than discovered later.**
+**Three criteria are currently red or unproven, stated here rather than discovered later.**
 V6.2 (a KQL query as the read-only identity) and V8.4 (every visual answer an Adaptive
 Card) fail on the current estate. V8.2 records SKIP because the Verifier cannot
 independently re-derive the agent's numbers without a Fabric role it deliberately does not
-hold. L10's self-healing chain has never executed end to end. Four honest reds among
-fifty-seven, visible in the same table as the greens.
+hold. Three honest reds among fifty-seven, visible in the same table as the greens.
+
+**The self-healing chain completed end to end on 2026-09-04, for the first time.** A
+seeded CodeQL flaw in `apps/vuln-lab` → Copilot Autofix wrote the patch → PR #226 → an
+18-check gauntlet → auto-merge → a new container app revision stamped with that merge
+commit → the alert closed. Seven stages, each read from a different API, 74 seconds from
+merge to closed alert.
+
+It had never run before because it *could not*: the workflow's lane picker had no
+`schedule` arm, so on every scheduled run since the repository was created the Autofix job
+was skipped and V10.1 was structurally unreachable rather than failing. Three more defects
+were stacked behind it, each hidden by the one in front. Nothing was red — a skipped job is
+not a failed one — and the runs went green on the lane they did take. What surfaced it was
+a human reading a notification and asking why the job named after the product said
+"Skipped". That is the honest version of how this repository's hardest bugs get found, and
+it belongs beside the counts.
 
 **Azure spend is $14.74 month-to-date, and one idle database is 99% of it.** Not the
 container apps, not the Functions, not the lakehouse — the serverless SQL instance, which

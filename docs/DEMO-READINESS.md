@@ -58,7 +58,7 @@ that section's model does not represent at all.
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working, and re-proven on the rebuilt estate** | **V7.6 PASSES**: the data API answers with rows, not merely a status code. This is the criterion that exists because an empty estate once signed off 5/5; it failed on the rebuild, was root-caused and fixed in the deploy path, and now passes. **Not re-opened in a browser since the rebuild** — the API is verified, the pixels are inferred |
 | **4** | **Compliance platform** — NIST 800-171 | 🟡 **shipped, and its state is five days stale** | `verification/layer-12-audit.ps1` reported 4 PASS + 2 SKIP on 2026-09-01 and **has not been re-run since the rebuild**. `compliance/state/` holds exactly two snapshots, newest **2026-08-29**, because F120 is still open — PR #147 has carried newer state since 2026-09-01 with **zero checks** and cannot merge. Committed figures: 110 requirements, **0 COMPLIANT**, 15 PARTIAL, 1 GAP, 94 NOT_ASSESSED; provenance **0 machine-verified**, 16 asserted |
 | **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **agent survives the rebuild; the eval cannot yet grade it** | **F183 fixed and merged, so the eval finally runs**: it read the Direct Line secret as an identity holding no Key Vault role, reported the secret ABSENT rather than UNOBSERVABLE, and suppressed its own artifact — V8.2/V8.4/V8.5 skipped and L8 stayed green over an ungraded agent for the life of the project. **`layer-08-agent-eval` now uploads**, reporting 0/10, p95 4.0s, **0 tool calls**, no transport errors. **That result is not yet interpretable (F184)**: the eval connects with the Direct Line secret and no user token, and this agent authenticates manually (Entra ID V2, see F128), so a healthy agent may decline tools to an unauthenticated caller and produce exactly this signature. **The agent itself survives the rebuild** — sponsor-confirmed; the browser failure was an expired minted token with the sign-in button correctly offered, which is F142/F150 working. Next: can the eval authenticate as a user, and if not, should it report UNOBSERVABLE rather than 0/10 |
-| **3** | **Self-healing code** | 🟡 **chain works, nothing to heal** | The token half is done and proven; V10.3 passes and the Dependabot lane runs. What is missing is a **subject**: Dependabot opens no *security* PR for the three seeded CVEs (**F126**, cause unresolved). It does open version-update PRs — #173 and #174 are open now — so the distinction is specifically about security advisories. **Not re-run since the rebuild** |
+| **3** | **Self-healing code** | ✅ **it healed something, on 2026-09-04, for the first time** | **Copilot Autofix wrote a real fix and the chain merged and deployed it unattended.** Seeded alert #2 `js/command-line-injection` → Autofix `status=success` → PR #226 → 18-check gauntlet → auto-merge `d77aabf` → witness revision `--0000003` stamped with that commit → alert `state=fixed`. **74 seconds from merge to closed alert.** Autofix replaced `cp.exec` on an interpolated shell string with `cp.execFile("git", [...])` on an argv array — the textbook fix, which we did not write. It had never run before because it *could not*: **F188**, no `schedule` arm in the lane picker, so Autofix was skipped on every scheduled run the repository has ever made. Three more defects were stacked behind it (**F188** tool filter, **F188b** missing labels, **F188c** the witness path) — see the blocker tree. The **Dependabot** lane still has no subject (**F126**, unresolved). **V10.1's verdict has not been re-run**, so this is an evidence trail, not a Verifier sign-off |
 
 ### The twelve layers
 
@@ -85,7 +85,7 @@ that section's model does not represent at all.
 |---|---|---|
 | L1 repo / IaC / OIDC | ✅ | `oidc-login` passed inside the rebuild (V1.1); the full L1 audit has not been re-run |
 | L9 DevSecOps chain | 🟡 partial | **The DAST was re-run on the rebuilt estate and is real**: six targets *derived from Azure*, three of them authenticated, **zero High-risk alerts**. V9.5 remains the gap (needs a Defender toggle round-trip, a G2 action) |
-| L10 self-healing | ❌ chain never executed | See showpiece 3 |
+| L10 self-healing | ✅ **the chain completed end to end on 2026-09-04 — the first time in this repository's history** | All seven stages, on the seeded vuln-lab flaw, each read from an independent API: alert **#2** `js/command-line-injection` in `apps/vuln-lab/seeds/component-history.js` → **Copilot Autofix** `status=success` (run 33872767439) → **PR #226** labelled `security,self-heal` → 18-check gauntlet green → **auto-merged by automation** 12:35:39Z, merge commit `d77aabf` → witness revision `mls-vuln-lab-demo-ca--0000003` created 12:36:19Z carrying `MLS_HEAL_COMMIT=d77aabf` → alert **`state=fixed`** 12:36:53Z. Autofix's own diff replaced `cp.exec` on an interpolated shell string with `cp.execFile("git", [...])` on an argv array. **Four defects stacked behind one another and each hid the next** — **F188** (no `schedule)` arm in the lane picker, so `if: kind == 'code-scanning'` was false on every scheduled run and Autofix had *never* been invoked; V10.1 was unreachable, not merely failing), **F188** second half (the listing did not filter `tool_name=CodeQL`, and 37 of 44 open alerts are Trivy, which Autofix does not cover), **F188b** (`gh pr create --label` validates labels *before* opening anything and neither `security` nor `self-heal` had ever existed, so the first working run stranded a real fix on a branch), and **F188c** (only `apps/vuln-lab/**` merges re-stamp the witness, so stage 6 was unreachable for a heal anywhere else — proven by PR #225, a correct Autofix heal in `apps/mcp-tools` that merged itself and still could not complete a trail). **V10.1's own verdict has not been re-run since**, so this is an evidence trail, not a Verifier sign-off |
 | L11 teardown / rebuild | ✅ **V11.1 and V11.2 both PASS — V11.2 for the first time ever** | The criterion proving a teardown did not cross the G3 tenant-object line has finally reported. **It took three attempts and three distinct causes**: F170 (guard read a `verify` secret from a `demo` job), F180 (`cond && '' || '-Skip…'` can never yield the empty string, so the flag was always passed), and F180's own fix (an explanatory comment inside an `args: |` literal block reached the script as argv). Each was invisible without performing a teardown. V11.3–V11.5 remain unreported — the up-phase audit has not completed a run |
 | L12 compliance | ✅ (2026-09-01) | Not re-run since the rebuild |
 
@@ -150,6 +150,49 @@ grant-failure reporter that reported success. A rebuild is the only thing that f
   `open-pull-requests-limit: 0` on `/apps/vuln-lab`, whose exemption for security updates
   is asserted in a comment and has never been verified. **Do not edit that limit casually**
   — raising it also enables version-update PRs that would disarm the seed.
+
+  **This described the DEPENDABOT lane, and it hid a larger fact about the other one
+  (2026-09-04).** The CodeQL lane had a subject the whole time — seven open CodeQL alerts,
+  one of them the seeded vuln-lab flaw the criterion was written for — and never once
+  looked at it. The chain completed end to end that day, on that alert, and the layer row
+  above carries the trail. Four defects, each hiding the next:
+
+  - **F188.** The lane picker's `case "${EVENT}"` had arms for `workflow_dispatch` and
+    `repository_dispatch` and **none for `schedule`**, which is the workflow's normal
+    trigger. Every scheduled run fell through to the `kind="dependabot"` initialiser, so
+    `if: kind == 'code-scanning'` was false and **Copilot Autofix was never invoked, on any
+    run, since the repository was created**. V10.1 was unreachable, not failing.
+  - **F188, second half.** The code-scanning listing did not filter `tool_name=CodeQL`.
+    That surface also carries Trivy's uploaded SARIF — 37 of 44 open alerts on `main` — and
+    Autofix covers CodeQL only, so the lane could pick an alert it can never fix and report
+    "no autofix suggestion" forever, which is indistinguishable from the capability being
+    absent.
+  - **F188b.** `gh pr create --label` validates labels **before** opening anything, and
+    neither `security` nor `self-heal` had ever existed in this repository. The first run
+    that reached Autofix got a real fix, committed it to a branch, then exited 1 and
+    stranded it. The workflow now creates both itself with `--force`, because doing it by
+    hand fixes one clone and the rebuild walks straight back into it.
+  - **F188c.** Only a merge touching `apps/vuln-lab/**` re-stamps the deployment witness,
+    so V10.1 stage 6 is unreachable for a heal anywhere else. **PR #225 proved it**: a
+    correct Autofix patch in `apps/mcp-tools`, gauntlet green, merged itself, and still
+    could not complete a trail. The lane now prefers an alert whose heal can finish —
+    F137's rule, applied to the second lane.
+
+  **Nothing about any of this was red.** A skipped job is not a failed one, and every run
+  went green on the lane it did take. It surfaced because a human looked at a notification
+  and asked why the job named after the product said "Skipped".
+
+- **F187 — the L10 audit crashed instead of reporting, and the guard was dead code.**
+  `Get-RevisionAfter` declared `[AllowNull()][datetime]$MergedUtc` and guarded its body with
+  `if ($null -eq $MergedUtc)`. `[AllowNull()]` waives null *validation* but not type
+  *coercion*, and `$null` does not convert to a value type — so the binder threw before the
+  guard could run, and that guard had never executed since the day it was written. The
+  state that triggers it is the chain's most ordinary one: a PR armed for auto-merge and not
+  merged yet. Both trails had already diagnosed every other stage, and the exception text
+  replaced all of it. `verification/tests/failure-classes.Tests.ps1` now sweeps for the
+  shape — carrying its own detector test, because the first draft of that sweep **passed
+  against the very line it was written to catch** (a variable assigned in a Pester
+  `Describe` body is set during discovery and gone before the `It` runs).
 
 - **BLOCKER-E is CLOSED (2026-09-03), by sponsor decision.**
   `scripts/bootstrap/02-fabric-capacity.ps1` defaulted `-ResourceGroup` to
