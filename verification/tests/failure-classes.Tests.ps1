@@ -145,6 +145,79 @@ Describe 'error predicates read the field that carries the value' {
     }
 }
 
+Describe 'a null-tolerant parameter is typed so null can actually reach it' {
+
+    # F187: Get-RevisionAfter declared [AllowNull()][datetime]$MergedUtc and guarded its body
+    # with `if ($null -eq $MergedUtc)`. [AllowNull()] waives the null VALIDATION but not the
+    # type COERCION, and $null does not convert to a value type - so the binder threw before
+    # the guard could run, and the guard was dead code from the day it was written. The audit
+    # crashed with a PowerShell type error on the single most ordinary state the self-heal
+    # chain has: a PR armed for auto-merge and not merged yet. Nullable reference types
+    # ([string], [object], arrays) are fine; only value types coerce.
+    BeforeAll {
+        # Declared in BeforeAll, not in the Describe body: a variable assigned in the body is
+        # set during DISCOVERY and is gone by the time an It runs, which silently turned the
+        # value-type alternation into an empty group that matched nothing. The first draft of
+        # this sweep passed against the very line it was written to catch.
+        $script:ValueType = 'datetime|datetimeoffset|timespan|guid|int|int32|int64|long|short|byte|double|single|float|decimal|bool|boolean|char'
+
+        function Test-CoercedNullParameter {
+            <# True when a parameter declares [AllowNull()] on a type $null cannot bind to. #>
+            param([Parameter(Mandatory)][AllowEmptyString()][string]$Line)
+            if ($Line -match '^\s*#') { return $false }
+            # A parameter declaration opens its line with the attribute list. Anchoring here
+            # is what stops this sweep matching the fixture strings in the It above, which
+            # reach the detector as arguments rather than as declarations - without that,
+            # the check reports its own test data as a defect and can never go green.
+            if ($Line -notmatch '^\s*\[') { return $false }
+            if ($Line -notmatch '\[AllowNull\(\)\]') { return $false }
+            # The type bracket immediately preceding the parameter variable is the one that
+            # coerces. [AllowNull()] and friends carry parentheses so they cannot match this
+            # class; [nullable[datetime]] matches it but is not a bare value type.
+            if ($Line -notmatch '\[([A-Za-z0-9_.\[\]]+)\]\s*\$[A-Za-z_]\w*') { return $false }
+            return ($Matches[1].Trim().ToLowerInvariant() -match "^($script:ValueType)$")
+        }
+    }
+
+    It 'the detector fires on the shape that caused F187, and not on its fix' {
+        # Without this the sweep below is unfalsifiable: a predicate that never returns true
+        # reports a clean repository forever.
+        Test-CoercedNullParameter '        [AllowNull()][datetime]$MergedUtc,' | Should -BeTrue
+        Test-CoercedNullParameter '        [AllowNull()][int]$Count' | Should -BeTrue
+        Test-CoercedNullParameter '        [AllowNull()][nullable[datetime]]$MergedUtc,' | Should -BeFalse
+        Test-CoercedNullParameter '        [AllowEmptyString()][AllowNull()][string]$MergeCommit' | Should -BeFalse
+        Test-CoercedNullParameter '        # [AllowNull()][datetime] in a comment is prose' | Should -BeFalse
+    }
+
+    It 'finds AllowNull parameters to check, so the assertion is not vacuous' {
+        $found = 0
+        foreach ($file in (Get-ChildItem -Path $script:RepoRoot -Recurse -Include '*.ps1', '*.psm1' -File)) {
+            if ($file.FullName -match '[\\/](node_modules|\.git)[\\/]') { continue }
+            foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+                if ($line -match '^\s*#') { continue }
+                if ($line -match '\[AllowNull\(\)\]') { $found++ }
+            }
+        }
+        $found | Should -BeGreaterThan 0 -Because 'a sweep that examines nothing cannot fail'
+    }
+
+    It 'no [AllowNull()] parameter is typed as a non-nullable value type' {
+        $offender = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($file in (Get-ChildItem -Path $script:RepoRoot -Recurse -Include '*.ps1', '*.psm1' -File)) {
+            if ($file.FullName -match '[\\/](node_modules|\.git)[\\/]') { continue }
+            $lines = Get-Content -LiteralPath $file.FullName
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if (-not (Test-CoercedNullParameter $lines[$i])) { continue }
+                $relative = $file.FullName.Substring($script:RepoRoot.Length).TrimStart('\', '/').Replace('\', '/')
+                $offender.Add("${relative}:$($i + 1)")
+            }
+        }
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because '[AllowNull()] does not stop a value type coercing $null; use [nullable[T]] or the guard below it is unreachable (F187)'
+    }
+}
+
 Describe 'every job that runs is bounded' {
 
     BeforeAll {

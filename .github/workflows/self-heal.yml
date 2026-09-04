@@ -248,6 +248,8 @@ jobs:
           INPUT_NUMBER: ${{ inputs.alert_number }}
           PAYLOAD_KIND: ${{ github.event.client_payload.alert_kind }}
           PAYLOAD_NUMBER: ${{ github.event.client_payload.alert_number }}
+          # Alternates the scheduled run between the two lanes (F188).
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
 
@@ -262,6 +264,17 @@ jobs:
             repository_dispatch)
               kind="${PAYLOAD_KIND:-dependabot}"
               number="${PAYLOAD_NUMBER}"
+              ;;
+            schedule)
+              # F188: THERE WAS NO schedule ARM, so a scheduled run fell through to the
+              # "dependabot" initialiser above and the autofix job's
+              # `if: kind == 'code-scanning'` was false EVERY TIME. Copilot Autofix - the
+              # headline of showpiece #3 - was skipped on all 20+ runs in this repository's
+              # history, and V10.1 could not pass on a scheduled run by construction. The
+              # gap was invisible because a skipped job is not a failed one, and the run
+              # that mattered still went green on the lane it did take.
+              # Alternate so both lanes are exercised and both V10.1 and V10.2 get evidence.
+              if [ $((RUN_NUMBER % 2)) -eq 0 ]; then kind="code-scanning"; fi
               ;;
           esac
 
@@ -285,7 +298,13 @@ jobs:
             # branch's own analysis, not just "open".
             default_branch="$(gh api "repos/${REPO}" --jq '.default_branch')"
             target_ref="refs/heads/${default_branch}"
-            endpoint="repos/${REPO}/code-scanning/alerts?state=open&ref=${target_ref}&per_page=100"
+            # tool_name=CodeQL is load-bearing, not tidiness. This surface carries Trivy's
+            # uploaded SARIF too - 37 of the 44 open alerts on main are Trivy container and
+            # dependency CVEs - and Copilot Autofix covers CodeQL alerts ONLY. Without the
+            # filter the lane would select an alert Autofix can never fix and report "no
+            # autofix suggestion" forever, which reads exactly like the capability being
+            # absent (F188).
+            endpoint="repos/${REPO}/code-scanning/alerts?state=open&tool_name=CodeQL&ref=${target_ref}&per_page=100"
           fi
 
           if ! gh api "${endpoint}" > alerts.json 2>alerts.err; then

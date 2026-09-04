@@ -121,7 +121,13 @@ function Get-RevisionAfter {
     param(
         [Parameter(Mandatory)][string]$ResourceGroupName,
         [Parameter(Mandatory)][string]$AppName,
-        [AllowNull()][datetime]$MergedUtc,
+        # [nullable[datetime]], not [datetime]. [AllowNull()] waives the null VALIDATION but
+        # not the type COERCION, and $null does not convert to a value type - so with a plain
+        # [datetime] the binder threw before the `if ($null -eq $MergedUtc)` guard below could
+        # ever run, and that guard was dead code from the day it was written. An unmerged PR
+        # is the chain's normal state, not an error: it must reach the guard and return $empty
+        # so the caller reports "PR not merged" instead of a PowerShell type error (F187).
+        [AllowNull()][nullable[datetime]]$MergedUtc,
         [AllowEmptyString()][AllowNull()][string]$MergeCommit
     )
     $revisions = @(Invoke-MlsAz -AllowFailure -Argument @(
