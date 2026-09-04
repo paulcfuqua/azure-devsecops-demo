@@ -75,13 +75,8 @@ function createHistoryServer() {
       return;
     }
 
-    // ---- SEEDED FLAW (js/command-line-injection) ---------------------------
-    // `component` is attacker-controlled and is interpolated straight into a
-    // string that `exec` hands to a shell. No quoting, no allow-list, no
-    // switch to an argument array.
-    const command = "git log --oneline -20 -- " + component;
-
-    cp.exec(command, { cwd: REPO_ROOT }, (error, stdout) => {
+    // Execute git without a shell; pass user input as a single argv element.
+    cp.execFile("git", ["log", "--oneline", "-20", "--", component], { cwd: REPO_ROOT }, (error, stdout) => {
       if (error) {
         res.statusCode = 500;
         res.end("Could not read the component history.");
@@ -91,7 +86,6 @@ function createHistoryServer() {
       res.setHeader("content-type", "text/plain; charset=utf-8");
       res.end(stdout);
     });
-    // ---- end seeded flaw ---------------------------------------------------
   });
 }
 
