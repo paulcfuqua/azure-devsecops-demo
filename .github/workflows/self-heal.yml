@@ -571,6 +571,26 @@ jobs:
           echo "committed=true" >> "${GITHUB_OUTPUT}"
           echo "Committed ${sha} to ${BRANCH}."
 
+      # F188b: `gh pr create --label` validates the labels BEFORE opening anything, so a
+      # label that does not exist means no pull request at all - not a PR missing a label.
+      # Run 33872246026 got a real Autofix suggestion, committed it to a branch, and then
+      # threw "could not add label: 'security' not found" and exited 1, leaving the fix
+      # stranded on a branch nobody would look at. Neither label shipped with the repository,
+      # so this had never worked and could not have. Creating them by hand fixes this clone
+      # and no other: a fork, or the rebuild this demo exists to show, would hit the same
+      # wall. --force is create-or-update, so this is idempotent.
+      - name: Ensure the labels the patch PR needs exist
+        if: ${{ steps.commit.outputs.committed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create security --repo "${REPO}" --color B60205 \
+            --description "Security fix or finding" --force
+          gh label create self-heal --repo "${REPO}" --color 0E8A16 \
+            --description "Opened by the self-healing pipeline (L10)" --force
+
       - name: Open the patch PR
         id: pr
         if: ${{ steps.commit.outputs.committed == 'true' }}
