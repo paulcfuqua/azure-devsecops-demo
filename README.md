@@ -64,6 +64,91 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 > unreachable from the internet — never open (finding F36). See
 > [docs/runbooks/g0-bootstrap.md](docs/runbooks/g0-bootstrap.md) § C9.
 
+## What this needs from Microsoft
+
+Every SKU below was read from the running estate on **2026-09-03** — Azure Resource
+Manager, Microsoft Graph, the Fabric API and the Power Platform admin API — rather than
+recalled from a design document. **The whole estate runs on trial and free tiers**: total
+licence cost is **$0**, and measured Azure spend is **$14.74 month-to-date**, of which the
+serverless SQL database is 99%.
+
+### Azure — one subscription, thirty resources
+
+| What | SKU as deployed | Count |
+|---|---|---|
+| Container Apps environment | Consumption (no workload profile) | 1 |
+| Container apps | Consumption, scale-to-zero, 15-minute cooldown | 6 |
+| Azure SQL Database | `GP_S_Gen5` — General Purpose **serverless**, 0.5–2 vCore, 60-minute auto-pause | 1 |
+| Azure SQL logical server | no charge; billing sits on the database | 1 |
+| Function App plans | `FC1` — **Flex Consumption** | 2 |
+| Function Apps | on the plans above | 2 |
+| Storage accounts | `Standard_LRS` | 3 |
+| Key Vault | `standard` (not Premium — no HSM key in the design) | 1 |
+| Log Analytics workspace | `PerGB2018` | 1 |
+| Application Insights | workspace-based | 1 |
+| Event Grid system topic | no SKU tier | 1 |
+| Log search alert rules + action group | 2 rules, 1 group | 3 |
+| User-assigned managed identities | no charge | 5 |
+
+Subscription-scope objects — the NIST SP 800-53 R5 policy initiative, the six
+`require-<tag>` deny policies, the `allowed-locations` deny and the budget — are **Azure
+Policy and Cost Management, both free**.
+
+Two things this estate deliberately does **not** need: there is **no Azure Container
+Registry** (the six images are hosted on GHCR, free for a public repository) and **no
+Microsoft Purview account resource** — the sensitivity labels are Microsoft 365 Purview,
+covered by the E5 service plans below.
+
+### Microsoft Defender for Cloud — subscription-scoped plans
+
+Seven plans read as `Standard` on this subscription: `FoundationalCspm`, `CloudPosture`,
+`Discovery`, `SqlServers`, `StorageAccounts` (`DefenderForStorageV2`), `KeyVaults`
+(`PerKeyVault`) and `Containers`. Only the last has a rate this repository pins —
+**~USD 0.29/day** — and `scripts/defender/toggle-containers-plan.ps1` treats enabling it as
+a **G2 spend gate**, prints that delta on every run, and expects it left **Off** between
+demos. Defender is the one line item here that will grow a bill if forgotten.
+
+### Microsoft 365 and Entra ID
+
+| SKU | Seats | What the estate consumes from it |
+|---|---|---|
+| **`SPE_E5`** — Microsoft 365 E5 (25-seat, 30-day trial) | 25 enabled, 7 assigned | `AAD_PREMIUM_P2` (Entra ID P2 — sign-in risk, Identity Protection, risk-based CA), `RMS_S_PREMIUM` (AIP P1 — sensitivity label management), `MFA_PREMIUM` (the enforced dashboard policy) |
+
+`scripts/bootstrap/verify-g0.ps1` asserts those three **service plans**, not a SKU part
+number, and that distinction is load-bearing. Two SKUs an earlier plan called for are
+**not** required: `EMSPREMIUM` (Enterprise Mobility + Security E5 is purchase-only at
+$18/user/month and Microsoft 365 E5 is a strict superset — finding F46) and
+`RMS_S_PREMIUM2` (AIP P2 auto-labeling, documented as optional).
+
+### Microsoft Fabric
+
+The `mls-operations` workspace runs on **`FTL4`** — a **Fabric 60-day trial capacity**,
+4 CU, East US. There is **no `Microsoft.Fabric/capacities` resource in the subscription**,
+which is how you can tell the trial rather than a paid capacity is carrying it.
+
+The one thing the trial cannot do is **AI experiences, including Fabric data agents**.
+Layer 8's Fabric knowledge source therefore needs a **paid F2 or higher** (~USD 0.36/hr
+while resumed, ~USD 260/month if left running) — a **G2 gate**, requested per resume, and
+never taken automatically. Everything else, layer 5 included, is covered by the trial.
+
+### Power Platform and Copilot Studio
+
+| SKU | What it provides |
+|---|---|
+| **`POWERAPPS_DEV`** — Power Apps Developer Plan | the `mls-authoring` Dataverse environment, type **Developer**, at $0 |
+| **`FLOW_FREE`** — Power Automate Free | the flows behind the solution |
+| **Copilot Studio pay-as-you-go meter** | billed to this Azure subscription, plus the *Copilot Studio authors* security role for the maker — **no licence purchase** |
+
+`POWERAPPS_PER_USER` exists in the tenant with **0 seats assigned**; it is not required and
+nothing here consumes it.
+
+### GitHub
+
+A **public repository** on a free account. Actions minutes, CodeQL, Dependabot, secret
+scanning with push protection, Copilot Autofix and GHCR image hosting are all free at that
+visibility — **GitHub Advanced Security is not purchased**, and showpiece #3 depends on
+Autofix being GA and free on public repositories.
+
 ## Status
 
 **Deployed and running.** Thirty Azure resources across four resource groups in one
