@@ -60,7 +60,7 @@ function inferColumnType(values: string[]): ColumnType {
     if (v === "") continue;
     sawValue = true;
     if (allInt && !INT_RE.test(v)) allInt = false;
-    if (allNum && !NUM_RE.test(v)) {
+    if (!NUM_RE.test(v)) {
       allNum = false;
       break;
     }
