@@ -1,5 +1,14 @@
 # Design: a self-auditing multi-framework compliance platform
 
+> **DESIGN RECORD.** This is what was designed and why, kept as the reasoning behind the
+> system rather than as a description of it. For what the estate does today and what is
+> verified about it, read [DEMO-READINESS.md](../../DEMO-READINESS.md); for the numbers,
+> [BY-THE-NUMBERS.md](../../BY-THE-NUMBERS.md).
+>
+> Where the text below anticipates a state that has since passed — a scaffold phase, an
+> estate not yet deployed — it is left as written. The design is not improved by pretending
+> it was authored after the fact.
+
 **Date:** 2026-08-26 · **Status:** sponsor-approved design, pending implementation plan
 **Affects:** a new `apps/compliance`; `verification/MlsAudit.psm1` and all 11 layer audits
 (a new `-Control` parameter); `apps/mcp-tools` (a new `query_compliance` tool); L7

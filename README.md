@@ -6,37 +6,29 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 
 *Meridian Launch Systems* is a fictional company. All data is synthetic.
 
-> ### Current state — read this before you spend an evening on it
+> ### What this is, and what is unusual about it
 >
-> **[docs/DEMO-READINESS.md](docs/DEMO-READINESS.md) is the live scorecard** of what is
-> verified, what is blocked, and what the audits cannot see. The short version, as of
-> **2026-09-03**, when the estate was torn down and rebuilt:
+> An enterprise Azure estate — landing zone, identity, data platform, three applications,
+> a copilot, a DevSecOps chain and a compliance board — defined entirely in this
+> repository and built by pipelines. It can be **destroyed and rebuilt on demand**, which
+> it has been, and it comes back with the same thirty resources.
 >
-> - **The destroy-and-rebuild claim is demonstrated.** Teardown took 14 minutes; the
->   rebuild came back with the same 30 resources across the same four resource groups.
->   L2, L3, L5, L6 and L7 all signed off on the rebuilt estate — L7 at 7 of 7, including
->   the criterion asserting the data API returns **rows**, not merely a status code.
-> - **It failed twice before it passed**, and that is the useful part. The rebuild
->   surfaced eleven findings, of which the three most valuable were not broken
->   infrastructure but **green checks that were verifying nothing**: L4's audit had never
->   once executed, V11.2 had never had evidence on any teardown ever run, and a step whose
->   only job is to announce a failed grant was reporting success.
-> - **L4 now has a verdict — its first ever.** The Purview labels were always real; nothing
->   could prove it, because three defects sat stacked behind one another and each hid the
->   next. Two were fixed in the repo; the third needed a human tenant grant, which the
->   sponsor authorised. `verify L4` reports 2 PASS + 1 by-design SKIP. Performing that grant
->   surfaced a further finding (F178): the documented consent command silently **revoked**
->   three existing grants, and re-running the L3 deploy path repaired it.
-> - **Two showpieces are qualified, not green.** The copilot survives a rebuild but three
->   of its criteria skip on a missing eval artifact; the compliance board's state is five
->   days stale because its nightly PR cannot merge (F120).
+> The unusual part is not the estate. It is that **the estate audits itself, independently,
+> and is built so that it cannot overstate the result.** Every layer ships three things —
+> a deploy path, a teardown, and a verification script that runs read-only under a
+> different identity. A layer is done when that auditor says so, not when a deploy exits
+> zero. Fifty-seven criteria work that way, and four of them are red today; they are in
+> the same table as the greens.
 >
-> None of that is hidden by a red pipeline, which is the point worth understanding before
-> trusting any green check here: layer criteria verify that the plumbing exists, and a
-> criterion asserting that water comes out of the tap is younger than the plumbing. If you
-> are evaluating this repo as an example, the interesting reading is the failure classes in
-> `verification/tests/failure-classes.Tests.ps1` and the
-> [finding register](docs/findings/2026-09-03-finding-register.md), not the badges.
+> The compliance board makes the same argument in a form an auditor recognises: 110 NIST
+> SP 800-171 requirements, **0 of them machine-verified**, no percentage anywhere, and a
+> derivation that cannot promote a human's written claim to `COMPLIANT`.
+>
+> **Where to look:** [docs/DEMO-READINESS.md](docs/DEMO-READINESS.md) is the live
+> scorecard — what is verified, what is blocked, and what the audits cannot see. If you
+> are evaluating this repository as an example, the interesting reading is that file, the
+> failure classes in `verification/tests/failure-classes.Tests.ps1`, and the
+> [finding register](docs/findings/2026-09-03-finding-register.md) — not the badges.
 
 ## Before you deploy this anywhere
 
@@ -74,86 +66,80 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 
 ## Status
 
-> ## The estate is deployed, and it has been destroyed and rebuilt.
->
-> Thirty resources across four resource groups in one region. The last full cycle ran on
-> **2026-09-03**: teardown in 14 minutes, rebuild in 87, same resource count on the other
-> side. Figures below marked *measured* came from an API answering for that live estate;
-> figures about the repository itself came from `git ls-files` and real test runs.
->
-> Read the compliance board further down with that in mind. It is the one place where the
-> distinction between *asserted* and *machine-verified* is load-bearing rather than a
-> disclaimer — and after all of the above, **0 of 110 requirements are machine-verified**.
+**Deployed and running.** Thirty Azure resources across four resource groups in one
+region. Teardown takes about fourteen minutes and a full rebuild about ninety, ending with
+the same resource count.
 
-**Turn-key, and self-auditing.** Everything is tenant-independent: the company prefix,
-environment segment and every derived name resolve from `infra/bicep/naming.bicep` or the
-`demo` GitHub environment, so this deploys into someone else's tenant under someone else's
-name without editing a template. The estate is assessed against NIST SP 800-171 by
-showpiece #4 below, on a board built so that it cannot overclaim.
+**Turn-key.** Everything is tenant-independent: the company prefix, environment segment
+and every derived name resolve from `infra/bicep/naming.bicep` or the `demo` GitHub
+environment, so this deploys into someone else's tenant under someone else's name without
+editing a template.
 
-What exists: data generators and seeding, the SQL schema, the Fabric lakehouse loaders,
-the renderer library, three frontends, the data API, the MCP tool server with real cloud
-adapters and six tools, the Copilot Studio agent definition and ALM, OpenTelemetry
-throughout, the full DevSecOps chain, **all 11 Verifier audit scripts wired into their
-layer workflows**, the compliance catalog/collectors/board, and the `up.ps1` / `down.ps1`
-fuse.
+**All runtime LLM work stays inside the Microsoft landscape.** The copilot is a custom
+Microsoft Copilot Studio agent over an MCP tool server; the code-healing half is GitHub
+Copilot Autofix. **There is no LLM API key anywhere in the system**, and CI authenticates
+to Azure only by OIDC / workload identity federation.
 
-Gates, measured 2026-09-03 rather than remembered:
+What is here: data generators and seeding, the SQL schema, the Fabric lakehouse loaders,
+the shared renderer library, three frontends, the data API, the MCP tool server with six
+real cloud-backed tools, the Copilot Studio agent and its ALM, OpenTelemetry throughout,
+the DevSecOps chain, **12 Verifier audit scripts wired into their layer workflows**, the
+compliance catalog / collectors / board, and the `up.ps1` / `down.ps1` fuse.
+
+### Repository gates
 
 | Gate | Result |
 |---|---|
-| Pester (PowerShell 7) over `scripts infra data verification compliance` | **1,598 passed, 0 failed, 1 skipped** |
-| `npm test` across 8 workspaces | **1,035 passed, 0 failed** |
+| Pester (PowerShell 7) over `scripts infra data verification compliance` | **1,652 passed, 0 failed, 1 skipped** |
+| `npm test` across 8 workspaces | **1,037 passed, 0 failed** |
 | pytest (`data/generators`) | **30 passed** |
-| **Total** | **2,663 automated tests** |
+| **Total** | **2,719 automated tests** |
 | PSScriptAnalyzer, Error + Warning, over `scripts infra verification data compliance .github` | **0 findings** |
 | actionlint | **clean across all 24 workflows** |
 | `az bicep build` / `build-params` | **3 templates + 3 parameter files, clean** |
 
-Those are repository gates and they are reproducible from a checkout. **They are not
-evidence the estate works** — that distinction is the entire subject of
-[docs/DEMO-READINESS.md](docs/DEMO-READINESS.md), and the 2026-09-03 rebuild found three
-places where a green job had verified nothing at all.
+These are reproducible from a checkout and they are **not evidence the estate works** —
+that distinction is the entire subject of [docs/DEMO-READINESS.md](docs/DEMO-READINESS.md),
+which is where the deployed-state verdicts live.
 
-**Architecture amendment, 2026-08-24 (sponsor-directed):** all runtime LLM work moves
-inside the Microsoft landscape.
-[The amendment](docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md) replaces
-the self-hosted copilot service with a **custom Microsoft Copilot Studio agent**, and the
-authored triage script with **GitHub Copilot Autofix**. There is now **no LLM API key
-anywhere in the system** — CI authenticates only by OIDC/workload identity federation.
-Decisions in force: monorepo, dual E5 trials, Fabric trial capacity first; the
-2026-08-22 LLM-provider decision is void.
+### Governance gates
+
+Four things an agent working in this repository may not decide for itself. They are
+enforced in the workflows and the scripts, not just written down.
 
 | Gate | Meaning | Status |
 |------|---------|--------|
-| G0 | Human bootstrap (tenant, OIDC root, Fabric capacity, licensing, Power Platform environment + Copilot Studio meter) | **Done**, and agents may now run the bootstrap scripts themselves (sponsor amendment 2026-08-29). **One step is outstanding**: 11d, the Security & Compliance grant `mls-verifier` needs before L4 can be independently audited |
-| G1 | One-time master plan approval | **Approved.** Agent-created and agent-managed infrastructure is now the demo rather than something the demo describes |
-| G2 | Spend-profile changes (per occurrence) | **Still binds, and nothing has triggered it.** The estate runs on the Fabric trial capacity; moving to the paid F2 that showpiece #1's Fabric data agent needs is a G2, and the tools-only MCP path is the trial-phase default. See BLOCKER-E in the scorecard — a paid capacity is currently created into a resource group that teardown deletes |
-| G3 | Tenant-level destructive ops (per occurrence) | **Still binds, and it held on 2026-09-03.** The teardown deleted four resource groups and reached no Entra object, Purview label, Fabric workspace shell or OIDC federation. The three tenant-level teardown scripts still refuse to run unattended in CI |
-| G4 | Exception escalation (event-driven) | Not triggered during the 2026-09-03 rebuild; two layers failed verification once each and were fixed on the first attempt |
+| G0 | Human bootstrap: tenant, OIDC root, Fabric capacity, licensing, Power Platform environment | **Complete**, except one step — the Security & Compliance grant `mls-verifier` needs before L4's labels can be independently audited (`docs/runbooks/g0-bootstrap.md` step 11d) |
+| G1 | One-time plan approval | **Approved.** Agent-created and agent-managed infrastructure is the demo, not something the demo describes |
+| G2 | Any spend-profile increase, per occurrence | **Binds, and has not been triggered.** The estate runs on the Fabric trial capacity; moving to a paid F2 is a G2 and the tools-only MCP path is the default without it |
+| G3 | Tenant-level deletion, per occurrence | **Binds.** Teardown deletes four resource groups and can reach no Entra object, Purview label, Fabric workspace shell or OIDC federation. The three tenant-level teardown scripts refuse to run unattended in CI |
 
 ## Key documents
 
-- [By the numbers](docs/BY-THE-NUMBERS.md) — what it took: files, lines, 2,663 tests
-- [Project brief (decision record)](docs/BRIEF.md)
-- [Design spec + pressure-test findings](docs/superpowers/specs/2026-08-22-azure-devsecops-demo-design.md)
-- [Copilot Studio amendment (in force)](docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md)
-- [G1 master plan](docs/superpowers/plans/2026-08-22-g1-master-plan.md)
-- [Compliance platform design](docs/superpowers/specs/2026-08-26-compliance-platform-design.md)
-  and [`compliance/README.md`](compliance/README.md) — showpiece #4's vocabulary, and the
-  rules that stop it overclaiming
-- [Tenant bootstrap (G0)](docs/runbooks/g0-bootstrap.md) — the accounts, trials and portal
-  steps you do by hand before anything deploys. **Start here if you are cloning this.**
+- **[Demo readiness](docs/DEMO-READINESS.md)** — the live scorecard: what is verified,
+  what is blocked, and what the audits cannot see. **Start here.**
+- [By the numbers](docs/BY-THE-NUMBERS.md) — files, lines, 2,719 tests, and what the
+  counts do not show
+- [Project brief](docs/BRIEF.md) — what this is for and the decisions behind it
+- [Design spec](docs/superpowers/specs/2026-08-22-azure-devsecops-demo-design.md) and the
+  [compliance platform design](docs/superpowers/specs/2026-08-26-compliance-platform-design.md)
+- [`compliance/README.md`](compliance/README.md) — the two vocabularies: what a human may
+  assert, and what the platform will derive from it
+- [Tenant bootstrap](docs/runbooks/g0-bootstrap.md) — the accounts, trials and portal steps
+  done by hand before anything deploys. **Start here if you are cloning this.**
+- [Kill and rebuild](docs/runbooks/kill-rebuild.md) — the destroy/rebuild cycle, its
+  semantics and its measured timings
 - [Lifecycle and shutdown](docs/runbooks/lifecycle-and-shutdown.md) — what expires when,
-  what bills outside the Azure spending limit, and what `down.ps1` deliberately does not
-  touch. Read it before the credit lapses, not after
+  what bills outside the Azure spending limit, and what teardown deliberately leaves alone
 - [Layer playbooks L01–L12](docs/runbooks/layers/) · [demo script](docs/runbooks/demo-script.md)
+- [Finding register](docs/findings/2026-09-03-finding-register.md) — a dated archive of
+  every defect found while building this, including the diagnoses that turned out to be
+  wrong. Kept because a register that edits its own history is not evidence
 - [Working agreements for all agents](CLAUDE.md)
-
 ## Run locally
 
-The apps and the MCP tool layer run pre-tenant in **local data mode** — no Azure, no
-credentials. Requires Node 20+ and Python 3.11+.
+The apps and the MCP tool layer run in **local data mode** — no Azure, no credentials, no
+tenant. Requires Node 20+ and Python 3.11+.
 
 ```sh
 # 1. Generate the synthetic dataset (deterministic, seed 20260822; gitignored output)
@@ -181,18 +167,16 @@ local data; set `LOCAL_DATA=1` to force it for a production build, or
 
 `npm run build` and `npm test` at the root run across all workspaces.
 
-**What you cannot run locally, stated plainly.** Since the 2026-08-24 amendment,
-showpiece #1's *agent* is **cloud-only**: Microsoft Copilot Studio has no local runtime,
-so the agent cannot be started, tested, or demoed on a laptop. It requires the tenant, a
-Power Platform environment, and a published agent. What remains locally runnable is
-everything around it — all three frontends (including the compliance board), the shared
-renderer, and the **MCP tool layer**
-with its six tools and their tests, which is where the copilot's data access actually
-lives. The golden-question eval suite runs locally against the MCP tools, and against the
-deployed agent over Direct Line in CI. This is a real capability the previous design had
-and this one does not — a deliberate trade made when the 2026-08-24 amendment moved all
-runtime LLM work inside the Microsoft landscape, and worth knowing before you plan an
-afternoon around iterating on the agent.
+**What you cannot run locally, stated plainly.** The *agent* is **cloud-only**: Microsoft
+Copilot Studio has no local runtime, so it cannot be started, tested or demoed on a laptop.
+It needs the tenant, a Power Platform environment and a published agent.
+
+Everything around it runs locally — all three frontends including the compliance board, the
+shared renderer, and the **MCP tool layer** with its six tools and their tests, which is
+where the copilot's data access actually lives. The golden-question eval runs locally
+against those tools, and in CI against the deployed agent over Direct Line. That is the
+cost of keeping all runtime LLM work inside the Microsoft landscape, and it is worth
+knowing before you plan an afternoon around iterating on the agent.
 
 ## The four showpieces
 
@@ -226,7 +210,7 @@ Showpiece #3 proves this repo can *fix* a vulnerability. Showpiece #4 proves it 
 *govern an estate against a standard* — the question the audience has to answer to their
 own auditors.
 
-**What the board says, from the last state that reached `main` — collected 2026-08-29:**
+**What the board says, collected 2026-09-04:**
 
 | | COMPLIANT | PARTIAL | GAP | INCONCLUSIVE | NOT_APPLICABLE | NOT_ASSESSED |
 |---|---|---|---|---|---|---|
@@ -235,18 +219,18 @@ own auditors.
 Plus four out-of-catalog rows keyed on 800-53 control ids the 800-171 catalog has no
 requirement for, counted separately so the 110 stays arithmetic.
 
-**That state is five days stale, and the reason is itself a finding.** The nightly
-collection runs and opens a pull request; that PR cannot merge, because a `GITHUB_TOKEN`
-push triggers no workflow runs, so no required check ever reports (**F120**, still open —
-PR #147 has been sitting with zero checks since 2026-09-01). `compliance/state/` therefore
-holds two snapshots when it should hold a dozen. A board whose selling point is *"the
-history is a git history"* is exactly the wrong place to have a broken history, and saying
-so here is cheaper than being asked.
+**One caveat, because omitting it would be the exact failure this board exists to
+prevent.** The nightly collection runs and opens a pull request, and that pull request
+cannot merge on its own: a `GITHUB_TOKEN` push triggers no workflow runs, so no required
+check ever reports. State therefore reaches `main` when someone collects it deliberately,
+which is how the snapshot above got here. The automation is real and the merge step is
+not, and a board whose selling point is *"the history is a git history"* is the wrong
+place to be quiet about that.
 
-**A compliance dashboard that showed green would be worthless.** The estate has since been
-deployed, destroyed and rebuilt — and the number that matters has not moved: of 110
-requirements, **0 are machine-verified**. Sixteen carry a human assertion and render as
-`asserted`. That is the whole product:
+**A compliance dashboard that showed green would be worthless.** This estate is deployed,
+audited and rebuildable, and the number that matters is still zero: of 110 requirements,
+**0 are machine-verified**. Sixteen carry a human assertion and render as `asserted`. That
+is the whole product:
 
 - **`COMPLIANT` is unreachable from a human claim.** The register's strongest word is
   `CLOSED`, meaning *no known open finding stands against this control* — weaker than
@@ -269,8 +253,7 @@ requirements, **0 are machine-verified**. Sixteen carry a human assertion and re
 - **The history is a git history** — when it can merge. `.github/workflows/compliance.yml`
   commits a dated snapshot on every run, so `git log compliance/state/` answers when the
   estate became compliant and when it regressed. There are **two** snapshots today and the
-  trend view says so in those words rather than drawing a flat line. See F120 above for
-  why there are not more.
+  trend view says so in those words rather than drawing a flat line.
 
 Read [`compliance/README.md`](compliance/README.md) for the two vocabularies — what a
 human may assert, and what the platform will derive from it — and

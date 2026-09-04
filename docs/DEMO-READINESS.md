@@ -1,51 +1,18 @@
 # Demo readiness — what is verified, what is broken, and what the audits cannot see
 
-**Re-baselined 2026-09-03, against an estate that was torn down and rebuilt that morning.**
-Every figure below was produced by a run on the rebuilt estate, not carried forward. Where
-something has not been re-verified since the rebuild, this file says so rather than
-reusing the previous verdict — because doing exactly that is what F167 was.
+**The live state of the estate, and the only file here that claims to be current.** Every
+verdict below came from a run against the deployed estate. Where something has not been
+re-verified, this file says so rather than reusing an older verdict — a verdict recorded at
+one moment and carried forward after the system changed underneath it is the single most
+common defect this project has recorded.
 
-This file is the **live** state. The history — every finding in order, including the
-diagnoses that turned out to be wrong — is
+A layer is done when the independent auditor says so, not when a deploy exits zero. Read
+the criterion tables, not the job status.
+
+The history — every defect found while building this, in order, including the diagnoses
+that turned out to be wrong — is a dated archive at
 **[findings/2026-09-03-finding-register.md](findings/2026-09-03-finding-register.md)**.
 Nothing was removed from it.
-
----
-
-## WHAT CHANGED ON 2026-09-03, FIXED AND NOT
-
-*The re-baseline run and the two teardown/rebuild cycles inside it. Eighteen findings,
-F167–F184. This section is the short answer; the tables below are the state it produced.*
-
-### Fixed and merged
-
-| | |
-|---|---|
-| **F167–F169** | L3's drift sweep failed on a legitimate G0 identity, hardcoded the company prefix, and burned 45.9 min on a verdict settled at minute zero. Verify now takes **0.9 min** |
-| **F170** | V11.2's guard read a `verify` secret from a `demo` job — the criterion proving a teardown did not cross the G3 line had **never had evidence** |
-| **F171–F173** | L5's V5.2 read a route it had been refused; L7's SQL grant died on a principal id no rebuild preserves; a step whose only job is to announce a failed grant reported success |
-| **F174** | The Log Analytics purge check warned of an F107 regression on **every** teardown — `--force` leaves a tombstone the check misread |
-| **F175–F177** | L4's audit had **never once executed**; `-CertificateThumbprint` is Windows-only; `mls-verifier` held no S&C grant. L4 now has its **first verdict ever** |
-| **F178** | The documented consent command **revoked three grants and created nothing**. Runbook corrected; repaired via the deploy path |
-| **F180** | `cond && '' \|\| 'X'` can never yield the empty string — so V11.2 stayed SKIP even after F170. **V11.2 now PASSES, first time ever** |
-| **F183** | The agent eval reported a secret *absent* when it was only *forbidden* to read it, suppressing its own artifact. Fixed, plus the Key Vault grant that lets it run — **`layer-08-agent-eval` now uploads** |
-| **BLOCKER-E** | A paid Fabric capacity was created into a resource group teardown deletes, arming on the first teardown after the G2 |
-
-### Not fixed, and known
-
-| | |
-|---|---|
-| **F184** | The eval runs but **cannot interpret its own 0/10** — it connects with no user token against an agent that authenticates manually. Open |
-| **L8 import** | Prints *"imported, NOT yet live"*, lists seven manual steps, **reports success**. A green L8 has never meant a live agent |
-| **F182** | L6's V6.2 fails on a rebuilt estate and cannot tell "cannot see" from "not there". Leading hypothesis (an expired federated assertion mid-audit) explicitly unproven |
-| **F181** | A transient in L4's supplementary step skipped four layers. Noted, **not chased**, by sponsor decision |
-| **F120** | The nightly compliance state still cannot merge, so `compliance/state/` is stale |
-| **F126** | Self-healing still has no subject — Dependabot opens no security PR for the seeded CVEs |
-| **V11.3–V11.5** | The L11 up-phase audit has still never completed a run |
-
-**The pattern, stated once:** of the eighteen, almost none were broken infrastructure. They
-were **checks reporting verdicts they had not earned** — and three of those were my own
-repairs, caught only because a second teardown was run against them.
 
 ---
 
