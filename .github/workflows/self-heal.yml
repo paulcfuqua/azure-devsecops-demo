@@ -368,7 +368,22 @@ jobs:
             echo "${candidate_numbers}" | while read -r n; do
               [ -n "${n}" ] || continue
               if grep -q "self-heal/${kind}-${n}-" self-heal-branches.txt; then continue; fi
-              if [ "$1" = "adoptable-only" ]; then
+              if [ "$1" = "adoptable-only" ] && [ "${kind}" = "code-scanning" ]; then
+                # The same rule as the dependabot lane below, applied to the OTHER thing
+                # this chain cannot do (F188c): only a merge touching apps/vuln-lab/**
+                # re-stamps the deployment witness, because that is the only path
+                # vuln-lab-witness.yml triggers on - so V10.1 stage 6 ("a new revision
+                # carries this heal's merge commit") is unreachable for a heal anywhere
+                # else, however good the fix is. Alert #9 in apps/mcp-tools healed
+                # perfectly, merged, and still could not produce a complete trail.
+                # The seeded vuln-lab flaws are the subject the criterion was written for.
+                path="$(jq -r --argjson n "${n}" '.[] | select(.number == $n) | .most_recent_instance.location.path // empty' alerts.json)"
+                case "${path}" in
+                  apps/vuln-lab/*) ;;
+                  *) continue ;;
+                esac
+              fi
+              if [ "$1" = "adoptable-only" ] && [ "${kind}" = "dependabot" ]; then
                 pkg="$(jq -r --argjson n "${n}" '.[] | select(.number == $n) | .dependency.package.name // empty' alerts.json)"
                 if [ -z "${pkg}" ]; then continue; fi
                 if ! grep -qi -- "${pkg}" dependabot-prs.txt; then continue; fi
