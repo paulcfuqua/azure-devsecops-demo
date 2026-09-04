@@ -274,6 +274,11 @@ param controlTowerEntraClientId string = 'unset'
 @description('[derived] Replica ceiling — enough for a demo burst, small enough to cap active spend.')
 param maxReplicas int = 2
 
+@minValue(60)
+@maxValue(3600)
+@description('Seconds a replica stays warm after the last request before scaling back to zero. PINNED, not inherited: Azure\'s default is 300, and five minutes is shorter than the gap between two questions in a live demo - the app sleeps mid-session and the next click pays a cold start. 900 (15 minutes) is the demo-safe window the sponsor chose; it is deliberately BELOW the 3600 that would mirror the SQL auto-pause, because idle replicas bill against the Container Apps free grant and a longer window buys warmth nobody is using. This is NOT solved with minReplicas > 0: layer-06-audit.ps1 treats a nonzero floor as an un-gated spend-profile change and fails V6.1 for it, correctly - cooldown keeps idle cost at zero when the estate is genuinely idle, which a floor does not.')
+param scaleCooldownSeconds int = 900
+
 @description('[derived] Smallest consumption CPU slice; demo workloads are tiny.')
 param containerCpu string = '0.25'
 
@@ -389,6 +394,7 @@ var dataApiCloudEnv = dataApiMode != 'cloud'
 var scaleToZero = {
   minReplicas: 0
   maxReplicas: maxReplicas
+  cooldownPeriod: scaleCooldownSeconds
 }
 
 // ------------------------------------------------------------------ mcp-tools workload identity
