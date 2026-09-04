@@ -11,7 +11,13 @@ export {
   parseTokenResponse,
 } from "./directLineToken";
 export { DirectLineAgentProvider, OfflineAgentProvider } from "./providers";
-export { activityToTurn, appendTurn, isAdaptiveCardAttachment, userTurn } from "./transcript";
+export {
+  activityToTurn,
+  appendTurn,
+  extractCardsFromText,
+  isAdaptiveCardAttachment,
+  userTurn,
+} from "./transcript";
 export * from "./types";
 
 export type AgentMode = "offline" | "directline";
