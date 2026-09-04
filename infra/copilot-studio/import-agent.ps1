@@ -308,6 +308,71 @@ or sign in to Azure so this can read it:
     return $resolved
 }
 
+function Get-DeployedMcpHost {
+    <#
+        .SYNOPSIS
+        The MCP hostname the DEPLOYED connector currently points at, or $null if it cannot
+        be read.
+
+        .DESCRIPTION
+        The solution version cannot express this value (F185): a Container Apps environment
+        gets a new random domain segment on every rebuild, so the connector's host changes
+        while the version does not. Reading the deployed host is what turns "the version
+        matches" into a claim about the endpoint rather than only about the components.
+
+        RETURNS $null FOR "COULD NOT READ", NEVER FOR "MATCHES". The caller treats null as
+        drift and imports, which is the safe direction: a needless import costs a minute, a
+        skipped one leaves the agent pointing at a hostname Azure retired (F183's lesson
+        about a read that cannot tell a refusal from an absence, applied to a decision
+        instead of a report).
+    #>
+    [CmdletBinding()]
+    param(
+        # Deliberately NOT scoped by solution name: the connector is found by the Container
+        # Apps host in its own OpenAPI definition, which is the value being compared. A
+        # $SolutionName parameter here would be one this function never reads.
+        [Parameter(Mandatory)][string]$EnvironmentUrl
+    )
+
+    $token = $null
+    try {
+        $resource = $EnvironmentUrl.TrimEnd('/')
+        $token = (& az account get-access-token --resource $resource --query accessToken -o tsv 2>$null)
+    }
+    catch { $token = $null }
+
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        Write-Status 'Could not obtain a Dataverse token to read the deployed connector - the deployer may have no application user in this environment.' -Color Yellow
+        return $null
+    }
+
+    try {
+        $uri = "$($EnvironmentUrl.TrimEnd('/'))/api/data/v9.2/connectors?`$select=name,connectorinternalid,openapidefinition"
+        $response = Invoke-RestMethod -Method Get -Uri $uri -Headers @{
+            Authorization    = "Bearer $token"
+            Accept           = 'application/json'
+            'OData-Version'  = '4.0'
+        } -ErrorAction Stop
+
+        foreach ($connector in @($response.value)) {
+            $definition = $connector.openapidefinition
+            if ([string]::IsNullOrWhiteSpace($definition)) { continue }
+            # The host sits in the OpenAPI definition. Matched rather than parsed: the
+            # payload shape varies by connector version and only this field is needed.
+            $match = [regex]::Match($definition, '"host"\s*:\s*"([^"]+)"')
+            if ($match.Success -and $match.Groups[1].Value -match 'azurecontainerapps\.io') {
+                return $match.Groups[1].Value
+            }
+        }
+        Write-Status 'No connector in this environment declares a Container Apps host - nothing to compare against.' -Color Yellow
+        return $null
+    }
+    catch {
+        Write-Status "Could not read the deployed connector definition: $($_.Exception.Message)" -Color Yellow
+        return $null
+    }
+}
+
 function Get-TokenisedSolutionSource {
     <#
         Copy the committed source to a staging folder and resolve its tokens, so `pac
@@ -474,11 +539,44 @@ function Invoke-Main {
         }
     }
 
+    # ---- the version cannot express the one thing a rebuild changes (F185) --------------
+    # Resolved BEFORE the idempotency check on purpose. The connector definition embeds the
+    # MCP server's FQDN, and a Container Apps environment gets a NEW random domain segment
+    # every rebuild - so the host changes while the solution version does not. A version
+    # match therefore proves the COMPONENTS are current and says nothing about the endpoint
+    # they point at.
+    #
+    # Measured 2026-09-03: three rebuilds ran, each reported "already installed - nothing to
+    # import", and the deployed connector still resolved
+    # `mls-mcp-demo-ca.happymeadow-9e15a087...` - the domain from BEFORE the first teardown.
+    # Copilot Studio showed "Connector request failed / The remote name could not be
+    # resolved", the agent had no tools, and every gate was green. The tokenising above was
+    # correct all along; it simply never ran, because the check that gates it cannot see the
+    # value it protects.
+    $resolvedMcpHost = Resolve-McpHost -Candidate $McpHost
+    Write-Status "MCP host for the connector: $resolvedMcpHost" -Color Green
+
+    $deployedMcpHost = Get-DeployedMcpHost -EnvironmentUrl $targetUrl
+    $hostDrifted = $false
+    if ($deployedMcpHost) {
+        Write-Status "MCP host currently deployed:  $deployedMcpHost" -Color Green
+        $hostDrifted = ($deployedMcpHost -ne $resolvedMcpHost)
+    }
+    else {
+        # Could not read it. NOT the same as "it matches" - say so and import rather than
+        # skipping on an answer nobody obtained (F105's rule, F183's shape).
+        Write-Status 'MCP host currently deployed:  UNREADABLE - importing rather than assuming it is current.' -Color Yellow
+        $hostDrifted = $true
+    }
+    if ($hostDrifted) {
+        Write-Status 'MCP host has drifted (or could not be confirmed) - the version check is not evidence here.' -Color Yellow
+    }
+
     # ---- idempotency: skip a no-op import --------------------------------------------
     $onlineVersion = Get-OnlineSolutionVersion -SolutionName $SolutionName -EnvironmentUrl $targetUrl
     if ($onlineVersion) {
         Write-Status "Online version: $onlineVersion" -Color Green
-        if ($localVersion -and $onlineVersion -eq $localVersion -and -not $Force) {
+        if ($localVersion -and $onlineVersion -eq $localVersion -and -not $Force -and -not $hostDrifted) {
             Write-Status ''
             Write-Status "'$SolutionName' $onlineVersion is already installed - nothing to import." -Color Yellow
             Write-Status 'Use -Force to import anyway (for example after a portal edit you want overwritten).' -Color Yellow
@@ -509,8 +607,8 @@ function Invoke-Main {
     # The repository keeps `${mcpHost}`; the PACKAGE gets the live FQDN. Resolved here, in
     # preflight, so a missing host fails before anything is written rather than importing a
     # connector that points at a hostname Azure retired on the last rebuild.
-    $resolvedMcpHost = Resolve-McpHost -Candidate $McpHost
-    Write-Status "MCP host for the connector: $resolvedMcpHost" -Color Green
+    # $resolvedMcpHost was resolved above, before the idempotency check, so that host drift
+    # can override a version match (F185).
     $staging = Get-TokenisedSolutionSource -SolutionFolder $solutionFolder `
         -StagingRoot (Join-Path $ArtifactPath 'staged-source') `
         -Token @{ '${mcpHost}' = $resolvedMcpHost }

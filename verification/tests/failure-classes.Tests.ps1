@@ -51,6 +51,9 @@ BeforeAll {
         @{ Path = 'infra/fabric/fabric-api.psm1'; RetryRequired = $true
             Why = 'Long-running operations are polled to a deadline honouring Retry-After. NOTE the transport itself does not retry a transient 429/503 - whether it needs to is unknown until L5 runs against a live capacity, and guessing is how three wrong theories about L3 got shipped.'
         }
+        @{ Path = 'infra/copilot-studio/import-agent.ps1'; RetryRequired = $false
+            Why = 'One Dataverse read: the MCP host the DEPLOYED connector points at, compared against the live one so host drift can override the version check (F185). Deliberately does NOT retry - a failed read returns $null, the caller treats that as drift and imports, and importing is the safe direction. Retrying to be sure it is really unreadable would spend a budget to reach the same decision.'
+        }
     )
 }
 
@@ -594,6 +597,44 @@ Describe 'the estate can be renamed from one place' {
             -Because 'if no deployable artifact names the Fabric workspace or lakehouse, this test asserts nothing'
         $offender -join ' | ' | Should -BeNullOrEmpty `
             -Because "a Fabric name that does not match naming.bicep's fabricWorkspaceName/fabricLakehouseName is a hardcoded company prefix, which a rebrand carries into Azure and leaves behind (F90)"
+    }
+
+    It 'lets MCP host drift override the solution version check, and resolves it first' {
+        # F185. A Container Apps environment gets a NEW random domain segment on every
+        # rebuild, and the Copilot Studio connector stores that FQDN. The solution VERSION
+        # cannot express it - so a version match proves the components are current and says
+        # nothing about the endpoint they point at.
+        #
+        # Measured 2026-09-03: three rebuilds each reported "already installed - nothing to
+        # import" while the deployed connector still resolved
+        # `mls-mcp-demo-ca.happymeadow-9e15a087...`, the domain from BEFORE the first
+        # teardown. Copilot Studio showed "Connector request failed / The remote name could
+        # not be resolved", the agent had no tools, and every gate was green. The tokenising
+        # in import-agent.ps1 was correct all along; it simply never ran, because the check
+        # that gates it cannot see the value it protects.
+        #
+        # Two properties, and ORDER is one of them: the host must be resolved BEFORE the
+        # idempotency check, or drift cannot participate in the decision at all.
+        $importer = Join-Path $script:Root 'infra/copilot-studio/import-agent.ps1'
+        Test-Path -LiteralPath $importer | Should -BeTrue
+
+        $content = Get-Content -LiteralPath $importer -Raw
+
+        $resolveAt = $content.IndexOf('$resolvedMcpHost = Resolve-McpHost')
+        $skipAt = $content.IndexOf('is already installed - nothing to import')
+        $resolveAt | Should -BeGreaterThan 0 `
+            -Because 'the importer must resolve the live MCP host before it can compare anything'
+        $skipAt | Should -BeGreaterThan 0 `
+            -Because 'if the idempotency skip is gone this test is asserting against a file it no longer understands'
+        $resolveAt | Should -BeLessThan $skipAt `
+            -Because 'resolving the host AFTER the version check leaves drift unable to influence the decision - which is exactly how three rebuilds skipped an import the estate needed'
+
+        # And the skip must actually consider drift, not merely have it available.
+        $skipCondition = [regex]::Match($content, '(?m)^\s*if \(\$localVersion -and \$onlineVersion -eq \$localVersion[^\r\n]*')
+        $skipCondition.Success | Should -BeTrue `
+            -Because 'the version-equality skip must still be findable for this to mean anything'
+        $skipCondition.Value | Should -Match 'hostDrifted' `
+            -Because 'a version match must not skip the import when the connector points at a hostname the last rebuild retired (F185)'
     }
 
     It 'grants the deployer Key Vault access only when there is a secret for it to read' {
