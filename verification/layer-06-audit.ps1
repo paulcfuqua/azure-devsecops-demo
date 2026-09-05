@@ -375,9 +375,38 @@ function Test-LogAnalyticsQuery {
         '--analytics-query', 'print 1', '--timespan', 'P1D', '--output', 'json'
     )
     if ($null -eq $result) {
+        # ESTABLISH THAT YOU COULD OBSERVE BEFORE REPORTING WHAT YOU SAW (F182).
+        #
+        # This used to return one sentence offering two readings - "HTTP error, OR the
+        # Reader identity cannot query this workspace" - and committing to neither. One
+        # reading is a broken credential and the other a missing role assignment, and a
+        # reader cannot act on the union. It is F102/F103/F105's disease in the component
+        # built to catch it: an audit that could not see, reporting absence.
+        #
+        # The register's leading hypothesis was an expired federated assertion. The code
+        # rules that out: Invoke-MlsAz THROWS on AADSTS700024 even under -AllowFailure
+        # precisely so it can never be swallowed, so an expired assertion arrives as
+        # "check threw", never as "no result". Whatever this is, it is not that.
+        #
+        # So ask the question the criterion could not: can this identity mint a Log
+        # Analytics token AT THIS MOMENT? No token means reachability is unobservable and
+        # there is no verdict to give. A token means the identity authenticates perfectly
+        # well, and a failing query is then a real finding about workspace RBAC - which is
+        # a different fix, made by a different person.
+        #
+        # Probed only on the failure path: an extra token call on every pass would spend
+        # the very assertion lifetime this is reasoning about.
+        $token = Invoke-MlsAz -AllowFailure -Argument @(
+            'account', 'get-access-token', '--resource', 'https://api.loganalytics.io', '--output', 'json'
+        )
+        if ($null -eq $token) {
+            return New-MlsCheckResult -Status SKIP `
+                -Observed 'the query returned nothing AND no Log Analytics token could be minted for this identity, so query reachability is unobservable - this is NOT evidence about the workspace or its role assignments' `
+                -Detail 'Establish a working login for the Verifier identity and re-run. A criterion that cannot authenticate has learned nothing about the control it audits, so it reports SKIP rather than a verdict (F105).'
+        }
         return New-MlsCheckResult -Passed $false `
-            -Observed 'the query returned no result (HTTP error, or the Reader identity cannot query this workspace)' `
-            -Detail 'Workspace RBAC propagation takes up to ~15 min; the standard 30-minute window covers it.'
+            -Observed 'a Log Analytics token WAS obtained for this identity, so authentication is working; the query itself still returned no result' `
+            -Detail 'The credential is not the problem. Look at workspace RBAC for the Verifier identity - it needs a role granting query rights on this workspace. Propagation takes up to ~15 min, which the retry window covers.'
     }
     return New-MlsCheckResult -Passed $true -Observed "query succeeded as the Verifier identity; $(@($result).Count) row(s) returned"
 }

@@ -52,6 +52,10 @@ Describe 'layer-06-audit' {
         $script:SqlStatus = 'Paused'
         $script:AcaState = 'Succeeded'
         $script:LawRows = @([pscustomobject]@{ TimeGenerated = '2026-08-24T09:00:00Z' })
+        # V6.2's precondition probe: whether a Log Analytics token can be minted at the
+        # moment of the query, and how many times the criterion asked.
+        $script:LawTokenAvailable = $true
+        $script:LawTokenProbes = 0
         $script:Blobs = @([pscustomobject]@{ name = '20260824/mls-cost-export.csv'; len = 20480 })
         $script:BackupRedundancy = 'Local'
         $script:BackupRetentionDays = 7
@@ -82,6 +86,11 @@ Describe 'layer-06-audit' {
             if ($joined -like 'sql db show*' -and $joined -like '*status*') { return $script:SqlStatus }
             if ($joined -like 'containerapp env show*') { return $script:AcaState }
             if ($joined -like 'monitor log-analytics query*') { return $script:LawRows }
+            if ($joined -like 'account get-access-token*loganalytics*') {
+                $script:LawTokenProbes++
+                if (-not $script:LawTokenAvailable) { return $null }
+                return [pscustomobject]@{ accessToken = 'law-token'; expiresOn = '2026-08-24T10:00:00Z' }
+            }
             if ($joined -like 'storage blob list*') { return $script:Blobs }
             if ($joined -like 'resource show*backupShortTermRetentionPolicies/default*') {
                 return [pscustomobject]@{ retentionDays = $script:BackupRetentionDays }
@@ -399,6 +408,51 @@ Describe 'layer-06-audit' {
             $row.Status | Should -Be 'FAIL'
             $row.Detail | Should -BeLike '*layer manifest artifact*'
             (Get-Row -Context $context -Id 'V6.2').Detail | Should -BeLike '*MLS_LAW_CUSTOMER_ID*'
+        }
+    }
+
+    Context 'V6.2 says whether it could look, before saying what it saw (F182)' {
+        # V6.2 failed twice on the rebuilt estate with:
+        #   "the query returned no result (HTTP error, or the Reader identity cannot
+        #    query this workspace)"
+        # which offers two readings in one breath and commits to neither - the exact
+        # F102/F103/F105 disease, in the component built to catch it. A reader cannot act
+        # on it: one reading is a broken credential, the other a missing role assignment.
+        #
+        # The register's leading hypothesis was an expired federated assertion. That is
+        # ruled out by the code: Invoke-MlsAz THROWS on AADSTS700024 even under
+        # -AllowFailure, so an expired assertion arrives as "check threw", never as "no
+        # result". Whatever this is, it is not that.
+        #
+        # So establish the precondition. If a Log Analytics token cannot be obtained AT
+        # THE MOMENT OF THE QUERY, reachability is unobservable and the criterion must
+        # not pretend to a verdict. If a token IS obtainable, the identity authenticates
+        # fine and a failing query is a real finding about workspace RBAC.
+        It 'reports UNOBSERVABLE when no Log Analytics token can be obtained' {
+            $script:LawRows = $null
+            $script:LawTokenAvailable = $false
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V6.2'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*unobservable*'
+            # Never the other reading: this must not read as "the role is missing".
+            $row.Observed | Should -Not -BeLike '*cannot query this workspace*'
+        }
+
+        It 'FAILS when a token was obtainable and the query still returned nothing' {
+            $script:LawRows = $null
+            $script:LawTokenAvailable = $true
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V6.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*token*obtained*'
+            $row.Detail | Should -BeLike '*RBAC*'
+        }
+
+        It 'does not probe for a token when the query succeeded' {
+            # The probe is diagnosis, not part of the happy path: an extra token call on
+            # every pass would spend the very assertion lifetime this is reasoning about.
+            $script:LawRows = @([pscustomobject]@{ TimeGenerated = '2026-08-24T09:00:00Z' })
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V6.2').Status | Should -Be 'PASS'
+            $script:LawTokenProbes | Should -Be 0
         }
     }
 
