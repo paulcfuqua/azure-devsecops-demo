@@ -145,6 +145,40 @@ Describe 'error predicates read the field that carries the value' {
     }
 }
 
+Describe 'a push that needs a different credential sets it on checkout' {
+
+    # F193: compliance.yml rewrote `origin` to carry SELF_HEAL_TOKEN, printed "Branch
+    # pushed with SELF_HEAL_TOKEN", succeeded - and authenticated as github-actions[bot]
+    # anyway, for nine days. actions/checkout defaults to persist-credentials: true and
+    # writes the job's GITHUB_TOKEN into http.https://github.com/.extraheader, and that
+    # Authorization header WINS over credentials embedded in a remote URL.
+    #
+    # Everything about it looked right: the branch existed, the log said the right thing,
+    # the push worked. Only the actor on the resulting workflow runs gave it away, and
+    # nothing was reading that. This is F122/F123/F124's class - a value that is present,
+    # correctly spelled, and not the one the system actually uses.
+    It 'no workflow rewrites a git remote with a token without also setting it on checkout' {
+        $offender = [System.Collections.Generic.List[string]]::new()
+        $workflowDir = Join-Path -Path $script:RepoRoot -ChildPath '.github' -AdditionalChildPath 'workflows'
+
+        foreach ($file in (Get-ChildItem -Path $workflowDir -Filter '*.yml' -File)) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            # Does it push using a token embedded in a rewritten remote? Matched loosely -
+            # the first draft of this anchored on `origin https://` and missed the real
+            # line, which quotes the URL (`origin "https://...`). A sweep that does not
+            # match the code it was written for is worse than none.
+            if ($text -notmatch '(?m)^.*remote\s+set-url\s+origin.*TOKEN.*$') { continue }
+            # Then a checkout in this file must either carry a token: or disable
+            # credential persistence - otherwise the rewrite is decorative.
+            if ($text -match 'persist-credentials:\s*false' -or $text -match '(?m)^\s*token:\s*\$\{\{') { continue }
+            $offender.Add($file.Name)
+        }
+
+        $offender -join ', ' | Should -BeNullOrEmpty `
+            -Because "actions/checkout persists GITHUB_TOKEN as an extraheader that overrides a remote URL's credentials, so rewriting the URL alone pushes as github-actions[bot] and the resulting pull_request runs are held for approval (F193)"
+    }
+}
+
 Describe 'the declared governance mode is legible and the prose agrees with it' {
 
     # V1.5 checks the declaration against the LIVE ruleset, which needs a tenant and a
