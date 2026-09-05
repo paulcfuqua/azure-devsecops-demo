@@ -16,6 +16,7 @@ in one piece. They are cross-referenced here and not restated.
 | **F192** | The chain window depended on a variable nobody had set, so an in-flight chain read as failed |
 | **F193** | The nightly compliance artifact still cannot merge, and F120's fix is not the reason *(open, hypothesis in flight)* |
 | **F194** | CODEOWNERS claimed a review gate the repository has never enforced |
+| **F195** | Both L10 criteria counted a *skipped* check as a failed one |
 
 ---
 
@@ -189,3 +190,38 @@ machine-checkable, and only where the change cannot modify the checker.** Self-h
 deliberately unaffected by the mode — a patch GitHub generated for a named advisory that
 cleared the full gauntlet auto-merges unattended in both, because heal PRs never touch the
 paths that define what safe means.
+
+---
+
+### F195 — a skipped check was counted as a failed one *(fixed 2026-09-05)*
+
+**What happened.** The scheduled run **33934487531** took the Dependabot lane and failed
+V10.2 with:
+
+> `gauntlet not green: deploy to Container Apps=skipped, deploy to Container
+> Apps=skipped, …`
+
+five times over, on a chain that had done its job.
+
+**Why.** The gauntlet stage's predicate was `$_ -notlike '*=success'`, so anything that was
+not literally `success` counted as a failure — including `skipped`. Those deploy jobs are
+**correctly** skipped: they only run on `main`. Every heal pull request carries them.
+Verified across three of them — **#174, #226 and #232 are each exactly 5 skipped / 24
+success** — so both V10.1 and V10.2 failed their gauntlet stage on every correct run.
+
+**The same shape as F191**, found the same way: a criterion asserting something that cannot
+be true when the system behaves correctly, discovered only by reading a real run rather
+than a green test suite.
+
+**Fixed** with `Test-GauntletConclusion`, shared by both trails. Accepting `skipped`
+outright would have been the opposite trap — a pull request where nothing ran would sail
+through — so it asserts the capability: **no check failed, AND at least one check actually
+concluded successfully.** `neutral` joins `skipped` as not-a-failure, because CodeQL
+reports it on a pull request it has nothing to say about (observed on #225).
+
+**And it exposed a latent bug beside it.** `$conclusion = Get-CheckConclusion …` was not
+wrapped in `@()`. PowerShell unwraps a one-element result, so a heal PR with exactly one
+check run made `$conclusion` a bare string and `"string".Count` threw under
+`Set-StrictMode` — the criterion would have reported `check threw: The property 'Count'
+cannot be found on this object` instead of a verdict. Never hit in production only because
+every real heal PR has had 29 checks. Both call sites are now wrapped.

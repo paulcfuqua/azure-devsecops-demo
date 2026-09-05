@@ -100,6 +100,51 @@ function Get-CheckConclusion {
     return @($runs | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'name')=$(Get-MlsProperty -InputObject $_ -Name 'conclusion')" })
 }
 
+function Test-GauntletConclusion {
+    <#
+    .SYNOPSIS
+        The gauntlet stage's verdict: nothing FAILED, and something actually ran.
+    .DESCRIPTION
+        This was `$_ -notlike '*=success'`, which counted SKIPPED as a failure. Every heal
+        pull request carries five skipped `deploy to Container Apps` jobs - they only run
+        on main - so the predicate marked the gauntlet not-green on every correct run.
+        Verified on #174, #226 and #232: all three are exactly 5 skipped / 24 success. Run
+        33934487531 failed V10.2 with "gauntlet not green: deploy to Container
+        Apps=skipped" five times over, on a chain that had worked.
+
+        Same shape as F191: a criterion asserting something that cannot be true when the
+        system behaves correctly.
+
+        Accepting `skipped` on its own would be the opposite trap - a pull request where
+        NOTHING ran would sail through - so this asserts the capability rather than the
+        artefact: no check failed, AND at least one check actually concluded successfully.
+        `neutral` joins `skipped` as not-a-failure; CodeQL reports it on a pull request it
+        has nothing to say about (observed on #225).
+    .OUTPUTS
+        A list of problems, empty when the gauntlet is green.
+    #>
+    param([AllowNull()][string[]]$Conclusion)
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $entries = @($Conclusion | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($entries.Count -eq 0) {
+        $problem.Add('no check runs on the heal PR head commit')
+        return $problem
+    }
+    # A conclusion that is absent or empty means the check has not finished, which is not
+    # a pass - it joins the failures rather than the benign set.
+    $benign = @('success', 'skipped', 'neutral')
+    $failed = @($entries | Where-Object {
+            $value = ($_ -split '=', 2)[1]
+            $benign -notcontains $value
+        })
+    $succeeded = @($entries | Where-Object { $_ -like '*=success' })
+    if ($failed.Count -gt 0) { $problem.Add("gauntlet not green: $($failed -join ', ')") }
+    elseif ($succeeded.Count -eq 0) {
+        $problem.Add("no check run actually concluded successfully ($($entries.Count) reported, all skipped or neutral) - a gauntlet nothing ran is not a gauntlet that passed")
+    }
+    return $problem
+}
+
 function Get-RevisionAfter {
     <#
     .SYNOPSIS
@@ -310,11 +355,12 @@ function Test-AutofixTrail {
     }
 
     # 4. gauntlet green
-    $conclusion = Get-CheckConclusion -Repository $Repository -HeadSha $headSha
-    $notGreen = @($conclusion | Where-Object { $_ -notlike '*=success' })
+    # @() because PowerShell unwraps a one-element result: a heal PR with exactly one
+    # check run made $conclusion a bare string, and "string".Count throws under
+    # Set-StrictMode. Latent until a test presented a single check.
+    $conclusion = @(Get-CheckConclusion -Repository $Repository -HeadSha $headSha)
     $stage.Add("4 checks=$($conclusion.Count)")
-    if ($conclusion.Count -eq 0) { $problem.Add('no check runs on the heal PR head commit') }
-    if ($notGreen.Count -gt 0) { $problem.Add("gauntlet not green: $($notGreen -join ', ')") }
+    foreach ($entry in (Test-GauntletConclusion -Conclusion $conclusion)) { $problem.Add($entry) }
 
     # 5. the merge was pre-authorised by the chain, not decided by a human (F191)
     $mergedAt = "$(Get-MlsProperty -InputObject $pullRequest -Name 'mergedAt')"
@@ -384,10 +430,11 @@ function Test-DependabotTrailForAlert {
     $number = "$(Get-MlsProperty -InputObject $candidate[0] -Name 'number')"
     $pullRequest = Get-PullRequestDetail -Repository $Repository -Number $number
     $headSha = "$(Get-MlsProperty -InputObject $pullRequest -Name 'headRefOid')"
-    $conclusion = Get-CheckConclusion -Repository $Repository -HeadSha $headSha
-    $notGreen = @($conclusion | Where-Object { $_ -notlike '*=success' })
-    if ($conclusion.Count -eq 0) { $problem.Add('no check runs') }
-    if ($notGreen.Count -gt 0) { $problem.Add("gauntlet not green: $($notGreen -join ', ')") }
+    # @() because PowerShell unwraps a one-element result: a heal PR with exactly one
+    # check run made $conclusion a bare string, and "string".Count throws under
+    # Set-StrictMode. Latent until a test presented a single check.
+    $conclusion = @(Get-CheckConclusion -Repository $Repository -HeadSha $headSha)
+    foreach ($entry in (Test-GauntletConclusion -Conclusion $conclusion)) { $problem.Add($entry) }
 
     # Same provenance rule as the Autofix trail (F191): the merge must have been
     # pre-authorised by the chain, not chosen by a human once the result was visible.

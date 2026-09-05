@@ -1,4 +1,4 @@
-﻿# Pester tests for verification/layer-10-audit.ps1 - every gh and az call mocked;
+# Pester tests for verification/layer-10-audit.ps1 - every gh and az call mocked;
 # zero cloud calls.
 
 BeforeAll {
@@ -72,6 +72,13 @@ Describe 'layer-10-audit' {
             enabledAt = '2026-08-24T10:20:00Z'
         }
         $script:CheckConclusion = 'success'
+        # Check runs beyond the three above. Every real heal PR carries five SKIPPED
+        # deploy jobs alongside its successes - verified on #174, #226 and #232, all
+        # exactly 5 skipped / 24 success.
+        $script:ExtraCheck = @()
+        # When true the three defaults are omitted, so a test can present a gauntlet
+        # in which nothing concluded at all.
+        $script:SuppressDefaultChecks = $false
         $script:PrBody = "Autofix says: $($script:AutofixDescription)"
         # The witness revision the deploy stage looks for: created after the merge AND
         # stamped with that merge's commit by .github/workflows/vuln-lab-witness.yml.
@@ -120,11 +127,14 @@ Describe 'layer-10-audit' {
                 }
             }
             if ($joined -like '*check-runs*') {
-                return [pscustomobject]@{ check_runs = @(
+                $default = if ($script:SuppressDefaultChecks) { @() } else {
+                    @(
                         [pscustomobject]@{ name = 'CodeQL'; conclusion = $script:CheckConclusion }
                         [pscustomobject]@{ name = 'Trivy'; conclusion = 'success' }
                         [pscustomobject]@{ name = 'ZAP'; conclusion = 'success' }
                     )
+                }
+                return [pscustomobject]@{ check_runs = @($default) + @($script:ExtraCheck)
                 }
             }
             throw "unexpected gh call: $joined"
@@ -355,6 +365,51 @@ Describe 'layer-10-audit' {
         It 'PASSES when the surface was readable, so the guard is not a blanket fail' {
             $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable 'true'
             (Get-Row -Context $context -Id 'V10.3').Status | Should -Be 'PASS'
+        }
+    }
+
+    Context 'a skipped check is not a failed one (F195)' {
+        # Run 33934487531: V10.2 reported "gauntlet not green: deploy to Container
+        # Apps=skipped" five times over. Those deploy jobs are CORRECTLY skipped - they
+        # only run on main - so every heal PR carries them and the predicate
+        # `$_ -notlike '*=success'` counted each one as a failure. Both trails therefore
+        # failed their gauntlet stage on every correct run, the same shape as F191: a
+        # criterion asserting something that cannot be true when the system works.
+        #
+        # Accepting `skipped` blindly is the opposite trap - a gauntlet where NOTHING ran
+        # would pass - so the criterion also requires that something actually succeeded.
+        It 'passes the gauntlet stage when deploy jobs are skipped alongside successes' {
+            $script:ExtraCheck = @(
+                [pscustomobject]@{ name = 'deploy to Container Apps'; conclusion = 'skipped' }
+                [pscustomobject]@{ name = 'deploy to Container Apps'; conclusion = 'skipped' }
+            )
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'PASS'
+            (Get-Row -Context $context -Id 'V10.2').Status | Should -Be 'PASS'
+        }
+
+        It 'still fails when a check genuinely failed' {
+            $script:ExtraCheck = @([pscustomobject]@{ name = 'vitest'; conclusion = 'failure' })
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*vitest=failure*'
+        }
+
+        It 'fails when every check was skipped, because nothing was actually verified' {
+            $script:CheckConclusion = 'skipped'
+            $script:SuppressDefaultChecks = $true
+            $script:ExtraCheck = @(
+                [pscustomobject]@{ name = 'deploy to Container Apps'; conclusion = 'skipped' }
+            )
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*no check run actually concluded*'
+        }
+
+        It 'treats a neutral conclusion as not-a-failure' {
+            # CodeQL reports NEUTRAL on a PR it has nothing to say about - observed on #225.
+            $script:CheckConclusion = 'neutral'
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1').Status | Should -Be 'PASS'
         }
     }
 
