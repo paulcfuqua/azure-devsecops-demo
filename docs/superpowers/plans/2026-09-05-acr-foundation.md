@@ -305,19 +305,24 @@ Container Apps pull with their user-assigned managed identity. Without `AcrPull`
 - Modify: `infra/bicep/apps/main.bicep`
 
 **Interfaces:**
-- Consumes: `registryId` from Task 3.
-- Produces: apps able to pull. No new outputs.
+- Consumes: `registryResourceGroupName` from Task 3, and the registry's **name** (the
+  `loginServer` output's first label, e.g. `mlsdemoacr` from `mlsdemoacr.azurecr.io`).
+- Produces: apps able to pull. `apps/main.bicep` gains exactly two parameters —
+  `registryName` and `registryResourceGroupName` — which Task 6 passes. **No `registryId`
+  and no `registryLoginServer`**: the module resolves the registry by name at its own
+  resource group's scope, and the `*Image` parameters already carry the full registry path,
+  so the login server never needs to reach bicep.
 
-- [ ] **Step 1: Add the registry id parameter**
+- [ ] **Step 1: Add the two parameters the grants need**
 
 In `infra/bicep/apps/main.bicep`, beside the other image parameters:
 
 ```bicep
-@description('Resource id of the container registry the apps pull from, from the registry deployment output. Empty means "still on a public registry" and skips the role assignments.')
-param registryId string = ''
+@description('Registry name (no suffix), e.g. mlsdemoacr. Empty means "still on a public registry" and skips the AcrPull grants.')
+param registryName string = ''
 
-@description('Login server of that registry, e.g. mlsdemoacr.azurecr.io.')
-param registryLoginServer string = ''
+@description('Resource group holding the registry. Outside the teardown set by design - see the registry module.')
+param registryResourceGroupName string = ''
 ```
 
 - [ ] **Step 2: Assign AcrPull to each app identity**
@@ -353,19 +358,13 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for id 
 }]
 ```
 
-Then, in `infra/bicep/apps/main.bicep`, call it at the registry's resource group scope. The
-five identity resources already exist in that file as `launchOpsIdentity`,
-`controlTowerIdentity`, `mcpIdentity`, `dataApiIdentity` and `costIngestIdentity` — confirm
-the exact symbol names with `grep -n "userAssignedIdentities" infra/bicep/apps/main.bicep`
-before writing this, and use what is there rather than these names:
+Then, in `infra/bicep/apps/main.bicep`, call it at the registry's resource group scope,
+using the two parameters added in step 1. The identity resources already exist in that file
+— **confirm their exact symbol names with `grep -n "userAssignedIdentities"
+infra/bicep/apps/main.bicep` and use what is actually there** rather than the names written
+below, which are illustrative:
 
 ```bicep
-@description('Resource group holding the registry. Outside the teardown set by design.')
-param registryResourceGroupName string = ''
-
-@description('Registry name, e.g. mlsdemoacr. Empty means "still on a public registry" and skips the grants.')
-param registryName string = ''
-
 module acrPullGrants 'acr-pull.bicep' = if (!empty(registryName)) {
   name: 'acr-pull-grants'
   scope: resourceGroup(registryResourceGroupName)
@@ -482,14 +481,19 @@ git commit -m "ci: push app images to ACR alongside GHCR"
 - Modify: `.github/workflows/layer-07-apps.yml` (pass the new parameters)
 
 **Interfaces:**
-- Consumes: `registryId`, `registryLoginServer` from Task 3; images from Task 5.
+- Consumes: `registryName` and `registryResourceGroupName` — the two parameters Task 4
+  defined — plus images from Task 5. **Not** `registryId` or `registryLoginServer`; neither
+  exists in `apps/main.bicep`, and passing them would fail the deployment on an unknown
+  parameter.
 - Produces: running revisions pulling from ACR.
 
 - [ ] **Step 1: Pass the registry parameters into the L7 deployment**
 
+`MLS_ACR_LOGIN_SERVER` is `<name>.azurecr.io`; the registry **name** is its first label.
+
 ```yaml
-            registryId=${{ steps.registry.outputs.id }}
-            registryLoginServer=${{ vars.MLS_ACR_LOGIN_SERVER }}
+            registryName=${{ vars.MLS_ACR_LOGIN_SERVER != '' && split(vars.MLS_ACR_LOGIN_SERVER, '.')[0] || '' }}
+            registryResourceGroupName=${{ vars.MLS_COMPANY_PREFIX || 'mls' }}-rg-registry
             mcpToolsImage=${{ vars.MLS_ACR_LOGIN_SERVER }}/mcp-tools:${{ github.sha }}
 ```
 
