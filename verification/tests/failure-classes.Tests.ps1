@@ -145,6 +145,56 @@ Describe 'error predicates read the field that carries the value' {
     }
 }
 
+Describe 'the declared governance mode is legible and the prose agrees with it' {
+
+    # V1.5 checks the declaration against the LIVE ruleset, which needs a tenant and a
+    # token. This is the half that can drift offline: prose in CLAUDE.md or CODEOWNERS
+    # describing a different mode from the one the file declares. That is exactly the
+    # defect that made this necessary - CODEOWNERS asserted a review gate, citing NIST
+    # 3.4.3 and 3.1.5, while zero approvals were required and every merge was
+    # self-approved.
+    BeforeAll {
+        $script:ModeFile = Join-Path -Path $script:RepoRoot -ChildPath '.github' -AdditionalChildPath 'governance-mode.json'
+    }
+
+    It 'declares a mode at all' {
+        Test-Path -LiteralPath $script:ModeFile | Should -BeTrue `
+            -Because 'without a declaration there is no stated policy on whether an agent may merge its own work, and V1.5 has nothing to check adherence against'
+    }
+
+    It 'declares a mode that has its enforcement stated' {
+        $declared = Get-Content -LiteralPath $script:ModeFile -Raw | ConvertFrom-Json
+        $declared.mode | Should -Not -BeNullOrEmpty
+        $declared.enforcement.($declared.mode) | Should -Not -BeNullOrEmpty `
+            -Because 'a mode with no enforcement entry cannot be compared to anything, so V1.5 would be unfalsifiable'
+        # ConvertFrom-Json yields [long] for a JSON integer, not [int].
+        $count = $declared.enforcement.($declared.mode).requiredApprovingReviewCount
+        $count | Should -Not -BeNullOrEmpty
+        [int]$count | Should -BeGreaterOrEqual 0
+    }
+
+    It 'names the declared mode in CLAUDE.md, so the prose cannot drift from the file' {
+        # -match, not -BeLike. In a wildcard pattern a backtick is the ESCAPE character,
+        # so "*``$declared``*" collapses to one backtick each side and the trailing one
+        # escapes the closing asterisk into a literal - the pattern then hunts for
+        # "development*" and fails against a file that plainly contains the word.
+        $declared = (Get-Content -LiteralPath $script:ModeFile -Raw | ConvertFrom-Json).mode
+        $claude = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'CLAUDE.md') -Raw
+        $claude | Should -Match ([regex]::Escape($declared)) `
+            -Because 'CLAUDE.md is what a cold-starting agent reads; it stating one mode while the file declares another is how an agent ends up self-approving in operational mode'
+    }
+
+    It 'does not let CODEOWNERS claim a review gate the mode does not enforce' {
+        # The specific sentence that was false for the life of the repository.
+        $owners = Get-Content -LiteralPath (Join-Path $script:RepoRoot '.github/CODEOWNERS') -Raw
+        $declared = (Get-Content -LiteralPath $script:ModeFile -Raw | ConvertFrom-Json)
+        if ($declared.enforcement.($declared.mode).requiredApprovingReviewCount -eq 0) {
+            $owners | Should -BeLike '*does not REQUIRE*' `
+                -Because 'with zero required approvals CODEOWNERS routes reviews and nothing more, and the file must say so rather than describing a control that is switched off'
+        }
+    }
+}
+
 Describe 'a null-tolerant parameter is typed so null can actually reach it' {
 
     # F187: Get-RevisionAfter declared [AllowNull()][datetime]$MergedUtc and guarded its body

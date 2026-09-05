@@ -152,6 +152,70 @@ function Get-RevisionAfter {
     return [pscustomobject]@{ After = $after; Matched = $matched; Stamp = $stamp }
 }
 
+function Test-MergeProvenance {
+    <#
+    .SYNOPSIS
+        Stage 5's verdict: the merge was PRE-AUTHORISED by the chain, not decided by a
+        human after seeing the result.
+    .DESCRIPTION
+        This asserted `mergedBy.login -eq 'github-actions[bot]'` until F191. The chain arms
+        auto-merge with SELF_HEAL_TOKEN, a PAT owned by a person, so GitHub attributes the
+        merge to THAT PERSON - and the criterion whose entire job is "no human merged this"
+        reported a human on every correct run. PR #232, healed and merged with no human
+        involved anywhere, failed it.
+
+        Allowing the PAT owner's login would have made it pass and asserted NOTHING: a
+        genuine hand-merge produces an identical `mergedBy`, so the check would no longer
+        distinguish the two states it exists to tell apart - and V10.1 is what makes
+        auto-merge-on-green defensible in the first place.
+
+        The question is not WHO merged, it is WHEN the decision was made. Auto-merge stamps
+        `enabledAt` before the gauntlet finishes and the platform merges on green; a
+        discretionary click happens after the result is known and leaves no
+        autoMergeRequest at all. `autoMergeRequest` survives the merge, so this is
+        readable after the fact.
+
+        The literal-login assertion becomes honest again the day the chain runs as a
+        GitHub App - an installation token merges as `<app>[bot]`. That is the durable
+        fix; this is the faithful check until then.
+    .OUTPUTS
+        Problem - failures, empty when the provenance holds
+        Note    - the stage fragment naming who merged and when it was armed
+    #>
+    param(
+        [AllowNull()]$PullRequest,
+        [AllowEmptyString()][AllowNull()][string]$MergedAt
+    )
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $mergedBy = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $PullRequest -Name 'mergedBy') -Name 'login')"
+    $autoMerge = Get-MlsProperty -InputObject $PullRequest -Name 'autoMergeRequest'
+    $armedBy = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $autoMerge -Name 'enabledBy') -Name 'login')"
+    $armedAt = "$(Get-MlsProperty -InputObject $autoMerge -Name 'enabledAt')"
+    $note = "5 mergedBy=$mergedBy armed=$(if ($armedBy) { "$armedBy@$armedAt" } else { 'none' })"
+
+    if ($null -eq $autoMerge) {
+        $problem.Add("no auto-merge request on the PR, so the merge was a discretionary act taken after the result was known (merged by '$mergedBy')")
+        return [pscustomobject]@{ Problem = $problem; Note = $note }
+    }
+
+    # Provenance is only meaningful once something has actually merged. An armed but
+    # unmerged PR is the chain's ordinary in-flight state, and its own problem is
+    # recorded by the caller - not a bogus identity mismatch against an absent merger.
+    if ([string]::IsNullOrWhiteSpace($MergedAt)) { return [pscustomobject]@{ Problem = $problem; Note = $note } }
+
+    if ($armedBy -ne $mergedBy) {
+        $problem.Add("auto-merge was armed by '$armedBy' but the merge is attributed to '$mergedBy' - a third identity completed what the chain started")
+    }
+    $armedSlot = [datetime]::MinValue
+    $mergedSlot = [datetime]::MinValue
+    if ([datetime]::TryParse($armedAt, [ref]$armedSlot) -and [datetime]::TryParse($MergedAt, [ref]$mergedSlot)) {
+        if ($armedSlot.ToUniversalTime() -ge $mergedSlot.ToUniversalTime()) {
+            $problem.Add("auto-merge was armed at $armedAt, which is not before the merge at $MergedAt - an arming stamped after the merge cannot have caused it")
+        }
+    }
+    return [pscustomobject]@{ Problem = $problem; Note = $note }
+}
+
 function Test-DeployStage {
     <#
     .SYNOPSIS
@@ -247,15 +311,13 @@ function Test-AutofixTrail {
     if ($conclusion.Count -eq 0) { $problem.Add('no check runs on the heal PR head commit') }
     if ($notGreen.Count -gt 0) { $problem.Add("gauntlet not green: $($notGreen -join ', ')") }
 
-    # 5. merged by automation, no human merger
+    # 5. the merge was pre-authorised by the chain, not decided by a human (F191)
     $mergedAt = "$(Get-MlsProperty -InputObject $pullRequest -Name 'mergedAt')"
-    $mergedBy = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $pullRequest -Name 'mergedBy') -Name 'login')"
-    $autoMerge = Get-MlsProperty -InputObject $pullRequest -Name 'autoMergeRequest'
-    $stage.Add("5 mergedBy=$mergedBy auto=$($null -ne $autoMerge)")
+    $provenance = Test-MergeProvenance -PullRequest $pullRequest -MergedAt $mergedAt
+    $stage.Add($provenance.Note)
     if ($mergedAt) { $timestamp.Add($mergedAt) }
     if ([string]::IsNullOrWhiteSpace($mergedAt)) { $problem.Add('the heal PR is not merged') }
-    if ($mergedBy -ne $AutomationLogin) { $problem.Add("mergedBy='$mergedBy', expected the automation identity '$AutomationLogin' (no human merger anywhere in the trail)") }
-    if ($null -eq $autoMerge) { $problem.Add('no auto-merge request on the PR') }
+    foreach ($entry in $provenance.Problem) { $problem.Add($entry) }
 
     # 6. new witness revision after the merge, stamped with this merge's commit
     $mergedUtc = $null
@@ -323,13 +385,13 @@ function Test-DependabotTrailForAlert {
     if ($conclusion.Count -eq 0) { $problem.Add('no check runs') }
     if ($notGreen.Count -gt 0) { $problem.Add("gauntlet not green: $($notGreen -join ', ')") }
 
+    # Same provenance rule as the Autofix trail (F191): the merge must have been
+    # pre-authorised by the chain, not chosen by a human once the result was visible.
     $mergedAt = "$(Get-MlsProperty -InputObject $pullRequest -Name 'mergedAt')"
-    $mergedBy = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $pullRequest -Name 'mergedBy') -Name 'login')"
-    $autoMerge = Get-MlsProperty -InputObject $pullRequest -Name 'autoMergeRequest'
     if ($mergedAt) { $timestamp.Add($mergedAt) }
     if ([string]::IsNullOrWhiteSpace($mergedAt)) { $problem.Add('PR not merged') }
-    if ($mergedBy -ne $AutomationLogin) { $problem.Add("mergedBy='$mergedBy'") }
-    if ($null -eq $autoMerge) { $problem.Add('no auto-merge request (Dependabot PRs must be explicitly flagged - L10 failure mode 5)') }
+    $provenance = Test-MergeProvenance -PullRequest $pullRequest -MergedAt $mergedAt
+    foreach ($entry in $provenance.Problem) { $problem.Add($entry) }
 
     $mergedUtc = $null
     if ($mergedAt) {
@@ -425,6 +487,34 @@ function Invoke-Main {
     if ([string]::IsNullOrWhiteSpace($reseed)) { $reseed = [Environment]::GetEnvironmentVariable('MLS_L10_RESEED_MERGED_AT') }
     if (-not [string]::IsNullOrWhiteSpace($reseed)) { $windowStart = [datetime]::Parse($reseed).ToUniversalTime() }
 
+    # F192: DERIVE THE WINDOW WHEN NOBODY SUPPLIED ONE.
+    #
+    # The self-heal workflow runs this audit in the same run that arms auto-merge, so it
+    # reads the trail minutes before the gauntlet finishes - run 33905789865 verified at
+    # 18:26:07 a merge that landed at 18:29:02. An in-flight chain is exactly what the
+    # PENDING window exists for, and it was recorded FAIL instead, because the window
+    # depended on a human having set MLS_L10_RESEED_MERGED_AT and nobody had. A window
+    # that only works when someone remembers to set a variable is a window that is
+    # usually absent, and 'absent' silently meant 'every in-flight trail is a failure'.
+    #
+    # The moment the chain committed to THIS heal is on the pull request itself:
+    # autoMergeRequest.enabledAt, which survives the merge. It is a narrower clock than
+    # the re-seed merge - it times the chain's own attempt rather than the whole demo
+    # cycle - so the supplied value still wins when there is one, and the report names
+    # which clock it used.
+    $windowSource = 're-seed merge'
+    if ($windowStart -eq [datetime]::MinValue -and -not [string]::IsNullOrWhiteSpace($healPr)) {
+        $armedAt = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject (
+                    Get-PullRequestDetail -Repository $repositoryName -Number $healPr
+                ) -Name 'autoMergeRequest') -Name 'enabledAt')"
+        $slot = [datetime]::MinValue
+        if (-not [string]::IsNullOrWhiteSpace($armedAt) -and [datetime]::TryParse($armedAt, [ref]$slot)) {
+            $windowStart = $slot.ToUniversalTime()
+            $windowSource = "heal PR #$healPr auto-merge armed"
+            $reseed = $armedAt
+        }
+    }
+
     $context = New-MlsAuditContext -Layer 10 -Title 'Self-healing pipeline on GitHub Copilot Autofix' `
         -ScriptName 'verification/layer-10-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
         -OnlyCriterion $OnlyCriterion
@@ -433,10 +523,13 @@ function Invoke-Main {
         -Status $(if ($codeqlAlert -and $healPr) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'Dependabot alerts' -Value ($dependabotAlert -join ', ') `
         -Status $(if ($dependabotAlert.Count -ge 3) { 'OK' } elseif ($dependabotAlert.Count -gt 0) { 'PARTIAL' } else { 'ABSENT' })
-    Add-MlsPreflight -Context $context -Name 'Re-seed merged (UTC)' -Value "$reseed" `
+    Add-MlsPreflight -Context $context -Name "Chain window start (UTC, from $windowSource)" -Value "$reseed" `
         -Status $(if ($windowStart -ne [datetime]::MinValue) { 'OK' } else { 'ABSENT' })
     if ($windowStart -eq [datetime]::MinValue) {
-        Add-MlsNote -Context $context -Message 'No re-seed merge timestamp supplied (-ReseedMergedUtc / $env:MLS_L10_RESEED_MERGED_AT), so the 24 h chain deadline could not be computed and an incomplete trail is recorded FAIL rather than PENDING.'
+        Add-MlsNote -Context $context -Message 'No chain window could be computed: no re-seed timestamp (-ReseedMergedUtc / $env:MLS_L10_RESEED_MERGED_AT) and no heal PR carrying an auto-merge arming time, so an incomplete trail is recorded FAIL rather than PENDING.'
+    }
+    elseif ($windowSource -ne 're-seed merge') {
+        Add-MlsNote -Context $context -Message "Chain window derived from $windowSource, not from a supplied re-seed timestamp (F192). It times this heal's own attempt rather than the whole demo cycle; set MLS_L10_RESEED_MERGED_AT to measure from the re-seed instead."
     }
     $windowMinutes = $ChainWindowHours * 60
     $pendingAllowed = ($windowStart -ne [datetime]::MinValue)

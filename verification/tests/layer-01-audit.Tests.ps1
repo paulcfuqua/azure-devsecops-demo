@@ -23,8 +23,14 @@ BeforeAll {
     }
 
     function Invoke-AuditForTest {
-        param([switch]$NoRetry)
-        Invoke-Main -Repository $script:Repository -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
+        param([switch]$NoRetry, [string]$GovernanceModePath = '')
+        $argument = @{
+            Repository = $script:Repository
+            ReportRoot = $script:ReportRoot
+            NoRetry    = $NoRetry
+        }
+        if ($GovernanceModePath) { $argument['GovernanceModePath'] = $GovernanceModePath }
+        Invoke-Main @argument
     }
 }
 
@@ -60,6 +66,9 @@ Describe 'layer-01-audit' {
         $script:JobConclusion = 'success'
         $script:SecretScanning = 'enabled'
         $script:PushProtection = 'enabled'
+        # V1.5's subjects: what main enforces, and whether this identity can read it.
+        $script:RequiredApprovals = 0
+        $script:RulesReadable = $true
         $script:Subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'
         $script:Issuer = 'https://token.actions.githubusercontent.com'
 
@@ -74,6 +83,19 @@ Describe 'layer-01-audit' {
                         [pscustomobject]@{ name = 'summary'; conclusion = 'success' }
                     )
                 }
+            }
+            if ($joined -like '*rules/branches/main*') {
+                # What Invoke-MlsGh -AllowFailure actually yields on a denied or 404 read:
+                # $null, not an exception. Mocking a throw here would have tested a
+                # different code path from the one production takes.
+                if (-not $script:RulesReadable) { return $null }
+                return @(
+                    [pscustomobject]@{ type = 'deletion' }
+                    [pscustomobject]@{
+                        type       = 'pull_request'
+                        parameters = [pscustomobject]@{ required_approving_review_count = $script:RequiredApprovals }
+                    }
+                )
             }
             if ($joined -like "api repos/$($script:Repository)") {
                 return [pscustomobject]@{
@@ -110,11 +132,14 @@ Describe 'layer-01-audit' {
     }
 
     Context 'all criteria pass' {
-        It 'records V1.1-V1.4 as PASS and exits 0' {
+        It 'records V1.1-V1.5 as PASS and exits 0' {
+            # V1.5 reads the repository's own .github/governance-mode.json here rather than
+            # a fixture, so this also asserts the committed declaration agrees with the
+            # ruleset the mock reports - development mode, zero required approvals.
             $context = Invoke-AuditForTest
-            @($context.Criterion).Count | Should -Be 4
+            @($context.Criterion).Count | Should -Be 5
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
-            @($context.Criterion).Id | Should -Be @('V1.1', 'V1.2', 'V1.3', 'V1.4')
+            @($context.Criterion).Id | Should -Be @('V1.1', 'V1.2', 'V1.3', 'V1.4', 'V1.5')
             Get-MlsExitCode -Context $context | Should -Be 0
         }
 
@@ -123,6 +148,79 @@ Describe 'layer-01-audit' {
             (Get-Row -Context $context -Id 'V1.2').Command | Should -BeLike '*gh api repos/paulcfuqua/azure-devsecops-demo*'
             (Get-Row -Context $context -Id 'V1.2').Expected | Should -Be '{"ss":"enabled","pp":"enabled"}'
             (Get-Row -Context $context -Id 'V1.4').Expected | Should -BeLike '*repo:paulcfuqua/azure-devsecops-demo:environment:demo*'
+        }
+    }
+
+    Context 'V1.5: the declared governance mode matches what main actually enforces' {
+        # The mode was true, load-bearing and written down nowhere. CODEOWNERS asserted
+        # review was enforced - citing NIST 3.4.3 and 3.1.5 - while the ruleset required
+        # ZERO approvals, so every reader believed in a control that did not exist. This
+        # criterion is what stops the declaration and the enforcement drifting apart, in
+        # either direction: declaring operational without flipping the setting is the
+        # dangerous one, and it is the one a human is most likely to do.
+        BeforeAll {
+            # Declared in BeforeAll, not in the Context body: a function defined in the
+            # body exists only during Pester DISCOVERY and is gone by the time an It runs.
+            function Set-Mode {
+                param([string]$Mode, [int]$Development = 0, [int]$Operational = 1)
+                @{
+                    mode        = $Mode
+                    enforcement = @{
+                        development = @{ requiredApprovingReviewCount = $Development }
+                        operational = @{ requiredApprovingReviewCount = $Operational }
+                    }
+                } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $script:ModePath -Encoding utf8
+            }
+        }
+        BeforeEach {
+            $script:ModePath = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-mode-$([guid]::NewGuid().ToString('n')).json"
+        }
+        AfterEach {
+            Remove-Item -LiteralPath $script:ModePath -Force -ErrorAction SilentlyContinue
+        }
+
+        It 'passes in development mode when main requires no approvals' {
+            Set-Mode -Mode 'development'
+            $script:RequiredApprovals = 0
+            $context = Invoke-AuditForTest -GovernanceModePath $script:ModePath
+            $row = Get-Row -Context $context -Id 'V1.5'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*development*'
+        }
+
+        It 'fails when operational mode is declared but approvals were never turned on' {
+            # The transition half-done: someone said production, nobody flipped the switch.
+            Set-Mode -Mode 'operational'
+            $script:RequiredApprovals = 0
+            $row = Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath) -Id 'V1.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*operational*declares 1*enforces 0*'
+        }
+
+        It 'fails when main enforces more than the declared mode claims' {
+            # Drift in the safe direction is still drift: the documents are wrong.
+            Set-Mode -Mode 'development'
+            $script:RequiredApprovals = 1
+            (Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath) -Id 'V1.5').Status |
+                Should -Be 'FAIL'
+        }
+
+        It 'SKIPs rather than reporting the control absent when the rules cannot be read' {
+            # F63/F105: an identity that cannot see a setting must never report it as off.
+            # The Verifier's token is deliberately read-only and may not be able to read
+            # branch rules at all - that is a property of the identity, not of the control.
+            Set-Mode -Mode 'development'
+            $script:RulesReadable = $false
+            $row = Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath) -Id 'V1.5'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*cannot read*'
+            $row.Observed | Should -Not -BeLike '*not enforced*'
+        }
+
+        It 'SKIPs when the declared mode file is missing, naming what to create' {
+            $row = Get-Row -Context (Invoke-AuditForTest -GovernanceModePath (Join-Path ([IO.Path]::GetTempPath()) 'no-such-mode.json')) -Id 'V1.5'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*governance-mode.json*'
         }
     }
 
@@ -206,10 +304,10 @@ Describe 'layer-01-audit' {
     }
 
     Context 'a check that throws' {
-        It 'records V1.4 as FAIL and still evaluates the other three criteria' {
+        It 'records V1.4 as FAIL and still evaluates the other criteria' {
             Mock Invoke-MlsGraph { throw 'Authorization_RequestDenied: Insufficient privileges to complete the operation.' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 4
+            @($context.Criterion).Count | Should -Be 5
             $row = Get-Row -Context $context -Id 'V1.4'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*Authorization_RequestDenied*'

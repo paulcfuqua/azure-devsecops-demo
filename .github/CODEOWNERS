@@ -1,13 +1,34 @@
 # Code owners for meridian-launch-systems / azure-devsecops-demo
 #
 # GitHub requests a review from the owner of every path a pull request touches.
-# Paired with branch protection requiring review, this is the control that stops
-# a workflow, a role grant or a compliance record changing without the person
-# accountable for it seeing the diff.
+#
+# WHAT THIS FILE DOES TODAY: it ROUTES review requests. It does not REQUIRE them.
+#
+# This header used to say "paired with branch protection requiring review, this is
+# the control that stops a workflow, a role grant or a compliance record changing
+# without the person accountable for it seeing the diff" - and cited NIST SP 800-171
+# Rev 2 3.4.3 and 3.1.5 for it. That pairing did not exist: main's ruleset sets
+# required_approving_review_count to 0, so no approval has ever been required and
+# every merge in this repository's history was self-approved. A control asserted in
+# prose and enforced nowhere is the exact defect this repository exists to catch,
+# and it sat in the file that describes the control.
+#
+# It is not an oversight - it is a DELIBERATE mode, now written down where it can be
+# read and checked: .github/governance-mode.json declares `development`, in which
+# agents are authorized to self-approve and merge on green because nothing here
+# reaches a real user and the gauntlet is the safety gate.
+#
+# The paths below become genuinely review-gated on the move to `operational` mode,
+# which is one setting: required_approving_review_count 0 -> 1. They are the paths
+# that define what "safe" MEANS, so a change to them can weaken the gate that
+# authorised it. verification/layer-01-audit.ps1 V1.5 fails whenever the declared
+# mode and the enforced ruleset disagree, so that transition cannot be half-done.
 #
 # NIST SP 800-171 Rev 2 3.4.3 ("track, review, approve or disapprove, and log
-# changes to organizational systems") and 3.1.5 (least privilege) both lean on
-# this being real rather than aspirational.
+# changes to organizational systems") and 3.1.5 (least privilege) are what the
+# operational-mode gate evidences. In development mode they are evidenced by the
+# gauntlet and the audit trail, not by human approval - state it that way in the
+# compliance register rather than claiming a review gate that is switched off.
 #
 # Ordering matters: the LAST matching pattern wins, so the broad default comes
 # first and the sensitive paths override it.
