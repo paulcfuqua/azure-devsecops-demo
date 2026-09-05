@@ -185,6 +185,38 @@ same way; or accepting that the compliance history reaches `main` by a human act
 `.github/governance-mode.json` and with whoever owns that, not with whoever next edits the
 workflow.
 
+**DIAGNOSTIC, 2026-09-05: approval is the sole blocker, and the artifact passes.** The
+eight held runs on head `426c00c5` were approved by hand. PR #147 went from **zero checks
+to eighteen**, and **16 concluded `success`** with the remaining 7 still running when they
+were orphaned. Nothing else was in the way: with the runs released, the compliance artifact
+behaves like any ordinary pull request and clears the gauntlet on its own merits. That
+settles the premise — a fix that stops the runs being held is sufficient, and **no gate
+needs weakening to land this**.
+
+**And the diagnostic exposed a SECOND mechanism nobody had named.** Merging an unrelated
+pull request triggered the compliance workflow, which **force-updates `compliance-state` on
+every run**. The branch moved `426c00c5` → `0510ba21`, every one of those 18 checks was
+orphaned, eight fresh runs were held on the new head, and #147 was back to zero checks
+within minutes.
+
+So manual approval is not merely toil, it is a **race the emitter runs against itself**: an
+approval only survives if nothing lands on `main` before the gauntlet finishes, and the
+emitter is triggered by exactly that. This is why "just approve it" has never worked and
+never will.
+
+**The complete fix is therefore two things, not one:**
+
+1. **Remove the approval gate** — run the emitter as a GitHub App, whose token is not
+   attributed to `github-actions[bot]`. This is also F191's durable fix: an installation
+   token merges as `<app>[bot]`, restoring V10.1's original literal assertion. It **retires**
+   `SELF_HEAL_TOKEN` rather than adding a credential.
+2. **Arm auto-merge on the compliance pull request**, so it merges the moment it is green
+   instead of requiring a human to be watching in the one window where the branch has not
+   just been force-updated.
+
+Neither weakens a gate. The pull request still runs the full gauntlet and still has to pass,
+which is the whole point of preferring this over a ruleset bypass.
+
 ---
 
 ### F194 — CODEOWNERS claimed a review gate the repository has never enforced *(fixed 2026-09-04)*
