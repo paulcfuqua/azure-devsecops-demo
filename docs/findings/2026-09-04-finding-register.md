@@ -17,6 +17,7 @@ in one piece. They are cross-referenced here and not restated.
 | **F193** | The nightly compliance artifact still cannot merge, and F120's fix is not the reason *(open, hypothesis in flight)* |
 | **F194** | CODEOWNERS claimed a review gate the repository has never enforced |
 | **F195** | Both L10 criteria counted a *skipped* check as a failed one |
+| **F196** | V6.2 fixed — and F182's leading hypothesis was wrong |
 
 ---
 
@@ -151,6 +152,39 @@ is elsewhere — a repository approval policy — and the comment in `compliance
 rather than being left as though it worked. **Do not close this finding on the absence of
 noise; close it on a `pull_request` run that reports a conclusion.**
 
+**SETTLED 2026-09-05, AND THE HYPOTHESIS WAS WRONG.** The identity fix did exactly what it
+was written to do and changed nothing that mattered. On head `426c00c5`: the commit's
+author **and** committer are `paulcfuqua`, the pull request's own author is `paulcfuqua`,
+and the branch was pushed with the PAT. GitHub still reports `actor:
+github-actions[bot]`, `triggering_actor: github-actions[bot]`, and holds every run at
+`action_required`. #147 still carries zero checks.
+
+**A push made from inside a workflow run is attributed to Actions whichever credential
+performs it**, and the resulting `pull_request` runs are held for approval. That is GitHub
+behaviour the workflow cannot talk its way out of, and no amount of token or identity
+juggling will change it.
+
+**The other route is closed by this repository's own ruleset**, which the direct push
+states exactly:
+
+    remote: error: GH013: Repository rule violations found for refs/heads/main.
+    remote: - Changes must be made through a pull request.
+    remote: - 12 of 12 required status checks are expected.
+
+So the emitter is caught between two rules with no automated path between them: it may not
+push to `main`, and the pull request it is therefore forced to open can never acquire the
+checks that `main` requires.
+
+**Still open, and now grounded rather than guessed.** Three candidates, none of them a bug
+fix: a ruleset **bypass actor** for the emitter — the only fully automated route, and a
+real widening, because bypass is actor-scoped rather than path-scoped and would permit
+pushing anything; running the emitter as a **GitHub App**, whose runs may not be gated the
+same way; or accepting that the compliance history reaches `main` by a human action.
+
+**This is a governance decision.** It belongs with the mode declared in
+`.github/governance-mode.json` and with whoever owns that, not with whoever next edits the
+workflow.
+
 ---
 
 ### F194 — CODEOWNERS claimed a review gate the repository has never enforced *(fixed 2026-09-04)*
@@ -225,3 +259,45 @@ check run made `$conclusion` a bare string and `"string".Count` threw under
 `Set-StrictMode` — the criterion would have reported `check threw: The property 'Count'
 cannot be found on this object` instead of a verdict. Never hit in production only because
 every real heal PR has had 29 checks. Both call sites are now wrapped.
+
+---
+
+### F196 — V6.2 now says whether it could look, and F182's hypothesis was wrong *(fixed 2026-09-05)*
+
+**F182** recorded that V6.2 fails on the rebuilt estate with one sentence offering two
+readings and committing to neither:
+
+> `the query returned no result (HTTP error, or the Reader identity cannot query this
+> workspace)`
+
+and named a **leading hypothesis, explicitly unproven**: that V6.2 retries past the
+federated assertion's five-minute lifetime and reports the resulting auth failure as "no
+result".
+
+**That hypothesis is wrong, and the code says so.** `Invoke-MlsAz` matches
+`AADSTS700024|assertion is not within its valid time range` and **throws** — deliberately,
+even under `-AllowFailure`, with a comment explaining that swallowing it is how "an expired
+credential becomes 'the lakehouse has no tables'". So an expired assertion reaches a
+criterion as `check threw: … could not authenticate`, never as `no result`. Whatever V6.2
+is hitting, it is not that.
+
+This is recorded rather than quietly corrected because the register's value is that it
+keeps its wrong diagnoses. F182's reasoning from job duration was sound and the conclusion
+did not survive contact with the source.
+
+**What was actually fixed** is the thing F182 asked for regardless of which hypothesis won:
+*"establish whether the token can be obtained at the moment of the query, then report
+UNOBSERVABLE rather than FAIL when it cannot."*
+
+On the failure path only — an extra token call on every pass would spend the very assertion
+lifetime this reasons about — V6.2 now asks whether this identity can mint a Log Analytics
+token:
+
+- **no token** → `SKIP`, stating that reachability is unobservable and that this is **not**
+  evidence about the workspace or its role assignments;
+- **token obtained** → `FAIL`, stating that authentication works and pointing at workspace
+  RBAC, which is a different fix made by a different person.
+
+The next real L6 run will say which of those two the estate is actually in. Until then V6.2
+is **not** claimed as fixed — only as capable of telling the difference, which it was not
+before.
