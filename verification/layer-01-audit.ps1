@@ -149,6 +149,83 @@ function Test-SecretScanning {
     return New-MlsCheckResult -Passed ($secretScanning -eq 'enabled' -and $pushProtection -eq 'enabled') -Observed $observed -Final
 }
 
+function Test-GovernanceMode {
+    <#
+    .SYNOPSIS
+        V1.5 - the governance mode this repository DECLARES is the one main ENFORCES.
+    .DESCRIPTION
+        The repository runs in one of two declared modes, and which one it is decides
+        whether an agent may merge its own pull request:
+
+          development  intent is established by the person building the thing, the
+                       gauntlet is the safety gate, and self-approval is authorized.
+          operational  a change can reach something real, so the paths that DEFINE
+                       safety - workflows, verification, compliance, identity - need a
+                       second party.
+
+        Self-healing is unchanged by the mode. A security patch GitHub generated for a
+        named advisory that cleared the full gauntlet auto-merges in both; heal PRs never
+        touch the paths above.
+
+        This criterion exists because the mode was true, load-bearing and written down
+        NOWHERE. `.github/CODEOWNERS` asserted that review was enforced, citing NIST SP
+        800-171 3.4.3 and 3.1.5, while the branch ruleset required ZERO approvals - so a
+        reader, or an agent starting cold, believed in a control that did not exist. The
+        dangerous drift is the other direction: declaring operational mode and never
+        flipping the setting, which leaves production changes unreviewed while every
+        document says they are not. Nothing detected either state.
+
+        A mode nobody can read is not a policy, and a policy nothing checks is a wish.
+    .OUTPUTS
+        PASS when the declared mode's required approval count is what main enforces.
+        SKIP when the declaration is missing, or when this identity cannot read the rules
+        - never a verdict that the control is absent (the F63/F105 rule).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$ModePath
+    )
+    if ([string]::IsNullOrWhiteSpace($ModePath) -or -not (Test-Path -LiteralPath $ModePath)) {
+        return New-MlsCheckResult -Status SKIP `
+            -Observed "no declared governance mode: .github/governance-mode.json was not found at '$ModePath'" `
+            -Detail 'Create it, declaring "mode" and an "enforcement" map giving requiredApprovingReviewCount per mode. Until it exists this repository has no stated policy for whether an agent may merge its own work, and nothing can check adherence.'
+    }
+
+    $declared = Get-Content -LiteralPath $ModePath -Raw | ConvertFrom-Json
+    $mode = "$(Get-MlsProperty -InputObject $declared -Name 'mode')"
+    $enforcement = Get-MlsProperty -InputObject $declared -Name 'enforcement'
+    $forMode = Get-MlsProperty -InputObject $enforcement -Name $mode
+    if ([string]::IsNullOrWhiteSpace($mode) -or $null -eq $forMode) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "the declaration names mode '$mode', which has no entry under 'enforcement'" `
+            -Detail 'Every declarable mode needs its enforcement stated, or the declaration cannot be checked against anything.'
+    }
+    $expected = [int]"$(Get-MlsProperty -InputObject $forMode -Name 'requiredApprovingReviewCount')"
+
+    # Read-only, and tolerant: an identity that cannot see the rules says so.
+    $rules = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/rules/branches/main")
+    if ($null -eq $rules) {
+        return New-MlsCheckResult -Status SKIP `
+            -Observed "declared mode is '$mode', but this identity cannot read the branch rules for main, so adherence is unobservable" `
+            -Detail 'GET /repos/{repo}/rules/branches/main returned nothing. That is a property of the identity, not of the control: it is NOT evidence that review is unenforced. Re-run with a token that can read repository rules.'
+    }
+
+    $pullRequestRule = @($rules | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'type')" -eq 'pull_request' })
+    # No pull_request rule at all means no approvals are required - a readable, real state.
+    $actual = 0
+    if ($pullRequestRule.Count -gt 0) {
+        $actual = [int]"$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $pullRequestRule[0] -Name 'parameters') -Name 'required_approving_review_count')"
+    }
+
+    if ($actual -eq $expected) {
+        return New-MlsCheckResult -Passed $true `
+            -Observed "declared mode '$mode' declares $expected required approving review(s); main enforces $actual"
+    }
+    return New-MlsCheckResult -Passed $false -Final `
+        -Observed "declared mode '$mode' declares $expected required approving review(s); main enforces $actual" `
+        -Detail "The declaration and the enforcement disagree, so one of them is a fiction. If the intent is operational mode, set required_approving_review_count to $expected on main's branch ruleset; if the repository is still in development, correct the declaration. Do not leave them apart - CODEOWNERS and the compliance record both lean on this being real."
+}
+
 function Test-CommittedIdentifier {
     <# V1.3 - two greps: the three real GUIDs (values injected from the Verifier's own
        environment, never from the repo) and a generic GUID sweep with an allowlist. #>
@@ -250,6 +327,7 @@ function Invoke-Main {
         [string]$EnvironmentName = 'demo',
         [string]$RepoRoot,
         [string]$GuidAllowlistPath,
+        [string]$GovernanceModePath,
         [string]$ReportRoot,
         [switch]$NoRetry,
         [string[]]$OnlyCriterion = @()
@@ -284,6 +362,17 @@ function Invoke-Main {
     $allowedGuid = @(Get-AllowedGuid -RepoRoot $root -AllowlistPath $GuidAllowlistPath)
     Add-MlsPreflight -Context $context -Name 'GUID allowlist entries' -Value "$($allowedGuid.Count)"
 
+    $governanceModePath = $GovernanceModePath
+    if ([string]::IsNullOrWhiteSpace($governanceModePath)) {
+        $governanceModePath = Join-Path -Path $root -ChildPath '.github' -AdditionalChildPath 'governance-mode.json'
+    }
+    $declaredMode = 'absent'
+    if (Test-Path -LiteralPath $governanceModePath) {
+        $declaredMode = "$((Get-Content -LiteralPath $governanceModePath -Raw | ConvertFrom-Json).mode)"
+    }
+    Add-MlsPreflight -Context $context -Name 'Declared governance mode' -Value $declaredMode `
+        -Status $(if ($declaredMode -eq 'absent') { 'ABSENT' } else { 'OK' })
+
     # L01: Graph reads of the app registration may lag creation by up to 30 min
     Invoke-MlsCriterion -Context $context -Id 'V1.1' -Control @('3.5.2') `
         -Description 'Actions run using OIDC succeeds (az account show inside the runner matches the demo sub)' `
@@ -315,6 +404,17 @@ function Invoke-Main {
         -Expected "Issuer == https://token.actions.githubusercontent.com; Subject == repo:${repositoryName}:environment:$EnvironmentName" `
         -RetryWindowMinutes 30 `
         -Test { Test-FederatedCredential -DeployerAppName $DeployerAppName -Repository $repositoryName -EnvironmentName $EnvironmentName } | Out-Null
+
+    # 3.4.3 "track, review, approve or disapprove, and log changes" and 3.1.5 least
+    # privilege are the two CODEOWNERS cites for requiring review. Whether that review is
+    # actually required is a MODE decision, and this is the criterion that keeps the
+    # declared mode and the enforced one from drifting apart. Read-your-writes on a
+    # repository setting, so no retry window.
+    Invoke-MlsCriterion -Context $context -Id 'V1.5' -Control @('3.4.3', '3.1.5') `
+        -Description 'The declared governance mode is the one main enforces' `
+        -Command "cat .github/governance-mode.json`ngh api repos/$repositoryName/rules/branches/main --jq '.[] | select(.type==`"pull_request`") | .parameters.required_approving_review_count'" `
+        -Expected 'the declared mode''s requiredApprovingReviewCount equals what main enforces' -NoRetry `
+        -Test { Test-GovernanceMode -Repository $repositoryName -ModePath $governanceModePath } | Out-Null
 
     return $context
 }

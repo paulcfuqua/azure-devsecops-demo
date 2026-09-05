@@ -1,0 +1,62 @@
+{
+  "$comment": [
+    "THE DECLARED GOVERNANCE MODE. This file is the single source; CLAUDE.md describes it",
+    "in prose and CODEOWNERS routes reviews under it, but neither of those is authoritative.",
+    "",
+    "It exists because 'we are in development mode' was true, load-bearing, and written",
+    "down nowhere. CODEOWNERS asserted that review was enforced - citing NIST SP 800-171",
+    "3.4.3 and 3.1.5 - while the ruleset required zero approvals, so a reader or a",
+    "cold-starting agent believed in a control that did not exist. A mode nobody can read",
+    "is not a policy, and a policy nothing checks is a wish.",
+    "",
+    "verification/layer-01-audit.ps1 V1.5 reads this file and the LIVE branch ruleset and",
+    "fails when they disagree, so declaring operational mode without flipping the setting",
+    "is caught rather than assumed."
+  ],
+  "mode": "development",
+  "declaredAt": "2026-09-04",
+  "declaredBy": "sponsor",
+  "rationale": [
+    "The solution is still being built. Intent for a change is established by the person",
+    "building it, and the gauntlet - lint, both test suites, CodeQL, gitleaks, Trivy - is",
+    "the safety gate. Agents are authorized to self-approve and merge their own pull",
+    "requests on green.",
+    "",
+    "Nothing here reaches a production system or a real user. The estate is synthetic,",
+    "disposable by design, and rebuilt on demand."
+  ],
+  "transition": {
+    "to": "operational",
+    "when": [
+      "the estate serves a real user, a real workload, or a real auditor's evidence, OR",
+      "anyone outside the build team depends on its output"
+    ],
+    "action": "Set required_approving_review_count to 1 on the branch ruleset for main. V1.5 fails until this matches the declared mode.",
+    "consequence": [
+      "Agents lose self-approval. A human approves changes to the paths CODEOWNERS names -",
+      "workflows, actions, verification, compliance, infra/entra, infra/policy,",
+      "infra/purview, scripts/bootstrap - because those define what 'safe' MEANS and a",
+      "change to them can weaken the gate that authorised it.",
+      "",
+      "Self-healing does NOT change. A security patch that GitHub generated for a named",
+      "advisory and that cleared the full gauntlet still auto-merges unattended in",
+      "operational mode; that is the product claim, not a development shortcut. Heal PRs",
+      "never touch the paths above, so the showpiece survives the transition intact."
+    ]
+  },
+  "enforcement": {
+    "development": {
+      "requiredApprovingReviewCount": 0,
+      "selfApprovalAuthorized": true
+    },
+    "operational": {
+      "requiredApprovingReviewCount": 1,
+      "selfApprovalAuthorized": false
+    }
+  },
+  "ruleset": {
+    "repository": "paulcfuqua/azure-devsecops-demo",
+    "branch": "main",
+    "note": "V1.5 reads GET /repos/{repo}/rules/branches/main and compares the pull_request rule's required_approving_review_count to enforcement[mode]. An identity that cannot read the rules reports SKIP, never 'the control is absent' (the F63/F105 rule)."
+  }
+}

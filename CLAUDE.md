@@ -78,6 +78,43 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
    creates is named both here and in gitleaks.yml, because a list that is only *believed* to be
    complete is the one that drifts.
 
+## Governance mode — who has to approve a merge
+
+**The repository is in `development` mode.** The declaration lives in
+[`.github/governance-mode.json`](.github/governance-mode.json), which is the single source;
+this section and `.github/CODEOWNERS` describe it, neither is authoritative.
+
+| | `development` (now) | `operational` |
+|---|---|---|
+| Agent self-approves and merges its own PR on green | **yes** | no |
+| Required approving reviews on `main` | **0** | 1 |
+| What establishes intent | the person building it | a second party, for the paths below |
+| What establishes safety | the gauntlet | the gauntlet |
+
+**Why self-approval is authorized now.** Intent is established by whoever is building the
+thing, the gauntlet — lint, both test suites, CodeQL, gitleaks, Trivy — is the safety gate,
+and nothing here reaches a real user. The estate is synthetic and disposable by design.
+
+**What changes at `operational`.** A human approves changes to the paths CODEOWNERS names —
+workflows, actions, `verification/`, `compliance/`, `infra/entra|policy|purview/`,
+`scripts/bootstrap/` — because those define what *safe* MEANS, and a change to them can
+weaken the gate that authorised it. That is the whole principle: **auto-merge where intent
+is pre-established and safety is machine-checkable, and only where the change cannot modify
+the checker.**
+
+**Self-healing does not change with the mode.** A security patch GitHub generated for a
+named advisory that cleared the full gauntlet auto-merges unattended in *both* modes — that
+is the product claim, not a development shortcut. Heal PRs never touch the paths above, so
+showpiece #3 survives the transition intact. V10.1 still FAILS a heal a human merged, in
+either mode.
+
+**The transition is one setting**, `required_approving_review_count` 0 → 1 on main's branch
+ruleset, and it cannot be half-done: **V1.5** reads the declaration and the live ruleset and
+fails when they disagree. That criterion exists because this mode was true, load-bearing and
+written down nowhere — CODEOWNERS asserted a review gate, citing 3.4.3 and 3.1.5, while zero
+approvals were required. A mode nobody can read is not a policy, and a policy nothing checks
+is a wish.
+
 ## How we work
 
 - Each teammate works in its own git worktree; merge to `main` via PR. ICs never push to

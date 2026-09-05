@@ -10,9 +10,10 @@ A layer is done when the independent auditor says so, not when a deploy exits ze
 the criterion tables, not the job status.
 
 The history — every defect found while building this, in order, including the diagnoses
-that turned out to be wrong — is a dated archive at
-**[findings/2026-09-03-finding-register.md](findings/2026-09-03-finding-register.md)**.
-Nothing was removed from it.
+that turned out to be wrong — is a dated archive:
+**[2026-08-22 → 09-03](findings/2026-09-03-finding-register.md)** and
+**[2026-09-04](findings/2026-09-04-finding-register.md)**, which carries F190–F194 and the
+one still open. Nothing was removed from either.
 
 ---
 

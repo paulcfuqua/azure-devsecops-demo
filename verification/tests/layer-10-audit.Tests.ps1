@@ -35,7 +35,7 @@ BeforeAll {
         )
         Invoke-Main -Repository $script:Repository -CodeQlAlertNumber $CodeQlAlertNumber -AutofixPrNumber $AutofixPrNumber `
             -DependabotAlertNumber $DependabotAlertNumber -VulnLabAppName 'mls-vuln-lab-demo-ca' `
-            -ResourceGroupName 'mls-rg-apps' -AutomationLogin $script:Automation -ReseedMergedUtc $ReseedMergedUtc `
+            -ResourceGroupName 'mls-rg-apps' -ReseedMergedUtc $ReseedMergedUtc `
             -ChainWindowHours 24 -DependencyPassBar 2 -AlertSurfaceReadable $AlertSurfaceReadable `
             -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
@@ -64,7 +64,13 @@ Describe 'layer-10-audit' {
         # Merged by default. Set to '' for the state the chain is actually in for most of
         # its life: auto-merge armed, PR still open, nothing merged yet.
         $script:MergedAt = '2026-08-24T10:30:00Z'
-        $script:AutoMerge = [pscustomobject]@{ enabledBy = 'github-actions[bot]' }
+        # Shaped as the API actually returns it: enabledBy is an object with a login,
+        # and enabledAt survives the merge. Armed BEFORE the merge, which is the whole
+        # signal - the decision to merge was recorded before the result was known.
+        $script:AutoMerge = [pscustomobject]@{
+            enabledBy = [pscustomobject]@{ login = $script:Automation }
+            enabledAt = '2026-08-24T10:20:00Z'
+        }
         $script:CheckConclusion = 'success'
         $script:PrBody = "Autofix says: $($script:AutofixDescription)"
         # The witness revision the deploy stage looks for: created after the merge AND
@@ -165,13 +171,37 @@ Describe 'layer-10-audit' {
     }
 
     Context 'a criterion fails on a realistic wrong value' {
-        It 'fails V10.1 when a human merged the heal PR' {
+        It 'fails V10.1 when a human merged the heal PR at their own discretion' {
+            # The governance claim: no human decided to merge this. A discretionary
+            # click leaves NO auto-merge request - the person saw the result, then
+            # chose. That is the state this must catch.
             $script:MergedBy = 'paulcfuqua'
+            $script:AutoMerge = $null
             $context = Invoke-AuditForTest -NoRetry
             $row = Get-Row -Context $context -Id 'V10.1'
             $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike "*expected the automation identity*"
+            $row.Observed | Should -BeLike '*after the result was known*'
             Get-MlsExitCode -Context $context | Should -Be 1
+        }
+
+        It 'fails V10.1 when someone else merged what the chain armed' {
+            $script:MergedBy = 'someone-else'
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*armed by*someone-else*'
+        }
+
+        It 'fails V10.1 when auto-merge was armed only after the merge' {
+            # Defends the ordering rather than the presence of the field: an arming
+            # stamped after the merge cannot have caused it.
+            $script:AutoMerge = [pscustomobject]@{
+                enabledBy = [pscustomobject]@{ login = $script:Automation }
+                enabledAt = '2026-08-24T11:30:00Z'
+            }
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Observed |
+                Should -BeLike '*not before the merge*'
         }
 
         It "fails V10.1 when the PR body does not carry Autofix's own explanation" {
@@ -261,6 +291,37 @@ Describe 'layer-10-audit' {
             (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
         }
 
+        It 'derives the window from the heal PR when no re-seed timestamp was supplied (F192)' {
+            # The self-heal workflow runs this audit in the same run that arms auto-merge,
+            # so it reads the trail minutes BEFORE the gauntlet finishes - run 33905789865
+            # verified at 18:26:07 a merge that landed at 18:29:02. That is the chain
+            # working, and it was recorded FAIL only because MLS_L10_RESEED_MERGED_AT was
+            # unset and an unset variable made every in-flight trail a failure.
+            #
+            # The moment the chain committed to this heal is on the PR itself, so the
+            # window no longer depends on a human remembering to set a variable.
+            $script:MergedAt = ''
+            $script:CodeQlState = 'open'
+            $script:AutoMerge = [pscustomobject]@{
+                enabledBy = [pscustomobject]@{ login = $script:Automation }
+                enabledAt = ([datetime]::UtcNow.AddMinutes(-3).ToString('o'))
+            }
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'PENDING'
+            Get-MlsExitCode -Context $context | Should -Be 0
+        }
+
+        It 'still FAILs a derived window that has long expired' {
+            $script:MergedAt = ''
+            $script:CodeQlState = 'open'
+            $script:AutoMerge = [pscustomobject]@{
+                enabledBy = [pscustomobject]@{ login = $script:Automation }
+                enabledAt = ([datetime]::UtcNow.AddHours(-30).ToString('o'))
+            }
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
+        }
+
         It 'never sleeps in-process for a 24 h window' {
             $context = Invoke-AuditForTest -ReseedMergedUtc ([datetime]::UtcNow.AddHours(-1).ToString('o'))
             @($context.Criterion | ForEach-Object { $_.SleptSeconds }) | Should -Be @(0, 0, 0)
@@ -294,6 +355,34 @@ Describe 'layer-10-audit' {
         It 'PASSES when the surface was readable, so the guard is not a blanket fail' {
             $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable 'true'
             (Get-Row -Context $context -Id 'V10.3').Status | Should -Be 'PASS'
+        }
+    }
+
+    Context 'merge provenance asserts the capability, not the merger''s login (F191)' {
+        # V10.1 stage 5 asserted mergedBy == 'github-actions[bot]'. The chain arms
+        # auto-merge with SELF_HEAL_TOKEN, a PAT owned by a person, so GitHub attributes
+        # the merge to that PERSON - and a criterion whose whole job is "no human merged
+        # this" reported a human on every correct run. PR #232, healed and merged with no
+        # human involved at all, failed it.
+        #
+        # Allowing the PAT owner's login would have made it pass and asserted NOTHING: a
+        # genuine hand-merge produces the identical login. What actually separates the two
+        # is WHEN the decision was made. Auto-merge records enabledAt before the checks
+        # finish; a discretionary click happens after the result is known and leaves no
+        # autoMergeRequest at all.
+        It 'passes when a human-named PAT armed auto-merge and the platform merged it' {
+            $script:MergedBy = 'paulcfuqua'
+            $script:AutoMerge = [pscustomobject]@{
+                enabledBy = [pscustomobject]@{ login = 'paulcfuqua' }
+                enabledAt = '2026-08-24T10:20:00Z'
+            }
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'PASS'
+        }
+
+        It 'records who merged and when it was armed, so a reader can judge it' {
+            $context = Invoke-AuditForTest -NoRetry
+            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*armed*'
         }
     }
 
