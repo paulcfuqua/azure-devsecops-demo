@@ -161,8 +161,13 @@ Describe 'layer-01-audit' {
         BeforeAll {
             # Declared in BeforeAll, not in the Context body: a function defined in the
             # body exists only during Pester DISCOVERY and is gone by the time an It runs.
+            # SupportsShouldProcess because the name carries a state-changing verb and it
+            # writes a file; PSScriptAnalyzer runs at Error+Warning over verification/ and
+            # a test helper is not exempt from the rules the audits are held to.
             function Set-Mode {
+                [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
                 param([string]$Mode, [int]$Development = 0, [int]$Operational = 1)
+                if (-not $PSCmdlet.ShouldProcess($script:ModePath, 'write mode fixture')) { return }
                 @{
                     mode        = $Mode
                     enforcement = @{

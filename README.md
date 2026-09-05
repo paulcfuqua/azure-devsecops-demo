@@ -217,9 +217,11 @@ enforced in the workflows and the scripts, not just written down.
 - [Lifecycle and shutdown](docs/runbooks/lifecycle-and-shutdown.md) — what expires when,
   what bills outside the Azure spending limit, and what teardown deliberately leaves alone
 - [Layer playbooks L01–L12](docs/runbooks/layers/) · [demo script](docs/runbooks/demo-script.md)
-- [Finding register](docs/findings/2026-09-03-finding-register.md) — a dated archive of
-  every defect found while building this, including the diagnoses that turned out to be
-  wrong. Kept because a register that edits its own history is not evidence
+- Finding register — [2026-08-22 → 09-03](docs/findings/2026-09-03-finding-register.md) ·
+  [2026-09-04](docs/findings/2026-09-04-finding-register.md). A dated archive of every
+  defect found while building this, including the diagnoses that turned out to be wrong
+  and the ones still open. Kept because a register that edits its own history is not
+  evidence
 - [Working agreements for all agents](CLAUDE.md)
 ## Run locally
 

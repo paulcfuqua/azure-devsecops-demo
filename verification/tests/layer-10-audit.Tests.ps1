@@ -35,7 +35,7 @@ BeforeAll {
         )
         Invoke-Main -Repository $script:Repository -CodeQlAlertNumber $CodeQlAlertNumber -AutofixPrNumber $AutofixPrNumber `
             -DependabotAlertNumber $DependabotAlertNumber -VulnLabAppName 'mls-vuln-lab-demo-ca' `
-            -ResourceGroupName 'mls-rg-apps' -AutomationLogin $script:Automation -ReseedMergedUtc $ReseedMergedUtc `
+            -ResourceGroupName 'mls-rg-apps' -ReseedMergedUtc $ReseedMergedUtc `
             -ChainWindowHours 24 -DependencyPassBar 2 -AlertSurfaceReadable $AlertSurfaceReadable `
             -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }

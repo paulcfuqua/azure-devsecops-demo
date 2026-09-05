@@ -213,10 +213,36 @@ jobs:
           # degrades to today's behaviour rather than failing.
           GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || github.token }}
           MLS_PUSH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN }}
+          # The identity the PAT belongs to, so the commit matches the pusher (F193).
+          MLS_COMMIT_AUTHOR_NAME: ${{ github.repository_owner }}
+          MLS_COMMIT_AUTHOR_EMAIL: ${{ github.repository_owner }}@users.noreply.github.com
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # ATTRIBUTE THE COMMIT TO WHOEVER ACTUALLY PUSHES IT (F193, hypothesis).
+          #
+          # F120's fix - push the branch with SELF_HEAL_TOKEN so its pull-request checks
+          # run - is in place and demonstrably works: run 33906128904 printed "Branch
+          # pushed with SELF_HEAL_TOKEN". The checks still never report. Every resulting
+          # run sits at `action_required`, GitHub names `github-actions[bot]` as both
+          # actor and triggering_actor, and PR #147 therefore carries ZERO checks and has
+          # been unmergeable since 2026-09-01.
+          #
+          # The one thing still claiming to be the bot is this commit identity, hardcoded
+          # regardless of which credential pushes. GitHub holds workflow runs it
+          # attributes to Actions for approval, which is exactly the state observed.
+          #
+          # THIS IS A HYPOTHESIS, NOT A DIAGNOSIS. It has not been proven: the next
+          # nightly is the test, and the evidence that settles it is the run's
+          # triggering_actor. If runs still arrive as `action_required` with the bot as
+          # actor, the cause is elsewhere - a repository approval policy - and this
+          # comment must say so rather than being quietly left as though it worked.
+          if [ -n "${MLS_PUSH_TOKEN:-}" ]; then
+            git config user.name "${MLS_COMMIT_AUTHOR_NAME}"
+            git config user.email "${MLS_COMMIT_AUTHOR_EMAIL}"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          fi
           git add compliance/state
           if git diff --cached --quiet; then
             echo 'compliance state unchanged; nothing to commit.'

@@ -1,4 +1,4 @@
-﻿#Requires -Version 7.0
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     L10 Verifier audit - the self-healing pipeline on GitHub Copilot Autofix. READ-ONLY.
@@ -15,9 +15,16 @@
       V10.2  For at least 2 of the 3 seeded dependency pins, the Dependabot trail holds.
 
     Each stage is read independently from an API. Stage 3 checks the head commit came from
-    the Autofix API and stage 5 checks the merger identity, so a hand-assisted chain reads
-    as a failed chain - which is the point: never hand-close alerts, hand-write a fix, or
-    hand-merge PRs to "complete" a run (L10.md Rollback).
+    the Autofix API and stage 5 checks the merge was PRE-AUTHORISED rather than chosen by a
+    human once the result was visible, so a hand-assisted chain reads as a failed chain -
+    which is the point: never hand-close alerts, hand-write a fix, or hand-merge PRs to
+    "complete" a run (L10.md Rollback).
+
+    Stage 5 used to compare mergedBy against a bot login, which could never pass: the chain
+    arms auto-merge with a PAT owned by a person, so GitHub credits the merge to that person
+    and the criterion reported a human on every correct run. Allowing that login would have
+    asserted nothing, because a genuine hand-merge produces an identical mergedBy. See
+    Test-MergeProvenance and F191.
 
     THE DEPLOY STAGE (V10.1 stage 6, V10.2 stage 5) reads revisions of
     mls-vuln-lab-demo-ca, the L10 deployment witness provisioned by
@@ -45,7 +52,6 @@ param(
     [string[]]$DependabotAlertNumber = @(),
     [string]$VulnLabAppName = 'mls-vuln-lab-demo-ca',
     [string]$ResourceGroupName = 'mls-rg-apps',
-    [string]$AutomationLogin = 'github-actions[bot]',
     [string]$ReseedMergedUtc,
     [double]$ChainWindowHours = 24,
     [int]$DependencyPassBar = 2,
@@ -256,8 +262,7 @@ function Test-AutofixTrail {
         [AllowEmptyString()][string]$AlertNumber,
         [AllowEmptyString()][string]$PullRequestNumber,
         [Parameter(Mandatory)][string]$ResourceGroupName,
-        [Parameter(Mandatory)][string]$AppName,
-        [Parameter(Mandatory)][string]$AutomationLogin
+        [Parameter(Mandatory)][string]$AppName
     )
     if ([string]::IsNullOrWhiteSpace($AlertNumber) -or [string]::IsNullOrWhiteSpace($PullRequestNumber)) {
         return New-MlsCheckResult -Passed $false -Observed 'no seeded CodeQL alert number and/or heal PR number supplied' -Final `
@@ -355,8 +360,7 @@ function Test-DependabotTrailForAlert {
         [Parameter(Mandatory)][string]$Repository,
         [Parameter(Mandatory)][string]$AlertNumber,
         [Parameter(Mandatory)][string]$ResourceGroupName,
-        [Parameter(Mandatory)][string]$AppName,
-        [Parameter(Mandatory)][string]$AutomationLogin
+        [Parameter(Mandatory)][string]$AppName
     )
     $problem = [System.Collections.Generic.List[string]]::new()
     $timestamp = [System.Collections.Generic.List[object]]::new()
@@ -425,7 +429,6 @@ function Test-DependabotTrail {
         [AllowEmptyCollection()][string[]]$AlertNumber,
         [Parameter(Mandatory)][string]$ResourceGroupName,
         [Parameter(Mandatory)][string]$AppName,
-        [Parameter(Mandatory)][string]$AutomationLogin,
         [Parameter(Mandatory)][int]$PassBar
     )
     $numbers = @($AlertNumber | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -435,7 +438,7 @@ function Test-DependabotTrail {
     }
     $result = @($numbers | ForEach-Object {
             Test-DependabotTrailForAlert -Repository $Repository -AlertNumber $_ `
-                -ResourceGroupName $ResourceGroupName -AppName $AppName -AutomationLogin $AutomationLogin
+                -ResourceGroupName $ResourceGroupName -AppName $AppName
         })
     $passing = @($result | Where-Object { $_.Passed })
     $observed = "$($passing.Count) of $($numbers.Count) trails complete: " + (@($result | ForEach-Object { $_.Summary }) -join ' | ')
@@ -457,8 +460,7 @@ function Invoke-Main {
         [string[]]$DependabotAlertNumber = @(),
         [string]$VulnLabAppName = 'mls-vuln-lab-demo-ca',
         [string]$ResourceGroupName = 'mls-rg-apps',
-        [string]$AutomationLogin = 'github-actions[bot]',
-        [string]$ReseedMergedUtc,
+            [string]$ReseedMergedUtc,
         [double]$ChainWindowHours = 24,
         [int]$DependencyPassBar = 2,
         [string]$AlertSurfaceReadable = '',
@@ -545,11 +547,11 @@ function Invoke-Main {
     Invoke-MlsCriterion -Context $context -Id 'V10.1' -Control @('3.4.3', '3.14.1') `
         -Description 'For the seeded CodeQL alert, the full Autofix trail holds (alert -> autofix success -> PR with Autofix commit and explanation -> gauntlet green -> merged by automation -> new ACA revision -> alert fixed, timestamps monotonic)' `
         -Command "gh api repos/$repositoryName/code-scanning/alerts/<n> --jq '{state, created_at, rule:.rule.id}'`ngh api repos/$repositoryName/code-scanning/alerts/<n>/autofix --jq '{status, description, started_at}'`ngh pr view <pr> --json headRefOid,body,commits`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest,mergeCommit`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName --query `"[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}`"`ngh api repos/$repositoryName/code-scanning/alerts/<n> --jq '.state'" `
-        -Expected "seven stages hold: autofix status success with a non-empty description carried in the PR body; head commit from autofix/commits; all check-run conclusions success; mergedBy == $AutomationLogin with an auto-merge request; a witness revision after the merge carrying MLS_HEAL_COMMIT == the PR's merge commit; alert state fixed; timestamps monotonic" `
+        -Expected "seven stages hold: autofix status success with a non-empty description carried in the PR body; head commit from autofix/commits; all check-run conclusions success; the merge pre-authorised by auto-merge, armed before it and credited to the identity that armed it; a witness revision after the merge carrying MLS_HEAL_COMMIT == the PR's merge commit; alert state fixed; timestamps monotonic" `
         -RetryWindowMinutes $windowMinutes -InProcessWaitMinutes 0 -WindowStartUtc $windowStart -PendingWhenUnexpired:$pendingAllowed `
         -Test {
         Test-AutofixTrail -Repository $repositoryName -AlertNumber $codeqlAlert -PullRequestNumber $healPr `
-            -ResourceGroupName $ResourceGroupName -AppName $VulnLabAppName -AutomationLogin $AutomationLogin
+            -ResourceGroupName $ResourceGroupName -AppName $VulnLabAppName
     } | Out-Null
 
     # 3.4.3 for the same reason as V10.1: a full merge trail through the
@@ -562,7 +564,7 @@ function Invoke-Main {
         -RetryWindowMinutes $windowMinutes -InProcessWaitMinutes 0 -WindowStartUtc $windowStart -PendingWhenUnexpired:$pendingAllowed `
         -Test {
         Test-DependabotTrail -Repository $repositoryName -AlertNumber $dependabotAlert `
-            -ResourceGroupName $ResourceGroupName -AppName $VulnLabAppName -AutomationLogin $AutomationLogin -PassBar $DependencyPassBar
+            -ResourceGroupName $ResourceGroupName -AppName $VulnLabAppName -PassBar $DependencyPassBar
     } | Out-Null
 
     # V10.3 - F123. THE CHAIN COULD NOT LOOK, AND SAID "NOTHING TO HEAL".
@@ -608,7 +610,7 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -Repository $Repository -CodeQlAlertNumber $CodeQlAlertNumber `
             -AutofixPrNumber $AutofixPrNumber -DependabotAlertNumber $DependabotAlertNumber `
-            -VulnLabAppName $VulnLabAppName -ResourceGroupName $ResourceGroupName -AutomationLogin $AutomationLogin `
+            -VulnLabAppName $VulnLabAppName -ResourceGroupName $ResourceGroupName `
             -ReseedMergedUtc $ReseedMergedUtc -ChainWindowHours $ChainWindowHours `
             -DependencyPassBar $DependencyPassBar -AlertSurfaceReadable $AlertSurfaceReadable `
             -ReportRoot $ReportRoot -NoRetry:$NoRetry `
