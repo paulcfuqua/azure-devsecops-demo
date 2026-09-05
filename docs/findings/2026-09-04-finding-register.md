@@ -14,7 +14,7 @@ in one piece. They are cross-referenced here and not restated.
 | **F190** | The vuln-lab cannot be re-armed through a pull request |
 | **F191** | V10.1's "no human merged this" read a field that says the same thing either way |
 | **F192** | The chain window depended on a variable nobody had set, so an in-flight chain read as failed |
-| **F193** | The nightly compliance artifact still cannot merge, and F120's fix is not the reason *(open, hypothesis in flight)* |
+| **F193** | The credential that pushes is the one checkout persists, not the one in the remote URL |
 | **F194** | CODEOWNERS claimed a review gate the repository has never enforced |
 | **F195** | Both L10 criteria counted a *skipped* check as a failed one |
 | **F196** | V6.2 fixed — and F182's leading hypothesis was wrong |
@@ -124,7 +124,7 @@ meaning.
 
 ---
 
-### F193 — the nightly compliance artifact still cannot merge *(OPEN — hypothesis in flight)*
+### F193 — the credential that pushes is the one checkout persists *(fixed 2026-09-05)*
 
 **What is true.** PR **#147** has been open since 2026-09-01 and carries **zero** status
 checks. Every compliance run pushes to the `compliance-state` branch and spawns eight
@@ -184,6 +184,50 @@ same way; or accepting that the compliance history reaches `main` by a human act
 **This is a governance decision.** It belongs with the mode declared in
 `.github/governance-mode.json` and with whoever owns that, not with whoever next edits the
 workflow.
+
+**SOLVED 2026-09-05 — and it was none of the three. No governance decision was needed.**
+
+`actions/checkout` defaults to `persist-credentials: true` and writes the job's
+`GITHUB_TOKEN` into `http.https://github.com/.extraheader` as an Authorization header.
+**That header wins over credentials embedded in a remote URL.** So the step could rewrite
+`origin` to carry `SELF_HEAL_TOKEN`, print `Branch pushed with SELF_HEAL_TOKEN`, and push
+successfully — while authenticating as `github-actions[bot]` the entire time. GitHub then
+held every resulting `pull_request` run at `action_required`, and #147 never acquired a
+check.
+
+Everything about it looked right. The branch existed, the log said the intended thing, the
+push worked, the secret was correctly scoped and visible. **Only the actor on the resulting
+workflow runs gave it away, and nothing was reading that.** This is F122/F123/F124's class:
+a value that is present, correctly spelled, and not the one the system actually uses.
+
+**The comparison that found it is inside this repository.** Same repo, same ruleset, same
+PAT:
+
+| | actor | held? |
+|---|---|---|
+| self-heal #226, #232 | `paulcfuqua` | no — 8 runs each, all success |
+| compliance #147 | `github-actions[bot]` | yes — every run |
+
+The self-heal chain creates its commits through the **REST API** with the PAT and never
+touches a git remote, so no extraheader is involved. The compliance emitter pushes with
+`git`, and the extraheader silently outranked its credential.
+
+**Fixed** by setting `token:` on the checkout, so the persisted credential *is* the PAT.
+`failure-classes.Tests.ps1` now sweeps for the shape — a workflow that rewrites a remote
+with a token but neither sets `token:` on checkout nor disables credential persistence —
+and the sweep was mutation-tested: it flags the workflow with the fix removed and passes
+the workflow with it.
+
+**Also fixed: the race.** The state carries a fresh `collectedAt` every run, so every push
+to `main` force-updates this branch and orphans any checks in flight — verified directly
+when sixteen approved, green checks on head `426c00c5` were discarded by an unrelated
+merge minutes later. Auto-merge is now armed on the pull request, so it lands the moment it
+is green rather than needing a human present in a window the emitter keeps closing.
+
+**Neither the GitHub App nor the ruleset bypass was necessary.** Both were proposed here
+before the cause was understood, and the App was recommended on an unverified assumption
+about how App-triggered runs are gated. The identity arguments for an App remain true and
+remain separate; they were never what this finding needed.
 
 ---
 
