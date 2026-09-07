@@ -295,23 +295,3 @@ jobs:
 
       - name: Test
         run: npm test
-
-      - name: Confirm the vuln-lab CVE seed is still intact
-        run: |
-          set -euo pipefail
-          # apps/vuln-lab pins three known-vulnerable versions on purpose (L10
-          # showpiece seed) and is deliberately outside the root workspaces list
-          # so hoisting cannot patch them (open item P-6, closed 2026-08-24).
-          # If this count ever drops, the seed has been silently healed.
-          npm ci --prefix apps/vuln-lab
-          npm audit --prefix apps/vuln-lab --json > vuln-lab-audit.json || true
-          total="$(jq '.metadata.vulnerabilities.total' vuln-lab-audit.json)"
-          echo "vuln-lab advisories: ${total}"
-          {
-            echo "### vuln-lab CVE seed"
-            echo
-            echo "\`npm audit\` reports **${total}** advisories (expected: 3 while the seed is armed)."
-          } >> "${GITHUB_STEP_SUMMARY}"
-          if [ "${total}" -lt 3 ]; then
-            echo "::warning title=vuln-lab seed weakened::Expected at least 3 advisories in apps/vuln-lab but found ${total}. DO NOT re-arm. The plant is being retired by the sponsor-approved design of 2026-09-05 (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md, PR #237): re-arming is the F190 loop that design exists to break. L10 criteria still read the lab until that migration lands, so until then a weakened seed simply means V10.1/V10.2 have fewer pins to report on."
-          fi

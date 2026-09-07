@@ -470,6 +470,60 @@ Describe 'layer-10-audit' {
         }
     }
 
+    Context 'a pull request that TALKS about an alert did not heal it' {
+        # THE REAL FALSE POSITIVE, USED AS THE FIXTURE. V10.2 matched code-scanning alert
+        # #9 (closed 2026-09-04) to PR #254, which merged 2026-09-07 and mentioned
+        # "alert #9" only because its description discussed this very defect. A write-up
+        # was credited with the heal, three days after the fact, and the criterion went
+        # GREEN on it - which is worse than the red it replaced.
+        BeforeEach {
+            $script:CodeAlert = @(
+                [pscustomobject]@{
+                    number = 9; state = 'fixed'
+                    created_at = ([datetime]::UtcNow.AddDays(-10)).ToString('o')
+                    fixed_at = ([datetime]::UtcNow.AddDays(-3)).ToString('o')
+                    rule = [pscustomobject]@{ id = 'js/trivial-conditional'; security_severity_level = 'medium'; severity = 'warning' }
+                    tool = [pscustomobject]@{ name = 'CodeQL' }
+                    most_recent_instance = [pscustomobject]@{ location = [pscustomobject]@{ path = 'apps/mcp-tools/src/thing.ts' } }
+                })
+            $script:DependabotAlert = @()
+        }
+
+        It 'does NOT credit a pull request that merged AFTER the alert closed' {
+            # The cheap half of the fix: one comparison, no extra API call, and it alone
+            # rules out the #254 case.
+            $script:PrBody = 'Alert **#9**: fixed but no auto-merge request on the PR.'
+            $script:MergedAt = ([datetime]::UtcNow).ToString('o')   # merged today; alert closed 3d ago
+            $script:PrFiles = @('apps/mcp-tools/src/thing.ts')
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*no merged pull request in the window explains it*'
+        }
+
+        It 'does NOT credit a pull request that never touched the file the alert is in' {
+            # The other half: a heal edits the flawed code; a write-up does not.
+            $script:PrBody = 'Alert **#9** is discussed at length here.'
+            $script:MergedAt = ([datetime]::UtcNow.AddDays(-4)).ToString('o')
+            $script:ArmedAt = ([datetime]::UtcNow.AddDays(-4).AddMinutes(-5)).ToString('o')
+            $script:PrFiles = @('docs/runbooks/layers/L10.md')
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*no merged pull request in the window explains it*'
+        }
+
+        It 'DOES credit a pull request that changed the file, before the alert closed' {
+            # The fix must not make every real heal unexplainable.
+            $script:PrBody = 'Fixes code scanning alert #9.'
+            $script:MergedAt = ([datetime]::UtcNow.AddDays(-4)).ToString('o')
+            # Armed BEFORE the merge, or the provenance stage correctly objects - the
+            # fixture has to move both clocks together, not just one.
+            $script:ArmedAt = ([datetime]::UtcNow.AddDays(-4).AddMinutes(-5)).ToString('o')
+            $script:RevisionCreated = ([datetime]::UtcNow.AddDays(-4).AddMinutes(10)).ToString('o')
+            $script:PrFiles = @('apps/mcp-tools/src/thing.ts')
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*healed:PR #247*'
+        }
+    }
+
     Context 'the candidate window bounds the fetch, and truncation is unobservable' {
         It 'reports SKIP rather than FAIL when the candidate page was truncated' {
             # THE DEFECT THIS GUARDS. The fetch asked for --limit 100 and then filtered by
