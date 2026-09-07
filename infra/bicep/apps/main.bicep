@@ -1326,7 +1326,7 @@ output dataApiIdentityClientId string = dataApiIdentity.outputs.clientId
 @description('Principal (object) ID of the data-api user-assigned identity, for role assignments made outside this template.')
 output dataApiIdentityPrincipalId string = dataApiIdentity.outputs.principalId
 
-@description('Container app NAME per app key. verification/layer-07-audit.ps1 addresses apps by name (-AppName), and the L7 workflow builds the V7.1 deploy manifest from these. Two apps are deliberately NOT here, for different reasons: the L10 witness serves nothing, has no image digest to bind an endpoint to, and V7.1 would report it as an app whose /healthz never answers (published separately as vulnLabWitnessAppName); the compliance app (Task 13) sits behind Easy Auth, and V7.1\'s sweep is an UNAUTHENTICATED GET expecting 200 — exactly what Easy Auth exists to refuse. Folding it in here would either paint a permanently-red manifest entry or invite a future change to loop this output into a blind health sweep (published separately as complianceAppName).')
+@description('Container app NAME per app key. verification/layer-07-audit.ps1 addresses apps by name (-AppName), and the L7 workflow builds the V7.1 deploy manifest from these. One app is deliberately NOT here: the compliance app (Task 13) sits behind Easy Auth, and V7.1\'s sweep is an UNAUTHENTICATED GET expecting 200 — exactly what Easy Auth exists to refuse. Folding it in here would either paint a permanently-red manifest entry or invite a future change to loop this output into a blind health sweep (published separately as complianceAppName).')
 output containerAppNames object = {
   launchOps: launchOpsName
   controlTower: controlTowerName
