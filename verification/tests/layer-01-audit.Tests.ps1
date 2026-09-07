@@ -23,13 +23,14 @@ BeforeAll {
     }
 
     function Invoke-AuditForTest {
-        param([switch]$NoRetry, [string]$GovernanceModePath = '')
+        param([switch]$NoRetry, [string]$GovernanceModePath = '', [string]$CodeownersPath = '')
         $argument = @{
             Repository = $script:Repository
             ReportRoot = $script:ReportRoot
             NoRetry    = $NoRetry
         }
         if ($GovernanceModePath) { $argument['GovernanceModePath'] = $GovernanceModePath }
+        if ($CodeownersPath) { $argument['CodeownersPath'] = $CodeownersPath }
         Invoke-Main @argument
     }
 }
@@ -69,6 +70,9 @@ Describe 'layer-01-audit' {
         # V1.5's subjects: what main enforces, and whether this identity can read it.
         $script:RequiredApprovals = 0
         $script:RulesReadable = $true
+        # The SECOND switch on the same rule, defaulted OFF so every test written before
+        # it existed still describes the case it was written for.
+        $script:RequireCodeOwnerReview = $false
         $script:Subject = 'repo:paulcfuqua/azure-devsecops-demo:environment:demo'
         $script:Issuer = 'https://token.actions.githubusercontent.com'
 
@@ -93,7 +97,10 @@ Describe 'layer-01-audit' {
                     [pscustomobject]@{ type = 'deletion' }
                     [pscustomobject]@{
                         type       = 'pull_request'
-                        parameters = [pscustomobject]@{ required_approving_review_count = $script:RequiredApprovals }
+                        parameters = [pscustomobject]@{
+                            required_approving_review_count = $script:RequiredApprovals
+                            require_code_owner_review       = $script:RequireCodeOwnerReview
+                        }
                     }
                 )
             }
@@ -226,6 +233,111 @@ Describe 'layer-01-audit' {
             $row = Get-Row -Context (Invoke-AuditForTest -GovernanceModePath (Join-Path ([IO.Path]::GetTempPath()) 'no-such-mode.json')) -Id 'V1.5'
             $row.Status | Should -Be 'SKIP'
             $row.Observed | Should -BeLike '*governance-mode.json*'
+        }
+
+        # THE HALF THIS CRITERION COULD NOT SEE.
+        #
+        # `require_code_owner_review` is a second, independent switch on the same
+        # pull_request rule. With a catch-all CODEOWNERS pattern it requires an approval
+        # on EVERY pull request while required_approving_review_count still reads 0 - so
+        # a check that compares only the count reports PASS over a repository whose
+        # declared policy ("0 reviews, self-approval authorized") is not the enforced one.
+        #
+        # Measured on this repository, not theorised: PR #174 held 12/12 green required
+        # checks, mergeable=MERGEABLE and auto-merge armed for five days, and moved
+        # BLOCKED -> CLEAN the moment a code owner approved it.
+        Context 'the code-owner switch, which the count cannot see' {
+            BeforeEach {
+                $script:CodeownersPath = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-codeowners-$([guid]::NewGuid().ToString('n'))"
+            }
+            AfterEach {
+                Remove-Item -LiteralPath $script:CodeownersPath -Force -ErrorAction SilentlyContinue
+            }
+
+            It 'FAILS a declared zero when a catch-all owner makes every PR need approval' {
+                Set-Mode -Mode 'development'
+                $script:RequiredApprovals = 0
+                $script:RequireCodeOwnerReview = $true
+                Set-Content -LiteralPath $script:CodeownersPath -Encoding utf8 -Value @(
+                    '# every path has an owner',
+                    '*                       @paulcfuqua',
+                    '/verification/          @paulcfuqua')
+                $row = Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath -CodeownersPath $script:CodeownersPath) -Id 'V1.5'
+                $row.Status | Should -Be 'FAIL'
+                $row.Observed | Should -BeLike '*require_code_owner_review is ON*'
+                # Names the offending line, so the reader does not have to hunt for it.
+                $row.Observed | Should -BeLike '*line 2*'
+                $row.Observed | Should -BeLike "*'*'*@paulcfuqua*"
+            }
+
+            It 'PASSES when ownership is scoped to the sensitive paths instead' {
+                # The policy this repository actually states: the paths that DEFINE safety
+                # need a second party, and nothing else does. A heal PR touching a
+                # lockfile has no owner and merges unattended, which is the product claim.
+                Set-Mode -Mode 'development'
+                $script:RequiredApprovals = 0
+                $script:RequireCodeOwnerReview = $true
+                Set-Content -LiteralPath $script:CodeownersPath -Encoding utf8 -Value @(
+                    '/.github/workflows/     @paulcfuqua',
+                    '/verification/          @paulcfuqua',
+                    '/infra/                 @paulcfuqua')
+                (Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath -CodeownersPath $script:CodeownersPath) -Id 'V1.5').Status |
+                    Should -Be 'PASS'
+            }
+
+            It 'PASSES a catch-all when the code-owner switch is OFF, because then it gates nothing' {
+                # Ownership without require_code_owner_review requires no approval. The
+                # criterion must not fail on a file that has no effect.
+                Set-Mode -Mode 'development'
+                $script:RequiredApprovals = 0
+                $script:RequireCodeOwnerReview = $false
+                Set-Content -LiteralPath $script:CodeownersPath -Encoding utf8 -Value @('*  @paulcfuqua')
+                (Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath -CodeownersPath $script:CodeownersPath) -Id 'V1.5').Status |
+                    Should -Be 'PASS'
+            }
+
+            It 'PASSES a catch-all in operational mode, where an approval is required anyway' {
+                # A catch-all is not wrong per se - it only contradicts a declared ZERO.
+                Set-Mode -Mode 'operational'
+                $script:RequiredApprovals = 1
+                $script:RequireCodeOwnerReview = $true
+                Set-Content -LiteralPath $script:CodeownersPath -Encoding utf8 -Value @('*  @paulcfuqua')
+                (Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath -CodeownersPath $script:CodeownersPath) -Id 'V1.5').Status |
+                    Should -Be 'PASS'
+            }
+
+            It 'does not treat a pattern with no owner as a catch-all' {
+                # `*` alone grants ownership to nobody and therefore gates nothing.
+                Set-Mode -Mode 'development'
+                $script:RequiredApprovals = 0
+                $script:RequireCodeOwnerReview = $true
+                Set-Content -LiteralPath $script:CodeownersPath -Encoding utf8 -Value @('*', '# nobody owns anything')
+                (Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath -CodeownersPath $script:CodeownersPath) -Id 'V1.5').Status |
+                    Should -Be 'PASS'
+            }
+
+            It 'does not mistake a commented-out catch-all for a live one' {
+                Set-Mode -Mode 'development'
+                $script:RequiredApprovals = 0
+                $script:RequireCodeOwnerReview = $true
+                Set-Content -LiteralPath $script:CodeownersPath -Encoding utf8 -Value @(
+                    '#  *   @paulcfuqua   <- removed 2026-09-07',
+                    '/verification/          @paulcfuqua')
+                (Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath -CodeownersPath $script:CodeownersPath) -Id 'V1.5').Status |
+                    Should -Be 'PASS'
+            }
+
+            It 'treats a missing CODEOWNERS as no owners rather than as unreadable' {
+                # GitHub with no CODEOWNERS has no code owners, so the switch gates
+                # nothing. That is a readable state, not a blind spot - the F63/F105 rule
+                # is about an API returning emptiness on denial, not a file that is simply
+                # not there.
+                Set-Mode -Mode 'development'
+                $script:RequiredApprovals = 0
+                $script:RequireCodeOwnerReview = $true
+                (Get-Row -Context (Invoke-AuditForTest -GovernanceModePath $script:ModePath -CodeownersPath (Join-Path ([IO.Path]::GetTempPath()) 'no-such-codeowners')) -Id 'V1.5').Status |
+                    Should -Be 'PASS'
+            }
         }
     }
 

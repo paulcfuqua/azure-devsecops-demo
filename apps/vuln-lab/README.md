@@ -1,5 +1,17 @@
 # @mls/vuln-lab
 
+> ## ⛔ RETIRED — do not re-arm this lab.
+>
+> `reseed.ps1` and everything below about re-arming are kept for reference only. The
+> sponsor-approved design of 2026-09-05 —
+> `docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md` (PR #237) —
+> removes this package. **Re-arming is F190**: a pull request that reintroduces a
+> critical alert cannot merge past code scanning protection without an administrator
+> override, so the lab can be healed but never re-seeded without a human bypass.
+>
+> The self-healing chain now runs on real findings in real, deployed applications. If
+> this lab's seed weakens, let it weaken.
+
 > ## ⚠️ This package is deliberately vulnerable. It is NEVER imported by any deployed app.
 >
 > Nothing in `launch-ops`, `control-tower`, `mcp-tools`, `directline-token` or
@@ -175,10 +187,12 @@ nothing — each module only exports a factory.
 npm test   # node index.js — prints a status object, exit 0
 ```
 
-## Re-arming after a heal — `reseed.ps1`
+## ~~Re-arming after a heal~~ — `reseed.ps1` (RETIRED, see the banner; do not run)
 
 A successful heal cycle rewrites the flawed code and upgrades the pins, which
-disarms the lab on both tracks. `reseed.ps1` (pwsh 7) restores it:
+disarms the lab on both tracks. `reseed.ps1` (pwsh 7) restored it. **Recorded for
+reference only — do not run any of these.** Letting a healed lab stay healed is now the
+correct outcome:
 
 ```powershell
 pwsh apps/vuln-lab/reseed.ps1            # restore code flaws + pins + lockfile, verify

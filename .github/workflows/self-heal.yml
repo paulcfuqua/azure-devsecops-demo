@@ -400,7 +400,7 @@ jobs:
             # trade one silent state for another.
             number="$(pick_from any)"
             if [ -n "${number}" ] && [ "${kind}" = "dependabot" ]; then
-              echo "::warning title=No adoptable alert::No open Dependabot alert has a security-update PR this lane could merge, so the chain selected one it cannot heal. That is usually F126 (a previous PR was closed unmerged and Dependabot does not reopen it) or a TRANSITIVE dependency with no direct pin to bump, such as esbuild. Re-arm with apps/vuln-lab/reseed.ps1 to raise the seeded advisories afresh."
+              echo "::warning title=No adoptable alert::No open Dependabot alert has a security-update PR this lane could merge, so the chain selected one it cannot heal. That is usually F126 (a previous PR was closed unmerged and Dependabot does not reopen it) or a TRANSITIVE dependency with no direct pin to bump, such as esbuild. Do NOT re-arm apps/vuln-lab to manufacture an adoptable alert: that plant is retired (PR #237) and re-arming is F190. An alert this lane cannot adopt is a real state to report, not one to paper over."
             fi
           fi
 
@@ -784,7 +784,7 @@ jobs:
             # WRONG remedy is worse than no remedy: it sends the reader to change a
             # setting that is already correct and stops them looking further. The actual
             # cause that day was the third one below.
-            echo "::notice title=No Dependabot PR to gauntlet::No open Dependabot pull request mentions '${PACKAGE}'. Copilot Autofix does not cover dependency alerts and no API can request a security-update PR on demand, so this lane can only ADOPT a PR Dependabot has already opened. Check three things, in this order, rather than assuming the first: (1) is 'Dependabot security updates' ON? (gh api repos/OWNER/REPO/automated-security-fixes) - if it is already on, this is NOT your cause; (2) is there an ignore condition on the package? (comment '@dependabot show ${PACKAGE} ignore conditions' on any Dependabot PR); (3) was a previous security PR for this advisory CLOSED unmerged? Dependabot does not reopen one, and no ignore condition is recorded when it happens - the alert stays open forever with no PR. The fix for (3) is to re-trigger the alert by changing the manifest: run apps/vuln-lab/reseed.ps1 and merge the result, which rewrites the pins and raises the advisory afresh."
+            echo "::notice title=No Dependabot PR to gauntlet::No open Dependabot pull request mentions '${PACKAGE}'. Copilot Autofix does not cover dependency alerts and no API can request a security-update PR on demand, so this lane can only ADOPT a PR Dependabot has already opened. Check three things, in this order, rather than assuming the first: (1) is 'Dependabot security updates' ON? (gh api repos/OWNER/REPO/automated-security-fixes) - if it is already on, this is NOT your cause; (2) is there an ignore condition on the package? (comment '@dependabot show ${PACKAGE} ignore conditions' on any Dependabot PR); (3) was a previous security PR for this advisory CLOSED unmerged? Dependabot does not reopen one, and no ignore condition is recorded when it happens - the alert stays open forever with no PR. For (3) the alert can only be re-raised by changing the manifest that declares the dependency, so Dependabot opens a fresh security PR. Do NOT do this by re-arming apps/vuln-lab: that plant is retired (PR #237), re-arming is F190, and its seeded pins are being deleted rather than raised again. If the package is a real dependency of a real app, bump or re-pin it in that app's manifest; if nothing upstream can fix it, record it as pending-solution rather than leaving it to look like an unworked finding."
           else
             echo "Found ${url}"
           fi
@@ -864,9 +864,21 @@ jobs:
   # -InProcessWaitMinutes 0), so running this immediately after the run that
   # opened the PR is correct: it records PENDING with the deadline, and the same
   # workflow re-dispatched later closes it. That only works if it is told when the
-  # window opened — hence MLS_L10_RESEED_MERGED_AT, which apps/vuln-lab/reseed.ps1
-  # cannot know (the clock starts when the re-seed PR MERGES, which is after the
-  # script has finished). It is therefore a demo variable set once per demo cycle.
+  # window opened.
+  #
+  # MLS_L10_RESEED_MERGED_AT IS LEGACY. DO NOT SET IT, AND DO NOT RE-SEED TO
+  # PRODUCE ONE. It dated the window from a re-seed of apps/vuln-lab, and the
+  # sponsor-approved design of 2026-09-05
+  # (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md,
+  # PR #237) retires the plant altogether: re-arming is the F190 loop that design
+  # exists to break, and the whole apparatus — seeded CVEs, reseed.ps1, the
+  # --admin override — existed to feed one hard-coded path filter.
+  #
+  # F192 already removed the dependency: when no timestamp is supplied the window
+  # derives from the heal pull request's own autoMergeRequest.enabledAt, which
+  # times this chain's attempt rather than a demo cycle and needs nobody to
+  # remember anything. That is now the ONLY path anyone should rely on. The
+  # variable is still read so an in-flight migration is not broken by this file.
   #
   # V10.2 reads Dependabot alerts, which the default GITHUB_TOKEN is refused on;
   # that is what SELF_HEAL_TOKEN / MLS_VERIFIER_GH_TOKEN exist for, and the audit
@@ -906,9 +918,21 @@ jobs:
       # `pwsh -File` cannot bind a string[] parameter — a comma-joined value
       # arrives as ONE element and a space-separated one silently drops the tail —
       # so the alert LIST goes through its environment variable, which the audit
-      # splits on [,;\s]+. The demo variable carries all three seeded pins; the
+      # splits on [,;\s]+. The VERIFY variable carries all three seeded pins; the
       # alert this run happened to pick is appended so a fresh alert is covered
       # before anyone updates the variable.
+      #
+      # `verify`, NOT `demo`, and this said demo until 2026-09-07 while the
+      # variable existed on neither. This job declares `environment: verify` --
+      # it must, because it authenticates as mls-verifier through
+      # vars.AZURE_VERIFIER_CLIENT_ID, which lives there -- and a `demo`
+      # variable is INVISIBLE from here. So the expression collapsed to the
+      # empty string plus whatever alert this run happened to pick, and the
+      # audit was handed ` 10`: one qs alert in the ROOT lockfile, which is not
+      # a seeded pin at all. V10.2 asks for the trail on 2 of the 3 SEEDED pins
+      # (json5 #2, minimist #3, semver #4 -- all in apps/vuln-lab), so it was
+      # structurally unable to pass and reported FAIL on an alert nobody seeded.
+      # F124's class in a variable nobody had set anywhere.
       MLS_L10_DEPENDABOT_ALERTS: >-
         ${{ vars.MLS_L10_DEPENDABOT_ALERTS }}
         ${{ needs.select.outputs.kind == 'dependabot' && needs.select.outputs.number || '' }}
@@ -946,7 +970,7 @@ jobs:
         if: ${{ vars.MLS_L10_RESEED_MERGED_AT == '' }}
         run: |
           set -euo pipefail
-          echo "::warning title=No re-seed merge timestamp::MLS_L10_RESEED_MERGED_AT is not set on the demo environment, so the 24-hour chain deadline cannot be computed and an incomplete healing trail is recorded FAIL rather than PENDING. Set it to the UTC time the apps/vuln-lab/reseed.ps1 PR merged: gh variable set MLS_L10_RESEED_MERGED_AT --env demo --body \$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "::warning title=No re-seed merge timestamp::MLS_L10_RESEED_MERGED_AT is not set. This is EXPECTED and needs no action: the variable dated the chain window from a re-seed of apps/vuln-lab, and the sponsor-approved design of 2026-09-05 (PR #237) retires that plant. Do not re-seed to satisfy it. F192 derives the window from the heal PR auto-merge arming time instead, so a trail is recorded PENDING rather than FAIL whenever a heal PR exists"
 
       - name: Run verification/layer-10-audit.ps1
         id: audit

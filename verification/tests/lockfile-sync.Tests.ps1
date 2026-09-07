@@ -84,17 +84,26 @@ Describe 'every tracked lockfile matches its package.json' {
             # indexing .Keys on null throws rather than yielding nothing.
             foreach ($section in 'dependencies', 'devDependencies') {
                 if ($null -ne $pkg[$section]) {
-                    foreach ($name in @($pkg[$section].Keys)) { $declared[$name] = $pkg[$section][$name] }
+                    foreach ($dep in @($pkg[$section].Keys)) { $declared[$dep] = $pkg[$section][$dep] }
                 }
                 if ($null -ne $lockRoot[$section]) {
-                    foreach ($name in @($lockRoot[$section].Keys)) { $locked[$name] = $lockRoot[$section][$name] }
+                    foreach ($dep in @($lockRoot[$section].Keys)) { $locked[$dep] = $lockRoot[$section][$dep] }
                 }
             }
 
-            $drift = foreach ($name in $declared.Keys | Sort-Object) {
-                if ($locked[$name] -ne $declared[$name]) {
-                    $lockValue = if ($locked.ContainsKey($name)) { $locked[$name] } else { '<absent>' }
-                    "$name (package.json=$($declared[$name]), lock=$lockValue)"
+            # $dep, NOT $name, in all three loops above and below: PowerShell
+            # variables are case-insensitive, so a loop variable called $name
+            # silently overwrites the $Name this Context was given by -ForEach.
+            # The -Because then reported the LAST dependency examined as though
+            # it were the directory at fault -- "vitest's lockfile is stale"
+            # when apps/mcp-tools was meant. Renaming only the drift loop is not
+            # enough and looks like it worked: the two loops that build
+            # $declared and $locked clobber it first, so the message still named
+            # a package. Exercise the failure, do not reason about it.
+            $drift = foreach ($dep in $declared.Keys | Sort-Object) {
+                if ($locked[$dep] -ne $declared[$dep]) {
+                    $lockValue = if ($locked.ContainsKey($dep)) { $locked[$dep] } else { '<absent>' }
+                    "$dep (package.json=$($declared[$dep]), lock=$lockValue)"
                 }
             }
 

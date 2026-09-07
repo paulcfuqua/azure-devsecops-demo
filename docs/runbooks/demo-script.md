@@ -62,7 +62,7 @@ Run through in order; every box must be checked before the audience sits down.
 | 2 | **Tenant objects intact** | quick re-run of `verification/layer-03-audit.ps1` + `layer-04-audit.ps1` | PASS — rebuild will no-op through L2–L4 as rehearsed |
 | 3 | **Capacity state known** | trial: confirmed active trial window; paid F2: `Paused` now, **G2 filed** for the rebuild's resume (the rebuild resumes it — do not resume manually) | Recorded |
 | 4 | **Seed data contract verified** (from the last green cycle) | last `verification/reports/L05-*.md` shows `launches = 1,200` and table set green | PASS report ≤ 7 days old |
-| 5 | **vuln-lab re-armed** (both tracks) | `pwsh apps/vuln-lab/reseed.ps1` → PR merged; `gh api .../dependabot/alerts` and `gh api .../code-scanning/alerts` both show seeded alerts `open` | ≥ 3 open Dependabot alerts **and** ≥ 1 open CodeQL alert on `apps/vuln-lab/` |
+| 5 | ~~**vuln-lab re-armed**~~ **RETIRED — do not re-seed** | The plant is removed by the sponsor-approved design of 2026-09-05 (PR #237); re-arming is F190. Instead confirm the chain has real findings to work with: `gh api .../dependabot/alerts` and `gh api .../code-scanning/alerts` | Alert surface **readable** (a denial must never read as "nothing to heal" — V10.3). Zero open findings is a PASS for the demo, not a gap: the story is the operations cycle, not a planted CVE |
 | 6 | **Agent published and answering** | Copilot Studio shows the agent published from the last pipeline import; ask one golden question in the control tower's **Ask** tab (off the record) | Answer + Adaptive Card rendered; note which path is live — Fabric data agent or tools-only |
 | 7 | **All layer audits green** | latest `verification/reports/L*.md` set | All PASS, ≤ 7 days old |
 | 8 | **Budget headroom** | Azure portal → Cost Management → budget `$75/month` | < 80% consumed, no unacknowledged alerts |
@@ -70,9 +70,11 @@ Run through in order; every box must be checked before the audience sits down.
 | 10 | **Fallback pack** | screenshots of every showpiece state + the last committed `rebuild-proof.md` | On local disk |
 | 11 | **Compliance board serves the current snapshot** | open the board, read its "Collected `<date>` from commit `<short>`" line and compare with `git log -1 --format=%h -- compliance/state/` | The two match. If they differ the image predates the latest collection — re-run `app-compliance-ci.yml`, which is path-filtered on `compliance/state/**` precisely so this cannot happen quietly |
 
-Notes for step 5: re-seed at T-60, not earlier in the week — freshly-open alerts make
-the self-healing segment's timestamps read cleanly ("this alert appeared an hour
-ago"). Steps 3–4 exist because the three classic demo-killers are a paused capacity,
+Notes for step 5: ~~re-seed at T-60~~ — **do not re-seed at all.** The plant is retired
+(PR #237). Do not manufacture a finding to demo against: the segment's story is the
+operations cycle — *no findings; one arrives; it is healed; back to no findings* — and an
+empty backlog demonstrates that, where a planted CVE only ever demonstrated the plant. If
+a real finding happens to be in flight, show it; if not, show the trail of the last one. Steps 3–4 exist because the three classic demo-killers are a paused capacity,
 a broken seed, and an un-armed vuln-lab.
 
 Note for step 6: this replaces the old LLM-key check, and it is doing more work than that
