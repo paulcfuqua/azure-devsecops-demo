@@ -1,5 +1,11 @@
 # Pester tests for verification/layer-10-audit.ps1 - every gh and az call mocked;
 # zero cloud calls.
+#
+# REWRITTEN 2026-09-07 for the operations model. The previous suite tested a seeded
+# alert's seven-stage trail against apps/vuln-lab: it asserted things like "the witness
+# was never stamped" and "2 of 3 pins is the pass line", none of which exist any more.
+# The stages it protected are still tested - they moved into Get-HealTrail and are
+# exercised per healed finding below.
 
 BeforeAll {
     $env:MLS_SKIP_MAIN = '1'
@@ -9,9 +15,8 @@ BeforeAll {
 
     $script:ReportRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-l10-$([guid]::NewGuid().ToString('n'))"
     $script:Repository = 'paulcfuqua/azure-devsecops-demo'
-    $script:Automation = 'github-actions[bot]'
-    $script:EnvironmentVariable = @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'MLS_L10_CODEQL_ALERT',
-        'MLS_L10_AUTOFIX_PR', 'MLS_L10_DEPENDABOT_ALERTS', 'MLS_L10_RESEED_MERGED_AT')
+    $script:Automation = 'mls-automation'
+    $script:EnvironmentVariable = @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
     $script:SavedEnvironment = @{}
     foreach ($name in $script:EnvironmentVariable) { $script:SavedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
 
@@ -20,23 +25,60 @@ BeforeAll {
         return @($Context.Criterion | Where-Object { $_.Id -eq $Id })[0]
     }
 
+    # SupportsShouldProcess on both fixture builders: the names carry a state-changing verb
+    # and they write files. PSScriptAnalyzer runs at Error+Warning over the whole
+    # repository, and a test helper is not exempt from the rules the audits are held to -
+    # the same treatment Set-Mode carries in layer-01-audit.Tests.ps1.
+    function New-PolicyFile {
+        [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+        param(
+            [int]$CriticalDays = 7,
+            [int]$MediumDays = 30,
+            [int]$Lookback = 30,
+            [string[]]$ExcludedManifest = @('apps/vuln-lab/package-lock.json'),
+            [string[]]$ExcludedPrefix = @('apps/vuln-lab/')
+        )
+        $path = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-policy-$([guid]::NewGuid().ToString('n')).json"
+        if (-not $PSCmdlet.ShouldProcess($path, 'write policy fixture')) { return $path }
+        @{
+            slo                 = @{ days = @{ critical = $CriticalDays; high = $CriticalDays; medium = $MediumDays; low = $MediumDays } }
+            closureLookbackDays = @{ value = $Lookback }
+            excludedPaths       = @{ manifests = $ExcludedManifest; sourcePrefixes = $ExcludedPrefix }
+        } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8
+        return $path
+    }
+
+    function New-NamingFile {
+        # Only the appKeys block matters, and the map is deliberately NOT the identity
+        # function - mcp-tools keys to `mcp`, which is exactly the trap Get-AppKeyMap
+        # exists to avoid.
+        [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+        param()
+        $path = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-naming-$([guid]::NewGuid().ToString('n')).bicep"
+        if (-not $PSCmdlet.ShouldProcess($path, 'write naming fixture')) { return $path }
+        @(
+            'var appKeys = {'
+            "  launchOps: 'launch-ops'"
+            "  controlTower: 'control-tower'"
+            "  mcpTools: 'mcp'"
+            "  dataApi: 'data-api'"
+            '}'
+        ) | Set-Content -LiteralPath $path -Encoding utf8
+        return $path
+    }
+
     function Invoke-AuditForTest {
         param(
             [switch]$NoRetry,
-            [string]$CodeQlAlertNumber = '7',
-            [string]$AutofixPrNumber = '31',
-            [string[]]$DependabotAlertNumber = @('3', '4', '5'),
-            [string]$ReseedMergedUtc = '',
-            # The healthy PRECONDITION for the rest of the suite: the select job
-            # could read the alert surface. This is an input the chain reports, in
-            # the same way $script:Trail is an input - not V10.3's answer, which is
-            # exercised explicitly in both directions in its own Context below.
-            [string]$AlertSurfaceReadable = 'true'
+            [string]$AlertSurfaceReadable = 'true',
+            [string]$PolicyPath = '',
+            [string]$NamingBicepPath = ''
         )
-        Invoke-Main -Repository $script:Repository -CodeQlAlertNumber $CodeQlAlertNumber -AutofixPrNumber $AutofixPrNumber `
-            -DependabotAlertNumber $DependabotAlertNumber -VulnLabAppName 'mls-vuln-lab-demo-ca' `
-            -ResourceGroupName 'mls-rg-apps' -ReseedMergedUtc $ReseedMergedUtc `
-            -ChainWindowHours 24 -DependencyPassBar 2 -AlertSurfaceReadable $AlertSurfaceReadable `
+        Invoke-Main -Repository $script:Repository -ResourceGroupName 'mls-rg-apps' `
+            -Prefix 'mls' -EnvironmentSegment 'demo' `
+            -PolicyPath $(if ($PolicyPath) { $PolicyPath } else { $script:PolicyPath }) `
+            -NamingBicepPath $(if ($NamingBicepPath) { $NamingBicepPath } else { $script:NamingPath }) `
+            -AlertSurfaceReadable $AlertSurfaceReadable `
             -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
 }
@@ -56,446 +98,328 @@ Describe 'layer-10-audit' {
         Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
         Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
 
-        $script:AutofixStatus = 'success'
-        $script:AutofixDescription = 'Escape the user-controlled value before interpolating it into the query.'
-        $script:CodeQlState = 'fixed'
-        $script:DependabotState = 'fixed'
-        $script:MergedBy = $script:Automation
-        # Merged by default. Set to '' for the state the chain is actually in for most of
-        # its life: auto-merge armed, PR still open, nothing merged yet.
-        $script:MergedAt = '2026-08-24T10:30:00Z'
-        # Shaped as the API actually returns it: enabledBy is an object with a login,
-        # and enabledAt survives the merge. Armed BEFORE the merge, which is the whole
-        # signal - the decision to merge was recorded before the result was known.
-        $script:AutoMerge = [pscustomobject]@{
-            enabledBy = [pscustomobject]@{ login = $script:Automation }
-            enabledAt = '2026-08-24T10:20:00Z'
-        }
-        $script:CheckConclusion = 'success'
-        # Check runs beyond the three above. Every real heal PR carries five SKIPPED
-        # deploy jobs alongside its successes - verified on #174, #226 and #232, all
-        # exactly 5 skipped / 24 success.
-        $script:ExtraCheck = @()
-        # When true the three defaults are omitted, so a test can present a gauntlet
-        # in which nothing concluded at all.
-        $script:SuppressDefaultChecks = $false
-        $script:PrBody = "Autofix says: $($script:AutofixDescription)"
-        # The witness revision the deploy stage looks for: created after the merge AND
-        # stamped with that merge's commit by .github/workflows/vuln-lab-witness.yml.
-        $script:MergeCommit = [pscustomobject]@{ oid = 'mergecommitsha' }
-        $script:Revision = @([pscustomobject]@{
-                name       = 'mls-vuln-lab-demo-ca--rev7'
-                created    = '2026-08-24T11:00:00Z'
-                healCommit = 'mergecommitsha'
-            })
-        $script:DependabotPr = @(
-            [pscustomobject]@{ number = 41; title = 'Bump lodash from 4.17.20 to 4.17.21'; headRefName = 'dependabot/npm_and_yarn/lodash-4.17.21' }
-            [pscustomobject]@{ number = 42; title = 'Bump minimist from 1.2.5 to 1.2.8'; headRefName = 'dependabot/npm_and_yarn/minimist-1.2.8' }
-            [pscustomobject]@{ number = 43; title = 'Bump axios from 0.21.1 to 0.21.4'; headRefName = 'dependabot/npm_and_yarn/axios-0.21.4' }
+        $script:PolicyPath = New-PolicyFile
+        $script:NamingPath = New-NamingFile
+        $script:HealCandidate = $null
+
+        $now = [datetime]::UtcNow
+        # The steady state this model expects: nothing open, one closure fully explained.
+        $script:DependabotAlert = @(
+            [pscustomobject]@{
+                number = 91; state = 'fixed'
+                created_at = $now.AddDays(-3).ToString('o'); fixed_at = $now.AddDays(-2).ToString('o')
+                security_advisory = [pscustomobject]@{ severity = 'high' }
+                security_vulnerability = [pscustomobject]@{ first_patched_version = [pscustomobject]@{ identifier = '6.16.0' } }
+                dependency = [pscustomobject]@{ package = [pscustomobject]@{ name = 'qs' }; manifest_path = 'package-lock.json' }
+            }
         )
-        $script:DependabotPackage = @{ '3' = 'lodash'; '4' = 'minimist'; '5' = 'axios' }
+        $script:CodeAlert = @()
+        $script:DependabotReadable = $true
+        $script:CodeReadable = $true
+
+        $script:MergedAt = $now.AddDays(-2).ToString('o')
+        $script:ArmedAt = $now.AddDays(-2).AddMinutes(-5).ToString('o')
+        $script:ArmedBy = $script:Automation
+        $script:MergedBy = $script:Automation
+        $script:MergeCommit = 'abcdef1234567890abcdef1234567890abcdef12'
+        $script:PrTitle = 'fix(deps): Bump qs from 6.15.3 to 6.16.0'
+        $script:PrBody = 'Bumps qs.'
+        $script:PrFiles = @('apps/mcp-tools/package-lock.json')
+        $script:Checks = @('vitest (npm workspace)=success', 'PSScriptAnalyzer + Pester=success', 'deploy to Container Apps=skipped')
+        $script:RevisionImage = 'ghcr.io/paulcfuqua/azure-devsecops-demo/mcp-tools:sha-abcdef1'
+        $script:RevisionCreated = $now.AddDays(-2).AddMinutes(10).ToString('o')
+        $script:AppExists = $true
 
         Mock Invoke-MlsGh {
             $joined = $Argument -join ' '
-            if ($joined -like '*code-scanning/alerts/*/autofix*') {
-                return [pscustomobject]@{ status = $script:AutofixStatus; description = $script:AutofixDescription; started_at = '2026-08-24T10:05:00Z' }
+            if ($joined -like '*dependabot/alerts?state=all*') {
+                if (-not $script:DependabotReadable) { throw 'HTTP 403: Resource not accessible by integration' }
+                return $script:DependabotAlert
             }
-            if ($joined -like '*code-scanning/alerts/*') {
-                return [pscustomobject]@{ state = $script:CodeQlState; created_at = '2026-08-24T10:00:00Z'; rule = [pscustomobject]@{ id = 'js/sql-injection' } }
+            if ($joined -like '*code-scanning/alerts?state=all*') {
+                if (-not $script:CodeReadable) { throw 'HTTP 403: Resource not accessible by integration' }
+                return $script:CodeAlert
             }
-            if ($joined -match 'dependabot/alerts/(?<n>\d+)') {
-                $number = $Matches['n']
-                return [pscustomobject]@{
-                    state      = $script:DependabotState
-                    created_at = '2026-08-24T10:00:00Z'
-                    dependency = [pscustomobject]@{ package = [pscustomobject]@{ name = $script:DependabotPackage[$number] } }
-                }
+            if ($joined -match 'dependabot/alerts/(\d+)$') {
+                $number = [int]$Matches[1]
+                return @($script:DependabotAlert | Where-Object { $_.number -eq $number })[0]
             }
-            if ($joined -like 'pr list*') { return $script:DependabotPr }
-            if ($joined -like 'pr view*') {
-                return [pscustomobject]@{
-                    number           = 31
-                    headRefOid       = 'autofixsha'
-                    body             = $script:PrBody
-                    commits          = @([pscustomobject]@{ oid = 'autofixsha' })
-                    mergedAt         = $script:MergedAt
-                    mergedBy         = [pscustomobject]@{ login = $script:MergedBy }
-                    autoMergeRequest = $script:AutoMerge
-                    mergeCommit      = $script:MergeCommit
-                    state            = 'MERGED'
-                    title            = 'Fix js/sql-injection'
-                }
+            if ($joined -like 'pr list*') {
+                return @([pscustomobject]@{
+                        number = 247; title = $script:PrTitle; body = $script:PrBody
+                        mergedAt = $script:MergedAt; headRefOid = 'head1234'
+                        mergeCommit = [pscustomobject]@{ oid = $script:MergeCommit }
+                        mergedBy = [pscustomobject]@{ login = $script:MergedBy }
+                        autoMergeRequest = $(if ($script:ArmedBy) {
+                                [pscustomobject]@{ enabledBy = [pscustomobject]@{ login = $script:ArmedBy }; enabledAt = $script:ArmedAt }
+                            } else { $null })
+                        author = [pscustomobject]@{ login = 'app/dependabot' }
+                    })
+            }
+            if ($joined -like '*/pulls/*/files*') {
+                return @($script:PrFiles | ForEach-Object { [pscustomobject]@{ filename = $_ } })
             }
             if ($joined -like '*check-runs*') {
-                $default = if ($script:SuppressDefaultChecks) { @() } else {
-                    @(
-                        [pscustomobject]@{ name = 'CodeQL'; conclusion = $script:CheckConclusion }
-                        [pscustomobject]@{ name = 'Trivy'; conclusion = 'success' }
-                        [pscustomobject]@{ name = 'ZAP'; conclusion = 'success' }
-                    )
-                }
-                return [pscustomobject]@{ check_runs = @($default) + @($script:ExtraCheck)
-                }
+                return @($script:Checks | ForEach-Object {
+                        $part = $_ -split '='
+                        [pscustomobject]@{ name = $part[0]; conclusion = $part[1] }
+                    })
             }
-            throw "unexpected gh call: $joined"
+            return $null
         }
 
         Mock Invoke-MlsAz {
-            if (($Argument -join ' ') -like 'containerapp revision list*') { return $script:Revision }
-            throw "unexpected az call: $($Argument -join ' ')"
+            if (-not $script:AppExists) { return @() }
+            return @([pscustomobject]@{ name = 'rev-1'; created = $script:RevisionCreated; image = $script:RevisionImage })
         }
     }
 
-    Context 'all criteria pass' {
-        It 'records V10.1-V10.3 as PASS and exits 0' {
-            $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V10.1', 'V10.2', 'V10.3')
+    AfterEach {
+        Remove-Item -LiteralPath $script:PolicyPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:NamingPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Context 'the steady state: a drained backlog and one explained closure' {
+        It 'records V10.1-V10.4 as PASS and exits 0' {
+            $context = Invoke-AuditForTest -NoRetry
+            @($context.Criterion).Id | Should -Be @('V10.1', 'V10.2', 'V10.3', 'V10.4')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
 
-        It 'walks all seven Autofix stages and records them in order' {
-            $context = Invoke-AuditForTest
-            $observed = (Get-Row -Context $context -Id 'V10.1').Observed
-            foreach ($stage in 1..7) { $observed | Should -BeLike "*$stage *" }
-            $observed | Should -BeLike '*autofix status=success*'
-            $observed | Should -BeLike '*alert state=fixed*'
-        }
-
-        It 'binds the deploy stage to the merge commit the witness was stamped with' {
-            $context = Invoke-AuditForTest
-            $observed = (Get-Row -Context $context -Id 'V10.1').Observed
-            $observed | Should -BeLike '*stamped with mergeco=1*'
-            Should -Invoke Invoke-MlsAz -Exactly -Times 4 -ParameterFilter {
-                ($Argument -join ' ') -like '*MLS_HEAL_COMMIT*'
+        It 'reports the backlog per lane and per severity rather than as one number' {
+            # A blended figure hides the slice that is not moving, which is the whole
+            # reason the design says never to average them.
+            $script:DependabotAlert += [pscustomobject]@{
+                number = 92; state = 'open'
+                created_at = ([datetime]::UtcNow.AddDays(-1)).ToString('o'); fixed_at = ''
+                security_advisory = [pscustomobject]@{ severity = 'medium' }
+                security_vulnerability = [pscustomobject]@{ first_patched_version = [pscustomobject]@{ identifier = '1.2.3' } }
+                dependency = [pscustomobject]@{ package = [pscustomobject]@{ name = 'left-pad' }; manifest_path = 'package-lock.json' }
             }
+            $observed = (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1').Observed
+            $observed | Should -BeLike '*dependabot=1*'
+            $observed | Should -BeLike '*medium=1*'
         }
 
-        It 'accepts 2 of 3 dependency trails as the pass line' {
-            $script:DependabotPr = @($script:DependabotPr | Select-Object -First 2)
-            $context = Invoke-AuditForTest
-            $row = Get-Row -Context $context -Id 'V10.2'
+        It 'binds the deploy stage to the merge commit through the image tag' {
+            # The tag is `sha-<first 7>`, which every app CI already computes. Nothing
+            # about this needs the applications to cooperate.
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed | Should -BeLike '*healed:PR #247*'
+        }
+    }
+
+    Context 'V10.1 - the backlog drains' {
+        It 'FAILS a healable finding that has outlived its declared SLO' {
+            $script:DependabotAlert += [pscustomobject]@{
+                number = 93; state = 'open'
+                created_at = ([datetime]::UtcNow.AddDays(-40)).ToString('o'); fixed_at = ''
+                security_advisory = [pscustomobject]@{ severity = 'critical' }
+                security_vulnerability = [pscustomobject]@{ first_patched_version = [pscustomobject]@{ identifier = '2.0.0' } }
+                dependency = [pscustomobject]@{ package = [pscustomobject]@{ name = 'minimist' }; manifest_path = 'package-lock.json' }
+            }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*PAST SLO*#93*minimist*'
+            Get-MlsExitCode -Context (Invoke-AuditForTest -NoRetry) | Should -Be 1
+        }
+
+        It 'does NOT age a finding that has no upstream fix - that is pending-solution' {
+            $script:DependabotAlert += [pscustomobject]@{
+                number = 94; state = 'open'
+                created_at = ([datetime]::UtcNow.AddDays(-90)).ToString('o'); fixed_at = ''
+                security_advisory = [pscustomobject]@{ severity = 'high' }
+                security_vulnerability = [pscustomobject]@{ first_patched_version = $null }
+                dependency = [pscustomobject]@{ package = [pscustomobject]@{ name = 'nofix' }; manifest_path = 'package-lock.json' }
+            }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1'
             $row.Status | Should -Be 'PASS'
-            $row.Observed | Should -BeLike '*2 of 3 trails complete*'
+            $row.Observed | Should -BeLike '*pending-solution: 1*'
+        }
+
+        It 'excludes the vuln-lab by policy, and SAYS how many it excluded' {
+            # The lab is a manual demonstration generator now. Excluding it must never be
+            # silent, or an empty backlog could be manufactured by editing the policy.
+            $script:DependabotAlert += [pscustomobject]@{
+                number = 95; state = 'open'
+                created_at = ([datetime]::UtcNow.AddDays(-90)).ToString('o'); fixed_at = ''
+                security_advisory = [pscustomobject]@{ severity = 'critical' }
+                security_vulnerability = [pscustomobject]@{ first_patched_version = [pscustomobject]@{ identifier = '1.2.8' } }
+                dependency = [pscustomobject]@{ package = [pscustomobject]@{ name = 'minimist' }; manifest_path = 'apps/vuln-lab/package-lock.json' }
+            }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*excluded by policy: 1*'
+        }
+
+        It 'SKIPs rather than reporting a drained backlog when the surface cannot be read' {
+            # F103/F105: an identity that cannot look must never say the queue is empty.
+            $script:DependabotReadable = $false
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*not fully readable*'
+            $row.Observed | Should -Not -BeLike '*drained*'
+        }
+
+        It 'SKIPs rather than inventing an SLO when no policy is declared' {
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -PolicyPath (Join-Path ([IO.Path]::GetTempPath()) 'no-such-policy.json')) -Id 'V10.1'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*no declared self-heal policy*'
         }
     }
 
-    Context 'a criterion fails on a realistic wrong value' {
-        It 'fails V10.1 when a human merged the heal PR at their own discretion' {
-            # The governance claim: no human decided to merge this. A discretionary
-            # click leaves NO auto-merge request - the person saw the result, then
-            # chose. That is the state this must catch.
-            $script:MergedBy = 'paulcfuqua'
-            $script:AutoMerge = $null
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V10.1'
+    Context 'V10.2 - every closure is traceable' {
+        It 'FAILS a closure with no merged pull request behind it' {
+            $script:PrTitle = 'chore: something unrelated'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
             $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*after the result was known*'
-            Get-MlsExitCode -Context $context | Should -Be 1
+            $row.Observed | Should -BeLike '*no merged pull request in the window explains it*'
         }
 
-        It 'fails V10.1 when someone else merged what the chain armed' {
+        It 'FAILS a heal a human merged at their own discretion' {
+            # F191's question: WHEN was the decision made, not who is credited with it.
+            $script:ArmedBy = ''
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*discretionary act*'
+        }
+
+        It 'FAILS when a third identity completed what the chain armed' {
             $script:MergedBy = 'someone-else'
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V10.1'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*armed by*someone-else*'
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*third identity*'
         }
 
-        It 'fails V10.1 when auto-merge was armed only after the merge' {
-            # Defends the ordering rather than the presence of the field: an arming
-            # stamped after the merge cannot have caused it.
-            $script:AutoMerge = [pscustomobject]@{
-                enabledBy = [pscustomobject]@{ login = $script:Automation }
-                enabledAt = '2026-08-24T11:30:00Z'
+        It 'FAILS when the gauntlet was not green' {
+            $script:Checks = @('vitest (npm workspace)=failure', 'PSScriptAnalyzer + Pester=success')
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*gauntlet not green*'
+        }
+
+        It 'FAILS when the changed application never ran this heal' {
+            $script:RevisionImage = 'ghcr.io/paulcfuqua/azure-devsecops-demo/mcp-tools:sha-0000000'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*mls-mcp-demo-ca never ran this heal*'
+        }
+
+        It 'resolves the container app through naming.bicep, not the directory name' {
+            # apps/mcp-tools keys to `mcp`. Assuming the directory would look up
+            # mls-mcp-tools-demo-ca, which does not exist, and report a good heal as
+            # undeployed.
+            $script:RevisionImage = 'ghcr.io/x/y:sha-0000000'
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*mls-mcp-demo-ca*'
+        }
+
+        It 'REPORTS rather than fails a heal that touched no deployed application' {
+            $script:PrFiles = @('verification/layer-10-audit.ps1', 'docs/runbooks/layers/L10.md')
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*no deployed application on its changed paths*'
+        }
+
+        It 'REPORTS rather than fails when the application is not deployed at all' {
+            # Absence of the app is a different fact from absence of the revision.
+            $script:AppExists = $false
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*not deployed - no deploy assertion*'
+        }
+
+        It 'accepts a dismissal that carries a recorded reason' {
+            $script:DependabotAlert[0].state = 'dismissed'
+            $script:DependabotAlert[0] | Add-Member -NotePropertyName dismissed_at -NotePropertyValue ([datetime]::UtcNow.AddDays(-1).ToString('o')) -Force
+            $script:DependabotAlert[0] | Add-Member -NotePropertyName dismissed_reason -NotePropertyValue 'not_used' -Force
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*dismissed:not_used*'
+        }
+
+        It 'FAILS a dismissal with no reason recorded' {
+            $script:DependabotAlert[0].state = 'dismissed'
+            $script:DependabotAlert[0] | Add-Member -NotePropertyName dismissed_at -NotePropertyValue ([datetime]::UtcNow.AddDays(-1).ToString('o')) -Force
+            $script:DependabotAlert[0] | Add-Member -NotePropertyName dismissed_reason -NotePropertyValue '' -Force
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*NO recorded reason*'
+        }
+
+        It 'passes when nothing closed in the window, and says so' {
+            $script:DependabotAlert = @()
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*nothing to explain*'
+        }
+    }
+
+    Context 'V10.3 - the alert surface was readable' {
+        It 'passes when the chain reported readable=true' {
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.3').Status | Should -Be 'PASS'
+        }
+
+        It 'FAILS a denial, and never calls it "nothing to heal"' {
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -AlertSurfaceReadable 'false') -Id 'V10.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*could NOT read*'
+            $row.Observed | Should -Not -BeLike '*nothing to heal*'
+        }
+
+        It 'FAILS when the chain did not say either way' {
+            # An absent value is UNOBSERVABLE, and unobservable is not healthy. With the
+            # plant gone, "no findings" is the expected steady state - so a denial that
+            # read as an empty queue would look exactly like success, forever.
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -AlertSurfaceReadable '') -Id 'V10.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*did not report whether*'
+        }
+    }
+
+    Context 'V10.4 - pending-solution is not a dumping ground' {
+        It 'passes when nothing is being held' {
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.4').Observed |
+                Should -BeLike '*no finding is being held*'
+        }
+
+        It 'FAILS a finding held as unfixable while the advisory names a patched version' {
+            # The list projection says there is no fix; the re-read says there is. The
+            # re-read wins, because that is the claim the whole state rests on.
+            $held = [pscustomobject]@{
+                number = 96; state = 'open'
+                created_at = ([datetime]::UtcNow.AddDays(-2)).ToString('o'); fixed_at = ''
+                security_advisory = [pscustomobject]@{ severity = 'high' }
+                security_vulnerability = [pscustomobject]@{ first_patched_version = $null }
+                dependency = [pscustomobject]@{ package = [pscustomobject]@{ name = 'held' }; manifest_path = 'package-lock.json' }
             }
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Observed |
-                Should -BeLike '*not before the merge*'
-        }
-
-        It "fails V10.1 when the PR body does not carry Autofix's own explanation" {
-            $script:PrBody = 'Automated fix generated by our workflow.'
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*does not carry*explanation*'
-        }
-
-        It 'fails V10.1 when autofix generation errored' {
-            $script:AutofixStatus = 'error'
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V10.1'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike "*autofix status 'error'*"
-            $row.Detail | Should -BeLike '*not retried away*'
-        }
-
-        It 'fails V10.1 when the alert never closed' {
-            $script:CodeQlState = 'open'
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike "*alert state 'open', expected 'fixed'*"
-        }
-
-        It 'fails V10.1 when no new container app revision followed the merge' {
-            $script:Revision = @([pscustomobject]@{ name = 'old'; created = '2026-08-20T10:00:00Z'; healCommit = 'unset' })
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*no new container app revision*'
-        }
-
-        It 'fails V10.1 when a revision followed the merge but is not this heal''s' {
-            # An unrelated redeploy of the witness must not satisfy the deploy stage: the
-            # criterion is that THIS heal shipped, not that something shipped.
-            $script:Revision = @([pscustomobject]@{
-                    name       = 'mls-vuln-lab-demo-ca--rev8'
-                    created    = '2026-08-24T11:00:00Z'
-                    healCommit = 'someothercommit'
-                })
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V10.1'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*none carries MLS_HEAL_COMMIT=mergecommitsha*'
-            $row.Observed | Should -BeLike '*does not prove this heal shipped*'
-        }
-
-        It 'fails V10.1 when the witness was never stamped at all' {
-            $script:Revision = @([pscustomobject]@{
-                    name       = 'mls-vuln-lab-demo-ca--rev1'
-                    created    = '2026-08-24T11:00:00Z'
-                    healCommit = $null
-                })
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*stamps seen: (none stamped)*'
-        }
-
-        It 'fails V10.2 for a pin whose merge did not roll the witness' {
-            $script:Revision = @([pscustomobject]@{ name = 'old'; created = '2026-08-20T10:00:00Z'; healCommit = 'unset' })
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V10.2'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*no new container app revision*'
-        }
-
-        It 'fails V10.2 when only one dependency trail completes' {
-            $script:DependabotPr = @($script:DependabotPr | Select-Object -First 1)
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V10.2'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*1 of 3 trails complete*'
-            $row.Detail | Should -BeLike '*Partial credit does not accumulate*'
-        }
-    }
-
-    Context 'the 24 h chain window' {
-        It 'records PENDING while the window from the re-seed merge is still open' {
-            $script:CodeQlState = 'open'
-            $script:DependabotState = 'open'
-            $context = Invoke-AuditForTest -ReseedMergedUtc ([datetime]::UtcNow.AddHours(-1).ToString('o'))
-            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'PENDING'
-            (Get-Row -Context $context -Id 'V10.1').RetryWindowMinutes | Should -Be 1440
-            (Get-Row -Context $context -Id 'V10.2').Status | Should -Be 'PENDING'
-            Get-MlsExitCode -Context $context | Should -Be 0
-        }
-
-        It 'records FAIL once the 24 h window has elapsed' {
-            $script:CodeQlState = 'open'
-            $context = Invoke-AuditForTest -ReseedMergedUtc ([datetime]::UtcNow.AddHours(-30).ToString('o'))
-            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
-        }
-
-        It 'derives the window from the heal PR when no re-seed timestamp was supplied (F192)' {
-            # The self-heal workflow runs this audit in the same run that arms auto-merge,
-            # so it reads the trail minutes BEFORE the gauntlet finishes - run 33905789865
-            # verified at 18:26:07 a merge that landed at 18:29:02. That is the chain
-            # working, and it was recorded FAIL only because MLS_L10_RESEED_MERGED_AT was
-            # unset and an unset variable made every in-flight trail a failure.
-            #
-            # The moment the chain committed to this heal is on the PR itself, so the
-            # window no longer depends on a human remembering to set a variable.
-            $script:MergedAt = ''
-            $script:CodeQlState = 'open'
-            $script:AutoMerge = [pscustomobject]@{
-                enabledBy = [pscustomobject]@{ login = $script:Automation }
-                enabledAt = ([datetime]::UtcNow.AddMinutes(-3).ToString('o'))
+            $script:DependabotAlert += $held
+            Mock Invoke-MlsGh {
+                $joined = $Argument -join ' '
+                if ($joined -like '*dependabot/alerts?state=all*') { return $script:DependabotAlert }
+                if ($joined -like '*code-scanning/alerts?state=all*') { return @() }
+                if ($joined -match 'dependabot/alerts/96$') {
+                    return [pscustomobject]@{
+                        security_vulnerability = [pscustomobject]@{ first_patched_version = [pscustomobject]@{ identifier = '9.9.9' } }
+                    }
+                }
+                if ($joined -like 'pr list*') { return @() }
+                return $null
             }
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'PENDING'
-            Get-MlsExitCode -Context $context | Should -Be 0
-        }
-
-        It 'still FAILs a derived window that has long expired' {
-            $script:MergedAt = ''
-            $script:CodeQlState = 'open'
-            $script:AutoMerge = [pscustomobject]@{
-                enabledBy = [pscustomobject]@{ login = $script:Automation }
-                enabledAt = ([datetime]::UtcNow.AddHours(-30).ToString('o'))
-            }
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
-        }
-
-        It 'never sleeps in-process for a 24 h window' {
-            $context = Invoke-AuditForTest -ReseedMergedUtc ([datetime]::UtcNow.AddHours(-1).ToString('o'))
-            @($context.Criterion | ForEach-Object { $_.SleptSeconds }) | Should -Be @(0, 0, 0)
-            Should -Invoke Wait-MlsRetryInterval -ModuleName 'MlsAudit' -Exactly -Times 0
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*the advisory names a patched version: 9.9.9*'
         }
     }
 
-    Context 'V10.3: the chain could not look, and called it "nothing to heal" (F123)' {
-        It 'FAILS when the select job reports the alert surface was unreadable' {
-            $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable 'false'
-            $row = Get-Row -Context $context -Id 'V10.3'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -Match 'could NOT read'
-            # A denial and an empty alert list are different facts, and the whole
-            # point of this criterion is that the report says which one happened.
-            $row.Detail | Should -Match 'DENIAL, not an empty alert list'
-            # The remedy is a credential SCOPE, not a permission grant, which is the
-            # part that cost days - so the criterion carries it.
-            $row.Detail | Should -Match 'REPOSITORY secret'
+    Context 'Get-AppKeyMap reads naming.bicep rather than restating it' {
+        It 'maps the directory to the appKey, including where they differ' {
+            $map = Get-AppKeyMap -NamingBicepPath $script:NamingPath
+            $map['mcp-tools'] | Should -Be 'mcp'
+            $map['launch-ops'] | Should -Be 'launch-ops'
+            $map['control-tower'] | Should -Be 'control-tower'
         }
 
-        It 'FAILS as UNOBSERVABLE when the chain reported nothing at all' {
-            # Never "healthy by default". An audit invoked without the input cannot
-            # say the chain can see its own work, and must not imply that it can.
-            $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable ''
-            $row = Get-Row -Context $context -Id 'V10.3'
-            $row.Status | Should -Be 'FAIL'
-            $row.Detail | Should -Match 'UNOBSERVABLE, not healthy'
-        }
-
-        It 'PASSES when the surface was readable, so the guard is not a blanket fail' {
-            $context = Invoke-AuditForTest -NoRetry -AlertSurfaceReadable 'true'
-            (Get-Row -Context $context -Id 'V10.3').Status | Should -Be 'PASS'
-        }
-    }
-
-    Context 'a skipped check is not a failed one (F195)' {
-        # Run 33934487531: V10.2 reported "gauntlet not green: deploy to Container
-        # Apps=skipped" five times over. Those deploy jobs are CORRECTLY skipped - they
-        # only run on main - so every heal PR carries them and the predicate
-        # `$_ -notlike '*=success'` counted each one as a failure. Both trails therefore
-        # failed their gauntlet stage on every correct run, the same shape as F191: a
-        # criterion asserting something that cannot be true when the system works.
-        #
-        # Accepting `skipped` blindly is the opposite trap - a gauntlet where NOTHING ran
-        # would pass - so the criterion also requires that something actually succeeded.
-        It 'passes the gauntlet stage when deploy jobs are skipped alongside successes' {
-            $script:ExtraCheck = @(
-                [pscustomobject]@{ name = 'deploy to Container Apps'; conclusion = 'skipped' }
-                [pscustomobject]@{ name = 'deploy to Container Apps'; conclusion = 'skipped' }
-            )
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'PASS'
-            (Get-Row -Context $context -Id 'V10.2').Status | Should -Be 'PASS'
-        }
-
-        It 'still fails when a check genuinely failed' {
-            $script:ExtraCheck = @([pscustomobject]@{ name = 'vitest'; conclusion = 'failure' })
-            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*vitest=failure*'
-        }
-
-        It 'fails when every check was skipped, because nothing was actually verified' {
-            $script:CheckConclusion = 'skipped'
-            $script:SuppressDefaultChecks = $true
-            $script:ExtraCheck = @(
-                [pscustomobject]@{ name = 'deploy to Container Apps'; conclusion = 'skipped' }
-            )
-            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*no check run actually concluded*'
-        }
-
-        It 'treats a neutral conclusion as not-a-failure' {
-            # CodeQL reports NEUTRAL on a PR it has nothing to say about - observed on #225.
-            $script:CheckConclusion = 'neutral'
-            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.1').Status | Should -Be 'PASS'
-        }
-    }
-
-    Context 'merge provenance asserts the capability, not the merger''s login (F191)' {
-        # V10.1 stage 5 asserted mergedBy == 'github-actions[bot]'. The chain arms
-        # auto-merge with SELF_HEAL_TOKEN, a PAT owned by a person, so GitHub attributes
-        # the merge to that PERSON - and a criterion whose whole job is "no human merged
-        # this" reported a human on every correct run. PR #232, healed and merged with no
-        # human involved at all, failed it.
-        #
-        # Allowing the PAT owner's login would have made it pass and asserted NOTHING: a
-        # genuine hand-merge produces the identical login. What actually separates the two
-        # is WHEN the decision was made. Auto-merge records enabledAt before the checks
-        # finish; a discretionary click happens after the result is known and leaves no
-        # autoMergeRequest at all.
-        It 'passes when a human-named PAT armed auto-merge and the platform merged it' {
-            $script:MergedBy = 'paulcfuqua'
-            $script:AutoMerge = [pscustomobject]@{
-                enabledBy = [pscustomobject]@{ login = 'paulcfuqua' }
-                enabledAt = '2026-08-24T10:20:00Z'
-            }
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'PASS'
-        }
-
-        It 'records who merged and when it was armed, so a reader can judge it' {
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*armed*'
-        }
-    }
-
-    Context 'the PR is armed but not merged yet - the state the chain is in most of the time' {
-        # Run 33845069050 (2026-09-04): the Dependabot lane armed auto-merge on PR #174 and
-        # the audit ran 35 seconds later. mergedAt was empty, so both trails passed $null to
-        # Get-RevisionAfter -MergedUtc, whose [AllowNull()][datetime] waives the null CHECK
-        # but not the type COERCION - the binder threw before the function's own
-        # `if ($null -eq $MergedUtc)` guard could run. The exception text then replaced every
-        # stage this trail had already diagnosed, so a run that knew "PR not merged" reported
-        # a PowerShell type error instead.
-        It 'reports V10.2 as not merged rather than throwing a type-conversion error' {
-            $script:MergedAt = ''
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V10.2'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -Not -BeLike '*Cannot convert null*'
-            $row.Observed | Should -BeLike '*not merged*'
-        }
-
-        It 'reports V10.1 as not merged rather than throwing a type-conversion error' {
-            $script:MergedAt = ''
-            $context = Invoke-AuditForTest -NoRetry
-            $row = Get-Row -Context $context -Id 'V10.1'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -Not -BeLike '*Cannot convert null*'
-            $row.Observed | Should -BeLike '*not merged*'
-        }
-
-        It 'still reports the deploy stage it could not bind, so the trail is diagnosed in full' {
-            $script:MergedAt = ''
-            $context = Invoke-AuditForTest -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*no new container app revision*'
-        }
-    }
-
-    Context 'a check that throws' {
-        It 'records V10.1 as FAIL and still evaluates V10.2 and V10.3' {
-            Mock Invoke-MlsAz { throw 'az containerapp revision list failed: ResourceGroupNotFound.' }
-            $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 3
-            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
-            (Get-Row -Context $context -Id 'V10.1').Observed | Should -BeLike '*ResourceGroupNotFound*'
-        }
-    }
-
-    Context 'missing input' {
-        It 'refuses to run without the Verifier GitHub token' {
-            foreach ($name in @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')) { [Environment]::SetEnvironmentVariable($name, $null) }
-            { Invoke-AuditForTest } | Should -Throw '*GitHubToken*'
-        }
-
-        It 'fails V10.1 and V10.2 with actionable messages when no alert numbers were posted' {
-            $context = Invoke-AuditForTest -CodeQlAlertNumber '' -AutofixPrNumber '' -DependabotAlertNumber @() -NoRetry
-            (Get-Row -Context $context -Id 'V10.1').Status | Should -Be 'FAIL'
-            (Get-Row -Context $context -Id 'V10.1').Detail | Should -BeLike '*MLS_L10_CODEQL_ALERT*'
-            (Get-Row -Context $context -Id 'V10.2').Status | Should -Be 'FAIL'
-            (Get-Row -Context $context -Id 'V10.2').Detail | Should -BeLike '*MLS_L10_DEPENDABOT_ALERTS*'
+        It 'returns an empty map when naming.bicep cannot be read, so callers can say so' {
+            (Get-AppKeyMap -NamingBicepPath (Join-Path ([IO.Path]::GetTempPath()) 'no-such.bicep')).Count |
+                Should -Be 0
         }
     }
 }

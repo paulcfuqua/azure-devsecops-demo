@@ -1,0 +1,85 @@
+{
+  "$comment": [
+    "THE DECLARED SERVICE LEVELS FOR SELF-HEALING. This file is the single source; the L10",
+    "playbook describes it in prose and layer-10-audit.ps1 reads it, but neither is",
+    "authoritative.",
+    "",
+    "It exists because the design that retired the seeded-CVE model says the window must be",
+    "DECLARED in configuration, not inherited from a default: 'this repository has twice been",
+    "bitten by criteria silently adopting a timeout nobody chose'. layer-10-audit.ps1",
+    "therefore SKIPs rather than assuming a number when this file is missing or malformed - a",
+    "criterion that invents its own pass line is not measuring anything.",
+    "",
+    "Spec: docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md sections 4-6."
+  ],
+  "declaredAt": "2026-09-07",
+  "declaredBy": "sponsor",
+
+  "slo": {
+    "$comment": [
+      "Per source and per severity, NEVER averaged into one number - a blended figure hides",
+      "the slice that is not moving, which is the failure the compliance platform was built",
+      "to avoid. Values are the spec's section 5 table.",
+      "",
+      "The clock starts when the finding is CREATED and stops when it is closed. A finding",
+      "with no upstream fix does not consume its SLO: it is pending-solution, which holds and",
+      "ages without failing, and V10.4 is what stops that state becoming a dumping ground."
+    ],
+    "days": {
+      "critical": 7,
+      "high": 7,
+      "medium": 30,
+      "low": 30
+    }
+  },
+
+  "closureLookbackDays": {
+    "$comment": [
+      "V10.2 asks that every closure be traceable. 'Since the last audit' is not a boundary",
+      "this script can read - reports are committed but an audit may be re-run, skipped, or",
+      "run twice in an hour - so the window is declared instead. 30 days covers a monthly",
+      "compliance cycle with room for a gap, and every closure inside it must carry either a",
+      "complete heal trail or an explicit dismissal record."
+    ],
+    "value": 30
+  },
+
+  "notAutomatable": {
+    "$comment": [
+      "Findings for which NO automated path exists, so V10.1 must not count them as a",
+      "draining backlog and V10.4 must not demand an upstream fix for them. Each entry needs",
+      "a reason: an unexplained entry is how an exclusion list becomes a place to hide a",
+      "finding nobody wants to fix.",
+      "",
+      "Empty by design. Add an entry only when the class genuinely has no automated fix path,",
+      "and say why here rather than in a commit message nobody will find."
+    ],
+    "ecosystems": [],
+    "rules": []
+  },
+
+  "excludedPaths": {
+    "$comment": [
+      "Manifests whose findings are deliberate and are NOT part of the operational backlog.",
+      "",
+      "apps/vuln-lab holds knowingly-vulnerable pins. Since the 2026-09-05 design it is no",
+      "longer load-bearing for any criterion - it is a manual demonstration generator, armed",
+      "deliberately by a human when the queue is empty or the chain needs exercising in front",
+      "of an audience. Its findings must therefore not age against an SLO the estate never",
+      "intended to meet: the package is excluded from the root npm workspaces, is never",
+      "imported by any deployed application, and is not built into any container image.",
+      "",
+      "This is an exclusion from the BACKLOG, not from visibility. The alerts still exist,",
+      "V10.3 still proves the surface was readable, and the audit reports how many findings",
+      "were excluded and why, so an empty backlog can never be manufactured by adding a path",
+      "here unnoticed."
+    ],
+    "manifests": [
+      "apps/vuln-lab/package-lock.json",
+      "apps/vuln-lab/package.json"
+    ],
+    "sourcePrefixes": [
+      "apps/vuln-lab/"
+    ]
+  }
+}

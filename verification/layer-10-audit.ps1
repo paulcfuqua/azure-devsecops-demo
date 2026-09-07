@@ -4,57 +4,71 @@
     L10 Verifier audit - the self-healing pipeline on GitHub Copilot Autofix. READ-ONLY.
 
 .DESCRIPTION
-    Implements the two master-plan Verify criteria owned by
-    docs/runbooks/layers/L10.md section Validation cycle, and nothing else:
+    The OPERATIONS CYCLE, not a demonstration. Four criteria:
 
-      V10.1  For the seeded CodeQL alert, the full Autofix trail holds - alert created ->
-             autofix status success -> PR whose head commit is the Autofix commit and whose
-             body carries Autofix's explanation -> gauntlet checks all green -> merged by
-             automation (no human merger) -> new ACA revision -> alert state fixed,
-             timestamps monotonic.
-      V10.2  For at least 2 of the 3 seeded dependency pins, the Dependabot trail holds.
+      V10.1  The backlog drains. No HEALABLE finding remains open past the SLO its
+             severity declares. Reported per lane and per severity, never averaged - a
+             blended figure hides the slice that is not moving.
+      V10.2  Every closure is traceable. Each finding closed inside the declared window
+             carries a complete heal trail, or an explicit record of being closed some
+             other way. An unexplained closure fails.
+      V10.3  The alert surface was READABLE. A denial is never recorded as "nothing to
+             heal" (F123).
+      V10.4  pending-solution is not a dumping ground. Every finding held there is checked
+             against the advisory for an upstream fix that does exist.
 
-    Each stage is read independently from an API. Stage 3 checks the head commit came from
-    the Autofix API and stage 5 checks the merge was PRE-AUTHORISED rather than chosen by a
-    human once the result was visible, so a hand-assisted chain reads as a failed chain -
-    which is the point: never hand-close alerts, hand-write a fix, or hand-merge PRs to
-    "complete" a run (L10.md Rollback).
+    WHAT THIS REPLACED, AND WHY. V10.1 and V10.2 used to verify one SEEDED alert's
+    seven-stage trail against apps/vuln-lab. That framing required the lab to always hold
+    something to heal, which required re-arming, which is F190 - a pull request that
+    reintroduces a critical alert cannot merge past code scanning protection without an
+    administrator override. The entire apparatus existed to feed one hard-coded path
+    filter, and it made the verification weaker rather than stronger: PR #225 was a correct
+    Autofix heal of a REAL alert in apps/mcp-tools, and it could never complete a trail,
+    because the wrong application deployed. L10.md conceded as much in its own words -
+    nothing can prove healed code runs when the package is deliberately never deployed.
 
-    Stage 5 used to compare mergedBy against a bot login, which could never pass: the chain
-    arms auto-merge with a PAT owned by a person, so GitHub credits the merge to that person
-    and the criterion reported a human on every correct run. Allowing that login would have
-    asserted nothing, because a genuine hand-merge produces an identical mergedBy. See
-    Test-MergeProvenance and F191.
+    THE STAGES SURVIVED. They live in Get-HealTrail and apply per healed finding: a merged
+    pull request that explains the closure, a green gauntlet (skipped and neutral are not
+    failures, and a run where nothing executed is not a pass), a merge PRE-AUTHORISED by
+    auto-merge rather than chosen once the result was visible (F191 - the question is WHEN
+    the decision was made, not who is credited with it), and the healed code actually
+    running.
 
-    THE DEPLOY STAGE (V10.1 stage 6, V10.2 stage 5) reads revisions of
-    mls-vuln-lab-demo-ca, the L10 deployment witness provisioned by
-    infra/bicep/apps/main.bicep. apps/vuln-lab itself is never containerised - its pins are
-    CRITICAL and would fail the very Trivy gate the heal PR has to pass, and its seeds are
-    unstarted server factories whose safety rests on nothing ever running them - so the
-    witness carries a pinned public placeholder image plus the heal's identity as
-    configuration. The criterion is therefore not "some revision appeared", which any
-    unrelated redeploy satisfies, but "the revision after the merge carries
-    MLS_HEAL_COMMIT == this PR's merge commit", which nothing satisfies by accident.
-    .github/workflows/vuln-lab-witness.yml is what stamps it.
+    THE DEPLOY STAGE IS WHERE THE MODEL CHANGED SHAPE. Old: did the vuln-lab witness roll?
+    New: did the application this heal actually CHANGED receive a revision carrying the
+    merge commit? The binding needs no cooperation from the applications, because every app
+    CI already computes `tag="sha-${GITHUB_SHA:0:7}"` and GITHUB_SHA on a push to main IS
+    the merge commit - so a revision whose image ends `:sha-<first 7>` is the estate's own
+    record that this heal shipped. Two cases are REPORTED rather than failed: a heal
+    touching no deployed application, and an application that is not deployed at all.
 
-    Both criteria carry a 24 h window measured from the re-seed merge. This audit does not
-    block for a day: it evaluates the trail now and records PENDING while that declared
-    window is still open, FAIL once it has passed.
+    THE SERVICE LEVEL IS DECLARED, NEVER DEFAULTED. .github/self-heal-policy.json carries
+    it, and a missing or malformed policy makes the criteria SKIP rather than invent a pass
+    line - this repository has twice been bitten by a criterion silently adopting a timeout
+    nobody chose.
+
+    apps/vuln-lab still exists and is no longer load-bearing for anything here. It is a
+    manual demonstration generator: a deliberate way to arm a finding when the queue is
+    empty or the chain needs exercising in front of an audience. Its manifests are listed
+    under excludedPaths in the policy, so its knowingly-vulnerable pins do not age against
+    an SLO the estate never intended to meet - and the audit reports how many findings were
+    excluded, so an empty backlog cannot be manufactured by adding a path there unnoticed.
 
 .EXAMPLE
-    ./layer-10-audit.ps1 -CodeQlAlertNumber 7 -AutofixPrNumber 31 -DependabotAlertNumber 3,4,5
+    ./layer-10-audit.ps1 -Repository owner/repo -AlertSurfaceReadable true
 #>
 [CmdletBinding()]
 param(
     [string]$Repository,
-    [string]$CodeQlAlertNumber,
-    [string]$AutofixPrNumber,
-    [string[]]$DependabotAlertNumber = @(),
-    [string]$VulnLabAppName = 'mls-vuln-lab-demo-ca',
     [string]$ResourceGroupName = 'mls-rg-apps',
-    [string]$ReseedMergedUtc,
-    [double]$ChainWindowHours = 24,
-    [int]$DependencyPassBar = 2,
+    # The estate's naming inputs, so a rebranded estate resolves its own container apps
+    # rather than looking up names that no longer exist (F90).
+    [string]$Prefix = 'mls',
+    [string]$EnvironmentSegment = 'demo',
+    # Both default to the repository's own copies; parameters exist so the tests can
+    # supply fixtures without writing into .github/.
+    [string]$PolicyPath = '',
+    [string]$NamingBicepPath = '',
     # V10.3's subject. 'true' / 'false' as reported by the self-heal select job; an
     # empty value means the chain did not say, which is itself unobservable and is
     # NOT treated as healthy. See F123.
@@ -145,62 +159,158 @@ function Test-GauntletConclusion {
     return $problem
 }
 
-function Get-RevisionAfter {
+function Get-SelfHealPolicy {
     <#
     .SYNOPSIS
-        The deploy stage for both tracks (V10.1 stage 6, V10.2 stage 5): a new revision of
-        the L10 deployment witness, timestamped after the merge AND stamped with that
-        merge's commit.
+        The DECLARED service levels. Never a default.
     .DESCRIPTION
-        The app is mls-vuln-lab-demo-ca, provisioned by infra/bicep/apps/main.bicep. It is a
-        witness, not a fifth serving app: apps/vuln-lab is never containerised (its pins are
-        CRITICAL and would fail the very Trivy gate the heal PR has to pass, and its seeds
-        are unstarted server factories whose safety argument is that nothing ever runs
-        them), so the container carries a pinned public placeholder image and the heal's
-        identity as configuration. .github/workflows/vuln-lab-witness.yml re-stamps
-        MLS_HEAL_COMMIT on every push to main touching apps/vuln-lab/**.
-
-        The commit match is the point. "Some revision appeared after the merge" is satisfied
-        by any unrelated redeploy and proves nothing; "the revision after the merge carries
-        this heal's merge commit" cannot be satisfied by accident, and it is the estate's own
-        record - read from ARM with Reader - that the merged fix reached Azure.
+        The design is explicit that the window is declared in configuration rather than
+        inherited: "this repository has twice been bitten by criteria silently adopting a
+        timeout nobody chose". So a missing or malformed policy is UNOBSERVABLE, not
+        "assume 7 days" - a criterion that invents its own pass line measures nothing.
     .OUTPUTS
-        After   - revisions created at or after the merge
-        Matched - of those, the ones stamped with this merge commit
-        Stamp   - the MLS_HEAL_COMMIT values seen on After, for the report's observed line
+        The parsed policy, or $null when it cannot be read.
+    #>
+    param([AllowEmptyString()][string]$PolicyPath = '')
+    if ([string]::IsNullOrWhiteSpace($PolicyPath) -or -not (Test-Path -LiteralPath $PolicyPath)) { return $null }
+    try { return Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json }
+    catch { return $null }
+}
+
+function Get-AppKeyMap {
+    <#
+    .SYNOPSIS
+        apps/<directory> -> the appKey infra/bicep/naming.bicep gives it.
+    .DESCRIPTION
+        Read from naming.bicep rather than restated here, because CLAUDE.md is explicit
+        that a constant naming something in another system is resolved against that
+        system. The map is NOT the identity function: apps/mcp-tools is keyed `mcp` and
+        apps/directline-token is keyed `directline`, so assuming the directory name would
+        look up container apps that do not exist and report a heal as undeployed.
+    .OUTPUTS
+        A hashtable of directory name -> appKey. Empty when naming.bicep cannot be read,
+        which callers must treat as unobservable rather than as "no apps".
+    #>
+    param([Parameter(Mandatory)][string]$NamingBicepPath)
+    $map = @{}
+    if (-not (Test-Path -LiteralPath $NamingBicepPath)) { return $map }
+
+    $inBlock = $false
+    foreach ($raw in @(Get-Content -LiteralPath $NamingBicepPath)) {
+        $line = "$raw".Trim()
+        if ($line -match '^var\s+appKeys\s*=\s*\{') { $inBlock = $true; continue }
+        if (-not $inBlock) { continue }
+        if ($line -eq '}') { break }
+        if ($line.StartsWith('//') -or $line.Length -eq 0) { continue }
+        if ($line -match "^([A-Za-z0-9_]+)\s*:\s*'([^']+)'") {
+            # camelCase identifier -> the kebab directory it corresponds to, plus the
+            # explicit value. Both are recorded: the VALUE is the appKey, and the
+            # directory is derived by kebab-casing the identifier.
+            $identifier = $Matches[1]
+            $key = $Matches[2]
+            $directory = ($identifier -creplace '([a-z0-9])([A-Z])', '$1-$2').ToLowerInvariant()
+            $map[$directory] = $key
+        }
+    }
+    return $map
+}
+
+function Resolve-AffectedApp {
+    <#
+    .SYNOPSIS
+        Which deployed applications a heal actually changed.
+    .DESCRIPTION
+        Replaces the seeded model's single hard-coded witness. The old deploy stage read
+        revisions of mls-vuln-lab-demo-ca no matter what the heal touched, so PR #225 -
+        a correct Autofix heal of a REAL alert in apps/mcp-tools - could never complete a
+        trail, because the wrong application deployed. L10.md conceded the limitation in
+        its own words: nothing can prove healed code runs when the package is deliberately
+        never deployed.
+
+        The path is the evidence: changed files -> apps/<dir>/** -> naming.bicep appKey ->
+        <prefix>-<key>-<env>-ca.
+
+        Two outcomes are REPORTED rather than failed, per the design:
+          * a heal touching no application path (verification/, docs/, .github/) - no
+            deploy assertion is possible, and saying so is honest where failing is not;
+          * a heal touching several applications - all of them must roll.
+    .OUTPUTS
+        Directory, AppKey and ContainerApp for each application path the heal touched.
+    #>
+    param(
+        [AllowNull()][string[]]$ChangedPath,
+        [Parameter(Mandatory)][hashtable]$AppKeyMap,
+        [Parameter(Mandatory)][string]$Prefix,
+        [Parameter(Mandatory)][string]$EnvironmentSegment
+    )
+    $seen = [System.Collections.Generic.List[string]]::new()
+    foreach ($path in @($ChangedPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        if ("$path" -notmatch '^apps/([^/]+)/') { continue }
+        $directory = $Matches[1]
+        if (-not $AppKeyMap.ContainsKey($directory)) { continue }
+        if (-not $seen.Contains($directory)) { $seen.Add($directory) }
+    }
+    return @($seen | ForEach-Object {
+            [pscustomobject]@{
+                Directory    = $_
+                AppKey       = $AppKeyMap[$_]
+                ContainerApp = "$Prefix-$($AppKeyMap[$_])-$EnvironmentSegment-ca"
+            }
+        })
+}
+
+function Get-RevisionCarryingCommit {
+    <#
+    .SYNOPSIS
+        A revision of one container app that is running THIS merge commit's image.
+    .DESCRIPTION
+        The binding is the image tag, and it needs no cooperation from the applications.
+        Every app CI computes `tag="sha-${GITHUB_SHA:0:7}"`, and on a push to main
+        GITHUB_SHA is the merge commit - so a revision whose image ends `:sha-<first 7 of
+        the merge commit>` is the estate's own record, read with Reader, that this heal
+        shipped to this app.
+
+        That is why it is not "some revision appeared after the merge", which any
+        unrelated redeploy satisfies. It is also why the old MLS_HEAL_COMMIT stamp is not
+        needed outside the witness: the tag already carries the commit.
+
+        Absence of the app is distinguished from absence of the revision. `az` returning
+        nothing for an app that does not exist is NOT evidence the heal failed to deploy -
+        it is a different fact, and the caller reports it as one (the F63/F105 rule).
+    .OUTPUTS
+        AppExists, After, Matched, Tag - enough for the caller to phrase every case.
     #>
     param(
         [Parameter(Mandatory)][string]$ResourceGroupName,
         [Parameter(Mandatory)][string]$AppName,
-        # [nullable[datetime]], not [datetime]. [AllowNull()] waives the null VALIDATION but
-        # not the type COERCION, and $null does not convert to a value type - so with a plain
-        # [datetime] the binder threw before the `if ($null -eq $MergedUtc)` guard below could
-        # ever run, and that guard was dead code from the day it was written. An unmerged PR
-        # is the chain's normal state, not an error: it must reach the guard and return $empty
-        # so the caller reports "PR not merged" instead of a PowerShell type error (F187).
         [AllowNull()][nullable[datetime]]$MergedUtc,
         [AllowEmptyString()][AllowNull()][string]$MergeCommit
     )
     $revisions = @(Invoke-MlsAz -AllowFailure -Argument @(
             'containerapp', 'revision', 'list', '--resource-group', $ResourceGroupName, '--name', $AppName,
-            '--query', "[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}",
+            '--query', '[].{name:name, created:properties.createdTime, image:properties.template.containers[0].image}',
             '--output', 'json'
         ))
-    $empty = [pscustomobject]@{ After = @(); Matched = @(); Stamp = @() }
-    if ($null -eq $MergedUtc) { return $empty }
+    $appExists = ($null -ne $revisions -and @($revisions).Count -gt 0)
+    $result = [pscustomobject]@{ AppExists = $appExists; After = @(); Matched = @(); Tag = @() }
+    if (-not $appExists -or $null -eq $MergedUtc) { return $result }
+
     $after = @($revisions | Where-Object {
-            $created = "$(Get-MlsProperty -InputObject $_ -Name 'created')"
             $slot = [datetime]::MinValue
-            [datetime]::TryParse($created, [ref]$slot) -and $slot.ToUniversalTime() -ge $MergedUtc
+            [datetime]::TryParse("$(Get-MlsProperty -InputObject $_ -Name 'created')", [ref]$slot) -and
+            $slot.ToUniversalTime() -ge $MergedUtc
         })
-    $stamp = @($after | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'healCommit')" })
-    $matched = @()
+    $result.After = $after
+    $result.Tag = @($after | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'image')" })
     if (-not [string]::IsNullOrWhiteSpace($MergeCommit)) {
-        $matched = @($after | Where-Object {
-                "$(Get-MlsProperty -InputObject $_ -Name 'healCommit')" -eq $MergeCommit
+        # The tag is the SHORT sha the app CI computes. Comparing the full oid would never
+        # match, and comparing a prefix of the tag would match too much.
+        $short = "$MergeCommit".Substring(0, [Math]::Min(7, "$MergeCommit".Length))
+        $result.Matched = @($after | Where-Object {
+                "$(Get-MlsProperty -InputObject $_ -Name 'image')" -like "*:sha-$short"
             })
     }
-    return [pscustomobject]@{ After = $after; Matched = $matched; Stamp = $stamp }
+    return $result
 }
 
 function Test-MergeProvenance {
@@ -267,234 +377,483 @@ function Test-MergeProvenance {
     return [pscustomobject]@{ Problem = $problem; Note = $note }
 }
 
-function Test-DeployStage {
+function Select-ClosedAt {
     <#
     .SYNOPSIS
-        Shared verdict for the deploy stage: returns the matched revision (or $null) plus the
-        problem text, so both trails phrase the same failure the same way.
+        When an alert closed: whichever stamp it actually carries, never both glued together.
+    .DESCRIPTION
+        GitHub can report fixed_at AND dismissed_at on the same alert - a fixed alert that
+        someone later dismissed keeps both. Concatenating them yields a string no parser
+        accepts, which drops the closure out of the audit window entirely and lets V10.2
+        report "nothing to explain" over a closure that plainly happened. The most recent
+        stamp is the one that describes the state the alert is in now.
+    #>
+    param([Parameter(Mandatory)]$Alert)
+    $candidate = @(
+        "$(Get-MlsProperty -InputObject $Alert -Name 'fixed_at')",
+        "$(Get-MlsProperty -InputObject $Alert -Name 'dismissed_at')",
+        "$(Get-MlsProperty -InputObject $Alert -Name 'auto_dismissed_at')"
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    $latest = ''
+    $latestSlot = [datetime]::MinValue
+    foreach ($value in $candidate) {
+        $slot = [datetime]::MinValue
+        if ([datetime]::TryParse($value, [ref]$slot) -and $slot -ge $latestSlot) {
+            $latestSlot = $slot
+            $latest = $value
+        }
+    }
+    return $latest
+}
+
+function Get-PullRequestFile {
+    <# The paths a pull request changed - the input to the rewritten deploy stage. #>
+    param(
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][string]$Number
+    )
+    $response = Invoke-MlsGh -AllowFailure -Argument @('api', '--paginate', "repos/$Repository/pulls/$Number/files?per_page=100")
+    return @(Get-MlsCollection -Response $response | ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'filename')" })
+}
+
+function Get-MergedHealPullRequest {
+    <#
+    .SYNOPSIS
+        Merged pull requests in the window, as trail candidates.
+    .DESCRIPTION
+        Fetched once and reused for every closure rather than searched per finding: this
+        audit runs against a rate-limited API, and a per-finding search turns one
+        observation into dozens.
     #>
     param(
-        [Parameter(Mandatory)]$Deploy,
-        [AllowEmptyString()][AllowNull()][string]$MergeCommit
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][int]$LookbackDays
     )
-    if ($Deploy.After.Count -lt 1) {
-        return [pscustomobject]@{
-            Revision = $null
-            Problem  = 'no new container app revision timestamped after the merge (the vuln-lab deployment witness was not rolled - check .github/workflows/vuln-lab-witness.yml ran for the merge commit)'
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($MergeCommit)) {
-        return [pscustomobject]@{
-            Revision = $null
-            Problem  = 'the PR reports no merge commit, so the revision after the merge could not be bound to this heal'
-        }
-    }
-    if ($Deploy.Matched.Count -lt 1) {
-        $seen = @($Deploy.Stamp | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
-        $describe = if ($seen.Count -gt 0) { $seen -join ', ' } else { '(none stamped)' }
-        return [pscustomobject]@{
-            Revision = $null
-            Problem  = "$($Deploy.After.Count) revision(s) exist after the merge but none carries MLS_HEAL_COMMIT=$MergeCommit (stamps seen: $describe) - a revision that is not this heal's does not prove this heal shipped"
-        }
-    }
-    return [pscustomobject]@{ Revision = $Deploy.Matched[0]; Problem = '' }
+    $response = Invoke-MlsGh -AllowFailure -Argument @(
+        'pr', 'list', '--repo', $Repository, '--state', 'merged', '--limit', '100',
+        '--json', 'number,title,body,mergedAt,headRefOid,mergeCommit,mergedBy,autoMergeRequest,author')
+    if ($null -eq $response) { return @() }
+    $since = [datetime]::UtcNow.AddDays(-$LookbackDays)
+    return @(Get-MlsCollection -Response $response | Where-Object {
+            $slot = [datetime]::MinValue
+            [datetime]::TryParse("$(Get-MlsProperty -InputObject $_ -Name 'mergedAt')", [ref]$slot) -and
+            $slot.ToUniversalTime() -ge $since
+        })
 }
 
-function Test-AutofixTrail {
-    <# V10.1 - seven stages, each read independently. #>
+function Get-HealTrail {
+    <#
+    .SYNOPSIS
+        The seven stages, applied to ONE closed finding.
+    .DESCRIPTION
+        This is where the seeded model's stages survive. They are unchanged in substance -
+        a pull request that explains the closure, a green gauntlet, a merge pre-authorised
+        rather than chosen once the result was visible, and the healed code actually
+        running - but they now attach to whatever was healed instead of to three pins
+        somebody planted.
+
+        The deploy stage is the part that changes shape. Old: did the vuln-lab witness
+        roll? New: did the application this heal actually CHANGED receive a revision
+        carrying the merge commit? A heal touching no deployed application is reported as
+        exactly that rather than failed, because no deploy assertion is possible - and
+        saying so is the honest answer where failing would be a lie about what was
+        observed.
+    .OUTPUTS
+        Problem[] and Reference.
+    #>
     param(
         [Parameter(Mandatory)][string]$Repository,
-        [AllowEmptyString()][string]$AlertNumber,
-        [AllowEmptyString()][string]$PullRequestNumber,
+        [Parameter(Mandatory)]$Finding,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Candidate,
+        [Parameter(Mandatory)][hashtable]$AppKeyMap,
         [Parameter(Mandatory)][string]$ResourceGroupName,
-        [Parameter(Mandatory)][string]$AppName
-    )
-    if ([string]::IsNullOrWhiteSpace($AlertNumber) -or [string]::IsNullOrWhiteSpace($PullRequestNumber)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no seeded CodeQL alert number and/or heal PR number supplied' -Final `
-            -Detail 'L10 deploy step 4: the DevSecOps lead posts the alert numbers and PR numbers to the Verifier as they appear. Pass -CodeQlAlertNumber / $env:MLS_L10_CODEQL_ALERT and -AutofixPrNumber / $env:MLS_L10_AUTOFIX_PR.'
-    }
-    $stage = [System.Collections.Generic.List[string]]::new()
-    $problem = [System.Collections.Generic.List[string]]::new()
-    $timestamp = [System.Collections.Generic.List[object]]::new()
-
-    # 1. alert created
-    $alert = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/code-scanning/alerts/$AlertNumber")
-    if ($null -eq $alert) {
-        return New-MlsCheckResult -Passed $false -Observed "code-scanning alert #$AlertNumber could not be read"
-    }
-    $createdAt = "$(Get-MlsProperty -InputObject $alert -Name 'created_at')"
-    $rule = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $alert -Name 'rule') -Name 'id')"
-    $stage.Add("1 alert #$AlertNumber rule=$rule created=$createdAt")
-    $timestamp.Add($createdAt)
-
-    # 2. autofix generated by GitHub, not by us
-    $autofix = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/code-scanning/alerts/$AlertNumber/autofix")
-    $autofixStatus = "$(Get-MlsProperty -InputObject $autofix -Name 'status')"
-    $description = "$(Get-MlsProperty -InputObject $autofix -Name 'description')"
-    $startedAt = "$(Get-MlsProperty -InputObject $autofix -Name 'started_at')"
-    $stage.Add("2 autofix status=$autofixStatus")
-    if ($startedAt) { $timestamp.Add($startedAt) }
-    if ($autofixStatus -ne 'success') { $problem.Add("autofix status '$autofixStatus' (expected success)") }
-    if ([string]::IsNullOrWhiteSpace($description)) { $problem.Add('autofix returned no description - there is no GitHub-authored explanation to carry into the PR') }
-
-    # 3. PR head commit is the autofix commit and the body carries Autofix's explanation
-    $pullRequest = Get-PullRequestDetail -Repository $Repository -Number $PullRequestNumber
-    if ($null -eq $pullRequest) {
-        return New-MlsCheckResult -Passed $false -Observed (($stage -join ' | ') + " | heal PR #$PullRequestNumber could not be read")
-    }
-    $headSha = "$(Get-MlsProperty -InputObject $pullRequest -Name 'headRefOid')"
-    $body = "$(Get-MlsProperty -InputObject $pullRequest -Name 'body')"
-    $commits = @(Get-MlsProperty -InputObject $pullRequest -Name 'commits')
-    $stage.Add("3 PR #$PullRequestNumber head=$($headSha.Substring(0, [math]::Min(7, $headSha.Length))) commits=$($commits.Count)")
-    if ($description -and $body -notlike "*$($description.Substring(0, [math]::Min(40, $description.Length)))*") {
-        $problem.Add("the PR body does not carry Autofix's own explanation - the check that the narrative is GitHub's, not text the workflow wrote")
-    }
-    $headCommit = @($commits | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'oid')" -eq $headSha })
-    if ($commits.Count -gt 0 -and $headCommit.Count -eq 0) {
-        $problem.Add("the PR's head commit $headSha is not among its own commits - the branch was not created from the autofix/commits call")
-    }
-
-    # 4. gauntlet green
-    # @() because PowerShell unwraps a one-element result: a heal PR with exactly one
-    # check run made $conclusion a bare string, and "string".Count throws under
-    # Set-StrictMode. Latent until a test presented a single check.
-    $conclusion = @(Get-CheckConclusion -Repository $Repository -HeadSha $headSha)
-    $stage.Add("4 checks=$($conclusion.Count)")
-    foreach ($entry in (Test-GauntletConclusion -Conclusion $conclusion)) { $problem.Add($entry) }
-
-    # 5. the merge was pre-authorised by the chain, not decided by a human (F191)
-    $mergedAt = "$(Get-MlsProperty -InputObject $pullRequest -Name 'mergedAt')"
-    $provenance = Test-MergeProvenance -PullRequest $pullRequest -MergedAt $mergedAt
-    $stage.Add($provenance.Note)
-    if ($mergedAt) { $timestamp.Add($mergedAt) }
-    if ([string]::IsNullOrWhiteSpace($mergedAt)) { $problem.Add('the heal PR is not merged') }
-    foreach ($entry in $provenance.Problem) { $problem.Add($entry) }
-
-    # 6. new witness revision after the merge, stamped with this merge's commit
-    $mergedUtc = $null
-    if ($mergedAt) {
-        $slot = [datetime]::MinValue
-        if ([datetime]::TryParse($mergedAt, [ref]$slot)) { $mergedUtc = $slot.ToUniversalTime() }
-    }
-    $mergeCommit = Get-MergeCommitSha -PullRequest $pullRequest
-    $deploy = Get-RevisionAfter -ResourceGroupName $ResourceGroupName -AppName $AppName `
-        -MergedUtc $mergedUtc -MergeCommit $mergeCommit
-    $verdict = Test-DeployStage -Deploy $deploy -MergeCommit $mergeCommit
-    $stage.Add("6 revisions after merge=$($deploy.After.Count) stamped with $($mergeCommit.Substring(0, [math]::Min(7, $mergeCommit.Length)))=$($deploy.Matched.Count)")
-    if ($verdict.Problem) { $problem.Add($verdict.Problem) }
-    else { $timestamp.Add("$(Get-MlsProperty -InputObject $verdict.Revision -Name 'created')") }
-
-    # 7. alert closed
-    $final = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/code-scanning/alerts/$AlertNumber")
-    $finalState = "$(Get-MlsProperty -InputObject $final -Name 'state')"
-    $stage.Add("7 alert state=$finalState")
-    if ($finalState -ne 'fixed') { $problem.Add("alert state '$finalState', expected 'fixed'") }
-
-    $monotonic = Test-MlsMonotonicTimestamp -Timestamp @($timestamp)
-    if (-not $monotonic.Monotonic) { $problem.Add("timestamps not monotonic: $($monotonic.Problem)") }
-
-    if ($problem.Count -eq 0) {
-        return New-MlsCheckResult -Passed $true -Observed ($stage -join ' | ')
-    }
-    return New-MlsCheckResult -Passed $false -Observed (($stage -join ' | ') + ' || ' + ($problem -join ' | ')) `
-        -Detail 'A status of error is not retried away by the audit: one re-run of the chain is permitted and recorded; a second failure is a genuine defect in the seeded flaw''s suitability (L10 failure mode 3).'
-}
-
-function Test-DependabotTrailForAlert {
-    <# Six stages for one seeded pin. #>
-    param(
-        [Parameter(Mandatory)][string]$Repository,
-        [Parameter(Mandatory)][string]$AlertNumber,
-        [Parameter(Mandatory)][string]$ResourceGroupName,
-        [Parameter(Mandatory)][string]$AppName
+        [Parameter(Mandatory)][string]$Prefix,
+        [Parameter(Mandatory)][string]$EnvironmentSegment
     )
     $problem = [System.Collections.Generic.List[string]]::new()
-    $timestamp = [System.Collections.Generic.List[object]]::new()
-    $alert = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/dependabot/alerts/$AlertNumber")
-    if ($null -eq $alert) {
-        return [pscustomobject]@{ Passed = $false; Summary = "alert #$AlertNumber unreadable" }
-    }
-    $package = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $alert -Name 'dependency') -Name 'package') -Name 'name')"
-    $timestamp.Add("$(Get-MlsProperty -InputObject $alert -Name 'created_at')")
 
-    $pullRequests = @(Invoke-MlsGh -AllowFailure -Argument @(
-            'pr', 'list', '--repo', $Repository, '--author', 'app/dependabot', '--state', 'all',
-            '--json', 'number,title,headRefName'
-        ))
-    $candidate = @($pullRequests | Where-Object {
-            "$(Get-MlsProperty -InputObject $_ -Name 'title')$(Get-MlsProperty -InputObject $_ -Name 'headRefName')" -like "*$package*"
+    # Stage 1 - a pull request that plausibly explains this closure. Dependabot names the
+    # package in its title; a code-scanning heal names the alert number in its body.
+    $match = @($Candidate | Where-Object {
+            $title = "$(Get-MlsProperty -InputObject $_ -Name 'title')"
+            $body = "$(Get-MlsProperty -InputObject $_ -Name 'body')"
+            if ($Finding.Lane -eq 'dependabot') {
+                -not [string]::IsNullOrWhiteSpace($Finding.Package) -and $title -like "*$($Finding.Package)*"
+            }
+            else {
+                $body -match "alert[^0-9]{0,12}$([regex]::Escape($Finding.Number))\b"
+            }
         })
-    if ($candidate.Count -eq 0) {
-        return [pscustomobject]@{ Passed = $false; Summary = "#$AlertNumber ($package): no Dependabot PR targeting the package" }
+    if ($match.Count -eq 0) {
+        $problem.Add('no merged pull request in the window explains it')
+        return [pscustomobject]@{ Problem = $problem; Reference = '' }
     }
-    $number = "$(Get-MlsProperty -InputObject $candidate[0] -Name 'number')"
-    $pullRequest = Get-PullRequestDetail -Repository $Repository -Number $number
+    $pullRequest = $match[0]
+    $number = "$(Get-MlsProperty -InputObject $pullRequest -Name 'number')"
+    $reference = "PR #$number"
+
+    # Stage 2 - the gauntlet. Reused verbatim: SKIPPED and neutral are not failures, and a
+    # pull request where nothing ran is not a pass (F-gauntlet).
     $headSha = "$(Get-MlsProperty -InputObject $pullRequest -Name 'headRefOid')"
-    # @() because PowerShell unwraps a one-element result: a heal PR with exactly one
-    # check run made $conclusion a bare string, and "string".Count throws under
-    # Set-StrictMode. Latent until a test presented a single check.
-    $conclusion = @(Get-CheckConclusion -Repository $Repository -HeadSha $headSha)
-    foreach ($entry in (Test-GauntletConclusion -Conclusion $conclusion)) { $problem.Add($entry) }
+    foreach ($entry in @(Test-GauntletConclusion -Conclusion (Get-CheckConclusion -Repository $Repository -HeadSha $headSha))) {
+        $problem.Add($entry)
+    }
 
-    # Same provenance rule as the Autofix trail (F191): the merge must have been
-    # pre-authorised by the chain, not chosen by a human once the result was visible.
+    # Stage 3 - provenance. WHEN the decision was made, not who typed it (F191).
     $mergedAt = "$(Get-MlsProperty -InputObject $pullRequest -Name 'mergedAt')"
-    if ($mergedAt) { $timestamp.Add($mergedAt) }
-    if ([string]::IsNullOrWhiteSpace($mergedAt)) { $problem.Add('PR not merged') }
-    $provenance = Test-MergeProvenance -PullRequest $pullRequest -MergedAt $mergedAt
-    foreach ($entry in $provenance.Problem) { $problem.Add($entry) }
-
-    $mergedUtc = $null
-    if ($mergedAt) {
-        $slot = [datetime]::MinValue
-        if ([datetime]::TryParse($mergedAt, [ref]$slot)) { $mergedUtc = $slot.ToUniversalTime() }
+    foreach ($entry in @((Test-MergeProvenance -PullRequest $pullRequest -MergedAt $mergedAt).Problem)) {
+        $problem.Add($entry)
     }
+
+    # Stage 4 - the healed code is running.
     $mergeCommit = Get-MergeCommitSha -PullRequest $pullRequest
-    $deploy = Get-RevisionAfter -ResourceGroupName $ResourceGroupName -AppName $AppName `
-        -MergedUtc $mergedUtc -MergeCommit $mergeCommit
-    $verdict = Test-DeployStage -Deploy $deploy -MergeCommit $mergeCommit
-    if ($verdict.Problem) { $problem.Add($verdict.Problem) }
-    else { $timestamp.Add("$(Get-MlsProperty -InputObject $verdict.Revision -Name 'created')") }
+    $mergedUtc = $null
+    $slot = [datetime]::MinValue
+    if ([datetime]::TryParse($mergedAt, [ref]$slot)) { $mergedUtc = $slot.ToUniversalTime() }
 
-    $final = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/dependabot/alerts/$AlertNumber")
-    $finalState = "$(Get-MlsProperty -InputObject $final -Name 'state')"
-    if ($finalState -ne 'fixed') { $problem.Add("alert state '$finalState', expected 'fixed'") }
-
-    $monotonic = Test-MlsMonotonicTimestamp -Timestamp @($timestamp)
-    if (-not $monotonic.Monotonic) { $problem.Add("timestamps not monotonic: $($monotonic.Problem)") }
-
-    if ($problem.Count -eq 0) {
-        return [pscustomobject]@{ Passed = $true; Summary = "#$AlertNumber ($package) PR #$($number): all six stages hold" }
+    $affected = @(Resolve-AffectedApp -ChangedPath (Get-PullRequestFile -Repository $Repository -Number $number) `
+            -AppKeyMap $AppKeyMap -Prefix $Prefix -EnvironmentSegment $EnvironmentSegment)
+    if ($affected.Count -eq 0) {
+        # REPORTED, not failed. The design names this case explicitly.
+        return [pscustomobject]@{
+            Problem   = $problem
+            Reference = "$reference (no deployed application on its changed paths, so no deploy assertion is possible)"
+        }
     }
-    return [pscustomobject]@{ Passed = $false; Summary = "#$AlertNumber ($package) PR #$($number): $($problem -join ', ')" }
+    foreach ($app in $affected) {
+        $revision = Get-RevisionCarryingCommit -ResourceGroupName $ResourceGroupName -AppName $app.ContainerApp `
+            -MergedUtc $mergedUtc -MergeCommit $mergeCommit
+        if (-not $revision.AppExists) {
+            # Not a failure of the heal: the app is not deployed, or Reader cannot see it.
+            $reference += " ($($app.ContainerApp) not deployed - no deploy assertion)"
+            continue
+        }
+        if ($revision.Matched.Count -lt 1) {
+            $short = if ($mergeCommit) { "$mergeCommit".Substring(0, [Math]::Min(7, "$mergeCommit".Length)) } else { '(none)' }
+            $seen = if ($revision.Tag.Count -gt 0) { $revision.Tag -join ', ' } else { '(no revision after the merge)' }
+            $problem.Add("$($app.ContainerApp) never ran this heal: no revision after the merge carries image tag sha-$short (saw: $seen)")
+        }
+    }
+    return [pscustomobject]@{ Problem = $problem; Reference = $reference }
 }
 
-function Test-DependabotTrail {
-    <# V10.2 - at least 2 of the 3 seeded pins; the third's outcome is recorded either way. #>
+function Get-Finding {
+    <#
+    .SYNOPSIS
+        Every Dependabot and code-scanning alert, normalised to one shape.
+    .DESCRIPTION
+        The seeded model asked about three pre-named alert numbers. The operations model
+        asks about the whole surface, so the surface is what this reads.
+
+        READABILITY IS ESTABLISHED BEFORE CONTENT. `gh api` returning nothing is
+        indistinguishable from "no alerts" at the call site, and this repository has paid
+        for that confusion three times in one night (F102/F103/F105). So each source
+        reports Readable separately, and a caller that could not look must never report an
+        empty backlog as a drained one.
+    .OUTPUTS
+        Finding[] plus DependabotReadable / CodeScanningReadable.
+    #>
     param(
         [Parameter(Mandatory)][string]$Repository,
-        [AllowEmptyCollection()][string[]]$AlertNumber,
-        [Parameter(Mandatory)][string]$ResourceGroupName,
-        [Parameter(Mandatory)][string]$AppName,
-        [Parameter(Mandatory)][int]$PassBar
+        [AllowNull()]$Policy
     )
-    $numbers = @($AlertNumber | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($numbers.Count -eq 0) {
-        return New-MlsCheckResult -Passed $false -Observed 'no seeded Dependabot alert numbers supplied' -Final `
-            -Detail 'Pass -DependabotAlertNumber / $env:MLS_L10_DEPENDABOT_ALERTS (comma-separated) with the three seeded pins'' alert numbers. L9 failure mode 5 - a valid but silent Dependabot config - is exactly what this criterion would otherwise hide.'
+    $excludedManifest = @()
+    $excludedPrefix = @()
+    if ($null -ne $Policy) {
+        $excluded = Get-MlsProperty -InputObject $Policy -Name 'excludedPaths'
+        $excludedManifest = @(Get-MlsProperty -InputObject $excluded -Name 'manifests')
+        $excludedPrefix = @(Get-MlsProperty -InputObject $excluded -Name 'sourcePrefixes')
     }
-    $result = @($numbers | ForEach-Object {
-            Test-DependabotTrailForAlert -Repository $Repository -AlertNumber $_ `
-                -ResourceGroupName $ResourceGroupName -AppName $AppName
+
+    $finding = [System.Collections.Generic.List[object]]::new()
+
+    # READABILITY COMES FROM WHETHER THE CALL SUCCEEDED, NEVER FROM WHETHER IT RETURNED
+    # ANYTHING. `-AllowFailure` yields $null on a denial - and an empty JSON array yields
+    # $null too, because PowerShell collapses an empty collection on return. Testing
+    # `$null -ne $raw` therefore reports a healthy, genuinely empty alert surface as
+    # UNREADABLE, and (far worse in the other direction) would let a denial masquerade as
+    # emptiness the day the collapse behaviour differed. That is F102/F103/F105 exactly,
+    # and under the operations model an empty queue is the EXPECTED steady state, so the
+    # two states have to be told apart by construction rather than by luck.
+    #
+    # A throw is a denial; a successful call that returned nothing is an empty surface.
+    $dependabotRaw = $null
+    $dependabotReadable = $true
+    try { $dependabotRaw = Invoke-MlsGh -Argument @(
+            'api', '--paginate', "repos/$Repository/dependabot/alerts?state=all&per_page=100") }
+    catch { $dependabotReadable = $false }
+    foreach ($alert in @(Get-MlsCollection -Response $dependabotRaw)) {
+        $dependency = Get-MlsProperty -InputObject $alert -Name 'dependency'
+        $manifest = "$(Get-MlsProperty -InputObject $dependency -Name 'manifest_path')"
+        $advisory = Get-MlsProperty -InputObject $alert -Name 'security_advisory'
+        $vulnerability = Get-MlsProperty -InputObject $alert -Name 'security_vulnerability'
+        $patched = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $vulnerability -Name 'first_patched_version') -Name 'identifier')"
+        $finding.Add([pscustomobject]@{
+                Lane      = 'dependabot'
+                Number    = "$(Get-MlsProperty -InputObject $alert -Name 'number')"
+                State     = "$(Get-MlsProperty -InputObject $alert -Name 'state')"
+                Severity  = "$(Get-MlsProperty -InputObject $advisory -Name 'severity')".ToLowerInvariant()
+                Package   = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $dependency -Name 'package') -Name 'name')"
+                Path      = $manifest
+                CreatedAt = "$(Get-MlsProperty -InputObject $alert -Name 'created_at')"
+                # Chosen, not concatenated. An alert can carry BOTH stamps - GitHub keeps
+                # fixed_at after a later dismissal - and gluing them together produced an
+                # unparseable string, so the closure silently fell out of the window and
+                # V10.2 reported "nothing to explain" over a real closure.
+                ClosedAt  = (Select-ClosedAt -Alert $alert)
+                Reason    = "$(Get-MlsProperty -InputObject $alert -Name 'dismissed_reason')"
+                FixExists = (-not [string]::IsNullOrWhiteSpace($patched))
+                FixVersion = $patched
+                Excluded  = ($excludedManifest -contains $manifest)
+            })
+    }
+
+    $codeRaw = $null
+    $codeReadable = $true
+    try { $codeRaw = Invoke-MlsGh -Argument @(
+            'api', '--paginate', "repos/$Repository/code-scanning/alerts?state=all&per_page=100") }
+    catch { $codeReadable = $false }
+    foreach ($alert in @(Get-MlsCollection -Response $codeRaw)) {
+        $rule = Get-MlsProperty -InputObject $alert -Name 'rule'
+        $path = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $alert -Name 'most_recent_instance') -Name 'location') -Name 'path')"
+        # security_severity_level is the CVSS-aligned band and is absent on non-security
+        # rules; `severity` (note/warning/error) is the fallback so nothing lands with a
+        # blank band and silently misses every SLO comparison.
+        $severity = "$(Get-MlsProperty -InputObject $rule -Name 'security_severity_level')"
+        if ([string]::IsNullOrWhiteSpace($severity)) { $severity = "$(Get-MlsProperty -InputObject $rule -Name 'severity')" }
+        $excludedBySource = $false
+        foreach ($prefix in $excludedPrefix) {
+            if (-not [string]::IsNullOrWhiteSpace($prefix) -and $path.StartsWith($prefix)) { $excludedBySource = $true; break }
+        }
+        $finding.Add([pscustomobject]@{
+                Lane      = 'code-scanning'
+                Number    = "$(Get-MlsProperty -InputObject $alert -Name 'number')"
+                State     = "$(Get-MlsProperty -InputObject $alert -Name 'state')"
+                Severity  = "$severity".ToLowerInvariant()
+                Package   = "$(Get-MlsProperty -InputObject $rule -Name 'id')"
+                Path      = $path
+                CreatedAt = "$(Get-MlsProperty -InputObject $alert -Name 'created_at')"
+                ClosedAt  = (Select-ClosedAt -Alert $alert)
+                Reason    = "$(Get-MlsProperty -InputObject $alert -Name 'dismissed_reason')"
+                # Autofix covers CodeQL alerts as a class; there is no per-alert "a fix
+                # exists" field to read without asking Autofix to generate one, which an
+                # audit must never do. Dependency findings carry first_patched_version and
+                # are where V10.4's question can be answered definitively.
+                FixExists = $true
+                FixVersion = ''
+                Excluded  = $excludedBySource
+            })
+    }
+
+    return [pscustomobject]@{
+        Finding             = @($finding)
+        DependabotReadable  = $dependabotReadable
+        CodeScanningReadable = $codeReadable
+    }
+}
+
+function Get-SloDay {
+    <# The declared SLO for a severity band, or 0 when the policy does not name it. #>
+    param([AllowNull()]$Policy, [AllowEmptyString()][string]$Severity)
+    $days = Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $Policy -Name 'slo') -Name 'days'
+    if ($null -eq $days) { return 0 }
+    $value = Get-MlsProperty -InputObject $days -Name "$Severity"
+    if ($null -eq $value) { return 0 }
+    return [int]$value
+}
+
+function Test-BacklogDrain {
+    <#
+    .SYNOPSIS
+        V10.1 - no HEALABLE finding remains open past its declared SLO.
+    .DESCRIPTION
+        Replaces "the seeded CodeQL alert's seven-stage trail". The stages did not vanish;
+        they moved to V10.2, where they apply per healed finding instead of to a pre-named
+        one. What this asserts now is the thing an operations cycle actually promises: the
+        queue drains.
+
+        Reported per lane and per severity, NEVER averaged - a blended figure hides the
+        slice that is not moving, which is the failure the compliance platform exists to
+        avoid.
+
+        A finding with no upstream fix does not consume its SLO. It is pending-solution,
+        which holds and ages legitimately, and V10.4 is what stops that becoming a place
+        where a backlog goes to die quietly.
+    #>
+    param(
+        [Parameter(Mandatory)]$Surface,
+        [AllowNull()]$Policy,
+        [Parameter(Mandatory)][datetime]$NowUtc
+    )
+    if ($null -eq $Policy) {
+        return New-MlsCheckResult -Status SKIP -Observed 'no declared self-heal policy: .github/self-heal-policy.json was not found or is malformed' `
+            -Detail 'The design requires the SLO to be DECLARED rather than inherited from a default, so this criterion refuses to invent one. Create the file with an slo.days map per severity.'
+    }
+    if (-not $Surface.DependabotReadable -or -not $Surface.CodeScanningReadable) {
+        return New-MlsCheckResult -Status SKIP `
+            -Observed "alert surface not fully readable (dependabot=$($Surface.DependabotReadable) code-scanning=$($Surface.CodeScanningReadable))" `
+            -Detail 'UNOBSERVABLE, never "the backlog is empty". An identity that cannot read an alert surface must not be able to report it drained (F103/F105).'
+    }
+
+    $open = @($Surface.Finding | Where-Object { $_.State -eq 'open' })
+    $excluded = @($open | Where-Object { $_.Excluded })
+    $counted = @($open | Where-Object { -not $_.Excluded })
+    $pending = @($counted | Where-Object { -not $_.FixExists })
+    $healable = @($counted | Where-Object { $_.FixExists })
+
+    $breach = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $healable) {
+        $slo = Get-SloDay -Policy $Policy -Severity $item.Severity
+        if ($slo -le 0) {
+            $breach.Add("#$($item.Number) $($item.Lane)/$($item.Severity) $($item.Package) - the policy declares no SLO for severity '$($item.Severity)', so this finding is not measurable")
+            continue
+        }
+        $created = [datetime]::MinValue
+        if (-not [datetime]::TryParse($item.CreatedAt, [ref]$created)) { continue }
+        $age = ($NowUtc - $created.ToUniversalTime()).TotalDays
+        if ($age -gt $slo) {
+            $breach.Add("#$($item.Number) $($item.Lane)/$($item.Severity) $($item.Package) open $([math]::Floor($age))d, SLO ${slo}d ($($item.Path))")
+        }
+    }
+
+    $byLane = @($healable | Group-Object Lane | ForEach-Object { "$($_.Name)=$($_.Count)" })
+    $bySeverity = @($healable | Group-Object Severity | ForEach-Object { "$($_.Name)=$($_.Count)" })
+    $observed = "healable open: $(if ($byLane) { $byLane -join ' ' } else { 'none' }) | by severity: $(if ($bySeverity) { $bySeverity -join ' ' } else { 'none' }) | pending-solution: $($pending.Count) | excluded by policy: $($excluded.Count)"
+
+    if ($breach.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false `
+            -Observed "$observed | PAST SLO: $($breach -join '; ')" `
+            -Detail 'Each of these has an upstream fix and has outlived its declared service level. Either the chain is not reaching them or the fix generator produced nothing to adopt - the per-lane counts above say which.'
+    }
+    return New-MlsCheckResult -Passed $true -Observed $observed
+}
+
+function Test-ClosureTraceable {
+    <#
+    .SYNOPSIS
+        V10.2 - every closure inside the declared window is explained.
+    .DESCRIPTION
+        The seven stages live here now, applied per healed finding rather than to three
+        pre-named pins. For each alert closed in the window, either a self-heal pull
+        request explains it with a complete trail, or the closure is explicitly recorded
+        as having happened another way.
+
+        "Explicitly recorded" is GitHub's own dismissal record, not a file this repository
+        invents: a dismissed alert carries who dismissed it and why. A FIXED alert with no
+        heal pull request behind it is the case that fails - something closed it and the
+        estate cannot say what, which is precisely the property an auditor is buying.
+    #>
+    param(
+        [Parameter(Mandatory)]$Surface,
+        [AllowNull()]$Policy,
+        [Parameter(Mandatory)][datetime]$NowUtc,
+        [Parameter(Mandatory)][scriptblock]$TrailFor
+    )
+    if ($null -eq $Policy) {
+        return New-MlsCheckResult -Status SKIP -Observed 'no declared self-heal policy, so the closure window is undefined' `
+            -Detail 'Declare closureLookbackDays in .github/self-heal-policy.json.'
+    }
+    if (-not $Surface.DependabotReadable -or -not $Surface.CodeScanningReadable) {
+        return New-MlsCheckResult -Status SKIP `
+            -Observed "alert surface not fully readable (dependabot=$($Surface.DependabotReadable) code-scanning=$($Surface.CodeScanningReadable))" `
+            -Detail 'UNOBSERVABLE. A surface that cannot be read cannot be reported as having no unexplained closures.'
+    }
+
+    $lookback = [int]"$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $Policy -Name 'closureLookbackDays') -Name 'value')"
+    if ($lookback -le 0) {
+        return New-MlsCheckResult -Status SKIP -Observed 'the policy declares no closureLookbackDays, so there is no window to audit' `
+            -Detail 'Declare closureLookbackDays.value in .github/self-heal-policy.json rather than letting this criterion choose one.'
+    }
+    $since = $NowUtc.AddDays(-$lookback)
+
+    $closed = @($Surface.Finding | Where-Object {
+            $_.State -ne 'open' -and -not $_.Excluded -and (& {
+                $slot = [datetime]::MinValue
+                [datetime]::TryParse($_.ClosedAt, [ref]$slot) -and $slot.ToUniversalTime() -ge $since
+            })
         })
-    $passing = @($result | Where-Object { $_.Passed })
-    $observed = "$($passing.Count) of $($numbers.Count) trails complete: " + (@($result | ForEach-Object { $_.Summary }) -join ' | ')
-    if ($passing.Count -ge $PassBar) {
-        return New-MlsCheckResult -Passed $true -Observed $observed `
-            -Detail '3/3 is the target, 2/3 is the pass line; the third pin''s outcome is recorded either way (L10.md V10.2).'
+
+    if ($closed.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true -Observed "no finding closed in the last ${lookback}d, so there is nothing to explain"
     }
-    return New-MlsCheckResult -Passed $false -Observed $observed `
-        -Detail 'Partial credit does not accumulate across runs - a pass requires the trails to complete within one armed cycle (L10 failure mode 7).'
+
+    $explained = [System.Collections.Generic.List[string]]::new()
+    $unexplained = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $closed) {
+        if ($item.State -like '*dismissed*') {
+            $reason = if ([string]::IsNullOrWhiteSpace($item.Reason)) { '(no reason recorded)' } else { $item.Reason }
+            if ([string]::IsNullOrWhiteSpace($item.Reason)) {
+                $unexplained.Add("#$($item.Number) $($item.Lane) $($item.Package) dismissed with NO recorded reason")
+            }
+            else {
+                $explained.Add("#$($item.Number) dismissed:$reason")
+            }
+            continue
+        }
+        $trail = & $TrailFor $item
+        if ($trail.Problem.Count -eq 0) { $explained.Add("#$($item.Number) healed:$($trail.Reference)") }
+        else { $unexplained.Add("#$($item.Number) $($item.Lane) $($item.Package) fixed but $($trail.Problem -join '; ')") }
+    }
+
+    $observed = "$($closed.Count) closure(s) in ${lookback}d - explained: $($explained.Count), unexplained: $($unexplained.Count)"
+    if ($unexplained.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Observed "$observed | $($unexplained -join ' | ')" `
+            -Detail 'A closure the estate cannot account for is the failure this criterion exists to catch: either automation closed it and the trail is broken, or a human did and nothing recorded that.'
+    }
+    return New-MlsCheckResult -Passed $true -Observed "$observed | $($explained -join ' ')"
+}
+
+function Test-PendingSolution {
+    <#
+    .SYNOPSIS
+        V10.4 - pending-solution is not a dumping ground.
+    .DESCRIPTION
+        pending-solution legitimately does not count as failure, which makes it the
+        obvious place for a backlog to go and die quietly. So every finding excused from
+        V10.1 on the grounds that no upstream fix exists has that claim CHECKED against
+        the advisory rather than believed.
+
+        This is the artefact-instead-of-capability trap the repository keeps paying for,
+        one level up: an unverified "no fix available" is exactly the kind of comfortable
+        answer nothing was asserting.
+    #>
+    param(
+        [Parameter(Mandatory)]$Surface,
+        [Parameter(Mandatory)][string]$Repository
+    )
+    if (-not $Surface.DependabotReadable) {
+        return New-MlsCheckResult -Status SKIP -Observed 'the Dependabot alert surface was not readable' `
+            -Detail 'UNOBSERVABLE. Never report an empty pending-solution set from a surface that could not be read.'
+    }
+
+    $pending = @($Surface.Finding | Where-Object { $_.State -eq 'open' -and -not $_.Excluded -and -not $_.FixExists })
+    if ($pending.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true -Observed 'no finding is being held as pending-solution'
+    }
+
+    $wrong = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $pending) {
+        if ($item.Lane -ne 'dependabot') { continue }
+        # Re-read the alert on its own rather than trusting the list projection: this is
+        # the claim the whole state rests on, and it is one call per held finding.
+        $fresh = Invoke-MlsGh -AllowFailure -Argument @('api', "repos/$Repository/dependabot/alerts/$($item.Number)")
+        if ($null -eq $fresh) {
+            $wrong.Add("#$($item.Number) could not be re-read, so 'no fix exists' is unverified")
+            continue
+        }
+        $patched = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $fresh -Name 'security_vulnerability') -Name 'first_patched_version') -Name 'identifier')"
+        if (-not [string]::IsNullOrWhiteSpace($patched)) {
+            $wrong.Add("#$($item.Number) $($item.Package) is held as pending-solution but the advisory names a patched version: $patched")
+        }
+    }
+
+    $observed = "$($pending.Count) finding(s) held as pending-solution; $($wrong.Count) with a fix that does exist"
+    if ($wrong.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Observed "$observed | $($wrong -join ' | ')" `
+            -Detail 'A finding parked as unfixable while an upstream fix exists is a backlog hiding inside a state that never fails. Bump it or record why the named version is not adoptable.'
+    }
+    return New-MlsCheckResult -Passed $true -Observed $observed
 }
 
 function Invoke-Main {
@@ -502,14 +861,11 @@ function Invoke-Main {
         Justification = 'Every parameter is consumed inside the criterion scriptblocks; PSSA cannot see through scriptblock closures.')]
     param(
         [string]$Repository,
-        [string]$CodeQlAlertNumber,
-        [string]$AutofixPrNumber,
-        [string[]]$DependabotAlertNumber = @(),
-        [string]$VulnLabAppName = 'mls-vuln-lab-demo-ca',
         [string]$ResourceGroupName = 'mls-rg-apps',
-            [string]$ReseedMergedUtc,
-        [double]$ChainWindowHours = 24,
-        [int]$DependencyPassBar = 2,
+        [string]$Prefix = 'mls',
+        [string]$EnvironmentSegment = 'demo',
+        [string]$PolicyPath = '',
+        [string]$NamingBicepPath = '',
         [string]$AlertSurfaceReadable = '',
         [string]$ReportRoot,
         [switch]$NoRetry,
@@ -518,121 +874,90 @@ function Invoke-Main {
     $repositoryName = Resolve-MlsInput -Name 'Repository' -Value $Repository -EnvironmentVariable @('MLS_GITHUB_REPO', 'MLS_REPOSITORY') `
         -Hint 'The public repo the healing trail lives on.'
     Resolve-MlsInput -Name 'GitHubToken' -Value '' -EnvironmentVariable @('MLS_VERIFIER_GH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN') `
-        -Hint "The Verifier's own GitHub read token (spec F8); both criteria are mostly GitHub reads." | Out-Null
+        -Hint "The Verifier's own GitHub read token (spec F8); these criteria are mostly GitHub reads." | Out-Null
 
-    $codeqlAlert = $CodeQlAlertNumber
-    if ([string]::IsNullOrWhiteSpace($codeqlAlert)) { $codeqlAlert = [Environment]::GetEnvironmentVariable('MLS_L10_CODEQL_ALERT') }
-    $healPr = $AutofixPrNumber
-    if ([string]::IsNullOrWhiteSpace($healPr)) { $healPr = [Environment]::GetEnvironmentVariable('MLS_L10_AUTOFIX_PR') }
-    $dependabotAlert = @($DependabotAlertNumber | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($dependabotAlert.Count -eq 0) {
-        $fromEnvironment = [Environment]::GetEnvironmentVariable('MLS_L10_DEPENDABOT_ALERTS')
-        if (-not [string]::IsNullOrWhiteSpace($fromEnvironment)) {
-            $dependabotAlert = @($fromEnvironment -split '[,;\s]+' | Where-Object { $_ })
-        }
+    $repoRoot = (Resolve-Path (Join-Path -Path $PSScriptRoot -ChildPath '..')).Path
+    $policyPath = $PolicyPath
+    if ([string]::IsNullOrWhiteSpace($policyPath)) {
+        $policyPath = Join-Path -Path $repoRoot -ChildPath '.github' -AdditionalChildPath 'self-heal-policy.json'
     }
-    $windowStart = [datetime]::MinValue
-    $reseed = $ReseedMergedUtc
-    if ([string]::IsNullOrWhiteSpace($reseed)) { $reseed = [Environment]::GetEnvironmentVariable('MLS_L10_RESEED_MERGED_AT') }
-    if (-not [string]::IsNullOrWhiteSpace($reseed)) { $windowStart = [datetime]::Parse($reseed).ToUniversalTime() }
-
-    # F192: DERIVE THE WINDOW WHEN NOBODY SUPPLIED ONE.
-    #
-    # The self-heal workflow runs this audit in the same run that arms auto-merge, so it
-    # reads the trail minutes before the gauntlet finishes - run 33905789865 verified at
-    # 18:26:07 a merge that landed at 18:29:02. An in-flight chain is exactly what the
-    # PENDING window exists for, and it was recorded FAIL instead, because the window
-    # depended on a human having set MLS_L10_RESEED_MERGED_AT and nobody had. A window
-    # that only works when someone remembers to set a variable is a window that is
-    # usually absent, and 'absent' silently meant 'every in-flight trail is a failure'.
-    #
-    # The moment the chain committed to THIS heal is on the pull request itself:
-    # autoMergeRequest.enabledAt, which survives the merge. It is a narrower clock than
-    # the re-seed merge - it times the chain's own attempt rather than the whole demo
-    # cycle - so the supplied value still wins when there is one, and the report names
-    # which clock it used.
-    $windowSource = 're-seed merge'
-    if ($windowStart -eq [datetime]::MinValue -and -not [string]::IsNullOrWhiteSpace($healPr)) {
-        $armedAt = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject (
-                    Get-PullRequestDetail -Repository $repositoryName -Number $healPr
-                ) -Name 'autoMergeRequest') -Name 'enabledAt')"
-        $slot = [datetime]::MinValue
-        if (-not [string]::IsNullOrWhiteSpace($armedAt) -and [datetime]::TryParse($armedAt, [ref]$slot)) {
-            $windowStart = $slot.ToUniversalTime()
-            $windowSource = "heal PR #$healPr auto-merge armed"
-            $reseed = $armedAt
-        }
+    $namingPath = $NamingBicepPath
+    if ([string]::IsNullOrWhiteSpace($namingPath)) {
+        $namingPath = Join-Path -Path $repoRoot -ChildPath 'infra' -AdditionalChildPath 'bicep', 'naming.bicep'
     }
 
-    $context = New-MlsAuditContext -Layer 10 -Title 'Self-healing pipeline on GitHub Copilot Autofix' `
+    $policy = Get-SelfHealPolicy -PolicyPath $policyPath
+    $appKeyMap = Get-AppKeyMap -NamingBicepPath $namingPath
+    $surface = Get-Finding -Repository $repositoryName -Policy $policy
+    $now = [datetime]::UtcNow
+
+    $context = New-MlsAuditContext -Layer 10 -Title 'Self-healing pipeline - operations cycle' `
         -ScriptName 'verification/layer-10-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
         -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'Repository' -Value $repositoryName
-    Add-MlsPreflight -Context $context -Name 'CodeQL alert / heal PR' -Value "$codeqlAlert / $healPr" `
-        -Status $(if ($codeqlAlert -and $healPr) { 'OK' } else { 'ABSENT' })
-    Add-MlsPreflight -Context $context -Name 'Dependabot alerts' -Value ($dependabotAlert -join ', ') `
-        -Status $(if ($dependabotAlert.Count -ge 3) { 'OK' } elseif ($dependabotAlert.Count -gt 0) { 'PARTIAL' } else { 'ABSENT' })
-    Add-MlsPreflight -Context $context -Name "Chain window start (UTC, from $windowSource)" -Value "$reseed" `
-        -Status $(if ($windowStart -ne [datetime]::MinValue) { 'OK' } else { 'ABSENT' })
-    if ($windowStart -eq [datetime]::MinValue) {
-        Add-MlsNote -Context $context -Message 'No chain window could be computed: no re-seed timestamp (-ReseedMergedUtc / $env:MLS_L10_RESEED_MERGED_AT) and no heal PR carrying an auto-merge arming time, so an incomplete trail is recorded FAIL rather than PENDING.'
-    }
-    elseif ($windowSource -ne 're-seed merge') {
-        Add-MlsNote -Context $context -Message "Chain window derived from $windowSource, not from a supplied re-seed timestamp (F192). It times this heal's own attempt rather than a whole demo cycle, which is now the intended behaviour: the re-seed that MLS_L10_RESEED_MERGED_AT dated is retired (PR #237), so do NOT set it and do NOT re-seed to produce a value."
-    }
-    $windowMinutes = $ChainWindowHours * 60
-    $pendingAllowed = ($windowStart -ne [datetime]::MinValue)
+    Add-MlsPreflight -Context $context -Name 'Declared policy' -Value $policyPath `
+        -Status $(if ($null -ne $policy) { 'OK' } else { 'ABSENT' })
+    Add-MlsPreflight -Context $context -Name 'Alert surface readable' `
+        -Value "dependabot=$($surface.DependabotReadable) code-scanning=$($surface.CodeScanningReadable)" `
+        -Status $(if ($surface.DependabotReadable -and $surface.CodeScanningReadable) { 'OK' } else { 'ABSENT' })
+    Add-MlsPreflight -Context $context -Name 'Application key map' -Value "$($appKeyMap.Count) app(s) from naming.bicep" `
+        -Status $(if ($appKeyMap.Count -gt 0) { 'OK' } else { 'ABSENT' })
 
-    # 3.4.3 alongside 3.14.1: this is the estate's strongest change-control
-    # evidence. It asserts a complete, ordered trail - PR opened, the autofix
-    # explanation carried in the body, every required check green, merged by the
-    # automation identity under an auto-merge request, a witness revision stamped
-    # with the merge commit, timestamps monotonic. That is a positive demonstration
-    # of "track, review, approve or disapprove, and log changes", stronger than
-    # V8.1's negative evidence (no component carries an unmanaged layer), which
-    # already carries 3.4.3.
+    if ($null -eq $policy) {
+        Add-MlsNote -Context $context -Message "No declared self-heal policy at $policyPath. The service level must be DECLARED, not inherited from a default, so the criteria that depend on it report SKIP rather than inventing a pass line."
+    }
+
+    # THE SEEDED MODEL IS GONE, AND WITH IT THE ONLY REASON THIS LAYER NEEDED A PLANT.
+    #
+    # V10.1 and V10.2 used to verify ONE seeded alert's seven-stage trail against
+    # apps/vuln-lab. That framing required the lab to always contain something to heal,
+    # which required re-arming, which is F190: a pull request that reintroduces a critical
+    # alert cannot merge past code scanning protection without an administrator override.
+    # The whole apparatus existed to feed one hard-coded path filter, and PR #225 proved
+    # what it cost - a correct Autofix heal of a REAL alert could not complete a trail,
+    # because the wrong application deployed.
+    #
+    # The stages did not die; they moved to V10.2 and apply per healed finding. What the
+    # criteria assert now is what an operations cycle actually promises: no findings; one
+    # arrives; it is healed; back to no findings.
+
     Invoke-MlsCriterion -Context $context -Id 'V10.1' -Control @('3.4.3', '3.14.1') `
-        -Description 'For the seeded CodeQL alert, the full Autofix trail holds (alert -> autofix success -> PR with Autofix commit and explanation -> gauntlet green -> merged by automation -> new ACA revision -> alert fixed, timestamps monotonic)' `
-        -Command "gh api repos/$repositoryName/code-scanning/alerts/<n> --jq '{state, created_at, rule:.rule.id}'`ngh api repos/$repositoryName/code-scanning/alerts/<n>/autofix --jq '{status, description, started_at}'`ngh pr view <pr> --json headRefOid,body,commits`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest,mergeCommit`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName --query `"[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}`"`ngh api repos/$repositoryName/code-scanning/alerts/<n> --jq '.state'" `
-        -Expected "seven stages hold: autofix status success with a non-empty description carried in the PR body; head commit from autofix/commits; all check-run conclusions success; the merge pre-authorised by auto-merge, armed before it and credited to the identity that armed it; a witness revision after the merge carrying MLS_HEAL_COMMIT == the PR's merge commit; alert state fixed; timestamps monotonic" `
-        -RetryWindowMinutes $windowMinutes -InProcessWaitMinutes 0 -WindowStartUtc $windowStart -PendingWhenUnexpired:$pendingAllowed `
-        -Test {
-        Test-AutofixTrail -Repository $repositoryName -AlertNumber $codeqlAlert -PullRequestNumber $healPr `
-            -ResourceGroupName $ResourceGroupName -AppName $VulnLabAppName
-    } | Out-Null
+        -Description 'The backlog drains: no healable finding remains open past its declared SLO, reported per lane and per severity' `
+        -Command "gh api repos/$repositoryName/dependabot/alerts?state=all`ngh api repos/$repositoryName/code-scanning/alerts?state=all`ncat .github/self-heal-policy.json" `
+        -Expected 'every open finding with an upstream fix is inside the SLO its severity declares' `
+        -RetryWindowMinutes 0 `
+        -Test { Test-BacklogDrain -Surface $surface -Policy $policy -NowUtc $now } | Out-Null
 
-    # 3.4.3 for the same reason as V10.1: a full merge trail through the
-    # automation identity with every check green is change-control evidence, not
-    # only flaw-remediation evidence.
+    # 3.4.3 for the reason V10.1 used to carry it: a full merge trail through a
+    # pre-authorised auto-merge with every check green is change-control evidence, not only
+    # flaw-remediation evidence. It is stronger here than in the seeded model, because it
+    # now attaches to whatever the estate actually healed rather than to a planted example.
     Invoke-MlsCriterion -Context $context -Id 'V10.2' -Control @('3.4.3', '3.14.1') `
-        -Description 'For at least 2 of the 3 seeded dependency pins, the Dependabot trail holds (alert -> patch PR -> gauntlet green -> merged by automation -> new ACA revision -> alert fixed)' `
-        -Command "gh api repos/$repositoryName/dependabot/alerts/<n> --jq '{state, created_at, dep:.dependency.package.name}'`ngh pr list --author `"app/dependabot`" --json number,title,headRefName`ngh api repos/$repositoryName/commits/<head-sha>/check-runs`ngh pr view <pr> --json mergedBy,autoMergeRequest,mergeCommit`naz containerapp revision list -g $ResourceGroupName -n $VulnLabAppName --query `"[].{name:name, created:properties.createdTime, healCommit:properties.template.containers[0].env[?name=='MLS_HEAL_COMMIT']|[0].value}`"`ngh api repos/$repositoryName/dependabot/alerts/<n> --jq '.state'" `
-        -Expected "all six stages hold for at least $DependencyPassBar of the seeded pins (3/3 is the target, $DependencyPassBar/3 is the pass line)" `
-        -RetryWindowMinutes $windowMinutes -InProcessWaitMinutes 0 -WindowStartUtc $windowStart -PendingWhenUnexpired:$pendingAllowed `
+        -Description 'Every closure is traceable: each finding closed in the declared window carries a complete heal trail, or an explicit record of being closed another way' `
+        -Command "gh api repos/$repositoryName/dependabot/alerts?state=all`ngh pr list --repo $repositoryName --state merged --json number,mergedAt,mergeCommit,autoMergeRequest`ngh api repos/$repositoryName/commits/<head>/check-runs`naz containerapp revision list -g $ResourceGroupName -n <app> --query `"[].{created:properties.createdTime, image:properties.template.containers[0].image}`"" `
+        -Expected 'for every closure: a merged heal PR whose gauntlet was green, whose merge was pre-authorised by auto-merge, and whose changed applications each ran a revision tagged with the merge commit - or a dismissal carrying a recorded reason' `
+        -RetryWindowMinutes 0 `
         -Test {
-        Test-DependabotTrail -Repository $repositoryName -AlertNumber $dependabotAlert `
-            -ResourceGroupName $ResourceGroupName -AppName $VulnLabAppName -PassBar $DependencyPassBar
+        Test-ClosureTraceable -Surface $surface -Policy $policy -NowUtc $now -TrailFor {
+            param($Finding)
+            $lookback = [int]"$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $policy -Name 'closureLookbackDays') -Name 'value')"
+            if (-not $script:HealCandidate) {
+                $script:HealCandidate = @(Get-MergedHealPullRequest -Repository $repositoryName -LookbackDays $lookback)
+            }
+            Get-HealTrail -Repository $repositoryName -Finding $Finding -Candidate $script:HealCandidate `
+                -AppKeyMap $appKeyMap -ResourceGroupName $ResourceGroupName `
+                -Prefix $Prefix -EnvironmentSegment $EnvironmentSegment
+        }
     } | Out-Null
 
     # V10.3 - F123. THE CHAIN COULD NOT LOOK, AND SAID "NOTHING TO HEAL".
     #
-    # The select job's alert read returned HTTP 403 on every run since the workflow
-    # was written, and set `found=false` - the same output it sets when the
-    # repository genuinely has no open alerts. Every lane skipped, the run reported
-    # success, and BLOCKER-4 was recorded as "self-healing has nothing to heal"
-    # while four Dependabot alerts sat open, one of them critical.
+    # Unchanged by the operations model, and more load-bearing under it than before: with
+    # no planted alert guaranteeing the queue is non-empty, "no findings" is the EXPECTED
+    # steady state. A denial that reads as an empty queue would therefore look exactly like
+    # success, every time, forever.
     #
-    # The cause was a credential scope, not a permission grant: SELF_HEAL_TOKEN was
-    # created as a `demo` ENVIRONMENT secret, and every job that consumes it -
-    # here, in compliance.yml, in gitleaks.yml, in layer-09 - declares no
-    # environment, so `secrets.SELF_HEAL_TOKEN` was empty and the `|| GITHUB_TOKEN`
-    # fallback took over. GITHUB_TOKEN cannot read /dependabot/alerts. The rotation
-    # table in gitleaks.yml, which CLAUDE.md designates as the source of truth,
-    # says plainly that this one is a REPOSITORY secret.
-    #
-    # NO RETRY WINDOW. A 403 is settled the instant it is returned; there is no
-    # propagation to wait on, and waiting would only make a permissions answer
-    # arrive slower.
+    # NO RETRY WINDOW. A 403 is settled the instant it is returned.
     Invoke-MlsCriterion -Context $context -Id 'V10.3' -Control @('3.4.3', '3.14.1') `
         -Description 'The self-heal chain could actually READ the alert surface - a denial is never recorded as "no alerts to heal"' `
         -Command "gh api repos/$repositoryName/dependabot/alerts?state=open (in the self-heal select job; its readable output is passed here)" `
@@ -650,16 +975,28 @@ function Invoke-Main {
                 -Detail 'UNOBSERVABLE, not healthy. The select job emits a readable output for exactly this criterion; an absent value means the audit was invoked without it, so nothing here can say whether the chain can see its own work.'
         } | Out-Null
 
+    # V10.4 - THE STATE THAT NEVER FAILS IS THE ONE TO WATCH.
+    #
+    # pending-solution legitimately does not count as a breach, which makes it the obvious
+    # place for a backlog to go and die quietly. Every finding excused from V10.1 on the
+    # grounds that no upstream fix exists has that claim checked against the advisory, one
+    # call per held finding, rather than believed.
+    Invoke-MlsCriterion -Context $context -Id 'V10.4' -Control @('3.4.3', '3.14.1') `
+        -Description 'pending-solution is not a dumping ground: for every finding held there, no upstream fix actually exists' `
+        -Command "gh api repos/$repositoryName/dependabot/alerts/<n> --jq '.security_vulnerability.first_patched_version.identifier'" `
+        -Expected 'every finding held as pending-solution has no first_patched_version in its advisory' `
+        -RetryWindowMinutes 0 `
+        -Test { Test-PendingSolution -Surface $surface -Repository $repositoryName } | Out-Null
+
     return $context
 }
 
 if (-not $env:MLS_SKIP_MAIN) {
     try {
-        $auditContext = Invoke-Main -Repository $Repository -CodeQlAlertNumber $CodeQlAlertNumber `
-            -AutofixPrNumber $AutofixPrNumber -DependabotAlertNumber $DependabotAlertNumber `
-            -VulnLabAppName $VulnLabAppName -ResourceGroupName $ResourceGroupName `
-            -ReseedMergedUtc $ReseedMergedUtc -ChainWindowHours $ChainWindowHours `
-            -DependencyPassBar $DependencyPassBar -AlertSurfaceReadable $AlertSurfaceReadable `
+        $auditContext = Invoke-Main -Repository $Repository -ResourceGroupName $ResourceGroupName `
+            -Prefix $Prefix -EnvironmentSegment $EnvironmentSegment `
+            -PolicyPath $PolicyPath -NamingBicepPath $NamingBicepPath `
+            -AlertSurfaceReadable $AlertSurfaceReadable `
             -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion
     }
