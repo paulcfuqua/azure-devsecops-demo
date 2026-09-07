@@ -906,9 +906,21 @@ jobs:
       # `pwsh -File` cannot bind a string[] parameter — a comma-joined value
       # arrives as ONE element and a space-separated one silently drops the tail —
       # so the alert LIST goes through its environment variable, which the audit
-      # splits on [,;\s]+. The demo variable carries all three seeded pins; the
+      # splits on [,;\s]+. The VERIFY variable carries all three seeded pins; the
       # alert this run happened to pick is appended so a fresh alert is covered
       # before anyone updates the variable.
+      #
+      # `verify`, NOT `demo`, and this said demo until 2026-09-07 while the
+      # variable existed on neither. This job declares `environment: verify` --
+      # it must, because it authenticates as mls-verifier through
+      # vars.AZURE_VERIFIER_CLIENT_ID, which lives there -- and a `demo`
+      # variable is INVISIBLE from here. So the expression collapsed to the
+      # empty string plus whatever alert this run happened to pick, and the
+      # audit was handed ` 10`: one qs alert in the ROOT lockfile, which is not
+      # a seeded pin at all. V10.2 asks for the trail on 2 of the 3 SEEDED pins
+      # (json5 #2, minimist #3, semver #4 -- all in apps/vuln-lab), so it was
+      # structurally unable to pass and reported FAIL on an alert nobody seeded.
+      # F124's class in a variable nobody had set anywhere.
       MLS_L10_DEPENDABOT_ALERTS: >-
         ${{ vars.MLS_L10_DEPENDABOT_ALERTS }}
         ${{ needs.select.outputs.kind == 'dependabot' && needs.select.outputs.number || '' }}
@@ -946,7 +958,7 @@ jobs:
         if: ${{ vars.MLS_L10_RESEED_MERGED_AT == '' }}
         run: |
           set -euo pipefail
-          echo "::warning title=No re-seed merge timestamp::MLS_L10_RESEED_MERGED_AT is not set on the demo environment, so the 24-hour chain deadline cannot be computed and an incomplete healing trail is recorded FAIL rather than PENDING. Set it to the UTC time the apps/vuln-lab/reseed.ps1 PR merged: gh variable set MLS_L10_RESEED_MERGED_AT --env demo --body \$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "::warning title=No re-seed merge timestamp::MLS_L10_RESEED_MERGED_AT is not set on the verify environment, so the 24-hour chain deadline cannot be computed and an incomplete healing trail is recorded FAIL rather than PENDING. Set it to the UTC time the apps/vuln-lab re-seed PR merged: gh variable set MLS_L10_RESEED_MERGED_AT --env verify --body \$(date -u +%Y-%m-%dT%H:%M:%SZ). NOTE --env verify: this job declares environment: verify, so a variable set on demo cannot be seen from here"
 
       - name: Run verification/layer-10-audit.ps1
         id: audit
