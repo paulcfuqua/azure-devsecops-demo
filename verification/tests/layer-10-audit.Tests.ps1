@@ -470,6 +470,57 @@ Describe 'layer-10-audit' {
         }
     }
 
+    Context 'the candidate window bounds the fetch, and truncation is unobservable' {
+        It 'reports SKIP rather than FAIL when the candidate page was truncated' {
+            # THE DEFECT THIS GUARDS. The fetch asked for --limit 100 and then filtered by
+            # date - the wrong way round. 189 pull requests merged inside the declared
+            # 30-day window, so 89 were invisible and V10.2 called alert #1 unexplained
+            # when its fixing pull request had simply fallen off the page. A confident
+            # wrong answer from an audit that could not see what it was judging.
+            #
+            # The fetch is now bounded by the window (--search merged:>=<date>), and if a
+            # page ever does come back at the ceiling the criterion says so instead of
+            # judging on a partial view - the F63/F105 rule applied to pagination.
+            $script:PrTitle = 'chore: nothing that mentions the package'
+            Mock Invoke-MlsGh {
+                $joined = $Argument -join ' '
+                if ($joined -like '*dependabot/alerts?state=all*') { return $script:DependabotAlert }
+                if ($joined -like '*code-scanning/alerts?state=all*') { return @() }
+                if ($joined -like 'pr list*') {
+                    return @(1..1000 | ForEach-Object {
+                            [pscustomobject]@{
+                                number = $_; title = 'chore: unrelated'; body = ''
+                                mergedAt = ([datetime]::UtcNow.AddDays(-1)).ToString('o')
+                                headRefOid = 'h'; mergeCommit = [pscustomobject]@{ oid = 'x' }
+                                mergedBy = [pscustomobject]@{ login = 'x' }; autoMergeRequest = $null
+                                author = [pscustomobject]@{ login = 'x' }
+                            }
+                        })
+                }
+                return $null
+            }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*TRUNCATED*'
+        }
+
+        It 'asks the API for the window rather than a page size' {
+            # Asserts the call SHAPE, because the bug was invisible in any single result:
+            # a date-bounded search cannot silently drop the older half of the window.
+            $captured = ''
+            Mock Invoke-MlsGh {
+                $joined = $Argument -join ' '
+                if ($joined -like 'pr list*') { $script:Captured = $joined; return @() }
+                if ($joined -like '*dependabot/alerts?state=all*') { return $script:DependabotAlert }
+                if ($joined -like '*code-scanning/alerts?state=all*') { return @() }
+                return $null
+            }
+            Invoke-AuditForTest -NoRetry | Out-Null
+            $captured = $script:Captured
+            $captured | Should -BeLike '*--search*merged:>=*'
+        }
+    }
+
     Context 'the audit does not depend on state only the harness provides' {
         It 'uses no $script: state at all, in code' {
             # V10.2 shipped with `if (-not $script:HealCandidate) { $script:HealCandidate = ... }`
