@@ -425,21 +425,45 @@ function Get-MergedHealPullRequest {
         Fetched once and reused for every closure rather than searched per finding: this
         audit runs against a rate-limited API, and a per-finding search turns one
         observation into dozens.
+
+        THE WINDOW BOUNDS THE FETCH, NOT A COUNT. This asked for `--limit 100` and then
+        filtered by date, which is the wrong way round. 189 pull requests merged inside
+        the declared 30-day window, so 89 were invisible, and V10.2 reported alert #1 as
+        "no merged pull request explains it" when the explaining pull request had simply
+        fallen off the end of the page. A confident wrong answer, produced by an audit
+        that could not see what it was judging.
+
+        `--search merged:>=<date>` makes the API apply the same boundary the criterion
+        uses, so the two cannot drift apart.
+
+        TRUNCATION IS REPORTED, NEVER ASSUMED AWAY. If the result comes back at the
+        ceiling the page may still be short, and the caller has to be able to say so
+        rather than quietly under-explaining closures - the F63/F105 rule applied to
+        pagination.
+    .OUTPUTS
+        PullRequest - the candidates inside the window
+        Truncated   - whether the fetch may have been cut short
     #>
     param(
         [Parameter(Mandatory)][string]$Repository,
         [Parameter(Mandatory)][int]$LookbackDays
     )
-    $response = Invoke-MlsGh -AllowFailure -Argument @(
-        'pr', 'list', '--repo', $Repository, '--state', 'merged', '--limit', '100',
-        '--json', 'number,title,body,mergedAt,headRefOid,mergeCommit,mergedBy,autoMergeRequest,author')
-    if ($null -eq $response) { return @() }
+    $ceiling = 1000
     $since = [datetime]::UtcNow.AddDays(-$LookbackDays)
-    return @(Get-MlsCollection -Response $response | Where-Object {
+    $response = Invoke-MlsGh -AllowFailure -Argument @(
+        'pr', 'list', '--repo', $Repository, '--state', 'merged',
+        '--search', "merged:>=$($since.ToString('yyyy-MM-dd'))",
+        '--limit', "$ceiling",
+        '--json', 'number,title,body,mergedAt,headRefOid,mergeCommit,mergedBy,autoMergeRequest,author')
+    if ($null -eq $response) { return [pscustomobject]@{ PullRequest = @(); Truncated = $false } }
+
+    $all = @(Get-MlsCollection -Response $response)
+    $inWindow = @($all | Where-Object {
             $slot = [datetime]::MinValue
             [datetime]::TryParse("$(Get-MlsProperty -InputObject $_ -Name 'mergedAt')", [ref]$slot) -and
             $slot.ToUniversalTime() -ge $since
         })
+    return [pscustomobject]@{ PullRequest = $inWindow; Truncated = ($all.Count -ge $ceiling) }
 }
 
 function Get-HealTrail {
@@ -798,7 +822,12 @@ function Test-ClosureTraceable {
         [Parameter(Mandatory)]$Surface,
         [AllowNull()]$Policy,
         [Parameter(Mandatory)][datetime]$NowUtc,
-        [Parameter(Mandatory)][scriptblock]$TrailFor
+        [Parameter(Mandatory)][scriptblock]$TrailFor,
+        # When the candidate page was cut short an "unexplained" closure may only be one
+        # whose pull request fell off the end of it. That is unobservable, not a failure,
+        # and it is exactly how this criterion produced a false red against a repository
+        # with 189 merges inside the window.
+        [switch]$CandidateTruncated
     )
     if ($null -eq $Policy) {
         return New-MlsCheckResult -Status SKIP -Observed 'no declared self-heal policy, so the closure window is undefined' `
@@ -858,6 +887,11 @@ function Test-ClosureTraceable {
     }
 
     $observed = "$($closed.Count) closure(s) in ${lookback}d - explained: $($explained.Count), closed by image rebuild (lane 3): $rebuilt, unexplained: $($unexplained.Count)"
+    if ($CandidateTruncated -and $unexplained.Count -gt 0) {
+        return New-MlsCheckResult -Status SKIP `
+            -Observed "$observed | candidate page was TRUNCATED, so an unexplained closure may only be one whose pull request fell off it" `
+            -Detail 'UNOBSERVABLE rather than failed. Raise the ceiling in Get-MergedHealPullRequest, or shorten closureLookbackDays, so the whole window fits on one page.'
+    }
     if ($unexplained.Count -gt 0) {
         return New-MlsCheckResult -Passed $false -Observed "$observed | $($unexplained -join ' | ')" `
             -Detail 'A closure the estate cannot account for is the failure this criterion exists to catch: either automation closed it and the trail is broken, or a human did and nothing recorded that.'
@@ -956,9 +990,12 @@ function Invoke-Main {
     # pull requests answers every closure; a per-finding search would turn a single
     # observation into dozens against a rate-limited API.
     $healCandidate = @()
+    $healCandidateTruncated = $false
     if ($null -ne $policy) {
-        $healCandidate = @(Get-MergedHealPullRequest -Repository $repositoryName `
-                -LookbackDays ([int]"$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $policy -Name 'closureLookbackDays') -Name 'value')"))
+        $fetched = Get-MergedHealPullRequest -Repository $repositoryName `
+            -LookbackDays ([int]"$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $policy -Name 'closureLookbackDays') -Name 'value')")
+        $healCandidate = @($fetched.PullRequest)
+        $healCandidateTruncated = $fetched.Truncated
     }
 
     $context = New-MlsAuditContext -Layer 10 -Title 'Self-healing pipeline - operations cycle' `
@@ -1023,7 +1060,7 @@ function Invoke-Main {
             Get-HealTrail -Repository $repositoryName -Finding $Finding -Candidate $healCandidate `
                 -AppKeyMap $appKeyMap -ResourceGroupName $ResourceGroupName `
                 -Prefix $Prefix -EnvironmentSegment $EnvironmentSegment
-        }
+        } -CandidateTruncated:$healCandidateTruncated
     } | Out-Null
 
     # V10.3 - F123. THE CHAIN COULD NOT LOOK, AND SAID "NOTHING TO HEAL".
