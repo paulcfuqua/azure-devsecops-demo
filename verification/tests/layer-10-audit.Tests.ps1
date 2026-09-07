@@ -25,7 +25,12 @@ BeforeAll {
         return @($Context.Criterion | Where-Object { $_.Id -eq $Id })[0]
     }
 
+    # SupportsShouldProcess on both fixture builders: the names carry a state-changing verb
+    # and they write files. PSScriptAnalyzer runs at Error+Warning over the whole
+    # repository, and a test helper is not exempt from the rules the audits are held to -
+    # the same treatment Set-Mode carries in layer-01-audit.Tests.ps1.
     function New-PolicyFile {
+        [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
         param(
             [int]$CriticalDays = 7,
             [int]$MediumDays = 30,
@@ -34,6 +39,7 @@ BeforeAll {
             [string[]]$ExcludedPrefix = @('apps/vuln-lab/')
         )
         $path = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-policy-$([guid]::NewGuid().ToString('n')).json"
+        if (-not $PSCmdlet.ShouldProcess($path, 'write policy fixture')) { return $path }
         @{
             slo                 = @{ days = @{ critical = $CriticalDays; high = $CriticalDays; medium = $MediumDays; low = $MediumDays } }
             closureLookbackDays = @{ value = $Lookback }
@@ -46,7 +52,10 @@ BeforeAll {
         # Only the appKeys block matters, and the map is deliberately NOT the identity
         # function - mcp-tools keys to `mcp`, which is exactly the trap Get-AppKeyMap
         # exists to avoid.
+        [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Low')]
+        param()
         $path = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-naming-$([guid]::NewGuid().ToString('n')).bicep"
+        if (-not $PSCmdlet.ShouldProcess($path, 'write naming fixture')) { return $path }
         @(
             'var appKeys = {'
             "  launchOps: 'launch-ops'"
