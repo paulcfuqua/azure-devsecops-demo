@@ -313,5 +313,5 @@ jobs:
             echo "\`npm audit\` reports **${total}** advisories (expected: 3 while the seed is armed)."
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "${total}" -lt 3 ]; then
-            echo "::warning title=vuln-lab seed weakened::Expected at least 3 advisories in apps/vuln-lab but found ${total}. Re-arm with apps/vuln-lab/reseed.ps1 before demoing L10."
+            echo "::warning title=vuln-lab seed weakened::Expected at least 3 advisories in apps/vuln-lab but found ${total}. DO NOT re-arm. The plant is being retired by the sponsor-approved design of 2026-09-05 (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md, PR #237): re-arming is the F190 loop that design exists to break. L10 criteria still read the lab until that migration lands, so until then a weakened seed simply means V10.1/V10.2 have fewer pins to report on."
           fi

@@ -121,7 +121,7 @@ on a *standard* rebuild (tenant objects present):
 | 5 | L7 apps | `layer-07-apps.yml` redeploys the whole `infra/bicep/apps` template into `mls-rg-apps` **by image digest** — five serving container apps (`launch-ops`, `control-tower`, `data-api`, `mcp-tools`, `compliance`) plus the L10 witness. No image is rebuilt: `infra-up.yml` deliberately does not call the per-app CI workflows, because GHCR does not die with the resource groups | ~10–15 min |
 | 6 | L8 MCP tools CI + agent repoint + eval | **real work**: rebuild/deploy `apps/mcp-tools` to ACA; **repoint the surviving Copilot Studio agent at the new MCP FQDN** (the ACA environment's domain suffix changes when the RG is recreated) and, on the paid-F2 path, recreate + republish the Fabric data agent and reattach it; then the golden-question eval over Direct Line (needs capacity resumed — scheduled inside leg 4a's window or its own stated resume) | ~10–14 min |
 | 7 | L9 chain re-verify | config-as-code already in repo; re-assert states (Defender `Free`) | ~2–3 min |
-| — | L10 re-arm | **not in the timed path** — `apps/vuln-lab/reseed.ps1` is demo-prep, run from the pre-demo checklist [derived, per L11 playbook] | — |
+| — | ~~L10 re-arm~~ | **RETIRED — nothing to do.** `apps/vuln-lab/reseed.ps1` was demo-prep run from the pre-demo checklist; the sponsor-approved design of 2026-09-05 (PR #237) retires the plant, so a rebuild restores no seed and needs none | — |
 | 8 | Verifier audits L1–L10 | full independent re-audit | ~8–10 min |
 
 [derived] Scheduling: legs 4a and 4b have no mutual dependency and run as parallel
