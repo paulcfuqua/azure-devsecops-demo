@@ -276,6 +276,41 @@ this has not been confirmed at the Basic tier for our sources. **Lane 3 rests en
 it.** If it fails, lane 3 falls back to a scheduled rebuild against the existing GHCR
 images, and this document is amended to say so.
 
+> ### P1 — ANSWERED 2026-09-05, AND NOT WITH A YES OR A NO
+>
+> **ACR Tasks is not available on this subscription at all.** Every attempt to create a
+> task — including a control with no base-image flags — returns:
+>
+> ```
+> (TasksOperationsNotAllowed) ACR Tasks requests for the registry ... and
+> a8f2925d-d5e2-4edc-911e-c32041633a56 are not permitted. Please file an Azure
+> support request at http://aka.ms/azuresupport for assistance.
+> ```
+>
+> Reproduced twice, on two separate Basic registries in two separate resource groups —
+> once by the implementing agent and once independently. The restriction is on the
+> **subscription**, not a registry, a region, or a base image. Evidence:
+> [`docs/findings/2026-09-05-acr-basetrigger-spike.md`](../../findings/2026-09-05-acr-basetrigger-spike.md).
+>
+> **The original question remains open.** Whether Tasks can track a Docker Hub base is
+> unreachable from here — it is not answered in the negative, it is unanswerable until the
+> entitlement exists. If it is ever granted, **re-run the spike before building on it.**
+>
+> **Consequence: ACR is not adopted.** The G2 that authorised it was justified *by* Tasks.
+> Without them ACR buys a private registry and Defender image scanning, neither of which is
+> why it was chosen, and GHCR already serves these images free at public visibility. Paying
+> USD 0.1666/day plus a five-application registry migration for a blocked mechanism is not
+> a trade worth making.
+>
+> **Lane 3 therefore takes the documented fallback**: a scheduled rebuild of the app images
+> against GHCR, re-scanned and compared, deployed only if the finding count drops. That is
+> the custom mechanism this design set out to avoid — and the justification is now a
+> specific, recorded one: *the first-party mechanism is entitlement-blocked on this
+> subscription*, which is a materially different reason from "we did not look". It belongs
+> in the customisation audit under exactly that heading.
+>
+> **ACR Tasks stays on the roadmap as a future feature**, not a rejected option. See §11.
+
 **P2 — where ACR lives must not be inside the teardown set.** `infra-down.yml` deletes four
 resource groups by name. An ACR inside them is destroyed by a teardown, and the rebuild then
 cannot proceed: the applications would pull from a registry that only exists *after* the
@@ -328,6 +363,60 @@ three working lanes, not a system hardened against every hypothetical.
   describes the exact failure that cost nine days), lane 3 (custom rebuild scheduling versus
   ACR Tasks), and rollback (custom versus Container Apps revisions). That audit is the
   backbone of the production-hardening plan and should precede it.
+
+---
+
+## 11. Future features, with the reason each is not built yet
+
+Recorded so the reasoning survives, and so nobody re-derives it from scratch. Each entry
+says what would have to change for it to become work.
+
+### ACR Tasks with base-image update triggers — *blocked by entitlement, not by design*
+
+**What it would do.** Replace lane 3's scheduled rebuild entirely. ACR watches the upstream
+base and rebuilds when it is patched; no staleness heuristic, no polling logic, no cron we
+maintain. It is the first-party mechanism for exactly this problem.
+
+**Why it is not built.** `TasksOperationsNotAllowed` on this subscription — see §8's P1.
+
+**What would unblock it.** An Azure support request granting ACR Tasks. It may be a
+trial-subscription restriction that lifts on a paid subscription, which is untested.
+
+**If it is granted:** re-run
+[`docs/findings/2026-09-05-acr-basetrigger-spike.md`](../../findings/2026-09-05-acr-basetrigger-spike.md)'s
+probe first — P1's original question, whether Tasks can track a **Docker Hub** base, was
+never actually answered and must not be assumed. Then
+[`docs/superpowers/plans/2026-09-05-acr-foundation.md`](../plans/2026-09-05-acr-foundation.md)
+is ready to execute: eight tasks, TDD throughout, with the registry deliberately placed
+outside the teardown set and V11.6 proving it survived.
+
+### Automated runtime rollback
+
+**What it would do.** Shift traffic away from a revision that deploys green and then
+misbehaves. Today "fail" means the pull request never merges — there is no runtime signal.
+
+**Why it is not built.** Scope. Container Apps revision traffic-splitting is the primitive
+and this design turns it on; automating the decision is project 2's work.
+
+**What would unblock it.** A health signal worth acting on, and agreement on what
+constitutes "misbehaving" — which is a product decision, not an engineering one.
+
+### V10.5 — machine-verified change-window compliance
+
+**What it would do.** Assert that every heal merge and traffic shift happened inside the
+configured window.
+
+**Why it is not built.** The window functions without it; auditing it is the next
+increment. Building it now would also punish the correct response to an incident, since an
+authorised out-of-window release has no recorded shape yet.
+
+### Freeze-versus-SLO visibility
+
+**What it would do.** Show a finding as "at risk because of a freeze" when a change freeze
+is consuming its SLO.
+
+**Why it is not built.** It is a display concern that only matters once freezes are actually
+being used in anger.
 
 ---
 

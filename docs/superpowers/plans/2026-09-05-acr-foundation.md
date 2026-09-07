@@ -1,5 +1,23 @@
 # ACR Foundation Implementation Plan
 
+> ## ⛔ ON HOLD — stopped at Task 1's own stop condition, 2026-09-05
+>
+> **Task 1 ran and blocked. Tasks 2–8 were never dispatched. Nothing was migrated and
+> nothing was left running.**
+>
+> ACR Tasks is not permitted on this subscription — `TasksOperationsNotAllowed`, reproduced
+> on two separate Basic registries in two separate resource groups. Evidence:
+> [`docs/findings/2026-09-05-acr-basetrigger-spike.md`](../../findings/2026-09-05-acr-basetrigger-spike.md).
+>
+> The G2 that authorised ACR was justified *by* Tasks, so adopting the registry without them
+> would spend money and a five-application migration on a blocked mechanism. Lane 3 takes
+> the scheduled-rebuild fallback instead — see the spec's §8 and §11.
+>
+> **This plan is kept, not withdrawn.** If the entitlement is granted, re-run the spike
+> first (P1's original question was never actually answered), then execute from Task 2. The
+> pre-flight conflict scan has already been run and its one finding — interface drift
+> between Tasks 3, 4 and 6 — is fixed in the text below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stand up an Azure Container Registry that survives teardown, move the six app images onto it, and prove ACR Tasks rebuilds an image when its upstream base is patched — the mechanism lane 3 of the self-healing design depends on.

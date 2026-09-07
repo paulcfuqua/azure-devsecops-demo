@@ -226,3 +226,43 @@ INCONCLUSIVE rather than a clean NO, the recommendation is:
   task object was persisted), so there is nothing else to clean up.
 - No spend-profile increase occurred: the only registry created was Basic-tier, and it is
   being deleted.
+
+---
+
+## Independently reproduced, 2026-09-05
+
+The spike was run by a subagent. Its result was **not** taken at face value: the controller
+re-ran the probe on a **second, separate** Basic registry (`mlsspikeverify30954`) in a
+**second, separate** resource group (`mls-rg-spike2`), created fresh for the purpose.
+
+```
+az acr task create --registry mlsspikeverify30954 --name verify-probe \
+  --image probe:{{.Run.ID}} --context /dev/null --file Dockerfile \
+  --base-image-trigger-enabled true --base-image-trigger-type All \
+  --commit-trigger-enabled false
+
+ERROR: (TasksOperationsNotAllowed) ACR Tasks requests for the registry
+mlsspikeverify30954 and a8f2925d-d5e2-4edc-911e-c32041633a56 are not permitted.
+Please file an Azure support request at http://aka.ms/azuresupport for assistance.
+```
+
+Identical error, different registry, different resource group. The restriction is on the
+**subscription**, not on a registry, a region or a base image. `mls-rg-spike2` was deleted
+immediately after.
+
+**What this does and does not establish.** It establishes that ACR Tasks cannot be created
+on this subscription at all. It does **not** answer the original question — whether Tasks
+can track a Docker Hub base — because that question is unreachable from here. If the
+entitlement is ever granted, this spike must be re-run before lane 3 is built on it; the
+original P1 remains genuinely open, not answered in the negative.
+
+## Consequence for the approved design
+
+The **G2 that authorised ACR was justified by Tasks.** Without them, ACR provides a private
+registry and Defender image scanning — neither of which is why it was chosen, and GHCR
+already serves the images free at public visibility. Adopting it now would spend
+USD 0.1666/day plus a five-application registry migration on a mechanism that is
+administratively blocked.
+
+The ACR foundation plan was therefore **stopped at its own Task 1 stop condition**, before
+Tasks 2–8 were dispatched. Nothing was migrated and nothing was left running.
