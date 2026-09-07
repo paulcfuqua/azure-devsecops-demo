@@ -100,7 +100,6 @@ Describe 'layer-10-audit' {
 
         $script:PolicyPath = New-PolicyFile
         $script:NamingPath = New-NamingFile
-        $script:HealCandidate = $null
 
         $now = [datetime]::UtcNow
         # The steady state this model expects: nothing open, one closure fully explained.
@@ -406,6 +405,33 @@ Describe 'layer-10-audit' {
             $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.4'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*the advisory names a patched version: 9.9.9*'
+        }
+    }
+
+    Context 'the audit does not depend on state only the harness provides' {
+        It 'uses no $script: state at all, in code' {
+            # V10.2 shipped with `if (-not $script:HealCandidate) { $script:HealCandidate = ... }`
+            # as a lazy cache. Under Set-StrictMode -Version Latest the READ throws before
+            # the assignment can run, and production recorded
+            # "check threw: The variable '$script:HealCandidate' cannot be retrieved".
+            # The suite passed anyway, because BeforeEach set it to $null - the fixture
+            # created the precondition production lacked, which CLAUDE.md names as a test
+            # supplying its own answer rather than a test.
+            #
+            # THE FIRST VERSION OF THIS GUARD WAS FALSE COMFORT and is recorded because it
+            # is the more instructive mistake: it asserted "every $script: variable read is
+            # also assigned", and the lazy-cache pattern does BOTH, so it would have passed
+            # over the very defect it was written for. Checked by hand against the original
+            # line rather than assumed.
+            #
+            # This asserts the shape that actually holds: the audit is a script with no
+            # script-scoped mutable state, so values are parameters or closures and the
+            # ordering trap cannot recur. Comments are stripped first - this file documents
+            # the defect it scans for.
+            $source = Get-Content -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-10-audit.ps1')
+            $code = @($source | Where-Object { $_ -notmatch '^\s*#' })
+            @($code | Where-Object { $_ -match '\$script:' }) -join ' | ' |
+                Should -BeNullOrEmpty -Because 'script-scoped state in an audit is read before assignment sooner or later, and under Set-StrictMode -Version Latest that throws where a harness that pre-set it would show green'
         }
     }
 

@@ -23,13 +23,30 @@
       "",
       "The clock starts when the finding is CREATED and stops when it is closed. A finding",
       "with no upstream fix does not consume its SLO: it is pending-solution, which holds and",
-      "ages without failing, and V10.4 is what stops that state becoming a dumping ground."
+      "ages without failing, and V10.4 is what stops that state becoming a dumping ground.",
+      "",
+      "TWO SCALES, BOTH DECLARED. critical/high/medium/low are the CVSS-aligned bands that",
+      "Dependabot and code scanning's security_severity_level use. error/warning/note are the",
+      "OTHER scale: a code-scanning alert on a non-security rule carries no",
+      "security_severity_level, so the audit falls back to rule.severity, which speaks in",
+      "those words instead.",
+      "",
+      "The first run after this model shipped reported 13 findings as 'the policy declares no",
+      "SLO for severity note' - refusing to measure what nobody had declared rather than",
+      "inventing a number, which is the behaviour we want and also a gap in this file. They",
+      "are declared here rather than mapped silently in code, because a band the policy does",
+      "not name is precisely the thing a reader needs to be able to see is missing.",
+      "",
+      "error tracks high; warning and note track the 30-day tier."
     ],
     "days": {
       "critical": 7,
       "high": 7,
       "medium": 30,
-      "low": 30
+      "low": 30,
+      "error": 7,
+      "warning": 30,
+      "note": 30
     }
   },
 

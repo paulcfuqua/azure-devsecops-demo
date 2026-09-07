@@ -891,6 +891,15 @@ function Invoke-Main {
     $surface = Get-Finding -Repository $repositoryName -Policy $policy
     $now = [datetime]::UtcNow
 
+    # Fetched once, here, and closed over by V10.2's trail lookup. One page of merged
+    # pull requests answers every closure; a per-finding search would turn a single
+    # observation into dozens against a rate-limited API.
+    $healCandidate = @()
+    if ($null -ne $policy) {
+        $healCandidate = @(Get-MergedHealPullRequest -Repository $repositoryName `
+                -LookbackDays ([int]"$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $policy -Name 'closureLookbackDays') -Name 'value')"))
+    }
+
     $context = New-MlsAuditContext -Layer 10 -Title 'Self-healing pipeline - operations cycle' `
         -ScriptName 'verification/layer-10-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
         -OnlyCriterion $OnlyCriterion
@@ -940,11 +949,17 @@ function Invoke-Main {
         -Test {
         Test-ClosureTraceable -Surface $surface -Policy $policy -NowUtc $now -TrailFor {
             param($Finding)
-            $lookback = [int]"$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $policy -Name 'closureLookbackDays') -Name 'value')"
-            if (-not $script:HealCandidate) {
-                $script:HealCandidate = @(Get-MergedHealPullRequest -Repository $repositoryName -LookbackDays $lookback)
-            }
-            Get-HealTrail -Repository $repositoryName -Finding $Finding -Candidate $script:HealCandidate `
+            # $healCandidate is resolved ONCE, above, and closed over. It used to be a
+            # lazy `if (-not $script:HealCandidate)` cache, which threw on the first call
+            # under Set-StrictMode -Version Latest - reading a variable that has never
+            # been assigned is an error, not $null, and the criterion recorded
+            # "check threw: The variable '$script:HealCandidate' cannot be retrieved".
+            #
+            # The unit tests did not catch it because the harness set
+            # $script:HealCandidate = $null in BeforeEach. That is a test SUPPLYING the
+            # answer it is checking, which CLAUDE.md names as not a test at all - the
+            # fixture created the very precondition production lacked.
+            Get-HealTrail -Repository $repositoryName -Finding $Finding -Candidate $healCandidate `
                 -AppKeyMap $appKeyMap -ResourceGroupName $ResourceGroupName `
                 -Prefix $Prefix -EnvironmentSegment $EnvironmentSegment
         }
