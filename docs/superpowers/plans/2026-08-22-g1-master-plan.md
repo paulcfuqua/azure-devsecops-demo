@@ -322,8 +322,11 @@ human merger) → new ACA revision → alert state `fixed`, timestamps monotonic
 least 2 of the 3 seeded dependency pins, the Dependabot trail holds — alert created →
 Dependabot patch PR → gauntlet green → merged by automation → new ACA revision → alert
 state `fixed`.
-**Teardown:** re-seed script restores the vulnerable pins and the seeded code flaw for
-the next demo.
+**Teardown:** ~~re-seed script restores the vulnerable pins and the seeded code flaw for
+the next demo.~~ **SUPERSEDED 2026-09-05** by
+`docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md` (PR #237), which
+retires the plant: re-arming is F190, and the chain heals real findings in deployed apps
+instead. Teardown for L10 is now a no-op.
 **Cost:** $0 — [Copilot Autofix is GA and free on all public repositories](https://github.blog/changelog/2024-09-17-now-available-for-free-on-all-public-repositories-copilot-autofix-for-codeql-code-scanning-alerts/)
 and needs no Copilot subscription; CI minutes are free on a public repo.
 

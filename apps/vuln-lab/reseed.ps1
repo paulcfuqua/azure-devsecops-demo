@@ -1,8 +1,17 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Re-arms the vuln-lab after a self-healing cycle: restores BOTH the seeded
-    CodeQL code flaws and the three deliberately vulnerable dependency pins.
+    RETIRED - DO NOT RUN. Re-arms the vuln-lab after a self-healing cycle:
+    restores BOTH the seeded CodeQL code flaws and the three deliberately
+    vulnerable dependency pins.
+
+    The sponsor-approved design of 2026-09-05
+    (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md,
+    PR #237) removes this lab. Re-arming is F190: the pull request this script
+    produces reintroduces a critical alert and cannot merge past code scanning
+    protection without an administrator override. The chain now heals real
+    findings in real, deployed applications. This script is kept only until the
+    migration deletes it.
 
 .DESCRIPTION
     L10 heals this lab along two tracks, and a completed cycle disarms both:
@@ -100,6 +109,10 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
     throw "vuln-lab manifest not found at $manifestPath"
 }
 
+Write-Warning ('RETIRED: re-seeding the vuln-lab is no longer part of any procedure. ' +
+    'The sponsor-approved design of 2026-09-05 (PR #237) retires this lab, and re-arming ' +
+    'is F190 - the resulting PR cannot merge without an administrator override. ' +
+    'Continuing anyway; nothing in the estate asks you to do this.')
 Write-Information "Re-seeding vuln-lab at $labRoot" -InformationAction Continue
 
 # --- 1. restore the seeded code flaws ---------------------------------------

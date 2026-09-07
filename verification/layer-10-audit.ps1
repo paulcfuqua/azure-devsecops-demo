@@ -578,7 +578,7 @@ function Invoke-Main {
         Add-MlsNote -Context $context -Message 'No chain window could be computed: no re-seed timestamp (-ReseedMergedUtc / $env:MLS_L10_RESEED_MERGED_AT) and no heal PR carrying an auto-merge arming time, so an incomplete trail is recorded FAIL rather than PENDING.'
     }
     elseif ($windowSource -ne 're-seed merge') {
-        Add-MlsNote -Context $context -Message "Chain window derived from $windowSource, not from a supplied re-seed timestamp (F192). It times this heal's own attempt rather than the whole demo cycle; set MLS_L10_RESEED_MERGED_AT to measure from the re-seed instead."
+        Add-MlsNote -Context $context -Message "Chain window derived from $windowSource, not from a supplied re-seed timestamp (F192). It times this heal's own attempt rather than a whole demo cycle, which is now the intended behaviour: the re-seed that MLS_L10_RESEED_MERGED_AT dated is retired (PR #237), so do NOT set it and do NOT re-seed to produce a value."
     }
     $windowMinutes = $ChainWindowHours * 60
     $pendingAllowed = ($windowStart -ne [datetime]::MinValue)
