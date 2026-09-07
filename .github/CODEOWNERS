@@ -32,9 +32,28 @@
 #
 # Ordering matters: the LAST matching pattern wins, so the broad default comes
 # first and the sensitive paths override it.
-
-# Everything, unless a rule below is more specific.
-*                                   @paulcfuqua
+#
+# THERE IS DELIBERATELY NO CATCH-ALL. A `*  @paulcfuqua` line lived here until
+# 2026-09-07 and, combined with the ruleset's `require_code_owner_review: true`,
+# it required an approval on EVERY pull request while
+# `required_approving_review_count` still read 0. That inverted the policy this
+# file exists to express, because GitHub never requests review from a pull
+# request's own author:
+#
+#   author = the owner   changes verification/, .github/workflows/   no approval
+#   author = Dependabot  changes package-lock.json                   approval
+#
+# The gate fired on AUTHORSHIP rather than on sensitivity - an agent could change
+# the checker unreviewed while a bot could not bump a lockfile. It also made the
+# product claim false: CLAUDE.md and governance-mode.json both say a
+# gauntlet-green security patch auto-merges unattended in BOTH modes, and PR #174
+# proved it could not - 12/12 green checks, auto-merge armed, blocked five days
+# on a review request nobody had been told about.
+#
+# Scoped ownership below is the whole policy: the paths that DEFINE what safe
+# means need a second party, and a heal PR that touches none of them merges on
+# green. V1.5 now fails if a catch-all is reintroduced while the declared mode
+# requires zero approvals.
 
 # ---------------------------------------------------------------------------
 # The paths where an unreviewed change does the most damage.

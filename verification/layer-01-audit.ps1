@@ -149,6 +149,52 @@ function Test-SecretScanning {
     return New-MlsCheckResult -Passed ($secretScanning -eq 'enabled' -and $pushProtection -eq 'enabled') -Observed $observed -Final
 }
 
+function Find-MlsCodeownersCatchAll {
+    <#
+    .SYNOPSIS
+        The CODEOWNERS line, if any, that owns EVERY path in the repository.
+    .DESCRIPTION
+        A catch-all pattern combined with require_code_owner_review turns "0 approving
+        reviews required" into "an approval on every pull request", which is why V1.5
+        has to read this file and not just the rule's count.
+
+        Returns $null when there is no catch-all - including when the file does not
+        exist, which is a real and readable state: GitHub with no CODEOWNERS has no code
+        owners, so require_code_owner_review gates nothing.
+
+        Only `*` and `**` are catch-alls. A pattern with a path separator, however broad,
+        is scoped, and scoped ownership of the sensitive paths is exactly the policy this
+        repository intends.
+    .OUTPUTS
+        A PSCustomObject with File, Line, Pattern and Owners, or $null.
+    #>
+    param([AllowEmptyString()][string]$CodeownersPath = '')
+
+    if ([string]::IsNullOrWhiteSpace($CodeownersPath) -or -not (Test-Path -LiteralPath $CodeownersPath)) {
+        return $null
+    }
+
+    $number = 0
+    foreach ($raw in @(Get-Content -LiteralPath $CodeownersPath)) {
+        $number++
+        $line = "$raw".Trim()
+        # Comments, blanks, and the section headers CODEOWNERS allows on some plans.
+        if ($line.Length -eq 0 -or $line.StartsWith('#') -or $line.StartsWith('[') -or $line.StartsWith('^[')) { continue }
+
+        $token = @($line -split '\s+' | Where-Object { $_ })
+        if ($token.Count -lt 2) { continue }   # a pattern with no owner grants nothing
+        if ($token[0] -notin @('*', '**')) { continue }
+
+        return [pscustomobject]@{
+            File    = Split-Path -Leaf $CodeownersPath
+            Line    = $number
+            Pattern = $token[0]
+            Owners  = ($token[1..($token.Count - 1)] -join ' ')
+        }
+    }
+    return $null
+}
+
 function Test-GovernanceMode {
     <#
     .SYNOPSIS
@@ -176,14 +222,23 @@ function Test-GovernanceMode {
         document says they are not. Nothing detected either state.
 
         A mode nobody can read is not a policy, and a policy nothing checks is a wish.
+        THE COUNT IS ONLY HALF THE POLICY, and reading only the count is how this
+        criterion reported PASS over the very drift it exists to catch.
+        `require_code_owner_review` is an independent switch on the same rule; paired
+        with a catch-all CODEOWNERS pattern it demands an approval on EVERY pull request
+        while `required_approving_review_count` still reads 0. So the check now reads
+        both, plus CODEOWNERS, and compares the EFFECTIVE requirement.
+
     .OUTPUTS
-        PASS when the declared mode's required approval count is what main enforces.
+        PASS when the declared mode's required approval count is what main enforces AND
+        no catch-all owner silently raises the effective requirement above it.
         SKIP when the declaration is missing, or when this identity cannot read the rules
         - never a verdict that the control is absent (the F63/F105 rule).
     #>
     param(
         [Parameter(Mandatory)][string]$Repository,
-        [Parameter(Mandatory)][AllowEmptyString()][string]$ModePath
+        [Parameter(Mandatory)][AllowEmptyString()][string]$ModePath,
+        [AllowEmptyString()][string]$CodeownersPath = ''
     )
     if ([string]::IsNullOrWhiteSpace($ModePath) -or -not (Test-Path -LiteralPath $ModePath)) {
         return New-MlsCheckResult -Status SKIP `
@@ -218,8 +273,55 @@ function Test-GovernanceMode {
     }
 
     if ($actual -eq $expected) {
+        # THE COUNT IS NOT THE WHOLE POLICY. `require_code_owner_review` is a SECOND,
+        # independent switch on the same rule, and when CODEOWNERS carries a catch-all
+        # pattern it requires an approval on every pull request no matter what the count
+        # says. Reading only the count reported PASS on a repository where
+        # required_approving_review_count was 0, require_code_owner_review was true, and
+        # `*  @owner` owned every file - so the declaration said "self-approval
+        # authorized, 0 reviews" while the enforced policy was "every pull request needs
+        # the owner's approval".
+        #
+        # It was measured, not reasoned about: PR #174 carried 12/12 green required
+        # checks, mergeable=MERGEABLE and auto-merge armed for five days, and went
+        # BLOCKED -> CLEAN the instant a code owner approved it.
+        #
+        # THE GATE THEN FIRES ON AUTHORSHIP, NOT SENSITIVITY, which is the inversion that
+        # matters. GitHub does not request review from a pull request's own author, so
+        # with a single owner the agent's own changes to `verification/` merge unreviewed
+        # while Dependabot cannot land a lockfile bump. The declared policy is about which
+        # PATHS define safety; the enforced one was about who typed the commit.
+        #
+        # A catch-all is NOT wrong in operational mode, where an approval is required
+        # anyway - so this only contradicts a declaration of zero.
+        $requireCodeOwner = $false
+        if ($pullRequestRule.Count -gt 0) {
+            $requireCodeOwner = [bool](Get-MlsProperty `
+                    -InputObject (Get-MlsProperty -InputObject $pullRequestRule[0] -Name 'parameters') `
+                    -Name 'require_code_owner_review')
+        }
+
+        if ($expected -eq 0 -and $requireCodeOwner) {
+            $catchAll = Find-MlsCodeownersCatchAll -CodeownersPath $CodeownersPath
+            if ($null -ne $catchAll) {
+                return New-MlsCheckResult -Passed $false -Final `
+                    -Observed ("declared mode '$mode' declares 0 required approving review(s) and main enforces 0, " +
+                        "but require_code_owner_review is ON and $($catchAll.File) line $($catchAll.Line) owns every " +
+                        "path ('$($catchAll.Pattern)' -> $($catchAll.Owners)), so EVERY pull request needs an approval") `
+                    -Detail ('The count and the code-owner switch are independent, and the declaration only describes ' +
+                        'the count. Effective policy here is one approval on everything, which contradicts ' +
+                        "requiredApprovingReviewCount 0 and selfApprovalAuthorized. Worse, it gates on AUTHORSHIP: " +
+                        'GitHub never requests review from the author, so a sole owner reviews nothing of their own ' +
+                        'while every bot-authored pull request stops dead - which is why a gauntlet-green security ' +
+                        'patch cannot auto-merge unattended, the product claim this repository makes in both modes. ' +
+                        "Remove the catch-all pattern from CODEOWNERS and keep the specific sensitive paths, or " +
+                        'declare a mode whose requiredApprovingReviewCount is 1.')
+            }
+        }
+
         return New-MlsCheckResult -Passed $true `
-            -Observed "declared mode '$mode' declares $expected required approving review(s); main enforces $actual"
+            -Observed ("declared mode '$mode' declares $expected required approving review(s); main enforces $actual" +
+                "; require_code_owner_review=$requireCodeOwner with no catch-all owner")
     }
     return New-MlsCheckResult -Passed $false -Final `
         -Observed "declared mode '$mode' declares $expected required approving review(s); main enforces $actual" `
@@ -328,6 +430,7 @@ function Invoke-Main {
         [string]$RepoRoot,
         [string]$GuidAllowlistPath,
         [string]$GovernanceModePath,
+        [string]$CodeownersPath,
         [string]$ReportRoot,
         [switch]$NoRetry,
         [string[]]$OnlyCriterion = @()
@@ -366,6 +469,19 @@ function Invoke-Main {
     if ([string]::IsNullOrWhiteSpace($governanceModePath)) {
         $governanceModePath = Join-Path -Path $root -ChildPath '.github' -AdditionalChildPath 'governance-mode.json'
     }
+    # GitHub honours CODEOWNERS in exactly three places and uses the first it finds, so
+    # probing all three is the difference between reading the file that governs and
+    # concluding there is none. Resolved against the system rather than assumed.
+    $codeownersPath = $CodeownersPath
+    if ([string]::IsNullOrWhiteSpace($codeownersPath)) {
+        foreach ($candidate in @(
+                (Join-Path -Path $root -ChildPath '.github' -AdditionalChildPath 'CODEOWNERS'),
+                (Join-Path -Path $root -ChildPath 'CODEOWNERS'),
+                (Join-Path -Path $root -ChildPath 'docs' -AdditionalChildPath 'CODEOWNERS'))) {
+            if (Test-Path -LiteralPath $candidate) { $codeownersPath = $candidate; break }
+        }
+    }
+
     $declaredMode = 'absent'
     if (Test-Path -LiteralPath $governanceModePath) {
         $declaredMode = "$((Get-Content -LiteralPath $governanceModePath -Raw | ConvertFrom-Json).mode)"
@@ -412,9 +528,9 @@ function Invoke-Main {
     # repository setting, so no retry window.
     Invoke-MlsCriterion -Context $context -Id 'V1.5' -Control @('3.4.3', '3.1.5') `
         -Description 'The declared governance mode is the one main enforces' `
-        -Command "cat .github/governance-mode.json`ngh api repos/$repositoryName/rules/branches/main --jq '.[] | select(.type==`"pull_request`") | .parameters.required_approving_review_count'" `
-        -Expected 'the declared mode''s requiredApprovingReviewCount equals what main enforces' -NoRetry `
-        -Test { Test-GovernanceMode -Repository $repositoryName -ModePath $governanceModePath } | Out-Null
+        -Command "cat .github/governance-mode.json`ngh api repos/$repositoryName/rules/branches/main --jq '.[] | select(.type==`"pull_request`") | {required_approving_review_count, require_code_owner_review}'`ngrep -nE '^\s*\*{1,2}\s' .github/CODEOWNERS" `
+        -Expected 'the declared mode''s requiredApprovingReviewCount equals what main enforces, AND no catch-all CODEOWNERS pattern turns require_code_owner_review into an approval on every pull request' -NoRetry `
+        -Test { Test-GovernanceMode -Repository $repositoryName -ModePath $governanceModePath -CodeownersPath $codeownersPath } | Out-Null
 
     return $context
 }
