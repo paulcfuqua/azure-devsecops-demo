@@ -986,14 +986,10 @@ jobs:
             ${{ github.repository }}
             -ResourceGroupName
             ${{ steps.names.outputs.rg-apps }}
-            -VulnLabAppName
-            ${{ steps.names.outputs.ca-vuln-lab }}
-            ${{ needs.autofix.outputs.alert && '-CodeQlAlertNumber' || '' }}
-            ${{ needs.autofix.outputs.alert }}
-            ${{ needs.autofix.outputs.pr && '-AutofixPrNumber' || '' }}
-            ${{ needs.autofix.outputs.pr }}
-            ${{ vars.MLS_L10_RESEED_MERGED_AT && '-ReseedMergedUtc' || '' }}
-            ${{ vars.MLS_L10_RESEED_MERGED_AT }}
+            -Prefix
+            ${{ steps.names.outputs.prefix }}
+            -EnvironmentSegment
+            ${{ steps.names.outputs.env }}
             ${{ needs.select.outputs.readable && '-AlertSurfaceReadable' || '' }}
             ${{ needs.select.outputs.readable }}
 
