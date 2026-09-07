@@ -36,7 +36,9 @@ BeforeAll {
             [int]$MediumDays = 30,
             [int]$Lookback = 30,
             [string[]]$ExcludedManifest = @('apps/vuln-lab/package-lock.json'),
-            [string[]]$ExcludedPrefix = @('apps/vuln-lab/')
+            [string[]]$ExcludedPrefix = @('apps/vuln-lab/'),
+            [string]$DeferLane = '',
+            [string]$DeferExpires = ''
         )
         $path = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "mls-policy-$([guid]::NewGuid().ToString('n')).json"
         if (-not $PSCmdlet.ShouldProcess($path, 'write policy fixture')) { return $path }
@@ -44,6 +46,9 @@ BeforeAll {
             slo                 = @{ days = @{ critical = $CriticalDays; high = $CriticalDays; medium = $MediumDays; low = $MediumDays } }
             closureLookbackDays = @{ value = $Lookback }
             excludedPaths       = @{ manifests = $ExcludedManifest; sourcePrefixes = $ExcludedPrefix }
+            laneDeferral        = $(if ($DeferLane) {
+                    @{ $DeferLane = @{ reason = 'mechanism not built'; expires = $DeferExpires } }
+                } else { @{} })
         } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding utf8
         return $path
     }
@@ -405,6 +410,63 @@ Describe 'layer-10-audit' {
             $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.4'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*the advisory names a patched version: 9.9.9*'
+        }
+    }
+
+    Context 'lane 3 closes by rebuild, and its deferral expires' {
+        BeforeEach {
+            # A Trivy container-image finding: closed by a rescan, with no PR behind it -
+            # and never any prospect of one, because lane 3 changes no file in the repo.
+            $script:CodeAlert = @(
+                [pscustomobject]@{
+                    number = 400; state = 'fixed'
+                    created_at = ([datetime]::UtcNow.AddDays(-5)).ToString('o')
+                    fixed_at = ([datetime]::UtcNow.AddDays(-1)).ToString('o')
+                    rule = [pscustomobject]@{ id = 'CVE-2026-82562'; security_severity_level = 'high'; severity = 'error' }
+                    tool = [pscustomobject]@{ name = 'Trivy' }
+                    most_recent_instance = [pscustomobject]@{ location = [pscustomobject]@{ path = 'paulcfuqua/azure-devsecops-demo/launch-ops' } }
+                })
+        }
+
+        It 'does NOT demand a heal pull request for a container-image closure' {
+            # V10.2 shipped demanding one and reported 397 of 400 closures unexplained on
+            # its first real run - asking lane 3 for evidence that cannot exist.
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*closed by image rebuild (lane 3): 1*'
+        }
+
+        It 'still COUNTS the rebuild closures rather than dropping them silently' {
+            # A closure this criterion does not trail is still a closure the report must
+            # account for; a silent skip is indistinguishable from a lane nobody watches.
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*2 closure(s)*'
+        }
+
+        It 'defers an OPEN lane-3 finding while the deferral is live, and says how long is left' {
+            $script:CodeAlert[0].state = 'open'
+            $script:CodeAlert[0].fixed_at = ''
+            $script:CodeAlert[0].created_at = ([datetime]::UtcNow.AddDays(-90)).ToString('o')
+            $policy = New-PolicyFile -DeferLane 'container-image' -DeferExpires ([datetime]::UtcNow.AddDays(20).ToString('yyyy-MM-dd'))
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -PolicyPath $policy) -Id 'V10.1'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike "*lane 'container-image' deferred: 1 finding(s)*"
+            $row.Observed | Should -BeLike '*d left*'
+            Remove-Item -LiteralPath $policy -Force -ErrorAction SilentlyContinue
+        }
+
+        It 'FAILS once the deferral has expired - a deadline, not an amnesty' {
+            # The whole justification for deferring rather than excluding. If this did not
+            # hold, laneDeferral would be the dumping ground V10.4 exists to prevent.
+            $script:CodeAlert[0].state = 'open'
+            $script:CodeAlert[0].fixed_at = ''
+            $script:CodeAlert[0].created_at = ([datetime]::UtcNow.AddDays(-90)).ToString('o')
+            $policy = New-PolicyFile -DeferLane 'container-image' -DeferExpires ([datetime]::UtcNow.AddDays(-1).ToString('yyyy-MM-dd'))
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -PolicyPath $policy) -Id 'V10.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*DEFERRAL EXPIRED*'
+            $row.Observed | Should -BeLike '*PAST SLO*'
+            Remove-Item -LiteralPath $policy -Force -ErrorAction SilentlyContinue
         }
     }
 

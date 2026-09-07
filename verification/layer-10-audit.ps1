@@ -626,8 +626,22 @@ function Get-Finding {
         foreach ($prefix in $excludedPrefix) {
             if (-not [string]::IsNullOrWhiteSpace($prefix) -and $path.StartsWith($prefix)) { $excludedBySource = $true; break }
         }
+        # THE CODE-SCANNING SURFACE CARRIES TWO OF THE THREE LANES, AND THEY ARE NOT THE
+        # SAME SHAPE. The design's section 2 is explicit: lanes 1 and 2 produce COMMITS,
+        # lane 3 produces AN ARTIFACT - "there is nothing to merge, because nothing in the
+        # repository changes".
+        #
+        # Trivy uploads container-image findings as SARIF, and they close when a rebuilt
+        # image no longer contains them. No pull request is involved, ever. V10.2 shipped
+        # demanding a merged heal trail for every closure and reported 397 of 400 as
+        # unexplained on its first real run - asking lane 3 for evidence that structurally
+        # cannot exist. The lane is read from the tool that reported the finding rather
+        # than guessed from the path, because a container finding's path is an image
+        # reference, not a file in this repository.
+        $tool = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $alert -Name 'tool') -Name 'name')"
+        $lane = if ($tool -eq 'Trivy') { 'container-image' } else { 'code-scanning' }
         $finding.Add([pscustomobject]@{
-                Lane      = 'code-scanning'
+                Lane      = $lane
                 Number    = "$(Get-MlsProperty -InputObject $alert -Name 'number')"
                 State     = "$(Get-MlsProperty -InputObject $alert -Name 'state')"
                 Severity  = "$severity".ToLowerInvariant()
@@ -702,6 +716,42 @@ function Test-BacklogDrain {
     $pending = @($counted | Where-Object { -not $_.FixExists })
     $healable = @($counted | Where-Object { $_.FixExists })
 
+    # A LANE WHOSE MECHANISM DOES NOT EXIST YET, DEFERRED WITH AN EXPIRY DATE.
+    #
+    # Lane 3 is entitlement-blocked - ACR Tasks returns TasksOperationsNotAllowed on this
+    # subscription - and its scheduled-rebuild fallback is not built. Its findings are a
+    # real backlog with no automation reaching them, so counting them against a heal SLO
+    # states something true and useless: it fails every run for a reason nobody can act on
+    # from here.
+    #
+    # THE EXPIRY IS THE WHOLE POINT. An exclusion that cannot expire is precisely the
+    # dumping ground V10.4 exists to prevent, one level up - so this one stops applying by
+    # itself on a date declared in git, and the criterion goes red again if the lane still
+    # has no mechanism. It is a deadline, not an amnesty, and the observed line carries the
+    # count and the days remaining on every run so it can never be quietly forgotten.
+    $deferralNote = ''
+    $deferred = @()
+    $deferralConfig = Get-MlsProperty -InputObject $Policy -Name 'laneDeferral'
+    if ($null -ne $deferralConfig) {
+        foreach ($lane in @($healable | Select-Object -ExpandProperty Lane -Unique)) {
+            $entry = Get-MlsProperty -InputObject $deferralConfig -Name $lane
+            if ($null -eq $entry) { continue }
+            $expiry = [datetime]::MinValue
+            if (-not [datetime]::TryParse("$(Get-MlsProperty -InputObject $entry -Name 'expires')", [ref]$expiry)) { continue }
+            if ($NowUtc -ge $expiry.ToUniversalTime()) {
+                $deferralNote += " | DEFERRAL EXPIRED for lane '$lane' on $($expiry.ToString('yyyy-MM-dd')): its findings now count"
+                continue
+            }
+            $inLane = @($healable | Where-Object { $_.Lane -eq $lane })
+            $deferred += $inLane
+            $left = [math]::Ceiling(($expiry.ToUniversalTime() - $NowUtc).TotalDays)
+            $deferralNote += " | lane '$lane' deferred: $($inLane.Count) finding(s), expires $($expiry.ToString('yyyy-MM-dd')) ($left d left) - $(Get-MlsProperty -InputObject $entry -Name 'reason')"
+        }
+        if ($deferred.Count -gt 0) {
+            $healable = @($healable | Where-Object { $deferred -notcontains $_ })
+        }
+    }
+
     $breach = [System.Collections.Generic.List[string]]::new()
     foreach ($item in $healable) {
         $slo = Get-SloDay -Policy $Policy -Severity $item.Severity
@@ -719,7 +769,7 @@ function Test-BacklogDrain {
 
     $byLane = @($healable | Group-Object Lane | ForEach-Object { "$($_.Name)=$($_.Count)" })
     $bySeverity = @($healable | Group-Object Severity | ForEach-Object { "$($_.Name)=$($_.Count)" })
-    $observed = "healable open: $(if ($byLane) { $byLane -join ' ' } else { 'none' }) | by severity: $(if ($bySeverity) { $bySeverity -join ' ' } else { 'none' }) | pending-solution: $($pending.Count) | excluded by policy: $($excluded.Count)"
+    $observed = "healable open: $(if ($byLane) { $byLane -join ' ' } else { 'none' }) | by severity: $(if ($bySeverity) { $bySeverity -join ' ' } else { 'none' }) | pending-solution: $($pending.Count) | excluded by policy: $($excluded.Count)$deferralNote"
 
     if ($breach.Count -gt 0) {
         return New-MlsCheckResult -Passed $false `
@@ -780,7 +830,18 @@ function Test-ClosureTraceable {
 
     $explained = [System.Collections.Generic.List[string]]::new()
     $unexplained = [System.Collections.Generic.List[string]]::new()
+    $rebuilt = 0
     foreach ($item in $closed) {
+        # LANE 3 CLOSES BY REBUILD, NOT BY MERGE. The design's section 2 says lane 3
+        # produces an artifact and nothing in the repository changes, so a container-image
+        # finding that stopped appearing in a rescan has no pull request behind it and
+        # never could. Demanding one reported 397 of 400 closures as unexplained on the
+        # first real run - a category error, not a finding about the estate.
+        #
+        # It is COUNTED AND NAMED rather than dropped: a closure this criterion does not
+        # trail is still a closure the report has to account for, and a silent skip would
+        # be indistinguishable from a lane nobody is watching.
+        if ($item.Lane -eq 'container-image') { $rebuilt++; continue }
         if ($item.State -like '*dismissed*') {
             $reason = if ([string]::IsNullOrWhiteSpace($item.Reason)) { '(no reason recorded)' } else { $item.Reason }
             if ([string]::IsNullOrWhiteSpace($item.Reason)) {
@@ -796,7 +857,7 @@ function Test-ClosureTraceable {
         else { $unexplained.Add("#$($item.Number) $($item.Lane) $($item.Package) fixed but $($trail.Problem -join '; ')") }
     }
 
-    $observed = "$($closed.Count) closure(s) in ${lookback}d - explained: $($explained.Count), unexplained: $($unexplained.Count)"
+    $observed = "$($closed.Count) closure(s) in ${lookback}d - explained: $($explained.Count), closed by image rebuild (lane 3): $rebuilt, unexplained: $($unexplained.Count)"
     if ($unexplained.Count -gt 0) {
         return New-MlsCheckResult -Passed $false -Observed "$observed | $($unexplained -join ' | ')" `
             -Detail 'A closure the estate cannot account for is the failure this criterion exists to catch: either automation closed it and the trail is broken, or a human did and nothing recorded that.'

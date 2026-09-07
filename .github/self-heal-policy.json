@@ -61,6 +61,27 @@
     "value": 30
   },
 
+  "laneDeferral": {
+    "$comment": [
+      "A lane whose MECHANISM does not exist yet, deferred with a DEADLINE rather than",
+      "excused indefinitely. Its findings do not count against V10.1 until the date below;",
+      "on that date the deferral stops applying by itself, and the criterion goes red again",
+      "if the lane still has no mechanism.",
+      "",
+      "THE EXPIRY IS THE POINT. An exclusion that cannot expire is exactly the dumping",
+      "ground V10.4 exists to prevent, one level up. The audit prints the deferred count,",
+      "the expiry and the days remaining on EVERY run, and prints DEFERRAL EXPIRED after the",
+      "date - so this cannot be quietly forgotten.",
+      "",
+      "A deadline, not an amnesty. The findings are real, and they stay visible."
+    ],
+    "container-image": {
+      "reason": "Lane 3 has no automated path on this subscription: ACR Tasks returns TasksOperationsNotAllowed (spec section 8, P1 - reproduced twice, on two registries in two resource groups), and the documented scheduled-rebuild fallback is not built yet. Counting base-image findings against a heal SLO states something true and unactionable.",
+      "expires": "2026-10-07",
+      "unblockedBy": "the scheduled rebuild in spec sections 8 and 11, or an Azure support request granting ACR Tasks"
+    }
+  },
+
   "notAutomatable": {
     "$comment": [
       "Findings for which NO automated path exists, so V10.1 must not count them as a",
