@@ -16,6 +16,6 @@
   },
   "dependencies": {
     "@azure/functions": "^4.16.2",
-    "jose": "^6.2.10"
+    "jose": "^6.2.11"
   }
 }
