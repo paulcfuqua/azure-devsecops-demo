@@ -497,18 +497,58 @@ function Get-HealTrail {
     )
     $problem = [System.Collections.Generic.List[string]]::new()
 
-    # Stage 1 - a pull request that plausibly explains this closure. Dependabot names the
-    # package in its title; a code-scanning heal names the alert number in its body.
+    # Stage 1 - a pull request that plausibly explains this closure.
+    #
+    # TEXT ALONE IS NOT EVIDENCE, and this criterion learned that the embarrassing way.
+    # The matcher was a prose search - Dependabot names the package in its title, an
+    # Autofix heal names the alert number in its body - and it matched alert #9 (closed
+    # 2026-09-04) to PR #254, which merged on 2026-09-07 and mentioned "alert #9" only
+    # because its DESCRIPTION discussed this very defect. A pull request that talks about
+    # an alert was credited with healing it, three days after the fact, and V10.2 went
+    # green on it.
+    #
+    # CAUSALITY IS THE FILTER, in two parts, and the first is nearly free:
+    #
+    #   1. A merge that happened AFTER the alert closed cannot have closed it. One
+    #      comparison, no extra API call, and it alone rules out the #254 case.
+    #   2. For code scanning, the pull request must have CHANGED THE FILE the alert is
+    #      in. A heal edits the flawed code; a write-up does not.
+    #
+    # The prose match stays as the cheap first pass - it is what narrows a hundred
+    # candidates to a few - but it can no longer be the whole answer.
+    $closedSlot = [datetime]::MinValue
+    $haveClosedAt = [datetime]::TryParse($Finding.ClosedAt, [ref]$closedSlot)
+
     $match = @($Candidate | Where-Object {
             $title = "$(Get-MlsProperty -InputObject $_ -Name 'title')"
             $body = "$(Get-MlsProperty -InputObject $_ -Name 'body')"
-            if ($Finding.Lane -eq 'dependabot') {
+            $mentions = if ($Finding.Lane -eq 'dependabot') {
                 -not [string]::IsNullOrWhiteSpace($Finding.Package) -and $title -like "*$($Finding.Package)*"
             }
             else {
                 $body -match "alert[^0-9]{0,12}$([regex]::Escape($Finding.Number))\b"
             }
+            if (-not $mentions) { return $false }
+
+            # A grace hour, because the alert closes shortly AFTER the merge that fixed it
+            # and the two clocks are not the same clock.
+            if ($haveClosedAt) {
+                $mergedSlot = [datetime]::MinValue
+                if ([datetime]::TryParse("$(Get-MlsProperty -InputObject $_ -Name 'mergedAt')", [ref]$mergedSlot)) {
+                    if ($mergedSlot.ToUniversalTime() -gt $closedSlot.ToUniversalTime().AddHours(1)) { return $false }
+                }
+            }
+            return $true
         })
+
+    # The file test, applied only to the survivors: it costs one call each, so it runs
+    # after the cheap filters rather than instead of them.
+    if ($Finding.Lane -eq 'code-scanning' -and -not [string]::IsNullOrWhiteSpace($Finding.Path)) {
+        $match = @($match | Where-Object {
+                (Get-PullRequestFile -Repository $Repository -Number "$(Get-MlsProperty -InputObject $_ -Name 'number')") -contains $Finding.Path
+            })
+    }
+
     if ($match.Count -eq 0) {
         $problem.Add('no merged pull request in the window explains it')
         return [pscustomobject]@{ Problem = $problem; Reference = '' }
