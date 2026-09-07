@@ -167,3 +167,27 @@ component type (9) plus three invalid specs (bad `layout` enum, missing
 required `title`, x/y points where label/value is required). The test suite
 asserts every valid fixture validates, every invalid one fails with the
 expected error paths, and every component type renders with its title visible.
+
+## Who else reads these fixtures
+
+The golden fixtures are not only this package's test data. **L7's V7.2 —
+"renderer schema validation passes on golden specs" — runs the validator in
+`./validate` against every file in `fixtures/` from the Verifier's own
+workflow**, as an independent check that the deployed renderer contract still
+accepts what the copilot is expected to emit (L8 V8.4 pins the same schema for
+Adaptive Card payloads).
+
+Two consequences worth knowing before editing this directory:
+
+- **Adding a valid fixture widens what V7.2 asserts.** That is usually the
+  point — a new component type should arrive with one.
+- **Renaming or deleting one narrows it silently.** The suite still passes,
+  because it iterates whatever is present; V7.2 does too. Neither will tell you
+  the coverage shrank, so treat a deletion here as a deliberate scope change
+  rather than a tidy-up.
+
+Because this package sits under `apps/shared/**`, a change to it triggers
+**both** the launch-ops and control-tower pipelines — they each declare
+`apps/shared/**` alongside their own app path. That fan-out is deliberate:
+both frontends consume this renderer, so neither may be built against an
+unvalidated version of it.
