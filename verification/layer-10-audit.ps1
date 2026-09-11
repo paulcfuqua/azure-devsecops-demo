@@ -277,8 +277,21 @@ function Get-RevisionCarryingCommit {
         Absence of the app is distinguished from absence of the revision. `az` returning
         nothing for an app that does not exist is NOT evidence the heal failed to deploy -
         it is a different fact, and the caller reports it as one (the F63/F105 rule).
+
+        REVISION HISTORY IS NOT RETAINED, SO Matched GOING EMPTY PROVES NOTHING ON ITS
+        OWN. Every container app in this estate runs activeRevisionsMode=Single with
+        maxInactiveRevisions=0, which makes Azure destroy the previous revision the
+        instant a new one activates - `revision list` returns exactly one row, today's.
+        A heal that shipped correctly therefore becomes invisible here the moment ANY
+        later commit deploys that app, and this stage spent a fortnight announcing that
+        alert #9's heal "never ran" when its deploy job is green in the run history.
+
+        `--all` is passed anyway: it costs nothing and is correct the day retention is
+        raised or an app moves to Multiple mode. It is not the fix, and the caller must
+        not treat an empty Matched as a verdict - ActiveImage is what it falls back to.
     .OUTPUTS
-        AppExists, After, Matched, Tag - enough for the caller to phrase every case.
+        AppExists, After, Matched, Tag, ActiveImage - enough for the caller to phrase
+        every case, including the one where history no longer exists.
     #>
     param(
         [Parameter(Mandatory)][string]$ResourceGroupName,
@@ -288,12 +301,31 @@ function Get-RevisionCarryingCommit {
     )
     $revisions = @(Invoke-MlsAz -AllowFailure -Argument @(
             'containerapp', 'revision', 'list', '--resource-group', $ResourceGroupName, '--name', $AppName,
-            '--query', '[].{name:name, created:properties.createdTime, image:properties.template.containers[0].image}',
+            '--all',
+            '--query', '[].{name:name, created:properties.createdTime, active:properties.active, image:properties.template.containers[0].image}',
             '--output', 'json'
         ))
-    $appExists = ($null -ne $revisions -and @($revisions).Count -gt 0)
-    $result = [pscustomobject]@{ AppExists = $appExists; After = @(); Matched = @(); Tag = @() }
-    if (-not $appExists -or $null -eq $MergedUtc) { return $result }
+    # `@($null)` IS A ONE-ELEMENT ARRAY, which is how an app that does not exist came to
+    # read as one that does. Invoke-MlsAz -AllowFailure returns $null for a ResourceNotFound
+    # - mls-cost-ingest-demo-ca is named by naming.bicep but deployed as a Function App, so
+    # this path is live - and wrapping that in @() produced Count 1, AppExists true, and a
+    # deploy assertion made against an app that was never there. Discard the nulls first,
+    # so absence of the app stays distinguishable from absence of the revision.
+    $revisions = @($revisions | Where-Object { $null -ne $_ })
+    $appExists = ($revisions.Count -gt 0)
+    $result = [pscustomobject]@{ AppExists = $appExists; After = @(); Matched = @(); Tag = @(); ActiveImage = '' }
+    if (-not $appExists) { return $result }
+
+    # What is running RIGHT NOW, which survives the retention that erases everything else.
+    # Preferring the active revision over the newest matters when a rollout is mid-flight:
+    # the newest revision is not necessarily the one serving traffic.
+    $running = @($revisions | Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'active')" -eq 'True' })
+    if ($running.Count -eq 0) {
+        $running = @($revisions | Sort-Object -Property { [datetime]"$(Get-MlsProperty -InputObject $_ -Name 'created')" } -Descending)
+    }
+    if ($running.Count -gt 0) { $result.ActiveImage = "$(Get-MlsProperty -InputObject $running[0] -Name 'image')" }
+
+    if ($null -eq $MergedUtc) { return $result }
 
     $after = @($revisions | Where-Object {
             $slot = [datetime]::MinValue
@@ -310,6 +342,70 @@ function Get-RevisionCarryingCommit {
                 "$(Get-MlsProperty -InputObject $_ -Name 'image')" -like "*:sha-$short"
             })
     }
+    return $result
+}
+
+function Test-ImageCarriesCommit {
+    <#
+    .SYNOPSIS
+        Does the image a container app is RUNNING contain this heal's merge commit?
+    .DESCRIPTION
+        The fallback for the case Azure makes unobservable. Every app CI computes
+        `tag="sha-${GITHUB_SHA:0:7}"`, so the running image names the commit it was built
+        from; `compare/<merge>...<running>` then answers whether that build contains the
+        heal. `identical` and `ahead` both mean it does.
+
+        THIS ASSERTS THE CAPABILITY, NOT THE ARTEFACT. The old stage asked "did a revision
+        object carrying this exact tag ever exist", which is a proxy for the thing actually
+        worth knowing - is the healed code what serves traffic - and a proxy with a
+        lifetime of one deploy. Ancestry answers the real question and keeps answering it,
+        because git history does not get garbage-collected on a rollout.
+
+        It is deliberately NOT weaker than the tag test. A revert would show as `behind` or
+        `diverged`, and the alert would have reopened in any case; an app still running a
+        pre-heal image is exactly what `behind` reports.
+
+        UNRESOLVED IS NOT FALSE. A tag that names no commit, or a compare that could not be
+        read, means this function does not know - and the caller must say so rather than
+        convert silence into "the heal never ran" (F102/F103/F105).
+    .OUTPUTS
+        Resolved, Contains, Tag, Reason.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Repository,
+        [AllowEmptyString()][AllowNull()][string]$Image,
+        [AllowEmptyString()][AllowNull()][string]$MergeCommit
+    )
+    $result = [pscustomobject]@{ Resolved = $false; Contains = $false; Tag = ''; Reason = '' }
+
+    if ([string]::IsNullOrWhiteSpace($MergeCommit)) {
+        $result.Reason = 'the pull request records no merge commit to compare against'
+        return $result
+    }
+    if ([string]::IsNullOrWhiteSpace($Image)) {
+        $result.Reason = 'no running revision was readable'
+        return $result
+    }
+    if ("$Image" -notmatch ':sha-(?<sha>[0-9a-fA-F]{7,40})$') {
+        $result.Reason = "the running image '$Image' carries no sha- tag, so the commit it was built from is unknown"
+        return $result
+    }
+    $result.Tag = $Matches['sha']
+
+    $comparison = Invoke-MlsGh -AllowFailure -Argument @(
+        'api', "repos/$Repository/compare/$MergeCommit...$($result.Tag)")
+    if ($null -eq $comparison) {
+        $result.Reason = "the commit history between sha-$($result.Tag) and this heal could not be read"
+        return $result
+    }
+    $status = "$(Get-MlsProperty -InputObject $comparison -Name 'status')"
+    if ([string]::IsNullOrWhiteSpace($status)) {
+        $result.Reason = "the comparison against sha-$($result.Tag) returned no status"
+        return $result
+    }
+    $result.Resolved = $true
+    $result.Contains = ($status -in @('identical', 'ahead'))
+    $result.Reason = $status
     return $result
 }
 
@@ -518,42 +614,92 @@ function Get-HealTrail {
     # candidates to a few - but it can no longer be the whole answer.
     $closedSlot = [datetime]::MinValue
     $haveClosedAt = [datetime]::TryParse($Finding.ClosedAt, [ref]$closedSlot)
+    $closedUtc = $closedSlot.ToUniversalTime()
 
-    $match = @($Candidate | Where-Object {
-            $title = "$(Get-MlsProperty -InputObject $_ -Name 'title')"
-            $body = "$(Get-MlsProperty -InputObject $_ -Name 'body')"
-            $mentions = if ($Finding.Lane -eq 'dependabot') {
-                -not [string]::IsNullOrWhiteSpace($Finding.Package) -and $title -like "*$($Finding.Package)*"
-            }
-            else {
-                $body -match "alert[^0-9]{0,12}$([regex]::Escape($Finding.Number))\b"
-            }
-            if (-not $mentions) { return $false }
+    $createdSlot = [datetime]::MinValue
+    $haveCreatedAt = [datetime]::TryParse($Finding.CreatedAt, [ref]$createdSlot)
 
-            # A grace hour, because the alert closes shortly AFTER the merge that fixed it
-            # and the two clocks are not the same clock.
-            if ($haveClosedAt) {
-                $mergedSlot = [datetime]::MinValue
-                if ([datetime]::TryParse("$(Get-MlsProperty -InputObject $_ -Name 'mergedAt')", [ref]$mergedSlot)) {
-                    if ($mergedSlot.ToUniversalTime() -gt $closedSlot.ToUniversalTime().AddHours(1)) { return $false }
-                }
+    # mergedAt parsed ONCE per candidate: it is read by the causal filter, the ordering and
+    # the scan below, and re-parsing it three times is how the three drift apart.
+    $decorated = @($Candidate | ForEach-Object {
+            $slot = [datetime]::MinValue
+            $merged = $null
+            if ([datetime]::TryParse("$(Get-MlsProperty -InputObject $_ -Name 'mergedAt')", [ref]$slot)) {
+                $merged = $slot.ToUniversalTime()
             }
-            return $true
+            [pscustomobject]@{ PullRequest = $_; MergedUtc = $merged }
         })
 
-    # The file test, applied only to the survivors: it costs one call each, so it runs
-    # after the cheap filters rather than instead of them.
+    # A grace hour, because the alert closes shortly AFTER the merge that fixed it and the
+    # two clocks are not the same clock. A candidate whose mergedAt will not parse is kept
+    # rather than silently dropped - the later stages will judge it.
+    $causal = @($decorated | Where-Object {
+            $null -eq $_.MergedUtc -or -not $haveClosedAt -or $_.MergedUtc -le $closedUtc.AddHours(1)
+        })
+
+    $prose = @($causal | Where-Object {
+            $title = "$(Get-MlsProperty -InputObject $_.PullRequest -Name 'title')"
+            $body = "$(Get-MlsProperty -InputObject $_.PullRequest -Name 'body')"
+            if ($Finding.Lane -eq 'dependabot') {
+                return (-not [string]::IsNullOrWhiteSpace($Finding.Package) -and $title -like "*$($Finding.Package)*")
+            }
+            return ($body -match "alert[^0-9]{0,12}$([regex]::Escape($Finding.Number))\b")
+        })
+
+    $scanCeiling = 40
+    $scanTruncated = $false
+    $match = @()
     if ($Finding.Lane -eq 'code-scanning' -and -not [string]::IsNullOrWhiteSpace($Finding.Path)) {
-        $match = @($match | Where-Object {
-                (Get-PullRequestFile -Repository $Repository -Number "$(Get-MlsProperty -InputObject $_ -Name 'number')") -contains $Finding.Path
+        # The file test, applied to the prose survivors first: it costs one call each, so
+        # the cheap filter still runs before it rather than instead of it.
+        $match = @($prose | Where-Object {
+                (Get-PullRequestFile -Repository $Repository -Number "$(Get-MlsProperty -InputObject $_.PullRequest -Name 'number')") -contains $Finding.Path
             })
+
+        # PROSE IS NOT THE ONLY WAY A HEAL EXPLAINS ITSELF, AND REQUIRING IT COST A
+        # FORTNIGHT OF RED. Code-scanning alert #1 (js/polynomial-redos, auth-gate.ts)
+        # closed 2026-08-29T04:44:09Z; PR #45 changed that exact file and merged at
+        # 04:42:58Z, SEVENTY-ONE SECONDS earlier. Its body never says "alert 1" - it was a
+        # hand-written fix, not an Autofix patch - so it was never a candidate, and V10.2
+        # reported "no merged pull request explains it" about a closure whose explanation
+        # was one API call away. The criterion was measuring how a pull request was WORDED.
+        #
+        # So when prose finds nothing, ask the causal question directly: which merge
+        # inside this alert's own lifetime touched the file the alert is in. Newest first,
+        # because the fix is overwhelmingly the merge nearest the closure.
+        if ($match.Count -eq 0) {
+            $window = @($causal |
+                    Where-Object { $null -eq $_.MergedUtc -or -not $haveCreatedAt -or $_.MergedUtc -ge $createdSlot.ToUniversalTime().AddHours(-1) } |
+                    Sort-Object -Property @{ Expression = { if ($_.MergedUtc) { $_.MergedUtc } else { [datetime]::MinValue } } } -Descending)
+
+            # A CEILING, BECAUSE THIS IS THE ONE PLACE THAT COSTS A CALL PER CANDIDATE.
+            # Exhausting it is reported, never treated as an answer: "I checked 40 and
+            # stopped" is not "no pull request explains it" (F105).
+            $examined = 0
+            foreach ($entry in $window) {
+                if ($examined -ge $scanCeiling) { $scanTruncated = $true; break }
+                $examined++
+                if ((Get-PullRequestFile -Repository $Repository -Number "$(Get-MlsProperty -InputObject $entry.PullRequest -Name 'number')") -contains $Finding.Path) {
+                    $match = @($entry)
+                    break
+                }
+            }
+        }
+    }
+    else {
+        $match = $prose
     }
 
     if ($match.Count -eq 0) {
-        $problem.Add('no merged pull request in the window explains it')
+        if ($scanTruncated) {
+            $problem.Add("no merged pull request in the window explains it, but the causal scan stopped at its $scanCeiling-candidate ceiling, so this is UNOBSERVABLE rather than established")
+        }
+        else {
+            $problem.Add('no merged pull request in the window explains it')
+        }
         return [pscustomobject]@{ Problem = $problem; Reference = '' }
     }
-    $pullRequest = $match[0]
+    $pullRequest = $match[0].PullRequest
     $number = "$(Get-MlsProperty -InputObject $pullRequest -Name 'number')"
     $reference = "PR #$number"
 
@@ -593,11 +739,25 @@ function Get-HealTrail {
             $reference += " ($($app.ContainerApp) not deployed - no deploy assertion)"
             continue
         }
-        if ($revision.Matched.Count -lt 1) {
-            $short = if ($mergeCommit) { "$mergeCommit".Substring(0, [Math]::Min(7, "$mergeCommit".Length)) } else { '(none)' }
-            $seen = if ($revision.Tag.Count -gt 0) { $revision.Tag -join ', ' } else { '(no revision after the merge)' }
-            $problem.Add("$($app.ContainerApp) never ran this heal: no revision after the merge carries image tag sha-$short (saw: $seen)")
+        if ($revision.Matched.Count -ge 1) { continue }
+
+        # THE REVISION IS GONE, WHICH IS NOT THE SAME AS THE HEAL NEVER SHIPPING.
+        # maxInactiveRevisions=0 on every app in this estate means the tag this stage
+        # looks for is destroyed by the next deploy, so an empty Matched is the EXPECTED
+        # reading for any heal that is not the most recent one. Ask what is running
+        # instead, and whether it contains the heal.
+        $short = if ($mergeCommit) { "$mergeCommit".Substring(0, [Math]::Min(7, "$mergeCommit".Length)) } else { '(none)' }
+        $ancestry = Test-ImageCarriesCommit -Repository $Repository -Image $revision.ActiveImage -MergeCommit $mergeCommit
+        if ($ancestry.Contains) {
+            $reference += " ($($app.ContainerApp) runs $($revision.ActiveImage), which contains sha-$short)"
+            continue
         }
+        if (-not $ancestry.Resolved) {
+            $problem.Add("$($app.ContainerApp): could not establish whether the running image carries this heal - $($ancestry.Reason)")
+            continue
+        }
+        $seen = if ($revision.ActiveImage) { $revision.ActiveImage } else { '(no running revision)' }
+        $problem.Add("$($app.ContainerApp) never ran this heal: sha-$short is not in the history of the running image (saw: $seen, $($ancestry.Reason))")
     }
     return [pscustomobject]@{ Problem = $problem; Reference = $reference }
 }
