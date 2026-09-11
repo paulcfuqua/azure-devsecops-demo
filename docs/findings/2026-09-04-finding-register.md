@@ -18,6 +18,10 @@ in one piece. They are cross-referenced here and not restated.
 | **F194** | CODEOWNERS claimed a review gate the repository has never enforced |
 | **F195** | Both L10 criteria counted a *skipped* check as a failed one |
 | **F196** | V6.2 fixed — and F182's leading hypothesis was wrong |
+| **F197** | V10.2's deploy stage demanded evidence Azure destroys on every deploy |
+| **F198** | Prose was the primary matcher, so a heal that never cited its alert was invisible |
+| **F199** | `@($null)` is a one-element array, so an app that does not exist read as one that does |
+| **F200** | A chain trail was demanded of a closure the chain never produced |
 
 ---
 
@@ -345,3 +349,171 @@ token:
 The next real L6 run will say which of those two the estate is actually in. Until then V6.2
 is **not** claimed as fixed — only as capable of telling the difference, which it was not
 before.
+
+---
+
+### F197 — V10.2's deploy stage demanded evidence Azure destroys on every deploy *(fixed 2026-09-11)*
+
+**What happened.** The scheduled `self-heal` run failed on V10.2 every time for a fortnight,
+and one of the two closures it named each run was this:
+
+> `#9 code-scanning js/trivial-conditional fixed but mls-mcp-demo-ca never ran this heal: no
+> revision after the merge carries image tag sha-7eb75ce (saw: ...mcp-tools:sha-b8dca97)`
+
+The heal ran. `app-mcp-tools-ci` is green on merge commit `7eb75ce`, deploy job included, and
+`7eb75ce` is an **ancestor** of the commit behind the image the app serves today. The fixed
+code has been in production since 2026-09-04.
+
+**Root cause.** Every container app in this estate runs `activeRevisionsMode=Single` with
+**`maxInactiveRevisions=0`**:
+
+```
+mls-vuln-lab-demo-ca   Single  0      mls-data-api-demo-ca       Single  0
+mls-compliance-demo-ca Single  0      mls-launch-ops-demo-ca     Single  0
+mls-mcp-demo-ca        Single  0      mls-control-tower-demo-ca  Single  0
+```
+
+Azure destroys the previous revision the instant a new one activates. `revision list` returns
+exactly one row — today's — and `--all` returns the same one. That was checked before it was
+believed: the first hypothesis *was* that `--all` was the missing flag, and a second sample
+disproved it. So the image tag stage 4 looked for **has a lifetime of one deploy**. Any heal that is
+not the most recent deploy of its app is invisible by construction, and the criterion read
+green on the day of the heal and permanently, falsely red afterwards.
+
+**The class.** F102/F103/F105 again, one level down: absence of evidence reported as evidence
+of absence, from a source that physically cannot retain the record. It is also the
+artefact-instead-of-capability trap — "a revision object carrying this tag once existed" is a
+*proxy* for "the healed code is what serves traffic", and a proxy with an expiry date.
+
+**The fix.** Stage 4 still accepts the exact tag when it is there. When it is not, it asks
+whether the **running** image contains the merge commit —
+`compare/<merge>...<runningSha>`, `identical`/`ahead` — because app CI tags images
+`sha-${GITHUB_SHA:0:7}`, so the running image names its own commit. Git history is not
+garbage-collected on a rollout. A tag that resolves to nothing, or a comparison that cannot be
+read, reports **`could not establish`** and stays red; it never converts silence into "the
+heal never ran".
+
+---
+
+### F198 — prose was the primary matcher, so a heal that never cited its alert was invisible *(fixed 2026-09-11)*
+
+**What happened.** The other closure named on every failing run:
+
+> `#1 code-scanning js/polynomial-redos fixed but no merged pull request in the window explains it`
+
+PR #45 changed `apps/mcp-tools/src/auth-gate.ts` — the exact file the alert is in — and merged
+at `2026-08-29T04:42:58Z`. The alert closed at `04:44:09Z`. **Seventy-one seconds.**
+
+**Root cause.** For code scanning, the candidate matcher required the pull request body to name
+the alert number, and only the survivors of that test ever reached the file test. Copilot
+Autofix names the alert; a hand-written fix that closes the same alert does not, and nothing
+required it to. The criterion was measuring **how a pull request was worded**, then reporting
+the answer as whether the estate could explain a closure.
+
+The irony is that the *better* signal was already in the code — the file test — demoted to a
+secondary filter behind the weaker one.
+
+**The fix.** Causality is the matcher: merged inside the alert's own lifetime, and changed the
+alert's file. Prose is kept as the cheap first pass, because it is what narrows a hundred
+candidates to a few. The fallback scan is ordered newest-first and carries a **reported**
+ceiling — exhausting it says `UNOBSERVABLE`, never "no pull request explains it".
+
+**What this did not undo.** The two guards from the #254 case — a pull request that merged
+*after* the closure, or that never touched the file, is refused — are exactly the two
+conditions the new matcher is built from, and both keep their tests.
+
+---
+
+### F199 — `@($null)` is a one-element array, so an app that does not exist read as one that does *(fixed 2026-09-11)*
+
+**What happened.** Found while fixing F197, not looked for. `Get-RevisionCarryingCommit`
+documented that it distinguishes absence of the *app* from absence of the *revision* — the
+F63/F105 rule, stated in its own help text — and did not do it.
+
+**Root cause.** `Invoke-MlsAz -AllowFailure` returns `$null` on `ResourceNotFound`. In
+PowerShell, `@($null).Count` is **1**, and `$null -ne @($null)` is true. So:
+
+```powershell
+$revisions = @(Invoke-MlsAz -AllowFailure -Argument @(...))   # @($null) — Count 1
+$appExists = ($null -ne $revisions -and @($revisions).Count -gt 0)   # true
+```
+
+`mls-cost-ingest-demo-ca` is named by `naming.bicep` but deployed as a **Function App**, so
+this path is live, not hypothetical: a deploy assertion was being made against an app that was
+never there.
+
+**Why the suite missed it.** The Pester mock returned `@()` where production returns `$null`.
+A fixture friendlier than reality, supplying the answer the test was checking — the mirror
+CLAUDE.md warns about. Changing the mock to return what `az` returns made the existing
+"REPORTS rather than fails when the application is not deployed at all" test fail immediately,
+which is how the defect was found.
+
+**The fix.** Discard nulls before counting. The lesson is the mock's, not the code's: **a mock
+that is kinder than production tests a different system** — the same shape as F158, where a
+DAST detector was validated with PowerShell and shipped against `curl`.
+
+---
+
+### F200 — a chain trail was demanded of a closure the chain never produced *(fixed 2026-09-11)*
+
+**What happened.** With F197 and F198 fixed, V10.2's last red was **correct** and
+miscategorised:
+
+> `#1 ... fixed but no auto-merge request on the PR, so the merge was a discretionary act
+> taken after the result was known (merged by 'paulcfuqua')`
+
+True. Alert #1 was closed by PR #45 — branch `chore/dependency-sweep`, no labels, no
+auto-merge, merged by the person who wrote it, on 2026-08-29, **before the self-heal chain
+existed**. Judging a human's own dependency sweep by the chain's provenance stage says nothing
+about self-healing.
+
+**The class.** Lane 3's category error one level up. Demanding a pull request of a
+container-image finding once reported 397 of 400 closures as unexplained; demanding a *chain
+trail* of a closure the chain never produced reports a human's ordinary work as a broken heal.
+The estate can name exactly what closed alert #1, so it **is** traceable — which is what the
+criterion is about. It was simply not *healed*.
+
+**The discriminator, and why the obvious ones do not work.** `author` and `mergedBy` are both
+the PAT owner on a genuine heal (F191), so neither separates the two:
+
+| PR | branch | labels | author | mergedBy |
+|---|---|---|---|---|
+| #225 (real heal) | `self-heal/code-scanning-9-autofix` | `security,self-heal` | paulcfuqua | paulcfuqua |
+| #45 (human sweep) | `chore/dependency-sweep` | — | paulcfuqua | paulcfuqua |
+
+What separates them is **what the chain stamps on its own work**: the `self-heal/<kind>-<n>-*`
+branch and the `self-heal` label. The label is honoured as well as the branch so that renaming
+a branch cannot silently demote a real heal out of the strict path.
+
+**The fix.** A third bucket — *closed outside the chain* — counted and named on every run
+exactly like lane 3, never dropped:
+
+```
+400 closure(s) in 30d - explained: 2, closed by image rebuild (lane 3): 397,
+closed outside the chain: 1, unexplained: 0
+| OUTSIDE THE CHAIN: #1 code-scanning closed by PR #45
+  (not a chain heal: branch 'chore/dependency-sweep', merged by 'paulcfuqua')
+```
+
+**What it deliberately does not do.** A pull request the chain *did* produce still takes every
+stage, so CLAUDE.md's *"V10.1 still FAILS a heal a human merged, in either mode"* holds
+unchanged. Three tests pin the boundary: the same fixture FAILS with `discretionary act` when
+the branch is `self-heal/...`; FAILS again when only the *label* says so; and an unexplained
+closure cannot fall into the bucket, which is reachable only by *matching* a pull request.
+
+Sponsor decision, 2026-09-11, taken over the alternative of leaving the run red until the
+alert left the 30-day window on 2026-09-28.
+
+---
+
+### What these four cost, and what they bought
+
+The daily red was **one** symptom with **four** causes, and only one of them — F200 — was a
+statement about the estate at all. The other three were the criterion reporting on things it
+could not see, and each produced a confident, specific, wrong answer that a reader would have
+acted on.
+
+Worth carrying into the outbrief: **V10.2 was the check, and V10.2 was the defect.** The thing
+that makes this estate's evidence worth anything is not that its checks are green — it is that
+when a green check is wrong, something finds out and the finding becomes a test. Nine new tests
+came out of this, five of which reproduced the exact production strings before the fix landed.
