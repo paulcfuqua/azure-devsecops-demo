@@ -126,6 +126,11 @@ Describe 'layer-10-audit' {
         $script:ArmedBy = $script:Automation
         $script:MergedBy = $script:Automation
         $script:MergeCommit = 'abcdef1234567890abcdef1234567890abcdef12'
+        # What the CHAIN stamps on its own pull requests. The default is a chain heal, so
+        # every trail test below still exercises the strict path - including the ones that
+        # assert a human-merged heal FAILS.
+        $script:PrHeadRef = 'self-heal/dependabot-91-adopt'
+        $script:PrLabel = @('security', 'self-heal')
         $script:PrTitle = 'fix(deps): Bump qs from 6.15.3 to 6.16.0'
         $script:PrBody = 'Bumps qs.'
         $script:PrFiles = @('apps/mcp-tools/package-lock.json')
@@ -159,6 +164,8 @@ Describe 'layer-10-audit' {
                 return @([pscustomobject]@{
                         number = 247; title = $script:PrTitle; body = $script:PrBody
                         mergedAt = $script:MergedAt; headRefOid = 'head1234'
+                        headRefName = $script:PrHeadRef
+                        labels = @($script:PrLabel | ForEach-Object { [pscustomobject]@{ name = $_ } })
                         mergeCommit = [pscustomobject]@{ oid = $script:MergeCommit }
                         mergedBy = [pscustomobject]@{ login = $script:MergedBy }
                         autoMergeRequest = $(if ($script:ArmedBy) {
@@ -668,6 +675,67 @@ Describe 'layer-10-audit' {
             $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
             $row.Observed | Should -BeLike '*could not establish*'
             $row.Observed | Should -Not -BeLike '*never ran this heal*'
+        }
+    }
+
+    Context 'a closure the chain never produced' {
+        # Alert #1 (js/polynomial-redos) was closed by PR #45 - branch
+        # `chore/dependency-sweep`, no labels, no auto-merge, merged by the person who
+        # wrote it, on 2026-08-29, BEFORE the self-heal chain existed. Judging it by the
+        # chain's provenance stage reported "the merge was a discretionary act", which is
+        # true, entirely expected, and not a finding about self-healing - the same
+        # category error that once reported 397 lane-3 rebuilds as unexplained.
+        #
+        # The estate can name exactly what closed it, so it is traceable. It just was not
+        # healed, and the report says which.
+        BeforeEach {
+            $script:PrHeadRef = 'chore/dependency-sweep'
+            $script:PrLabel = @()
+            $script:ArmedBy = ''          # a human's own pull request has no auto-merge
+            $script:MergedBy = 'paulcfuqua'
+        }
+
+        It 'counts it as closed outside the chain rather than unexplained' {
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*closed outside the chain: 1*'
+            $row.Observed | Should -BeLike '*not a chain heal*'
+        }
+
+        It 'names it in the report rather than dropping it silently' {
+            # A closure this criterion does not trail is still a closure the report has to
+            # account for; a silent skip is indistinguishable from a lane nobody watches.
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*OUTSIDE THE CHAIN: #91*'
+        }
+
+        It 'STILL FAILS a chain heal that a human merged at their discretion' {
+            # THE RULE THIS BUCKET MUST NOT SWALLOW. CLAUDE.md: "V10.1 still FAILS a heal a
+            # human merged, in either mode." A pull request the chain DID open takes every
+            # stage, exactly as before - only the branch differs from the case above.
+            $script:PrHeadRef = 'self-heal/dependabot-91-adopt'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*discretionary act*'
+        }
+
+        It 'honours the self-heal LABEL when the branch was renamed' {
+            # The discriminator is what the chain stamps, and it stamps both. Trusting the
+            # branch alone would demote a real heal out of the strict path the day someone
+            # renames one.
+            $script:PrLabel = @('security', 'self-heal')
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*discretionary act*'
+        }
+
+        It 'does NOT excuse a closure that no pull request explains at all' {
+            # "Outside the chain" is reached only by MATCHING a pull request. An
+            # unexplained closure must not fall into it.
+            $script:PrTitle = 'chore: something unrelated'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*no merged pull request in the window explains it*'
         }
     }
 
