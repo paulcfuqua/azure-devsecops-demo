@@ -134,6 +134,13 @@ Describe 'layer-10-audit' {
         $script:RevisionCreated = $now.AddDays(-2).AddMinutes(10).ToString('o')
         $script:AppExists = $true
 
+        # Ancestry of the RUNNING image relative to the heal's merge commit. The default
+        # is 'diverged' - an unrelated image that does not contain the heal - so a fixture
+        # that changes RevisionImage away from the merge tag still means "this heal never
+        # shipped" unless it says otherwise.
+        $script:CompareStatus = 'diverged'
+        $script:CompareReadable = $true
+
         Mock Invoke-MlsGh {
             $joined = $Argument -join ' '
             if ($joined -like '*dependabot/alerts?state=all*') {
@@ -169,12 +176,25 @@ Describe 'layer-10-audit' {
                         [pscustomobject]@{ name = $part[0]; conclusion = $part[1] }
                     })
             }
+            if ($joined -like '*compare/*') {
+                if (-not $script:CompareReadable) { return $null }
+                return [pscustomobject]@{ status = $script:CompareStatus }
+            }
             return $null
         }
 
         Mock Invoke-MlsAz {
-            if (-not $script:AppExists) { return @() }
-            return @([pscustomobject]@{ name = 'rev-1'; created = $script:RevisionCreated; image = $script:RevisionImage })
+            # $null, NOT @(). This mock used to hand back an empty array, which is not what
+            # `Invoke-MlsAz -AllowFailure` does when the app is absent - it returns $null,
+            # and `@($null)` is a ONE-element array in PowerShell. The friendlier fixture
+            # was supplying the answer the test was checking, and it hid a real defect:
+            # a container app that does not exist read as existing with an unreadable
+            # revision, for every app in the estate, for as long as this suite has run.
+            if (-not $script:AppExists) { return $null }
+            return @([pscustomobject]@{
+                    name = 'rev-1'; created = $script:RevisionCreated
+                    image = $script:RevisionImage; active = $true
+                })
         }
     }
 
@@ -521,6 +541,133 @@ Describe 'layer-10-audit' {
             $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
             $row.Status | Should -Be 'PASS'
             $row.Observed | Should -BeLike '*healed:PR #247*'
+        }
+    }
+
+    Context 'a heal that fixed the code without naming the alert' {
+        # THE REAL FALSE NEGATIVE, USED AS THE FIXTURE. Code-scanning alert #1
+        # (js/polynomial-redos, apps/mcp-tools/src/auth-gate.ts) closed 2026-08-29T04:44:09Z.
+        # PR #45 changed that exact file and merged at 04:42:58Z - SEVENTY-ONE SECONDS
+        # earlier - and V10.2 reported "no merged pull request in the window explains it"
+        # on every scheduled run for a fortnight.
+        #
+        # The cause was that prose was the PRIMARY matcher: a code-scanning candidate had
+        # to name the alert number in its body before the file test was ever reached. An
+        # Autofix heal does name it; a hand-written fix that closes the same alert does
+        # not, and nothing required it to. The criterion was measuring how a pull request
+        # was WORDED, then reporting the answer as whether the estate could explain a
+        # closure.
+        BeforeEach {
+            $script:CodeAlert = @(
+                [pscustomobject]@{
+                    number = 1; state = 'fixed'
+                    created_at = ([datetime]::UtcNow.AddDays(-10)).ToString('o')
+                    fixed_at = ([datetime]::UtcNow.AddDays(-4)).ToString('o')
+                    rule = [pscustomobject]@{ id = 'js/polynomial-redos'; security_severity_level = 'high'; severity = 'error' }
+                    tool = [pscustomobject]@{ name = 'CodeQL' }
+                    most_recent_instance = [pscustomobject]@{ location = [pscustomobject]@{ path = 'apps/mcp-tools/src/auth-gate.ts' } }
+                })
+            $script:DependabotAlert = @()
+            $script:PrTitle = 'chore: resolve the Dependabot backlog, close a ReDoS'
+            $script:PrBody = 'Bumps a batch of dependencies and closes the ReDoS in the inbound Authorization parse.'
+            $script:PrFiles = @('apps/mcp-tools/src/auth-gate.ts', 'apps/mcp-tools/tests/auth-gate.test.ts')
+            $script:MergedAt = ([datetime]::UtcNow.AddDays(-4).AddMinutes(-2)).ToString('o')
+            $script:ArmedAt = ([datetime]::UtcNow.AddDays(-4).AddMinutes(-7)).ToString('o')
+            $script:RevisionCreated = ([datetime]::UtcNow.AddDays(-4).AddMinutes(10)).ToString('o')
+        }
+
+        It 'credits a pull request that changed the alert file before it closed, though it never named the alert' {
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*healed:PR #247*'
+        }
+
+        It 'still refuses a pull request that merged AFTER the alert closed, prose or no prose' {
+            # Causality is what replaced prose, so it has to hold on the new path too -
+            # otherwise this fix has only traded a false negative for the false positive
+            # the #254 case already cost.
+            $script:MergedAt = ([datetime]::UtcNow).ToString('o')
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*no merged pull request in the window explains it*'
+        }
+
+        It 'still refuses a pull request that never touched the alert file' {
+            $script:PrFiles = @('docs/runbooks/layers/L10.md')
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Observed |
+                Should -BeLike '*no merged pull request in the window explains it*'
+        }
+    }
+
+    Context 'a heal whose revision Azure has already discarded' {
+        # THE SECOND HALF OF THE SAME DAILY RED. Stage 4 demanded a container app revision
+        # whose image tag is the heal's merge commit. Every container app in this estate
+        # runs activeRevisionsMode=Single with maxInactiveRevisions=0, so Azure DESTROYS
+        # the previous revision the moment a new one activates: the evidence this stage
+        # requires has a lifetime of "until the next deploy of that app".
+        #
+        # Alert #9's heal (PR #225, merge 7eb75ce) deployed successfully on 2026-09-04 -
+        # the CI deploy job is green on that commit - and by 2026-09-10 the only revision
+        # left carried sha-b8dca97. The audit read one revision, did not find the tag, and
+        # announced that the app "never ran this heal". It had; the record was gone.
+        #
+        # So the fallback asserts the CAPABILITY - the healed code is what is running -
+        # rather than the artefact that used to accompany it.
+        BeforeEach {
+            $script:CodeAlert = @(
+                [pscustomobject]@{
+                    number = 9; state = 'fixed'
+                    created_at = ([datetime]::UtcNow.AddDays(-10)).ToString('o')
+                    fixed_at = ([datetime]::UtcNow.AddDays(-4)).ToString('o')
+                    rule = [pscustomobject]@{ id = 'js/trivial-conditional'; security_severity_level = 'medium'; severity = 'warning' }
+                    tool = [pscustomobject]@{ name = 'CodeQL' }
+                    most_recent_instance = [pscustomobject]@{ location = [pscustomobject]@{ path = 'apps/mcp-tools/src/data/lakehouse.ts' } }
+                })
+            $script:DependabotAlert = @()
+            $script:PrBody = 'Applies Copilot Autofix for code scanning alert #9.'
+            $script:PrFiles = @('apps/mcp-tools/src/data/lakehouse.ts')
+            $script:MergedAt = ([datetime]::UtcNow.AddDays(-4)).ToString('o')
+            $script:ArmedAt = ([datetime]::UtcNow.AddDays(-4).AddMinutes(-5)).ToString('o')
+            # The heal's own revision is gone; a LATER image is what runs now.
+            $script:RevisionImage = 'ghcr.io/paulcfuqua/azure-devsecops-demo/mcp-tools:sha-b8dca97'
+            $script:RevisionCreated = ([datetime]::UtcNow.AddDays(-1)).ToString('o')
+        }
+
+        It 'PASSES when the running image was built from a commit that contains the heal' {
+            $script:CompareStatus = 'ahead'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*sha-b8dca97*'
+        }
+
+        It 'PASSES when the running image is the heal commit itself' {
+            $script:CompareStatus = 'identical'
+            (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2').Status | Should -Be 'PASS'
+        }
+
+        It 'FAILS when the running image does not contain the heal' {
+            # The state the stage exists to catch survives: a heal that merged and never
+            # reached the app still reads as never having run.
+            $script:CompareStatus = 'behind'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*never ran this heal*'
+        }
+
+        It 'reports UNOBSERVABLE rather than claiming the heal never ran, when ancestry cannot be read' {
+            # F102/F103/F105, one level down: an audit that could not look must never
+            # report what it did not see. Still red - never green - but it says which.
+            $script:CompareReadable = $false
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*could not establish*'
+            $row.Observed | Should -Not -BeLike '*never ran this heal*'
+        }
+
+        It 'reports UNOBSERVABLE when the running image carries no sha- tag to resolve' {
+            $script:RevisionImage = 'ghcr.io/paulcfuqua/azure-devsecops-demo/mcp-tools:latest'
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V10.2'
+            $row.Observed | Should -BeLike '*could not establish*'
+            $row.Observed | Should -Not -BeLike '*never ran this heal*'
         }
     }
 
