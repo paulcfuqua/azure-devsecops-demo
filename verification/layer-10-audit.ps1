@@ -550,7 +550,7 @@ function Get-MergedHealPullRequest {
         'pr', 'list', '--repo', $Repository, '--state', 'merged',
         '--search', "merged:>=$($since.ToString('yyyy-MM-dd'))",
         '--limit', "$ceiling",
-        '--json', 'number,title,body,mergedAt,headRefOid,mergeCommit,mergedBy,autoMergeRequest,author')
+        '--json', 'number,title,body,mergedAt,headRefName,headRefOid,labels,mergeCommit,mergedBy,autoMergeRequest,author')
     if ($null -eq $response) { return [pscustomobject]@{ PullRequest = @(); Truncated = $false } }
 
     $all = @(Get-MlsCollection -Response $response)
@@ -697,11 +697,39 @@ function Get-HealTrail {
         else {
             $problem.Add('no merged pull request in the window explains it')
         }
-        return [pscustomobject]@{ Problem = $problem; Reference = '' }
+        return [pscustomobject]@{ Problem = $problem; Reference = ''; Kind = 'none' }
     }
     $pullRequest = $match[0].PullRequest
     $number = "$(Get-MlsProperty -InputObject $pullRequest -Name 'number')"
     $reference = "PR #$number"
+
+    # IS THIS A HEAL AT ALL? The stages below judge the CHAIN - its gauntlet, its
+    # auto-merge arming, its deploy - and every one of them is meaningless against a pull
+    # request the chain never produced. Alert #1 was closed by PR #45, a human's own
+    # dependency sweep from 2026-08-29, before the chain existed; running the provenance
+    # stage over it reported "the merge was a discretionary act", which is TRUE, entirely
+    # expected, and not a finding about self-healing. Same category error as lane 3.
+    #
+    # THE DISCRIMINATOR IS WHAT THE CHAIN ITSELF STAMPS, not who is credited. Author and
+    # mergedBy are both the PAT owner on a genuine heal (F191), so neither can tell the
+    # two apart - but the chain opens on `self-heal/<kind>-<n>-*` and labels `self-heal`,
+    # and a human's branch carries neither. The label is honoured as well as the branch so
+    # a renamed branch does not silently demote a real heal out of the strict path.
+    #
+    # THIS CANNOT SWALLOW THE RULE IT LOOKS LIKE IT WEAKENS. A pull request the chain DID
+    # produce still takes every stage, so "V10.1 still FAILS a heal a human merged" holds
+    # exactly as before - that is what the guard tests below pin.
+    $headRef = "$(Get-MlsProperty -InputObject $pullRequest -Name 'headRefName')"
+    $labelName = @(Get-MlsCollection -Response (Get-MlsProperty -InputObject $pullRequest -Name 'labels') |
+            ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'name')" })
+    if (-not ($headRef -like 'self-heal/*' -or $labelName -contains 'self-heal')) {
+        $who = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $pullRequest -Name 'mergedBy') -Name 'login')"
+        return [pscustomobject]@{
+            Problem   = $problem
+            Reference = "$reference (not a chain heal: branch '$headRef', merged by '$who')"
+            Kind      = 'outside'
+        }
+    }
 
     # Stage 2 - the gauntlet. Reused verbatim: SKIPPED and neutral are not failures, and a
     # pull request where nothing ran is not a pass (F-gauntlet).
@@ -729,6 +757,7 @@ function Get-HealTrail {
         return [pscustomobject]@{
             Problem   = $problem
             Reference = "$reference (no deployed application on its changed paths, so no deploy assertion is possible)"
+            Kind      = 'chain'
         }
     }
     foreach ($app in $affected) {
@@ -759,7 +788,7 @@ function Get-HealTrail {
         $seen = if ($revision.ActiveImage) { $revision.ActiveImage } else { '(no running revision)' }
         $problem.Add("$($app.ContainerApp) never ran this heal: sha-$short is not in the history of the running image (saw: $seen, $($ancestry.Reason))")
     }
-    return [pscustomobject]@{ Problem = $problem; Reference = $reference }
+    return [pscustomobject]@{ Problem = $problem; Reference = $reference; Kind = 'chain' }
 }
 
 function Get-Finding {
@@ -1059,6 +1088,7 @@ function Test-ClosureTraceable {
 
     $explained = [System.Collections.Generic.List[string]]::new()
     $unexplained = [System.Collections.Generic.List[string]]::new()
+    $outside = [System.Collections.Generic.List[string]]::new()
     $rebuilt = 0
     foreach ($item in $closed) {
         # LANE 3 CLOSES BY REBUILD, NOT BY MERGE. The design's section 2 says lane 3
@@ -1082,11 +1112,28 @@ function Test-ClosureTraceable {
             continue
         }
         $trail = & $TrailFor $item
+
+        # CLOSED OUTSIDE THE CHAIN IS A THIRD ANSWER, NOT A FAILED HEAL. The estate can
+        # say exactly what closed it - a named, merged pull request that changed the
+        # file - which is the traceability this criterion is about. What it cannot say is
+        # that the CHAIN did it, because the chain did not: the pull request carries
+        # neither the self-heal branch nor the label. Judging it by the chain's stages
+        # reports "a human merged this at their discretion" about a human's own pull
+        # request, which is true, expected, and says nothing about self-healing.
+        #
+        # COUNTED AND NAMED, exactly like lane 3, for the same reason: a closure this
+        # criterion does not trail is still a closure the report has to account for, and a
+        # silent skip would be indistinguishable from a lane nobody is watching.
+        if ($trail.Kind -eq 'outside') {
+            $outside.Add("#$($item.Number) $($item.Lane) closed by $($trail.Reference)")
+            continue
+        }
         if ($trail.Problem.Count -eq 0) { $explained.Add("#$($item.Number) healed:$($trail.Reference)") }
         else { $unexplained.Add("#$($item.Number) $($item.Lane) $($item.Package) fixed but $($trail.Problem -join '; ')") }
     }
 
-    $observed = "$($closed.Count) closure(s) in ${lookback}d - explained: $($explained.Count), closed by image rebuild (lane 3): $rebuilt, unexplained: $($unexplained.Count)"
+    $observed = "$($closed.Count) closure(s) in ${lookback}d - explained: $($explained.Count), closed by image rebuild (lane 3): $rebuilt, closed outside the chain: $($outside.Count), unexplained: $($unexplained.Count)"
+    if ($outside.Count -gt 0) { $observed += " | OUTSIDE THE CHAIN: $($outside -join ' | ')" }
     if ($CandidateTruncated -and $unexplained.Count -gt 0) {
         return New-MlsCheckResult -Status SKIP `
             -Observed "$observed | candidate page was TRUNCATED, so an unexplained closure may only be one whose pull request fell off it" `
