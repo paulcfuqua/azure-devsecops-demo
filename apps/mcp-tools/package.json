@@ -19,17 +19,17 @@
   "//dependencies": "Cloud-path packages (@azure/identity, @azure/monitor-opentelemetry, mssql) are declared here but imported LAZILY: nothing loads them on the local backend, so `MLS_TOOL_BACKENDS=local` pays no start-up cost for them and a laptop with no tenant still boots. @opentelemetry/api is the one static import — it is dependency-free and no-ops until a provider is registered.",
   "dependencies": {
     "@azure/identity": "^4.13.2",
-    "@azure/monitor-opentelemetry": "^1.19.0",
+    "@azure/monitor-opentelemetry": "^1.20.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@opentelemetry/api": "^1.9.1",
     "express": "^5.1.0",
-    "mssql": "^12.7.0",
+    "mssql": "^12.7.2",
     "sql.js": "^1.13.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/mssql": "^12.3.0",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.5.1",
     "@types/sql.js": "^1.4.9",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
