@@ -35,7 +35,7 @@ The token's `aud` claim is what the AWS OIDC provider validates. Entra will only
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: an app registration whose `identifierUris[0]` is `api://${prefix}-aws-athena-${env}`. Task 3 needs this exact string as the AWS provider's client ID; Task 6 needs it as the token scope.
+- Produces: an app registration whose `identifierUris[0]` is `api://${tenantId}/${prefix}-aws-athena-${env}`. Task 3 needs this exact string as the v1 AWS provider's client ID; Task 6 needs it as the token scope. (Corrected in fix round 1: this tenant's default app policy rejects a bare `api://${prefix}-aws-athena-${env}` with no verified domain, tenant id or app id — see `docs/superpowers/specs/2026-09-16-aws-lakehouse-link-design.md` section 2.1 and `infra/entra/manifest.json`'s `aws-athena` entry for the shape actually deployed.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -47,7 +47,7 @@ Describe 'AWS audience is tokenised, not hardcoded' {
         $manifest = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw | ConvertFrom-Json
         $app = $manifest.applications | Where-Object { $_.key -eq 'aws-athena' }
         $app | Should -Not -BeNullOrEmpty -Because 'Task 1 declares the AWS-facing audience'
-        $app.identifierUris[0] | Should -BeExactly 'api://${prefix}-aws-athena-${env}'
+        $app.identifierUris[0] | Should -BeExactly 'api://${tenantId}/${prefix}-aws-athena-${env}'
     }
     It 'never hardcodes the mls prefix in the AWS audience' {
         $raw = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw
@@ -55,6 +55,8 @@ Describe 'AWS audience is tokenised, not hardcoded' {
     }
 }
 ```
+
+**This snippet is the ORIGINAL task instruction and is superseded on two counts, not just the URI shown above:** the real manifest schema is `appRegistrations`/`appKey`, not `applications`/`key` as written here, and the real test (`verification/tests/failure-classes.Tests.ps1`, Describe block "AWS audience is tokenised, not hardcoded") reads that real schema and asserts the `${tenantId}` shape, plus a third check that the rebuild-fragile `${appId}` form never appears. Follow the real test file, not this historical snippet, if the two disagree.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -75,11 +77,16 @@ Add to the `applications` array, following the shape the file already uses:
 {
   "key": "aws-athena",
   "displayName": "${prefix}-aws-athena-${env}",
-  "identifierUris": ["api://${prefix}-aws-athena-${env}"],
+  "identifierUris": ["api://${tenantId}/${prefix}-aws-athena-${env}"],
   "signInAudience": "AzureADMyOrg",
   "notes": "Audience only. Holds no credential and no API permissions: it exists so Entra will mint a token whose aud claim the AWS IAM OIDC provider validates. See docs/superpowers/specs/2026-09-16-aws-lakehouse-link-design.md section 2.1."
 }
 ```
+
+(Corrected in fix round 1 — `${tenantId}`, not `${appId}`: an app id is
+reassigned on every teardown/rebuild, which is exactly the fragility spec
+section 2.2 exists to avoid for the managed identity next to this audience.
+The tenant id is never recreated.)
 
 - [ ] **Step 5: Run tests to verify they pass**
 

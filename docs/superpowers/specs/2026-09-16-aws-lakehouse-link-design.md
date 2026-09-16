@@ -62,14 +62,40 @@ embeds the **tenant id** instead: `api://<tenant-id>/mls-aws-athena-demo`. The
 tenant id is stable across every teardown and rebuild this estate performs, so
 the value the AWS-side scripts consume does not move underneath them.
 
-Permissions are scoped to the minimum that answers a question:
+**Amended in Task 3's fix round 1, on three counts this section got wrong.**
+
+*The token version is declared, and there are TWO providers.* Which issuer the
+token carries is decided by the app registration's
+`api.requestedAccessTokenVersion`, and the manifest declared none — so the whole
+trust chain rested on Entra's null default, which means version 1 and issuer
+`https://sts.windows.net/<tenant-id>/`. `infra/entra/manifest.json` now declares
+`1` explicitly and the deploy path applies it. The sponsor scripts register both
+that provider and the v2.0 one, with one self-contained trust statement each, so
+a later change to version 2 needs no AWS-side edit.
+
+*The role is not `mls-athena-reader`.* The sponsor's AWS identity may only manage
+roles matching `launch-intel-*` (`IamManageProjectRoles` in that account's
+`BOOTSTRAP.md`), so the role name is a required variable and the runbook
+recommends `launch-intel-athena-reader`.
+
+*Data and results share one bucket.* The table below assumed two. They are one
+bucket at different prefixes, which makes the write confinement load-bearing
+rather than incidental: `PutObject` is granted on `<bucket>/athena-results/*`
+alone, never bucket-wide, or this role could overwrite the source data it reads.
+
+Permissions are scoped to the minimum that answers a question — as shipped,
+which is wider than this table first claimed, because a Hive-partitioned Athena
+query needs more than the obvious six actions:
 
 | Service | Allowed | Scope |
 |---|---|---|
-| Athena | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution` | one workgroup |
-| Glue | `GetDatabase`, `GetTable(s)`, `GetPartition(s)` | one database |
-| S3 | `GetObject`, `ListBucket` | the data prefix, read only |
-| S3 | `GetObject`, `PutObject` | the Athena results prefix only |
+| Athena | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup` | one workgroup |
+| Athena | `GetDataCatalog` | `AwsDataCatalog` only |
+| Glue | `GetDatabase(s)`, `GetTable(s)`, `GetPartition(s)`, `BatchGetPartition` | one database, three named tables |
+| S3 | `GetBucketLocation` | the bucket |
+| S3 | `ListBucket` (conditioned on `s3:prefix`) | the three data prefixes and the results prefix |
+| S3 | `GetObject` | the three data prefixes, read only |
+| S3 | `GetObject`, `PutObject`, `ListMultipartUploadParts`, `AbortMultipartUpload` | the Athena results prefix only |
 
 The results prefix is the single place this role may write, because Athena cannot return a
 result without staging it. Nothing else in the account is reachable.
