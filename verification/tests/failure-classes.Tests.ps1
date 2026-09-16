@@ -2710,14 +2710,27 @@ Describe 'AWS audience is tokenised, not hardcoded' {
     # 'api://${prefix}-aws-athena-${env}' against the real tenant returned Graph error
     # InvalidUniqueTenantIdentifierAsPerAppPolicy - a newly-added identifierUris entry must
     # contain a tenant verified domain, the tenant id, or the app id, and a bare custom
-    # string has none of those. ${appId} is a literal marker (not a Resolve-ManifestToken
-    # substitution) that infra/entra/apply-entra.ps1's Resolve-IdentifierUri fills in with
-    # the real application id once Graph assigns one - see that function's comment.
-    It 'declares the AWS athena audience with prefix, env and appId tokens' {
+    # string has none of those.
+    #
+    # ${tenantId}, NOT ${appId} (fix round 1, superseding an earlier accepted ruling). An
+    # app id satisfies the same Graph policy but is reassigned every time the registration
+    # is recreated, so an AWS trust policy conditioned on it would not survive a teardown/
+    # rebuild - exactly the fragility spec section 2.2 exists to avoid for the managed
+    # identity next to this audience. ${tenantId} is equally a Resolve-ManifestToken
+    # substitution (alongside ${prefix}/${env}, resolved from Test-GraphConnection's
+    # Get-MgContext before the manifest is parsed - before any app exists), and the tenant
+    # is the one thing never recreated by a teardown/rebuild.
+    It 'declares the AWS athena audience with prefix, env and tenantId tokens' {
         $manifest = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw | ConvertFrom-Json
         $app = $manifest.appRegistrations | Where-Object { $_.appKey -eq 'aws-athena' }
         $app | Should -Not -BeNullOrEmpty -Because 'Task 1 declares the AWS-facing audience'
-        $app.identifierUris[0] | Should -BeExactly 'api://${appId}/${prefix}-aws-athena-${env}'
+        $app.identifierUris[0] | Should -BeExactly 'api://${tenantId}/${prefix}-aws-athena-${env}'
+    }
+
+    It 'never uses the rebuild-fragile appId as the URI disambiguator' {
+        $raw = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw
+        $raw | Should -Not -Match ([regex]::Escape('api://${appId}')) `
+            -Because 'an app id is reassigned on every teardown/rebuild; ${tenantId} is the stable disambiguator (fix round 1)'
     }
 
     It 'never hardcodes the mls prefix in the AWS audience' {

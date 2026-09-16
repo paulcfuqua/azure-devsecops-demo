@@ -278,13 +278,24 @@ function Get-NamingDefault {
 }
 
 function Resolve-ManifestToken {
-    <# Expand ${prefix} and ${env} in the manifest.
+    <# Expand ${prefix}, ${env} and ${tenantId} in the manifest.
 
        WHY THE MANIFEST IS TOKENISED. Every Entra name used to be hardcoded 'mls-...', while
        every AZURE name derived from naming.bicep's companyPrefix. A cloner who set the
        prefix therefore got acme-rg-platform resource groups next to mls-flight-operations
        groups - half a rebrand, and the half that is hardest to spot because Entra objects
        are not in the portal blade you are looking at (F90).
+
+       ${tenantId} joined the other two 2026-09-16 for the aws-athena audience: Entra
+       rejects a newly-added identifierUris entry with no verified domain, tenant id or app
+       id (InvalidUniqueTenantIdentifierAsPerAppPolicy), and the app id is the one of those
+       three that does NOT survive a teardown/rebuild - it is reassigned every time the
+       registration is recreated, which is exactly the fragility spec section 2.2 exists to
+       avoid for the managed identity next to it. The tenant is the one thing never
+       recreated, so it is the stable disambiguator, and Invoke-Main resolves it from
+       Test-GraphConnection's Get-MgContext BEFORE parsing the manifest - before any app
+       exists - so no value here is ever a placeholder waiting on an object this script has
+       not created yet.
 
        Expansion happens on the RAW TEXT before ConvertFrom-Json, so it reaches every string
        in one pass - including the cross-references that must stay consistent, like the
@@ -294,16 +305,24 @@ function Resolve-ManifestToken {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
         [Parameter(Mandatory)][string]$CompanyPrefix,
-        [Parameter(Mandatory)][string]$EnvSegment
+        [Parameter(Mandatory)][string]$EnvSegment,
+        [AllowEmptyString()][string]$TenantId = ''
     )
-    return $Text.Replace('${prefix}', $CompanyPrefix).Replace('${env}', $EnvSegment)
+    return $Text.Replace('${prefix}', $CompanyPrefix).Replace('${env}', $EnvSegment).Replace('${tenantId}', $TenantId)
 }
 
 function Get-Manifest {
     param(
         [Parameter(Mandatory)][string]$Path,
         [AllowEmptyString()][string]$CompanyPrefix = '',
-        [AllowEmptyString()][string]$EnvSegment = ''
+        [AllowEmptyString()][string]$EnvSegment = '',
+        # The tenant id ${tenantId} in identifierUris resolves to. Optional because
+        # teardown and read-only callers never touch identifierUris and have no Graph
+        # session to resolve it from at manifest-parse time; a caller that DOES manage
+        # identifierUris (Invoke-Main) must pass the real one or the token is left as a
+        # literal '${tenantId}' string in that field, harmless to everything that never
+        # reads it and caught by Assert-ManifestSchema's other checks for anything that does.
+        [AllowEmptyString()][string]$TenantId = ''
     )
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Manifest not found at '$Path'."
@@ -330,7 +349,7 @@ function Get-Manifest {
     }
     try {
         $text = Resolve-ManifestToken -Text (Get-Content -LiteralPath $Path -Raw) `
-            -CompanyPrefix $CompanyPrefix -EnvSegment $EnvSegment
+            -CompanyPrefix $CompanyPrefix -EnvSegment $EnvSegment -TenantId $TenantId
         return $text | ConvertFrom-Json
     }
     catch {
@@ -684,22 +703,6 @@ function Initialize-GroupMembership {
     return $added
 }
 
-function Resolve-IdentifierUri {
-    <# Substitute the literal token ${appId} with a real application (client) id.
-
-       TENANT POLICY, NOT A CHOICE. Entra rejects any newly-added identifierUris entry
-       that does not contain a tenant verified domain, the tenant id, or the app id
-       (InvalidUniqueTenantIdentifierAsPerAppPolicy) - confirmed against the tenant
-       2026-09-16 while wiring the aws-athena audience: a bare "api://mls-aws-athena-demo"
-       is refused outright. The app id is the only one of those three this script can use
-       without threading the tenant's verified domain (a value chosen per-tenant, never
-       part of this portable manifest) through every caller that touches an application.
-       ${appId} is a literal marker, not one Resolve-ManifestToken expands - it can only be
-       resolved once Graph has assigned an app id, i.e. after creation. #>
-    param([Parameter(Mandatory)][string[]]$Templates, [Parameter(Mandatory)][string]$AppId)
-    return @($Templates | ForEach-Object { $_.Replace('${appId}', $AppId) })
-}
-
 function Initialize-EntraApplication {
     <# Create-if-absent / update-on-drift app registration. Returns @{ AppId; ObjectId; AppRoles; Outcome }.
 
@@ -711,14 +714,25 @@ function Initialize-EntraApplication {
        identifierUris is managed ONLY for a registration that declares it (e.g. the
        2026-09-16 aws-lakehouse-link audience, aws-athena): sending an empty array for
        every other app would CLEAR whatever Application ID URI it holds, and this script
-       has no business touching a value it was never told to manage. It is also never sent
-       on the CREATE call - see Resolve-IdentifierUri - so creation always PATCHes it in as
-       a second call once the app id exists. #>
+       has no business touching a value it was never told to manage.
+
+       NO TWO-PHASE CREATE-THEN-PATCH, ON PURPOSE. An earlier version of this function
+       resolved a ${appId} marker AFTER creation, because Entra rejects a newly-added
+       identifierUris entry with no verified domain, tenant id or app id
+       (InvalidUniqueTenantIdentifierAsPerAppPolicy) and the app id did not exist before
+       the create call returned. That version was correct about the policy and wrong about
+       which stable value to use: an app id is reassigned every time the registration is
+       recreated, so an AWS trust policy conditioned on it would not survive a teardown/
+       rebuild - exactly the fragility spec section 2.2 exists to avoid for the managed
+       identity next to this audience. The manifest now uses ${tenantId} instead, which
+       Get-Manifest/Resolve-ManifestToken resolve from Test-GraphConnection BEFORE this
+       function - before any app exists - so the value in $App's identifierUris is already
+       final. One create call, same as every other field. #>
     param([Parameter(Mandatory)]$App)
     $displayName = Get-Field -Object $App -Name 'displayName'
     $audience = Get-Field -Object $App -Name 'signInAudience'
     if (-not $audience) { $audience = 'AzureADMyOrg' }
-    $uriTemplates = @(Get-FieldArray -Object $App -Name 'identifierUris')
+    $desiredUris = @(Get-FieldArray -Object $App -Name 'identifierUris')
     $existing = Get-EntraApplication -DisplayName $displayName
     if ($existing) {
         $appId = Get-Field -Object $existing -Name 'appId'
@@ -728,14 +742,7 @@ function Initialize-EntraApplication {
         if ((Get-Field -Object $existing -Name 'signInAudience') -ne $audience) {
             $updates['signInAudience'] = $audience
         }
-        if ($uriTemplates.Count -gt 0) {
-            # @(...) at the call site, not inside Resolve-IdentifierUri's return: PowerShell
-            # unrolls a returned one-element array back to a bare scalar (the same class
-            # Get-FieldArray's own docstring documents), and this is the single-URI case in
-            # practice. An unwrapped scalar here reaches ConvertTo-Json as a JSON string,
-            # and Graph rejects the PATCH with "'PrimitiveValue' ... 'StartArray' expected" -
-            # caught deploying this exact change against the real tenant.
-            $desiredUris = @(Resolve-IdentifierUri -Templates $uriTemplates -AppId $appId)
+        if ($desiredUris.Count -gt 0) {
             $existingUris = @(Get-FieldArray -Object $existing -Name 'identifierUris')
             # Order-sensitive on purpose: identifierUris[0] is the exact string Task 3's
             # AWS trust policy and Task 6's token scope both depend on.
@@ -755,6 +762,7 @@ function Initialize-EntraApplication {
         displayName    = $displayName
         signInAudience = $audience
     }
+    if ($desiredUris.Count -gt 0) { $body['identifierUris'] = $desiredUris }
     $notes = Get-Field -Object $App -Name 'notes'
     if ($notes) { $body['notes'] = $notes }
     $created = Invoke-GraphMutation -Target $displayName -Action 'Create app registration' -Method POST -Path 'applications' -Body $body
@@ -763,24 +771,9 @@ function Initialize-EntraApplication {
         # after creating it is a read against a replica that may not have it yet - the
         # exact shape F70 cost a run - and it would silently skip the probe role rather
         # than fail, because "not found" and "no role needed" look identical downstream.
-        $newAppId = Get-Field -Object $created -Name 'appId'
-        $newObjectId = Get-Field -Object $created -Name 'id'
-        if ($uriTemplates.Count -gt 0) {
-            # A sentence here, not a parameter-binding stack trace: Graph always returns
-            # appId on a successful application create, so a blank one means the create
-            # response was malformed in a way nothing else here would have caught either.
-            if ([string]::IsNullOrWhiteSpace([string]$newAppId)) {
-                throw "Created app registration '$displayName' but Graph's response carried no appId - cannot resolve identifierUris '$($uriTemplates -join ', ')'."
-            }
-            # See the matching @(...) note in the update branch above - same unroll, same fix.
-            $resolvedUris = @(Resolve-IdentifierUri -Templates $uriTemplates -AppId $newAppId)
-            Invoke-GraphMutation -Target $displayName -Action 'Set identifierUris' `
-                -Method PATCH -Path "applications/$newObjectId" `
-                -Body @{ identifierUris = $resolvedUris } | Out-Null
-        }
         return @{
-            AppId    = $newAppId
-            ObjectId = $newObjectId
+            AppId    = (Get-Field -Object $created -Name 'appId')
+            ObjectId = (Get-Field -Object $created -Name 'id')
             AppRoles = @()
             Outcome  = 'Created'
         }
@@ -1282,9 +1275,14 @@ function Invoke-Main {
     $licenseSku = $null
     $licenseSkuResolved = $false
 
-    $manifest = Get-Manifest -Path $ManifestPath
+    # TENANT ID FIRST, MANIFEST SECOND. ${tenantId} in identifierUris (the aws-athena
+    # audience) has to be resolved before ConvertFrom-Json ever sees it, and the tenant is
+    # known the moment Graph is connected - Get-MgContext answers it with no app, group or
+    # anything else created yet. Reversing this order would leave the literal string
+    # '${tenantId}' in the parsed manifest for this run.
+    $graphContext = Test-GraphConnection
+    $manifest = Get-Manifest -Path $ManifestPath -TenantId $graphContext.TenantId
     Assert-ManifestSchema -Manifest $manifest | Out-Null
-    Test-GraphConnection | Out-Null
 
     $effectiveDomain = $Domain
     if ([string]::IsNullOrWhiteSpace($effectiveDomain)) {

@@ -9,11 +9,14 @@ BeforeAll {
 
     function Get-FreshManifest {
         # Get-Manifest, not raw ConvertFrom-Json: the manifest is tokenised (${prefix},
-        # ${env}) and the script under test resolves those before it sees a single name.
-        # A test that read the raw file would assert against '${prefix}-break-glass' while
-        # the script created 'mls-break-glass' - a harness testing a different string than
-        # the code produces, which is the mirror this suite exists to avoid (F90).
-        return Get-Manifest -Path $script:ManifestPath
+        # ${env}, ${tenantId}) and the script under test resolves those before it sees a
+        # single name. A test that read the raw file would assert against
+        # '${prefix}-break-glass' while the script created 'mls-break-glass' - a harness
+        # testing a different string than the code produces, which is the mirror this
+        # suite exists to avoid (F90). 'mock-tenant' matches every `Mock Test-GraphConnection`
+        # below, so this fixture's aws-athena identifierUris resolves to the exact same
+        # string Invoke-Main will compute at apply time.
+        return Get-Manifest -Path $script:ManifestPath -TenantId 'mock-tenant'
     }
 
     function Invoke-ApplyForTest {
@@ -255,51 +258,101 @@ Describe 'one run reports every failure, and still fails' {
     }
 }
 
-Describe 'the identifierUris PATCH body survives real JSON serialization as an array' {
+Describe 'identifierUris survives real JSON serialization as an array, on every branch that sends it' {
     # PAID FOR ONCE, DEPLOYING THIS EXACT CODE PATH. Every OTHER test in this file mocks
     # Invoke-GraphApi and inspects the captured PowerShell hashtable directly -
     # `@($Body['identifierUris']) -join ','` reads identically whether the ACTUAL value is
     # a one-element array or a bare string, because the test does its own wrapping. That
     # blind spot is exactly how a real deploy reached the tenant with a bug no mocked-
-    # transport test could see: Initialize-EntraApplication's create branch called
-    # `Resolve-IdentifierUri` without re-wrapping its result in `@(...)`, PowerShell
-    # unrolled the function's one-element array back to a bare scalar on return (the same
-    # class Get-FieldArray's own docstring above documents - "PowerShell unrolls on
-    # return"), and Graph's real JSON parser rejected the PATCH with "'PrimitiveValue' node
+    # transport test could see: an earlier version of Initialize-EntraApplication (the
+    # rejected ${appId} two-phase design) called a helper without re-wrapping its result in
+    # `@(...)`, PowerShell unrolled a one-element array back to a bare scalar on return (the
+    # same class Get-FieldArray's own docstring above documents - "PowerShell unrolls on
+    # return"), and Graph's real JSON parser rejected the write with "'PrimitiveValue' node
     # ... 'StartArray' node was expected".
     #
-    # This test does NOT wrap the captured value itself - wrapping it would paper over the
-    # exact defect it exists to catch, the same way the ordinary mocked assertions did. It
-    # takes the $Body Initialize-EntraApplication actually built, round-trips it through the
-    # REAL ConvertTo-Json/ConvertFrom-Json the script's Invoke-GraphApi choke point uses,
-    # and only THEN checks the shape survived.
-    BeforeEach {
-        Mock Test-GraphConnection { [pscustomobject]@{ TenantId = 'mock-tenant' } }
-        Mock Invoke-PropagationDelay {}
-        Mock Wait-EntraPropagation { @{ id = 'x' } }
-        $script:CapturedBody = $null
-        Mock Invoke-GraphApi {
-            if ($Method -eq 'GET') { return @{ value = @() } }
-            if ($Method -eq 'POST' -and $Path -eq 'applications' -and $Body['displayName'] -eq 'mls-aws-athena-demo') {
-                return @{ id = 'aid-mls-aws-athena-demo'; appId = 'app-guid-123' }
+    # FIX ROUND 1 FINDING: that first fix round wrapped TWO independent call sites (create
+    # and update/drift) but only wrote a real regression test for the create one. Reverting
+    # the update-branch wrap alone left all tests green, because the covering test wrapped
+    # the captured value itself before comparing - a mirror, not a test. The ${tenantId}
+    # rewrite below folds both branches down to ONE shared computation
+    # (`$desiredUris = @(Get-FieldArray -Object $App -Name 'identifierUris')`, now the only
+    # place this wrap needs to exist), but each branch still gets its OWN round-trip test
+    # here: the finding was about coverage of the actual wire body each branch sends, not
+    # about where the fix happens to live, and a future per-branch transform (exactly what
+    # the ${appId} version had) would only be caught by a test that inspects each branch's
+    # real Graph body independently.
+    #
+    # NEITHER test below wraps the captured value before asserting - wrapping it would
+    # paper over the exact defect it exists to catch, the same way the ordinary mocked
+    # assertions do throughout this file.
+
+    Context 'create branch' {
+        BeforeEach {
+            Mock Test-GraphConnection { [pscustomobject]@{ TenantId = 'mock-tenant' } }
+            Mock Invoke-PropagationDelay {}
+            Mock Wait-EntraPropagation { @{ id = 'x' } }
+            $script:CapturedBody = $null
+            Mock Invoke-GraphApi {
+                # Nothing exists yet - every app registration, including aws-athena, takes
+                # the CREATE branch.
+                if ($Method -eq 'GET') { return @{ value = @() } }
+                if ($Method -eq 'POST' -and $Path -eq 'applications' -and $Body['displayName'] -eq 'mls-aws-athena-demo') {
+                    $script:CapturedBody = $Body
+                    return @{ id = 'aid-mls-aws-athena-demo'; appId = 'app-guid-123' }
+                }
+                return @{ id = "x-$([guid]::NewGuid())"; appId = "x-$([guid]::NewGuid())" }
             }
-            if ($Method -eq 'PATCH' -and $Path -eq 'applications/aid-mls-aws-athena-demo' -and $Body.Contains('identifierUris')) {
-                $script:CapturedBody = $Body
-            }
-            return @{ id = "x-$([guid]::NewGuid())"; appId = "x-$([guid]::NewGuid())" }
+        }
+
+        It 'round-trips identifierUris as a JSON array on create, not a collapsed scalar' {
+            Invoke-ApplyForTest | Out-Null
+            $script:CapturedBody | Should -Not -BeNullOrEmpty -Because 'the aws-athena app must have reached the create call'
+            $json = $script:CapturedBody | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+            # -is [array], not .Count -eq 1: ConvertFrom-Json hands back a bare string for a
+            # scalar JSON value, and a bare string also has a Count of 1 (strings are
+            # IEnumerable<char>), which would let a .Count assertion pass on the exact
+            # regression this test exists to catch.
+            ($json.identifierUris -is [array]) | Should -BeTrue -Because 'a collapsed scalar is exactly the defect a live deploy hit'
+            $json.identifierUris[0] | Should -BeExactly 'api://mock-tenant/mls-aws-athena-demo'
         }
     }
 
-    It 'round-trips identifierUris as a JSON array, not a collapsed scalar' {
-        Invoke-ApplyForTest | Out-Null
-        $script:CapturedBody | Should -Not -BeNullOrEmpty -Because 'the aws-athena app must have reached the identifierUris PATCH'
-        $json = $script:CapturedBody | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-        # -is [array], not .Count -eq 1: ConvertFrom-Json hands back a bare string for a
-        # scalar JSON value, and a bare string also has a Count of 1 (strings are
-        # IEnumerable<char>), which would let a .Count assertion pass on the exact
-        # regression this test exists to catch.
-        ($json.identifierUris -is [array]) | Should -BeTrue -Because 'a collapsed scalar is exactly the defect a live deploy hit'
-        $json.identifierUris[0] | Should -BeExactly 'api://app-guid-123/mls-aws-athena-demo'
+    Context 'update/drift branch' {
+        BeforeEach {
+            Mock Test-GraphConnection { [pscustomobject]@{ TenantId = 'mock-tenant' } }
+            Mock Invoke-PropagationDelay {}
+            Mock Wait-EntraPropagation { @{ id = 'x' } }
+            $script:CapturedBody = $null
+            Mock Invoke-GraphApi {
+                $cleanPath = $Path.Split('?')[0]
+                if ($Method -eq 'GET' -and $cleanPath -eq 'applications') {
+                    # aws-athena already exists, with NO identifierUris - forces the
+                    # drift-correction PATCH this Context exists to inspect.
+                    if ($Path -match "eq '([^']+)'" -and $Matches[1] -eq 'mls-aws-athena-demo') {
+                        return @{ value = @(@{
+                                    id = 'aid-mls-aws-athena-demo'; appId = 'app-guid-123'
+                                    displayName = 'mls-aws-athena-demo'; signInAudience = 'AzureADMyOrg'
+                                    appRoles = @()
+                                }) }
+                    }
+                    return @{ value = @() }
+                }
+                if ($Method -eq 'GET') { return @{ value = @() } }
+                if ($Method -eq 'PATCH' -and $Path -eq 'applications/aid-mls-aws-athena-demo' -and $Body.Contains('identifierUris')) {
+                    $script:CapturedBody = $Body
+                }
+                return @{ id = "x-$([guid]::NewGuid())"; appId = "x-$([guid]::NewGuid())" }
+            }
+        }
+
+        It 'round-trips identifierUris as a JSON array on drift-correction, not a collapsed scalar' {
+            Invoke-ApplyForTest | Out-Null
+            $script:CapturedBody | Should -Not -BeNullOrEmpty -Because 'the aws-athena app already existed with no identifierUris and must have been PATCHed'
+            $json = $script:CapturedBody | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+            ($json.identifierUris -is [array]) | Should -BeTrue -Because 'a collapsed scalar is exactly the defect a live deploy hit'
+            $json.identifierUris[0] | Should -BeExactly 'api://mock-tenant/mls-aws-athena-demo'
+        }
     }
 }
 
@@ -662,12 +715,12 @@ Describe 'apply-entra idempotency + WhatIf' {
                 appRoles = $roles
                 # A POPULATED TENANT already carries whatever identifierUris the manifest
                 # declares - derived from the manifest itself (Get-FieldArray, same reader
-                # the script uses) with ${appId} resolved via the SAME substitution
-                # Resolve-IdentifierUri performs, not hardcoded - so a fully-populated
-                # replay stays a true no-op and adding a URI to another app registration
-                # is felt here instead of silently re-PATCHing on every run.
-                identifierUris = @(Get-FieldArray -Object $app -Name 'identifierUris' |
-                        ForEach-Object { $_.Replace('${appId}', "client-$($app.displayName)") })
+                # the script uses) via $manifest, which Get-FreshManifest already resolved
+                # with -TenantId 'mock-tenant' (the same value Test-GraphConnection mocks
+                # below), so ${tenantId} is already a real string here, not hardcoded - a
+                # fully-populated replay stays a true no-op and adding a URI to another app
+                # registration is felt here instead of silently re-PATCHing on every run.
+                identifierUris = @(Get-FieldArray -Object $app -Name 'identifierUris')
             }
             $script:ExistingServicePrincipals["client-$($app.displayName)"] = @{
                 id = "spid-$($app.displayName)"; appId = "client-$($app.displayName)"
@@ -827,37 +880,28 @@ Describe 'apply-entra idempotency + WhatIf' {
             }
         }
 
-        It 'never sends identifierUris on the CREATE call, for any app' {
-            # TENANT POLICY, VERIFIED 2026-09-16: Entra rejects a newly-added
-            # identifierUris entry that contains no verified domain, tenant id or app id
-            # (InvalidUniqueTenantIdentifierAsPerAppPolicy) - and the app id does not
-            # exist until the create call returns. So identifierUris is NEVER part of the
-            # POST body; it is always a second, follow-up PATCH once the id is known.
-            Invoke-ApplyForTest | Out-Null
-            Should -Invoke Invoke-GraphApi -Exactly -Times 0 -ParameterFilter {
-                $Method -eq 'POST' -and $Path -eq 'applications' -and $Body.Contains('identifierUris')
-            }
-        }
-
-        It 'PATCHes identifierUris right after creating the app that declares them, with the real appId substituted in' {
+        It 'sends identifierUris on the CREATE call only for the app registration that declares them' {
             # aws-athena is an AUDIENCE ONLY (2026-09-16 aws-lakehouse-link Task 1): the
             # value AWS's IAM OIDC provider validates as the token's aud claim, and Entra
             # will not mint a token for a resource whose Application ID URI was never set.
-            # The manifest's ${appId} marker must resolve to the id THIS create returned
-            # (client-mls-aws-athena-demo per the mock), not a hardcoded or templated
-            # placeholder - a wrong id here is a trust policy Task 3 builds against a
-            # string the tenant will never present.
+            # ${tenantId} (fix round 1, superseding an earlier ${appId} ruling) is resolved
+            # by Resolve-ManifestToken from Test-GraphConnection BEFORE the manifest is
+            # parsed - before any app exists - so the value is already final at create
+            # time and rides in the SAME POST body as displayName/signInAudience. No
+            # second, follow-up PATCH is needed (unlike the rejected ${appId} version,
+            # which had to wait for Graph to assign an id).
             Invoke-ApplyForTest | Out-Null
             Should -Invoke Invoke-GraphApi -Exactly -Times 1 -ParameterFilter {
-                $Method -eq 'PATCH' -and $Path -eq 'applications/aid-mls-aws-athena-demo' -and
-                @($Body['identifierUris']) -join ',' -eq 'api://client-mls-aws-athena-demo/mls-aws-athena-demo'
+                $Method -eq 'POST' -and $Path -eq 'applications' -and
+                $Body['displayName'] -eq 'mls-aws-athena-demo' -and
+                @($Body['identifierUris']) -join ',' -eq 'api://mock-tenant/mls-aws-athena-demo'
             }
-            # The other four registrations declare no identifierUris and must never be
-            # PATCHed for it - an empty array would CLEAR any URI Azure AD assigned by
+            # The other four registrations declare no identifierUris and must never carry
+            # the key at all - an empty array would CLEAR any URI Azure AD assigned by
             # other means, on an app this layer does not intend to touch.
             Should -Invoke Invoke-GraphApi -Exactly -Times 0 -ParameterFilter {
-                $Method -eq 'PATCH' -and $Path -like 'applications/aid-mls-*' -and
-                $Path -ne 'applications/aid-mls-aws-athena-demo' -and
+                $Method -eq 'POST' -and $Path -eq 'applications' -and
+                $Body['displayName'] -ne 'mls-aws-athena-demo' -and
                 $Body.Contains('identifierUris')
             }
         }
@@ -1055,7 +1099,7 @@ Describe 'apply-entra idempotency + WhatIf' {
             $summary.AppsCreated | Should -Be 0
             Should -Invoke Invoke-GraphApi -Exactly -Times 1 -ParameterFilter {
                 $Method -eq 'PATCH' -and $Path -eq 'applications/aid-mls-aws-athena-demo' -and
-                @($Body['identifierUris']) -join ',' -eq 'api://client-mls-aws-athena-demo/mls-aws-athena-demo'
+                @($Body['identifierUris']) -join ',' -eq 'api://mock-tenant/mls-aws-athena-demo'
             }
         }
 
