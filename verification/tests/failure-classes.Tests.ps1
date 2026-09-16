@@ -2696,3 +2696,45 @@ as 'nothing to report'.
 "@
     }
 }
+
+Describe 'AWS audience is tokenised, not hardcoded' {
+    # 2026-09-16 aws-lakehouse-link Task 1. The manifest's real top-level key for app
+    # registrations is 'appRegistrations' (keyed by 'appKey'), not the 'applications'/'key'
+    # shape a draft brief for this task assumed - infra/entra/apply-entra.ps1 and
+    # infra/entra/tests/apply-entra.Tests.ps1 both read appRegistrations/appKey throughout,
+    # and Assert-ManifestSchema treats appRegistrations as the array of L3-applied app
+    # registrations. This test is written against the schema the readers actually use.
+    #
+    # The URI TEMPLATE also differs from the brief's snippet, for a reason no reading of
+    # this repository could have surfaced: deploying the brief's literal
+    # 'api://${prefix}-aws-athena-${env}' against the real tenant returned Graph error
+    # InvalidUniqueTenantIdentifierAsPerAppPolicy - a newly-added identifierUris entry must
+    # contain a tenant verified domain, the tenant id, or the app id, and a bare custom
+    # string has none of those.
+    #
+    # ${tenantId}, NOT ${appId} (fix round 1, superseding an earlier accepted ruling). An
+    # app id satisfies the same Graph policy but is reassigned every time the registration
+    # is recreated, so an AWS trust policy conditioned on it would not survive a teardown/
+    # rebuild - exactly the fragility spec section 2.2 exists to avoid for the managed
+    # identity next to this audience. ${tenantId} is equally a Resolve-ManifestToken
+    # substitution (alongside ${prefix}/${env}, resolved from Test-GraphConnection's
+    # Get-MgContext before the manifest is parsed - before any app exists), and the tenant
+    # is the one thing never recreated by a teardown/rebuild.
+    It 'declares the AWS athena audience with prefix, env and tenantId tokens' {
+        $manifest = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw | ConvertFrom-Json
+        $app = $manifest.appRegistrations | Where-Object { $_.appKey -eq 'aws-athena' }
+        $app | Should -Not -BeNullOrEmpty -Because 'Task 1 declares the AWS-facing audience'
+        $app.identifierUris[0] | Should -BeExactly 'api://${tenantId}/${prefix}-aws-athena-${env}'
+    }
+
+    It 'never uses the rebuild-fragile appId as the URI disambiguator' {
+        $raw = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw
+        $raw | Should -Not -Match ([regex]::Escape('api://${appId}')) `
+            -Because 'an app id is reassigned on every teardown/rebuild; ${tenantId} is the stable disambiguator (fix round 1)'
+    }
+
+    It 'never hardcodes the mls prefix in the AWS audience' {
+        $raw = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw
+        $raw | Should -Not -Match 'api://mls-aws-athena'
+    }
+}

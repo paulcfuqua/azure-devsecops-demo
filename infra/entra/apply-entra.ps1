@@ -278,13 +278,24 @@ function Get-NamingDefault {
 }
 
 function Resolve-ManifestToken {
-    <# Expand ${prefix} and ${env} in the manifest.
+    <# Expand ${prefix}, ${env} and ${tenantId} in the manifest.
 
        WHY THE MANIFEST IS TOKENISED. Every Entra name used to be hardcoded 'mls-...', while
        every AZURE name derived from naming.bicep's companyPrefix. A cloner who set the
        prefix therefore got acme-rg-platform resource groups next to mls-flight-operations
        groups - half a rebrand, and the half that is hardest to spot because Entra objects
        are not in the portal blade you are looking at (F90).
+
+       ${tenantId} joined the other two 2026-09-16 for the aws-athena audience: Entra
+       rejects a newly-added identifierUris entry with no verified domain, tenant id or app
+       id (InvalidUniqueTenantIdentifierAsPerAppPolicy), and the app id is the one of those
+       three that does NOT survive a teardown/rebuild - it is reassigned every time the
+       registration is recreated, which is exactly the fragility spec section 2.2 exists to
+       avoid for the managed identity next to it. The tenant is the one thing never
+       recreated, so it is the stable disambiguator, and Invoke-Main resolves it from
+       Test-GraphConnection's Get-MgContext BEFORE parsing the manifest - before any app
+       exists - so no value here is ever a placeholder waiting on an object this script has
+       not created yet.
 
        Expansion happens on the RAW TEXT before ConvertFrom-Json, so it reaches every string
        in one pass - including the cross-references that must stay consistent, like the
@@ -294,16 +305,24 @@ function Resolve-ManifestToken {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
         [Parameter(Mandatory)][string]$CompanyPrefix,
-        [Parameter(Mandatory)][string]$EnvSegment
+        [Parameter(Mandatory)][string]$EnvSegment,
+        [AllowEmptyString()][string]$TenantId = ''
     )
-    return $Text.Replace('${prefix}', $CompanyPrefix).Replace('${env}', $EnvSegment)
+    return $Text.Replace('${prefix}', $CompanyPrefix).Replace('${env}', $EnvSegment).Replace('${tenantId}', $TenantId)
 }
 
 function Get-Manifest {
     param(
         [Parameter(Mandatory)][string]$Path,
         [AllowEmptyString()][string]$CompanyPrefix = '',
-        [AllowEmptyString()][string]$EnvSegment = ''
+        [AllowEmptyString()][string]$EnvSegment = '',
+        # The tenant id ${tenantId} in identifierUris resolves to. Optional because
+        # teardown and read-only callers never touch identifierUris and have no Graph
+        # session to resolve it from at manifest-parse time; a caller that DOES manage
+        # identifierUris (Invoke-Main) must pass the real one or the token is left as a
+        # literal '${tenantId}' string in that field, harmless to everything that never
+        # reads it and caught by Assert-ManifestSchema's other checks for anything that does.
+        [AllowEmptyString()][string]$TenantId = ''
     )
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Manifest not found at '$Path'."
@@ -330,7 +349,7 @@ function Get-Manifest {
     }
     try {
         $text = Resolve-ManifestToken -Text (Get-Content -LiteralPath $Path -Raw) `
-            -CompanyPrefix $CompanyPrefix -EnvSegment $EnvSegment
+            -CompanyPrefix $CompanyPrefix -EnvSegment $EnvSegment -TenantId $TenantId
         return $text | ConvertFrom-Json
     }
     catch {
@@ -407,6 +426,15 @@ function Assert-ManifestSchema {
         if ((Test-Field -Object $app -Name 'verifierProbeRole') -and
             [string]::IsNullOrWhiteSpace([string](Get-Field -Object $app -Name 'verifierProbeRole'))) {
             $problems.Add("appRegistrations[$index] has an empty 'verifierProbeRole'; omit the field or name a role")
+        }
+        # Same shape: a declared-but-empty identifierUris would silently manage nothing,
+        # which looks identical to "this app has no audience" until the AWS trust policy
+        # (or whatever else depends on it) fails with an opaque error far from here.
+        if (Test-Field -Object $app -Name 'identifierUris') {
+            $uris = @(Get-FieldArray -Object $app -Name 'identifierUris')
+            if ($uris.Count -eq 0 -or ($uris | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) })) {
+                $problems.Add("appRegistrations[$index] has an empty or blank 'identifierUris'; omit the field or name at least one URI")
+            }
         }
         $index++
     }
@@ -530,7 +558,7 @@ function Get-EntraGroup {
 function Get-EntraApplication {
     param([Parameter(Mandatory)][string]$DisplayName)
     $literal = ConvertTo-ODataLiteral -Value $DisplayName
-    $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName,signInAudience,appRoles"
+    $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName,signInAudience,appRoles,identifierUris"
     $found = @(Get-ResponseValue -Response $response)
     if ($found.Count -ge 1) { return $found[0] }
     return $null
@@ -681,20 +709,51 @@ function Initialize-EntraApplication {
        AppId is the application (client) id, NOT the directory object id: it is what
        Conditional Access `includeApplications` addresses an application by, and carrying
        it out of here is what lets the CA loop below scope a policy to named applications
-       instead of 'All'. It is $null only under -WhatIf, where nothing was created. #>
+       instead of 'All'. It is $null only under -WhatIf, where nothing was created.
+
+       identifierUris is managed ONLY for a registration that declares it (e.g. the
+       2026-09-16 aws-lakehouse-link audience, aws-athena): sending an empty array for
+       every other app would CLEAR whatever Application ID URI it holds, and this script
+       has no business touching a value it was never told to manage.
+
+       NO TWO-PHASE CREATE-THEN-PATCH, ON PURPOSE. An earlier version of this function
+       resolved a ${appId} marker AFTER creation, because Entra rejects a newly-added
+       identifierUris entry with no verified domain, tenant id or app id
+       (InvalidUniqueTenantIdentifierAsPerAppPolicy) and the app id did not exist before
+       the create call returned. That version was correct about the policy and wrong about
+       which stable value to use: an app id is reassigned every time the registration is
+       recreated, so an AWS trust policy conditioned on it would not survive a teardown/
+       rebuild - exactly the fragility spec section 2.2 exists to avoid for the managed
+       identity next to this audience. The manifest now uses ${tenantId} instead, which
+       Get-Manifest/Resolve-ManifestToken resolve from Test-GraphConnection BEFORE this
+       function - before any app exists - so the value in $App's identifierUris is already
+       final. One create call, same as every other field. #>
     param([Parameter(Mandatory)]$App)
     $displayName = Get-Field -Object $App -Name 'displayName'
     $audience = Get-Field -Object $App -Name 'signInAudience'
     if (-not $audience) { $audience = 'AzureADMyOrg' }
+    $desiredUris = @(Get-FieldArray -Object $App -Name 'identifierUris')
     $existing = Get-EntraApplication -DisplayName $displayName
     if ($existing) {
         $appId = Get-Field -Object $existing -Name 'appId'
         $objectId = Get-Field -Object $existing -Name 'id'
         $roles = @(Get-FieldArray -Object $existing -Name 'appRoles')
+        $updates = [ordered]@{}
         if ((Get-Field -Object $existing -Name 'signInAudience') -ne $audience) {
-            Invoke-GraphMutation -Target $displayName -Action "Update signInAudience -> $audience" `
+            $updates['signInAudience'] = $audience
+        }
+        if ($desiredUris.Count -gt 0) {
+            $existingUris = @(Get-FieldArray -Object $existing -Name 'identifierUris')
+            # Order-sensitive on purpose: identifierUris[0] is the exact string Task 3's
+            # AWS trust policy and Task 6's token scope both depend on.
+            if (($existingUris -join '|') -ne ($desiredUris -join '|')) {
+                $updates['identifierUris'] = $desiredUris
+            }
+        }
+        if ($updates.Count -gt 0) {
+            Invoke-GraphMutation -Target $displayName -Action "Update $($updates.Keys -join ', ')" `
                 -Method PATCH -Path "applications/$objectId" `
-                -Body @{ signInAudience = $audience } | Out-Null
+                -Body $updates | Out-Null
             return @{ AppId = $appId; ObjectId = $objectId; AppRoles = $roles; Outcome = 'Updated' }
         }
         return @{ AppId = $appId; ObjectId = $objectId; AppRoles = $roles; Outcome = 'Unchanged' }
@@ -703,6 +762,7 @@ function Initialize-EntraApplication {
         displayName    = $displayName
         signInAudience = $audience
     }
+    if ($desiredUris.Count -gt 0) { $body['identifierUris'] = $desiredUris }
     $notes = Get-Field -Object $App -Name 'notes'
     if ($notes) { $body['notes'] = $notes }
     $created = Invoke-GraphMutation -Target $displayName -Action 'Create app registration' -Method POST -Path 'applications' -Body $body
@@ -1215,9 +1275,14 @@ function Invoke-Main {
     $licenseSku = $null
     $licenseSkuResolved = $false
 
-    $manifest = Get-Manifest -Path $ManifestPath
+    # TENANT ID FIRST, MANIFEST SECOND. ${tenantId} in identifierUris (the aws-athena
+    # audience) has to be resolved before ConvertFrom-Json ever sees it, and the tenant is
+    # known the moment Graph is connected - Get-MgContext answers it with no app, group or
+    # anything else created yet. Reversing this order would leave the literal string
+    # '${tenantId}' in the parsed manifest for this run.
+    $graphContext = Test-GraphConnection
+    $manifest = Get-Manifest -Path $ManifestPath -TenantId $graphContext.TenantId
     Assert-ManifestSchema -Manifest $manifest | Out-Null
-    Test-GraphConnection | Out-Null
 
     $effectiveDomain = $Domain
     if ([string]::IsNullOrWhiteSpace($effectiveDomain)) {
