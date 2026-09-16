@@ -42,7 +42,7 @@
  * unpin it.
  */
 
-export type SqlDialect = "sqlite" | "tsql";
+export type SqlDialect = "sqlite" | "tsql" | "trino";
 
 /** Row cap on tool results — unbounded SELECTs are an L8 latency failure mode. */
 export const MAX_RESULT_ROWS = 500;
@@ -96,6 +96,20 @@ export const DIALECTS: Record<SqlDialect, DialectProfile> = {
       "rows, and CONCAT(a, b) or + to join strings.",
     example: "SELECT COUNT(*) AS n FROM launches WHERE outcome = 'success'",
   },
+  trino: {
+    id: "trino",
+    displayName: "Trino dialect, AWS Athena over the Glue catalog",
+    idioms:
+      "This is Trino (Athena engine v3), not T-SQL or SQLite: strftime, DATEPART, " +
+      "FORMAT and SELECT TOP do not exist here. For day of week use " +
+      "day_of_week(actual_date), which is ISO-numbered 1=Monday .. 7=Sunday — note " +
+      "this differs from the Fabric tool's 1=Sunday .. 7=Saturday, so do not carry a " +
+      "weekday number from one tool to the other. day_of_week is confirmed against the " +
+      "live endpoint by a session probe at first query. To bucket by month use " +
+      "date_format(CAST(actual_date AS timestamp), '%Y-%m'). Use LIMIT n to take the " +
+      "top n rows, and || or concat(a, b) to join strings.",
+    example: "SELECT COUNT(*) AS n FROM launches WHERE outcome = 'success'",
+  },
 };
 
 /* ------------------------------------------------------------------ */
@@ -129,6 +143,13 @@ const FORBIDDEN_BY_DIALECT: Record<SqlDialect, string[]> = {
     "set", "use", "go", "dbcc", "kill", "shutdown", "reconfigure", "waitfor",
     "openrowset", "openquery", "opendatasource", "openjson", "bulk",
     "sp_", "xp_",
+  ],
+  // Trino/Athena: UNLOAD is the write path that hides inside a SELECT-shaped
+  // statement -- it streams results to S3. CALL invokes connector procedures;
+  // PREPARE/DEALLOCATE and SET/RESET are session state the agent must not touch.
+  trino: [
+    "unload", "call", "prepare", "deallocate",
+    "set", "reset", "use",
   ],
 };
 
