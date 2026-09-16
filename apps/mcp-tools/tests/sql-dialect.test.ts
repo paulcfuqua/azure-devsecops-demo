@@ -391,3 +391,47 @@ describe("scrubSql", () => {
     expect(scrubSql("SELECT 1;", "tsql").terminated).toBe(true);
   });
 });
+
+describe("trino dialect", () => {
+  it("advertises Trino idioms, not SQLite or T-SQL ones", () => {
+    const idioms = DIALECTS.trino.idioms;
+    expect(idioms).toContain("day_of_week");
+    // Bare mentions of "strftime"/"DATEPART" are fine — the idioms text warns
+    // the agent these do not exist here, exactly as the T-SQL profile warns
+    // against "strftime" in prose (see the sibling test above, which checks
+    // "strftime(" for the same reason). What must never appear is the
+    // CALLABLE form, which would tell the agent to use a function this
+    // engine does not have.
+    expect(idioms).not.toContain("strftime(");
+    expect(idioms).not.toContain("DATEPART(");
+  });
+
+  // UNLOAD writes query results to S3. It is the one write path in Athena that
+  // does not look like a write, and the common forbidden list does not cover it.
+  it("refuses UNLOAD", () => {
+    expect(() => assertReadOnlySingleStatement(
+      "UNLOAD (SELECT * FROM launches) TO 's3://x/' WITH (format='PARQUET')", "trino",
+    )).toThrow(SqlRejected);
+  });
+
+  it.each(["call", "prepare", "deallocate", "set", "reset", "use"])(
+    "refuses %s", (verb) => {
+      expect(() => assertReadOnlySingleStatement(`${verb} something`, "trino"))
+        .toThrow(SqlRejected);
+    });
+
+  it("allows an ordinary SELECT", () => {
+    expect(assertReadOnlySingleStatement(
+      "SELECT provider, COUNT(*) AS n FROM launches GROUP BY provider", "trino",
+    )).toContain("SELECT");
+  });
+
+  // Trino block comments DO NOT NEST -- the first */ closes, as in SQLite.
+  // Tracking depth unconditionally is the bug sql-dialect.ts documents at length,
+  // and a third dialect is exactly when someone reintroduces it.
+  it("treats block comments as non-nesting, like SQLite", () => {
+    const crafted = "SELECT 1 /* a /* b */ ; DROP TABLE launches";
+    expect(scrubSql(crafted, "trino").terminated).toBe(true);
+    expect(() => assertReadOnlySingleStatement(crafted, "trino")).toThrow(SqlRejected);
+  });
+});
