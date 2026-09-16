@@ -33,6 +33,7 @@ import { LiveGithubSecurityBackend } from "../src/tools/cloud/github-security.js
 import { AzureDefenderPostureBackend } from "../src/tools/cloud/defender-posture.js";
 import { AzureCostSeriesBackend } from "../src/tools/cloud/cost-series.js";
 import { FabricLakehouseSqlBackend, type TdsExecutor } from "../src/tools/cloud/fabric-sql.js";
+import { AthenaLakehouseSqlBackend, type AthenaExecutor } from "../src/tools/cloud/athena-sql.js";
 import { TokenProvider } from "../src/tools/auth.js";
 import { countRows } from "../src/tools/index.js";
 import { MockFetch, noSleep } from "./helpers/mock-fetch.js";
@@ -155,6 +156,44 @@ describe("query_lakehouse_sql — sql.js vs Fabric SQL analytics endpoint", () =
       executor,
     }).query("SELECT launch_id FROM launches WHERE launch_id = 'nope'");
     expectSameShape("query_lakehouse_sql", local, cloud);
+  });
+});
+
+describe("query_lakehouse_sql — sql.js vs Athena over the Glue catalog", () => {
+  it("returns the same {columns, rows, rowCount, truncated} shape from both", async () => {
+    const sql =
+      "SELECT cost_center, SUM(amount_usd) AS total_usd FROM cost_daily GROUP BY cost_center";
+    const local = await new LocalLakehouseSqlBackend().query(sql);
+
+    // The Athena adapter, fed a result carrying the same column values —
+    // GetQueryResults' own header-row handling and value coercion sit inside
+    // the default executor and are not this test's concern; the seam here is
+    // the same one the unit tests exercise.
+    const executor: AthenaExecutor = {
+      async run() {
+        return {
+          columns: ["cost_center", "total_usd"],
+          rows: local.rows.map((row) => [...row]),
+        };
+      },
+    };
+    const cloud = await new AthenaLakehouseSqlBackend({
+      // Synthetic placeholders — never the real tenant/account ids (F62's
+      // class: a fixture that commits a real GUID fails V1.3's allowlist
+      // sweep and, worse, the live audit).
+      roleArn: "arn:aws:iam::000000000000:role/mls-aws-athena-demo",
+      audience: "api://00000000-1111-2222-3333-444444444444/mls-aws-athena-demo",
+      region: "us-east-1",
+      database: "launch_intel_lakehouse",
+      workgroup: "primary",
+      outputLocation: "s3://launch-intel-lakehouse-000000000000/athena-results/",
+      tokens: tokens(),
+      executor,
+    }).query(sql);
+
+    expectSameShape("query_lakehouse_sql", local, cloud);
+    expect(cloud.rowCount).toBe(local.rowCount);
+    expect(cloud.truncated).toBe(local.truncated);
   });
 });
 
