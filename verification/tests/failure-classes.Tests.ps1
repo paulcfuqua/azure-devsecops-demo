@@ -2737,6 +2737,84 @@ Describe 'AWS audience is tokenised, not hardcoded' {
         $raw = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw
         $raw | Should -Not -Match 'api://mls-aws-athena'
     }
+
+    It 'declares requestedAccessTokenVersion, and declares the version the AWS scripts trust' {
+        # Task 3 fix round 1, finding C1. The manifest declared no token version, so the
+        # issuer the token carries - and therefore which AWS IAM OIDC provider can validate
+        # it - came from Entra's null default, which means 1. A trust anchor resting on an
+        # undeclared default is one silent Entra change away from an AccessDenied that
+        # names no field, and no rebuild reproduces a value nobody wrote down.
+        #
+        # Two files, one fact, asserted together: this is the coupling, not two separate
+        # checks that happen to agree today.
+        $manifest = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw | ConvertFrom-Json
+        $app = $manifest.appRegistrations | Where-Object { $_.appKey -eq 'aws-athena' }
+        $declared = $app.PSObject.Properties['requestedAccessTokenVersion']
+        $declared | Should -Not -BeNullOrEmpty -Because 'an inherited null default is not a decision anyone made'
+        [int]$declared.Value | Should -Be 1
+
+        $provider = Get-Content "$PSScriptRoot/../../scripts/aws/01-oidc-provider.sh" -Raw
+        $provider | Should -Match 'V1_ISSUER="https://sts\.windows\.net/\$\{MLS_TENANT_ID\}/"' `
+            -Because 'version 1 means the sts.windows.net issuer, and that is the provider the sponsor registers'
+    }
+}
+
+Describe 'scripts/aws is executable and its runbook is complete' {
+    # 2026-09-16 aws-lakehouse-link Task 3, fix round 1 (I1, I2, M5). The four
+    # sponsor-run scripts were committed 100644: core.fileMode is false in
+    # this repo, so a local `chmod +x` never reached the git index, and the
+    # sponsor's first command (`./01-oidc-provider.sh`) would have failed
+    # with "Permission denied" on a fresh checkout. Fixed with
+    # `git update-index --chmod=+x`. This test reads the git INDEX, not the
+    # working-tree filesystem, because the index is what a fresh clone
+    # materialises - a filesystem permission bit set only on this machine
+    # proves nothing about what the sponsor receives.
+    #
+    # Separately: a runbook that names two of six required values is a
+    # runbook the sponsor gets partway through before hitting an unset-
+    # variable error it never warned about (I2). Rather than hardcode the
+    # expected variable list here and let it drift from the scripts the way
+    # V8.1/V8.3 drifted from each other (F145), this test extracts every
+    # required (${VAR:?}) variable directly from the scripts and asserts the
+    # README names each one - the class paid for once becomes a check, not a
+    # second list to keep in sync with the first.
+
+    BeforeAll {
+        $script:AwsDir = Join-Path $script:RepoRoot 'scripts/aws'
+        $script:AwsScripts = @('01-oidc-provider.sh', '02-athena-role.sh', '03-verify.sh', 'teardown.sh')
+    }
+
+    It 'exists for all four sponsor-run scripts' {
+        foreach ($name in $script:AwsScripts) {
+            (Join-Path $script:AwsDir $name) | Should -Exist -Because "$name is one of the triplet's sponsor-run scripts"
+        }
+    }
+
+    It 'is committed as mode 100755 (executable), not 100644' {
+        Push-Location $script:RepoRoot
+        try {
+            foreach ($name in $script:AwsScripts) {
+                $line = git ls-files -s "scripts/aws/$name"
+                $line | Should -Match '^100755\s' -Because 'a 100644 script fails the sponsors first command with Permission denied (core.fileMode is false in this repo, so a local chmod +x never reaches the index)'
+            }
+        } finally {
+            Pop-Location
+        }
+    }
+
+    It 'has a README.md naming every variable a script requires with :?' {
+        $readme = Get-Content -LiteralPath (Join-Path $script:AwsDir 'README.md') -Raw
+        $required = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($name in $script:AwsScripts) {
+            $content = Get-Content -LiteralPath (Join-Path $script:AwsDir $name) -Raw
+            [regex]::Matches($content, '\$\{(MLS_[A-Z0-9_]+):\?') | ForEach-Object {
+                [void]$required.Add($_.Groups[1].Value)
+            }
+        }
+        $required.Count | Should -BeGreaterThan 0 -Because 'the scripts are expected to guard at least one required variable'
+        $missing = @($required | Where-Object { $readme -notmatch [regex]::Escape($_) })
+        $missing | Should -BeNullOrEmpty -Because 'every required variable in scripts/aws/*.sh must be named in the sponsors runbook (I2)'
+    }
 }
 
 Describe 'AWS trust identity survives teardown' {

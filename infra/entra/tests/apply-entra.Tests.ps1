@@ -356,6 +356,169 @@ Describe 'identifierUris survives real JSON serialization as an array, on every 
     }
 }
 
+Describe 'requestedAccessTokenVersion is DECLARED and reaches Graph, on both branches' {
+    # 2026-09-16 aws-lakehouse-link Task 3, fix round 1, finding C1. The AWS IAM OIDC
+    # provider scripts/aws/01-oidc-provider.sh registers is bound to ONE issuer, and which
+    # issuer the token carries is decided by api.requestedAccessTokenVersion: version 1
+    # means https://sts.windows.net/<tenantId>/ with aud = identifierUris[0], version 2
+    # means https://login.microsoftonline.com/<tenantId>/v2.0 with aud = the app id GUID.
+    # The manifest declared neither, so the whole cross-cloud trust chain rested on Entra's
+    # null default - a value nobody had chosen, that no rebuild reproduced, and whose change
+    # surfaces as an opaque AccessDenied from AWS naming no field.
+    #
+    # THE MANIFEST EDIT ALONE WAS HALF THE FIX. A declared value that the deploy path never
+    # sends is a value the tenant does not have (F159's class: configuration that exists
+    # only in the repo is as broken as configuration that exists only in the estate). These
+    # tests assert the WIRE BODY on both branches Initialize-EntraApplication can take, and
+    # that a registration which does not declare the field is left alone.
+    BeforeAll {
+        $script:DeclaredTokenVersion = [int](Get-Field `
+                -Object (@((Get-FreshManifest).appRegistrations) | Where-Object { (Get-Field -Object $_ -Name 'appKey') -eq 'aws-athena' }) `
+                -Name 'requestedAccessTokenVersion')
+    }
+
+    It 'the manifest declares it at all, as an integer Graph accepts' {
+        # Derived expectation, but this one criterion is deliberately a literal: if the
+        # declared version ever changes, scripts/aws and the README's "why two providers"
+        # section must change with it, and a test that reads whatever the file happens to
+        # say would let that pass silently.
+        $script:DeclaredTokenVersion | Should -Be 1 -Because 'scripts/aws/01-oidc-provider.sh registers sts.windows.net as the issuer the token actually carries'
+    }
+
+    Context 'create branch' {
+        BeforeEach {
+            Mock Test-GraphConnection { [pscustomobject]@{ TenantId = 'mock-tenant' } }
+            Mock Invoke-PropagationDelay {}
+            Mock Wait-EntraPropagation { @{ id = 'x' } }
+            $script:CreatedBodies = @{}
+            Mock Invoke-GraphApi {
+                if ($Method -eq 'GET') { return @{ value = @() } }
+                if ($Method -eq 'POST' -and $Path -eq 'applications') {
+                    $script:CreatedBodies[[string]$Body['displayName']] = $Body
+                    return @{ id = "aid-$($Body['displayName'])"; appId = 'app-guid-123' }
+                }
+                return @{ id = "x-$([guid]::NewGuid())"; appId = "x-$([guid]::NewGuid())" }
+            }
+        }
+
+        It 'sends api.requestedAccessTokenVersion on create, as a JSON number' {
+            Invoke-ApplyForTest | Out-Null
+            $body = $script:CreatedBodies['mls-aws-athena-demo']
+            $body | Should -Not -BeNullOrEmpty -Because 'the aws-athena app must have reached the create call'
+            # Round-tripped through real JSON, not read out of the hashtable: a quoted "1"
+            # and a bare 1 are the same PowerShell value to an -eq comparison and a
+            # different document to Graph, which rejects the string form.
+            $json = $body | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+            $json.api.requestedAccessTokenVersion | Should -Be $script:DeclaredTokenVersion
+            ($json.api.requestedAccessTokenVersion -is [string]) | Should -BeFalse -Because 'Graph rejects a stringified token version'
+        }
+
+        It 'sends no api block at all for a registration that does not declare it' {
+            Invoke-ApplyForTest | Out-Null
+            foreach ($name in @('mls-launch-ops-demo-app', 'mls-control-tower-demo-app', 'mls-mcp-tools-demo-app', 'mls-compliance-demo-app')) {
+                $body = $script:CreatedBodies[$name]
+                $body | Should -Not -BeNullOrEmpty -Because "$name must have reached the create call"
+                $body.Contains('api') | Should -BeFalse -Because 'this script has no business setting a token version it was never told to manage'
+            }
+        }
+    }
+
+    Context 'update/drift branch' {
+        BeforeEach {
+            Mock Test-GraphConnection { [pscustomobject]@{ TenantId = 'mock-tenant' } }
+            Mock Invoke-PropagationDelay {}
+            Mock Wait-EntraPropagation { @{ id = 'x' } }
+            $script:ApiPatchBody = $null
+            $script:ExistingApi = $null
+            Mock Invoke-GraphApi {
+                $cleanPath = $Path.Split('?')[0]
+                if ($Method -eq 'GET' -and $cleanPath -eq 'applications') {
+                    if ($Path -match "eq '([^']+)'" -and $Matches[1] -eq 'mls-aws-athena-demo') {
+                        return @{ value = @(@{
+                                    id = 'aid-mls-aws-athena-demo'; appId = 'app-guid-123'
+                                    displayName = 'mls-aws-athena-demo'; signInAudience = 'AzureADMyOrg'
+                                    appRoles = @(); identifierUris = @('api://mock-tenant/mls-aws-athena-demo')
+                                    api = $script:ExistingApi
+                                }) }
+                    }
+                    return @{ value = @() }
+                }
+                if ($Method -eq 'GET') { return @{ value = @() } }
+                if ($Method -eq 'PATCH' -and $Path -eq 'applications/aid-mls-aws-athena-demo' -and $Body.Contains('api')) {
+                    $script:ApiPatchBody = $Body['api']
+                }
+                return @{ id = "x-$([guid]::NewGuid())"; appId = "x-$([guid]::NewGuid())" }
+            }
+        }
+
+        It 'PATCHes a tenant whose app carries the wrong version' {
+            $script:ExistingApi = @{ requestedAccessTokenVersion = 2 }
+            Invoke-ApplyForTest | Out-Null
+            $script:ApiPatchBody | Should -Not -BeNullOrEmpty -Because 'version 2 is drift from the declared 1 and must be corrected'
+            [int]$script:ApiPatchBody['requestedAccessTokenVersion'] | Should -Be $script:DeclaredTokenVersion
+        }
+
+        It 'PATCHes a tenant whose app carries no version at all (the live state this fix found)' {
+            $script:ExistingApi = $null
+            Invoke-ApplyForTest | Out-Null
+            $script:ApiPatchBody | Should -Not -BeNullOrEmpty -Because 'a null requestedAccessTokenVersion is exactly what the live tenant held'
+            [int]$script:ApiPatchBody['requestedAccessTokenVersion'] | Should -Be $script:DeclaredTokenVersion
+        }
+
+        It 'does not PATCH when the tenant already matches' {
+            $script:ExistingApi = @{ requestedAccessTokenVersion = $script:DeclaredTokenVersion }
+            Invoke-ApplyForTest | Out-Null
+            $script:ApiPatchBody | Should -BeNullOrEmpty -Because 'a converged value must not churn a PATCH on every replay (spec F6)'
+        }
+
+        It 'carries the rest of api forward instead of clearing it' {
+            # A PATCH of a Graph complex type REPLACES it. Sending the version alone would
+            # set it correctly and silently delete every delegated scope on the app - a
+            # green run that destroys state, which is this estate's most expensive shape.
+            $script:ExistingApi = @{
+                requestedAccessTokenVersion = 2
+                oauth2PermissionScopes      = @(@{ id = 'scope-1'; value = 'Lakehouse.Read' })
+                acceptMappedClaims          = $true
+            }
+            Invoke-ApplyForTest | Out-Null
+            $script:ApiPatchBody | Should -Not -BeNullOrEmpty
+            [int]$script:ApiPatchBody['requestedAccessTokenVersion'] | Should -Be $script:DeclaredTokenVersion
+            @($script:ApiPatchBody['oauth2PermissionScopes']).Count | Should -Be 1 -Because 'an existing delegated scope must survive a token-version change'
+            $script:ApiPatchBody['acceptMappedClaims'] | Should -BeTrue
+        }
+    }
+
+    Context 'manifest validation' {
+        BeforeEach {
+            # Manifest validation runs AFTER Test-GraphConnection, because ${tenantId} is
+            # resolved from the live context before the file is parsed. Without this mock
+            # the run dies on "Not connected to Microsoft Graph" and the test passes for
+            # the wrong reason on a -Throw assertion with no message filter.
+            Mock Test-GraphConnection { [pscustomobject]@{ TenantId = 'mock-tenant' } }
+            Mock Invoke-PropagationDelay {}
+            Mock Invoke-GraphApi { @{ value = @() } }
+        }
+
+        It 'refuses a non-integer requestedAccessTokenVersion before any Graph call' {
+            $badPath = Join-Path $TestDrive 'bad-token-version.json'
+            $manifest = Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+            $app = @($manifest.appRegistrations) | Where-Object { $_.appKey -eq 'aws-athena' }
+            $app.requestedAccessTokenVersion = '1'
+            $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $badPath -Encoding utf8
+            { Invoke-ApplyForTest -Path $badPath } | Should -Throw '*Manifest validation failed*'
+        }
+
+        It 'refuses a version Graph does not accept' {
+            $badPath = Join-Path $TestDrive 'bad-token-version-3.json'
+            $manifest = Get-Content -LiteralPath $script:ManifestPath -Raw | ConvertFrom-Json
+            $app = @($manifest.appRegistrations) | Where-Object { $_.appKey -eq 'aws-athena' }
+            $app.requestedAccessTokenVersion = 3
+            $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $badPath -Encoding utf8
+            { Invoke-ApplyForTest -Path $badPath } | Should -Throw '*Manifest validation failed*'
+        }
+    }
+}
+
 Describe 'L3 licenses the users its manifest declares licensed' {
     # g0-bootstrap item C10 asked a human to assign licences after L3 created the users, and
     # V3.4 asserted the result - so the audit checked a state nothing in the deploy path
@@ -721,6 +884,18 @@ Describe 'apply-entra idempotency + WhatIf' {
                 # fully-populated replay stays a true no-op and adding a URI to another app
                 # registration is felt here instead of silently re-PATCHing on every run.
                 identifierUris = @(Get-FieldArray -Object $app -Name 'identifierUris')
+                # Same reasoning, same reader, for requestedAccessTokenVersion: a populated
+                # tenant already carries whatever the manifest declares, so a replay stays a
+                # true no-op. Built as a Graph-shaped `api` object ONLY for a registration
+                # that declares the field - an app with no declaration must come back with
+                # no api at all, or this fixture would be asserting against a tenant state
+                # the script never produces.
+                api = $(
+                    if (Test-Field -Object $app -Name 'requestedAccessTokenVersion') {
+                        @{ requestedAccessTokenVersion = [int](Get-Field -Object $app -Name 'requestedAccessTokenVersion') }
+                    }
+                    else { $null }
+                )
             }
             $script:ExistingServicePrincipals["client-$($app.displayName)"] = @{
                 id = "spid-$($app.displayName)"; appId = "client-$($app.displayName)"

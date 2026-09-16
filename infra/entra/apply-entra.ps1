@@ -436,6 +436,23 @@ function Assert-ManifestSchema {
                 $problems.Add("appRegistrations[$index] has an empty or blank 'identifierUris'; omit the field or name at least one URI")
             }
         }
+        # requestedAccessTokenVersion decides the ISSUER and the AUDIENCE of every token
+        # this app mints, and an AWS IAM OIDC provider is registered against exactly one
+        # issuer. Graph accepts only 1, 2 or null; anything else is rejected mid-layer with
+        # a message that names the app but not the field. Refuse it here instead, and
+        # refuse a string too - JSON "1" and JSON 1 look identical in a diff and only one
+        # of them is what Graph wants.
+        if (Test-Field -Object $app -Name 'requestedAccessTokenVersion') {
+            $tokenVersion = Get-Field -Object $app -Name 'requestedAccessTokenVersion'
+            # Int64, not Int32: ConvertFrom-Json widens every JSON integer to [long] in
+            # PowerShell 7, so an `-is [int]` test REJECTS THE SHIPPED MANIFEST. Verified
+            # by observing the parsed value, not assumed from the literal in the file.
+            $isIntegral = $tokenVersion -is [int] -or $tokenVersion -is [long] -or
+                $tokenVersion -is [int16] -or $tokenVersion -is [byte]
+            if (-not $isIntegral -or @(1, 2) -notcontains [int]$tokenVersion) {
+                $problems.Add("appRegistrations[$index] has an invalid 'requestedAccessTokenVersion' ('$tokenVersion'); omit the field or use the integer 1 or 2")
+            }
+        }
         $index++
     }
 
@@ -558,7 +575,12 @@ function Get-EntraGroup {
 function Get-EntraApplication {
     param([Parameter(Mandatory)][string]$DisplayName)
     $literal = ConvertTo-ODataLiteral -Value $DisplayName
-    $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName,signInAudience,appRoles,identifierUris"
+    # `api` IS IN THE SELECT BECAUSE SOMETHING COMPARES IT. Initialize-EntraApplication
+    # converges api.requestedAccessTokenVersion, and a field absent from $select comes back
+    # $null whatever the tenant actually holds - which is the invisible-value class
+    # (F122/F125): the comparison would then PATCH on every single run against a value it
+    # had never read, and report "Updated" forever while proving nothing.
+    $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName,signInAudience,appRoles,identifierUris,api"
     $found = @(Get-ResponseValue -Response $response)
     if ($found.Count -ge 1) { return $found[0] }
     return $null
@@ -703,6 +725,33 @@ function Initialize-GroupMembership {
     return $added
 }
 
+function ConvertTo-ApiPatchBody {
+    # ConvertTo-, not New-: PSUseShouldProcessForStateChangingFunctions treats New-* as a
+    # verb that changes system state and demands ShouldProcess support, and lint-ci fails
+    # on any warning. This function only shapes a hashtable; it calls nothing.
+    <# The `api` body for a PATCH that only means to change requestedAccessTokenVersion.
+
+       A PATCH of a Graph COMPLEX TYPE replaces the whole thing: sending
+       `{"api":{"requestedAccessTokenVersion":1}}` sets the version AND silently clears
+       oauth2PermissionScopes, preAuthorizedApplications and knownClientApplications on any
+       app that had them. Today only the audience-only aws-athena registration declares the
+       field and it has none of those, so the naive form would work - and would be a trap
+       armed for whichever app declares the field next. Carry the existing sub-fields
+       forward instead, so this converges ONE value and leaves the rest of `api` alone.
+
+       $ExistingApi is $null on an app whose `api` came back empty; the loop then adds
+       nothing and the body is the version alone, which is correct for that case. #>
+    param($ExistingApi, [Parameter(Mandatory)][int]$RequestedAccessTokenVersion)
+    $body = [ordered]@{ requestedAccessTokenVersion = $RequestedAccessTokenVersion }
+    foreach ($name in @('acceptMappedClaims', 'knownClientApplications', 'oauth2PermissionScopes', 'preAuthorizedApplications')) {
+        if (Test-Field -Object $ExistingApi -Name $name) {
+            $value = Get-Field -Object $ExistingApi -Name $name
+            if ($null -ne $value) { $body[$name] = $value }
+        }
+    }
+    return $body
+}
+
 function Initialize-EntraApplication {
     <# Create-if-absent / update-on-drift app registration. Returns @{ AppId; ObjectId; AppRoles; Outcome }.
 
@@ -715,6 +764,26 @@ function Initialize-EntraApplication {
        2026-09-16 aws-lakehouse-link audience, aws-athena): sending an empty array for
        every other app would CLEAR whatever Application ID URI it holds, and this script
        has no business touching a value it was never told to manage.
+
+       requestedAccessTokenVersion follows the same declare-to-manage rule, and exists for
+       the same AWS trust anchor. It decides the token's `iss` and `aud`: version 1 means
+       iss https://sts.windows.net/<tenantId>/ with aud = identifierUris[0], version 2
+       means iss https://login.microsoftonline.com/<tenantId>/v2.0 with aud = the app id.
+       An AWS IAM OIDC provider is registered against exactly one issuer, so leaving this
+       to Entra's null default meant the trust anchor depended on an undeclared value
+       nobody had chosen and no rebuild reproduced (Task 3 fix round 1, finding C1).
+
+       IF A PATCH HERE RETURNS 403 FOR ONE APP AND NOT THE OTHERS, IT IS OWNERSHIP, NOT
+       CONSENT. This script authenticates as a principal holding
+       Application.ReadWrite.OwnedBy - never .All, narrowed deliberately by F8 - so it can
+       write only an application it OWNS, and Graph makes the caller the first owner of
+       anything it creates. Every registration this script created is therefore fine, and
+       one created OUT OF BAND has no owner and can never be converged here. It stays
+       invisible for as long as the manifest and the tenant agree, because a converged app
+       computes zero updates and issues no PATCH at all - the layer reports success over a
+       registration it could not have written. See L03.md failure mode 0 for the one
+       command that repairs it; it needs a Global Administrator, because this principal
+       cannot grant itself ownership of an app it does not own.
 
        NO TWO-PHASE CREATE-THEN-PATCH, ON PURPOSE. An earlier version of this function
        resolved a ${appId} marker AFTER creation, because Entra rejects a newly-added
@@ -733,6 +802,14 @@ function Initialize-EntraApplication {
     $audience = Get-Field -Object $App -Name 'signInAudience'
     if (-not $audience) { $audience = 'AzureADMyOrg' }
     $desiredUris = @(Get-FieldArray -Object $App -Name 'identifierUris')
+    # Managed ONLY for a registration that declares it, same rule as identifierUris:
+    # $null here means "this script was never told to own this app's token version" and it
+    # sends nothing, rather than imposing a default on four apps it has no business
+    # touching. Manifest validation has already established it is the integer 1 or 2.
+    $desiredTokenVersion = $null
+    if (Test-Field -Object $App -Name 'requestedAccessTokenVersion') {
+        $desiredTokenVersion = [int](Get-Field -Object $App -Name 'requestedAccessTokenVersion')
+    }
     $existing = Get-EntraApplication -DisplayName $displayName
     if ($existing) {
         $appId = Get-Field -Object $existing -Name 'appId'
@@ -750,6 +827,13 @@ function Initialize-EntraApplication {
                 $updates['identifierUris'] = $desiredUris
             }
         }
+        if ($null -ne $desiredTokenVersion) {
+            $existingApi = Get-Field -Object $existing -Name 'api'
+            $existingTokenVersion = Get-Field -Object $existingApi -Name 'requestedAccessTokenVersion'
+            if ($null -eq $existingTokenVersion -or [int]$existingTokenVersion -ne $desiredTokenVersion) {
+                $updates['api'] = ConvertTo-ApiPatchBody -ExistingApi $existingApi -RequestedAccessTokenVersion $desiredTokenVersion
+            }
+        }
         if ($updates.Count -gt 0) {
             Invoke-GraphMutation -Target $displayName -Action "Update $($updates.Keys -join ', ')" `
                 -Method PATCH -Path "applications/$objectId" `
@@ -763,6 +847,9 @@ function Initialize-EntraApplication {
         signInAudience = $audience
     }
     if ($desiredUris.Count -gt 0) { $body['identifierUris'] = $desiredUris }
+    if ($null -ne $desiredTokenVersion) {
+        $body['api'] = [ordered]@{ requestedAccessTokenVersion = $desiredTokenVersion }
+    }
     $notes = Get-Field -Object $App -Name 'notes'
     if ($notes) { $body['notes'] = $notes }
     $created = Invoke-GraphMutation -Target $displayName -Action 'Create app registration' -Method POST -Path 'applications' -Body $body
