@@ -169,8 +169,16 @@ describe("query_lakehouse_sql — sql.js vs Athena over the Glue catalog", () =>
     // GetQueryResults' own header-row handling and value coercion sit inside
     // the default executor and are not this test's concern; the seam here is
     // the same one the unit tests exercise.
+    // The first statement this executor sees is NOT the caller's: the adapter
+    // runs its day_of_week probe once, before any real answer, exactly as the
+    // Fabric adapter runs its DATEFIRST one. A fake that answered it with the
+    // cost rows would make the probe pass on nonsense, so it answers honestly
+    // and the shape assertion below is still about the query it was asked.
     const executor: AthenaExecutor = {
-      async run() {
+      async run(sql: string) {
+        if (sql.includes("day_of_week")) {
+          return { columns: ["seed_date_weekday"], rows: [[6]] };
+        }
         return {
           columns: ["cost_center", "total_usd"],
           rows: local.rows.map((row) => [...row]),

@@ -108,6 +108,21 @@ export interface AwsLakehouseConfig {
   workgroup: string;
   /** `s3://` URI Athena writes query results to — required because the workgroup carries no default of its own. */
   outputLocation: string;
+  /**
+   * Client id of the user-assigned managed identity the AWS-bound token must be
+   * minted from — NOT the container's default `AZURE_CLIENT_ID`.
+   *
+   * The container app carries two user-assigned identities. `AZURE_CLIENT_ID`
+   * binds `DefaultAzureCredential` to the mcp-tools identity for every Azure
+   * data plane this server reads; the AWS IAM trust policy's `sub` condition is
+   * pinned to the *other* identity's principal id. A token minted from the wrong
+   * one is refused by STS as an `AccessDenied` that reads exactly like a broken
+   * trust policy when it is an Azure credential-selection problem — which is why
+   * this is required rather than optional. Missing it fails at BOOT, naming the
+   * variable, instead of at the first AWS call with a message pointing at the
+   * wrong system.
+   */
+  clientId: string;
 }
 
 /** Env var -> what it is for, used to build the fail-fast message (see `loadAwsConfig`). */
@@ -118,6 +133,10 @@ const REQUIRED_AWS_VARS: Array<[string, string]> = [
   ["MLS_GLUE_DATABASE", "Glue Data Catalog database for query_aws_lakehouse_sql"],
   ["MLS_ATHENA_WORKGROUP", "Athena workgroup query_aws_lakehouse_sql runs in"],
   ["MLS_ATHENA_OUTPUT", "s3:// URI Athena writes query results to (the primary workgroup enforces no default)"],
+  [
+    "MLS_AWS_CLIENT_ID",
+    "client id of the user-assigned identity the AWS token is minted from (NOT AZURE_CLIENT_ID; the trust policy's sub is pinned to this identity)",
+  ],
 ];
 
 /**
@@ -127,9 +146,9 @@ const REQUIRED_AWS_VARS: Array<[string, string]> = [
  * not an error (F125's lesson), so treating "none of the six are set" and
  * "some of the six are set" the same way would let a partial configuration
  * silently disable the tool — indistinguishable from one never built. So:
- *   - none set    -> undefined (the tool is simply not offered);
- *   - some set    -> throw, naming exactly what is missing;
- *   - all six set -> the resolved config.
+ *   - none set      -> undefined (the tool is simply not offered);
+ *   - some set      -> throw, naming exactly what is missing;
+ *   - all seven set -> the resolved config.
  */
 export function loadAwsConfig(env: NodeJS.ProcessEnv): AwsLakehouseConfig | undefined {
   const resolved: Record<string, string | undefined> = {};
@@ -155,6 +174,7 @@ export function loadAwsConfig(env: NodeJS.ProcessEnv): AwsLakehouseConfig | unde
     database: resolved.MLS_GLUE_DATABASE as string,
     workgroup: resolved.MLS_ATHENA_WORKGROUP as string,
     outputLocation: resolved.MLS_ATHENA_OUTPUT as string,
+    clientId: resolved.MLS_AWS_CLIENT_ID as string,
   };
 }
 
@@ -163,7 +183,7 @@ export interface McpToolsConfig {
   backendMode: BackendMode;
   /** Present only when backendMode === "cloud". */
   cloud?: CloudConfig;
-  /** Present only when all six AWS/Glue/Athena vars are set — see `loadAwsConfig`. */
+  /** Present only when all seven AWS/Glue/Athena vars are set — see `loadAwsConfig`. */
   aws?: AwsLakehouseConfig;
   /**
    * Who may call this server. Required in EVERY mode, not just cloud — the
