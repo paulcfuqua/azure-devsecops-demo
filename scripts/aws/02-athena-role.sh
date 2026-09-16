@@ -14,6 +14,29 @@
 # workload in the tenant holding a token for that audience assume the role.
 set -euo pipefail
 
+# Windows path fix follow-up, 2026-09-16: fill in any variable NOT already
+# set in this shell from the anchor file 01-oidc-provider.sh writes, so a
+# sponsor who did not hand-paste 01's four `export` lines does not die here
+# on an unset-variable error. A variable already exported in this shell wins
+# over the file -- this only fills gaps, it never overrides. Resolved to this
+# script's own directory, not the caller's cwd. Silently skipped if the file
+# does not exist (e.g. providers were pre-existing and exported by hand).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ANCHOR_ENV="${SCRIPT_DIR}/.aws-anchor.env"
+if [ -f "${ANCHOR_ENV}" ]; then
+  echo "found ${ANCHOR_ENV} (written by 01-oidc-provider.sh) -- filling in any variable not already set in this shell" >&2
+  while IFS='=' read -r _anchor_key _anchor_value; do
+    _anchor_key="${_anchor_key#export }"
+    _anchor_key="${_anchor_key%$'\r'}"
+    _anchor_value="${_anchor_value%$'\r'}"
+    [ -z "${_anchor_key}" ] && continue
+    if [ -z "${!_anchor_key+x}" ] || [ -z "${!_anchor_key}" ]; then
+      export "${_anchor_key}=${_anchor_value}"
+    fi
+  done < "${ANCHOR_ENV}"
+  unset _anchor_key _anchor_value
+fi
+
 : "${MLS_AWS_AUDIENCE:?set MLS_AWS_AUDIENCE (the v1 aud -- identifierUris[0] of the aws-athena app)}"
 : "${MLS_AWS_APP_ID:?set MLS_AWS_APP_ID (the v2 aud -- the aws-athena application/client id GUID)}"
 : "${MLS_AWS_PRINCIPAL_ID:?set MLS_AWS_PRINCIPAL_ID (the managed identity principal id -- the sub claim, from Task 2)}"
@@ -51,6 +74,16 @@ TRUST_FILE=$(mktemp)
 POLICY_FILE=$(mktemp)
 GET_ROLE_ERR=$(mktemp)
 trap 'rm -f "${TRUST_FILE}" "${POLICY_FILE}" "${GET_ROLE_ERR}"' EXIT
+
+# TRUST_FILE and POLICY_FILE are written to and validated (python3 json.load)
+# below, but handed to `aws` BY CONTENT ("$(cat "${FILE}")"), never by a
+# file:// reference (Windows path fix, 2026-09-16). A sponsor running MSYS2
+# bash on Windows with the native aws.exe hits this exactly: mktemp returns a
+# POSIX path like /tmp/tmp.XXXXXXXXXX that only the MSYS shell can resolve,
+# aws.exe sees a path that does not exist, and MSYS's argv translation does
+# not rescue a file:// URL. verification/tests/failure-classes.Tests.ps1
+# ("scripts/aws never hands a native CLI an mktemp path via file://") makes
+# this a repo-wide check, not just a fix at these three call sites.
 
 cat > "${TRUST_FILE}" <<JSON
 {
@@ -196,7 +229,7 @@ if ROLE_ARN=$(aws iam get-role --role-name "${MLS_AWS_ROLE_NAME}" --query Role.A
   ROLE_ARN="${ROLE_ARN//$'\r'/}"
   echo "role exists: updating trust policy in place"
   aws iam update-assume-role-policy --role-name "${MLS_AWS_ROLE_NAME}" \
-    --policy-document "file://${TRUST_FILE}"
+    --policy-document "$(cat "${TRUST_FILE}")"
 else
   if ! grep -q 'NoSuchEntity' "${GET_ROLE_ERR}"; then
     cat "${GET_ROLE_ERR}" >&2
@@ -204,14 +237,17 @@ else
   fi
   echo "role does not exist: creating"
   ROLE_ARN=$(aws iam create-role --role-name "${MLS_AWS_ROLE_NAME}" \
-    --assume-role-policy-document "file://${TRUST_FILE}" \
+    --assume-role-policy-document "$(cat "${TRUST_FILE}")" \
     --description "Read-only Athena access for the Azure-hosted MLS agent" \
     --query Role.Arn --output text)
   ROLE_ARN="${ROLE_ARN//$'\r'/}"
 fi
 
 aws iam put-role-policy --role-name "${MLS_AWS_ROLE_NAME}" \
-  --policy-name "${MLS_AWS_ROLE_NAME}-permissions" --policy-document "file://${POLICY_FILE}"
+  --policy-name "${MLS_AWS_ROLE_NAME}-permissions" --policy-document "$(cat "${POLICY_FILE}")"
 
-echo "export MLS_AWS_ROLE_ARN=${ROLE_ARN}"
-echo "export MLS_AWS_ROLE_NAME=${MLS_AWS_ROLE_NAME}"
+{
+  echo "export MLS_AWS_ROLE_ARN=${ROLE_ARN}"
+  echo "export MLS_AWS_ROLE_NAME=${MLS_AWS_ROLE_NAME}"
+} | tee -a "${ANCHOR_ENV}"
+echo "(the two lines above were also appended to ${ANCHOR_ENV} -- 03-verify.sh sources it automatically, so pasting them yourself is optional, not required)" >&2

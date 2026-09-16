@@ -158,8 +158,12 @@ The rest describe **your real `launch-intel` lakehouse**, verified against
 
 Two more are **produced by `01-oidc-provider.sh`, not set by you**:
 `MLS_AWS_PROVIDER_ARN_V1`, `MLS_AWS_PROVIDER_ARN_V2` (and their
-`_PREEXISTED` companions, used only by `teardown.sh` — see §6). Export the
-four lines `01` prints before running `02`.
+`_PREEXISTED` companions, used only by `teardown.sh` — see §6). `01` writes
+the four lines it prints to `./.aws-anchor.env` next to the scripts, and `02`
+and `03` source that file automatically for any variable you have not
+already exported yourself — so pasting them by hand is convenient, not
+required. That file is git-ignored: it holds a tenant id and a principal id
+and must never be committed.
 
 ## 3. Why two OIDC providers, not one
 
@@ -218,11 +222,14 @@ bash ./01-oidc-provider.sh
 #                    export MLS_AWS_PROVIDER_ARN_V2=...
 #                    export MLS_AWS_PROVIDER_V1_PREEXISTED=...
 #                    export MLS_AWS_PROVIDER_V2_PREEXISTED=...
-# run all four (or export them yourself) before continuing
+# ALSO written to ./.aws-anchor.env, which 02 and 03 source automatically --
+# run the four export lines yourself only if you want them in THIS shell too
+# (e.g. to hand-inspect a value); it is no longer required before continuing.
 
 bash ./02-athena-role.sh
 # prints: export MLS_AWS_ROLE_ARN=arn:aws:iam::...
 #         export MLS_AWS_ROLE_NAME=launch-intel-athena-reader
+# ALSO appended to ./.aws-anchor.env, which 03 sources automatically.
 
 bash ./03-verify.sh
 ```
@@ -230,7 +237,9 @@ bash ./03-verify.sh
 Each script is idempotent: re-running `01` or `02` against an existing
 provider/role updates it in place (including the trust policy itself, not
 just the inline permissions policy) rather than silently doing nothing, so a
-retry after a transient error is safe.
+retry after a transient error is safe. A variable already exported in your
+shell always wins over `.aws-anchor.env` — the file only fills gaps, it never
+overrides what you set yourself.
 
 ## 5. `03-verify.sh`'s output is the evidence
 
