@@ -773,6 +773,18 @@ function Initialize-EntraApplication {
        to Entra's null default meant the trust anchor depended on an undeclared value
        nobody had chosen and no rebuild reproduced (Task 3 fix round 1, finding C1).
 
+       IF A PATCH HERE RETURNS 403 FOR ONE APP AND NOT THE OTHERS, IT IS OWNERSHIP, NOT
+       CONSENT. This script authenticates as a principal holding
+       Application.ReadWrite.OwnedBy - never .All, narrowed deliberately by F8 - so it can
+       write only an application it OWNS, and Graph makes the caller the first owner of
+       anything it creates. Every registration this script created is therefore fine, and
+       one created OUT OF BAND has no owner and can never be converged here. It stays
+       invisible for as long as the manifest and the tenant agree, because a converged app
+       computes zero updates and issues no PATCH at all - the layer reports success over a
+       registration it could not have written. See L03.md failure mode 0 for the one
+       command that repairs it; it needs a Global Administrator, because this principal
+       cannot grant itself ownership of an app it does not own.
+
        NO TWO-PHASE CREATE-THEN-PATCH, ON PURPOSE. An earlier version of this function
        resolved a ${appId} marker AFTER creation, because Entra rejects a newly-added
        identifierUris entry with no verified domain, tenant id or app id
