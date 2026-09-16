@@ -27,6 +27,17 @@
 # tenant id.
 set -euo pipefail
 
+# Written at the end of this script, sourced automatically by 02-athena-role.sh
+# and 03-verify.sh if present (Windows path fix follow-up, 2026-09-16): the
+# sponsor's first run printed four `export` lines for hand-pasting and they
+# were not pasted, so 02 died on an unset-variable error with no indication
+# which step was skipped. Resolved to this script's own directory, not the
+# caller's cwd, so it lands in the same place regardless of where `bash
+# ./01-oidc-provider.sh` is invoked from. Git-ignored -- it holds a tenant id
+# and a principal id.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ANCHOR_ENV="${SCRIPT_DIR}/.aws-anchor.env"
+
 : "${MLS_TENANT_ID:?set MLS_TENANT_ID (az account show --query tenantId -o tsv)}"
 : "${MLS_AWS_AUDIENCE:?set MLS_AWS_AUDIENCE (identifierUris[0] of the aws-athena app -- api://<tenant-id>/mls-aws-athena-demo). This is the aud claim carried by a v1 token.}"
 : "${MLS_AWS_APP_ID:?set MLS_AWS_APP_ID (the aws-athena application/client id GUID). This is the aud claim carried by a v2 token, needed only if requestedAccessTokenVersion is ever changed to 2.}"
@@ -146,7 +157,10 @@ echo "--- v2 provider (readback) ---"
 aws iam get-open-id-connect-provider --open-id-connect-provider-arn "${V2_ARN}" \
   --query "{url:Url,audiences:ClientIDList}" --output json
 
-echo "export MLS_AWS_PROVIDER_ARN_V1=${V1_ARN}"
-echo "export MLS_AWS_PROVIDER_ARN_V2=${V2_ARN}"
-echo "export MLS_AWS_PROVIDER_V1_PREEXISTED=${V1_PREEXISTED}"
-echo "export MLS_AWS_PROVIDER_V2_PREEXISTED=${V2_PREEXISTED}"
+{
+  echo "export MLS_AWS_PROVIDER_ARN_V1=${V1_ARN}"
+  echo "export MLS_AWS_PROVIDER_ARN_V2=${V2_ARN}"
+  echo "export MLS_AWS_PROVIDER_V1_PREEXISTED=${V1_PREEXISTED}"
+  echo "export MLS_AWS_PROVIDER_V2_PREEXISTED=${V2_PREEXISTED}"
+} | tee "${ANCHOR_ENV}"
+echo "(the four lines above were also written to ${ANCHOR_ENV} -- 02-athena-role.sh and 03-verify.sh source it automatically, so pasting them yourself is optional, not required)" >&2

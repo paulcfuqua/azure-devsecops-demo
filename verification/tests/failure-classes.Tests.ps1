@@ -2852,3 +2852,48 @@ Describe 'AWS trust identity survives teardown' {
         $module | Should -Match 'rg-identity' -Because 'the identity must be declared in its own, fifth resource group'
     }
 }
+
+Describe 'scripts/aws never hands a native CLI an mktemp path via file://' {
+    # 2026-09-16 aws-lakehouse-link Task 3, fix round 2 (Windows-path fix, night before the
+    # 2026-09-17 demo). The sponsor runs MSYS2 bash on Windows ("CLANGARM64" prompt) with the
+    # NATIVE Windows aws.exe, not an MSYS-built aws. mktemp returns a POSIX path like
+    # /tmp/tmp.7IgI1AAFAH that only the MSYS shell can resolve; aws.exe sees a path that does
+    # not exist, and MSYS's automatic argv path translation does not rescue a file:// URL --
+    # it only rewrites bare paths, not the contents of a URL scheme. 02-athena-role.sh's
+    # --assume-role-policy-document/--policy-document "file://${TMPVAR}" arguments broke this
+    # way on the sponsor's machine: "Unable to load paramfile file:///tmp/tmp.7IgI1AAFAH:
+    # [Errno 2] No such file or directory". 01-oidc-provider.sh and 03-verify.sh never hit this
+    # -- 01 passes --client-id-list inline and 03 never shells out to a native binary with a
+    # mktemp path at all -- which is exactly why only the file:// handoff needs a rule, not
+    # "never use mktemp".
+    #
+    # Fixed by inlining the document's CONTENT ($(cat "${TMPVAR}")) instead of referencing it
+    # by path, so no path ever crosses the MSYS/native boundary. This test is the class, not
+    # the instance: it finds every variable ANY script under scripts/aws/ assigns from
+    # `mktemp`, then fails if that variable is ever handed to a command as a file:// URL
+    # anywhere in scripts/aws/ -- so a future script reintroducing this shape (or a fourth
+    # call site added to 02 itself) fails this suite rather than waiting for a sponsor's
+    # machine to find it again.
+
+    BeforeAll {
+        $script:AwsDirForMktemp = Join-Path $script:RepoRoot 'scripts/aws'
+        $script:AwsShellScriptsForMktemp = Get-ChildItem -Path $script:AwsDirForMktemp -Filter '*.sh' -File
+    }
+
+    It 'never passes a mktemp-derived variable to a command as a file:// path' {
+        $violations = @()
+        foreach ($file in $script:AwsShellScriptsForMktemp) {
+            $content = Get-Content -LiteralPath $file.FullName -Raw
+            $mktempVars = [regex]::Matches($content, '(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\$\(\s*mktemp\b') |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+            foreach ($varName in $mktempVars) {
+                # Matches file://$VAR and file://${VAR}, with or without a surrounding quote.
+                $pattern = 'file://\$\{?' + [regex]::Escape($varName) + '\}?'
+                if ($content -match $pattern) {
+                    $violations += "$($file.Name): '$varName' (assigned from mktemp) is passed to a command as a file:// path -- only the shell that ran mktemp can resolve that path, and a native CLI binary (e.g. Windows aws.exe under MSYS2) cannot"
+                }
+            }
+        }
+        $violations | Should -BeNullOrEmpty -Because 'a mktemp path handed to a native CLI as file:// is exactly the class that broke 02-athena-role.sh on the sponsor machine the night before the 2026-09-17 demo (F: Windows path fix) -- inline the file CONTENT instead, e.g. "$(cat "${VAR}")"'
+    }
+}
