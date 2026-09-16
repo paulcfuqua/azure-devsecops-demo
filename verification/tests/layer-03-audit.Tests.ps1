@@ -231,9 +231,13 @@ Describe 'layer-03-audit' {
             $expected | Should -BeLike "*$(@($script:Manifest.users).Count) users*"
             $expected | Should -BeLike "*$(@($script:Manifest.groups).Count) groups*"
             $expected | Should -BeLike "*$(@($script:Manifest.appRegistrations).Count) app registrations*"
-            # Guard against the counts silently collapsing to zero if the manifest
-            # ever fails to parse: the demo has five users, four groups, four apps.
-            @($script:Manifest.appRegistrations).Count | Should -Be 4
+            # Guard against the counts silently collapsing to zero if the manifest ever
+            # fails to parse - and, by design, against a new object landing unnoticed:
+            # this literal must be bumped by hand for every addition, which is exactly
+            # what caught F25 (3->4) and caught 2026-09-16 aws-lakehouse-link Task 1's
+            # aws-athena audience registration (4->5). The demo now has five users, four
+            # groups, five app registrations - bump this again on the next one.
+            @($script:Manifest.appRegistrations).Count | Should -Be 5
         }
     }
 
