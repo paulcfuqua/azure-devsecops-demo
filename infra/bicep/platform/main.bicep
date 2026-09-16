@@ -247,6 +247,31 @@ module rgOps 'br/public:avm/res/resources/resource-group:0.4.4' = {
   }
 }
 
+// ------------------------------------------------------------------ AWS trust identity (mls-rg-identity — a FIFTH group, deliberately not one of the four above)
+//
+// 2026-09-16 aws-lakehouse-link Task 2. NOT part of "all four — single owner of RG
+// creation" above: this resource group is deliberately OUTSIDE the set infra-down.yml
+// deletes by name, for the same reason the Fabric capacity's rg-fabric default is
+// (BLOCKER-E, scripts/bootstrap/02-fabric-capacity.ps1) — a managed identity's principal
+// id is destroyed and reissued on every teardown, and Task 3's AWS IAM trust policy is
+// conditioned on this one's principal id specifically. Self-contained module (creates its
+// own resource group AND the identity) rather than a sixth entry in the block above, so
+// nothing about "the four demo resource groups" changes shape; see
+// infra/bicep/modules/aws-identity.bicep's header for the full rationale and
+// verification/tests/failure-classes.Tests.ps1's "AWS trust identity survives teardown"
+// for the test that keeps it there across a rebrand.
+module awsIdentity '../modules/aws-identity.bicep' = {
+  name: 'l6-aws-identity'
+  params: {
+    prefix: companyPrefix
+    envSegment: env
+    location: location
+    costCenter: costCenter
+    owner: owner
+    dataClassification: dataClassification
+  }
+}
+
 // ------------------------------------------------------------------ observability (mls-rg-platform)
 
 module logAnalytics 'br/public:avm/res/operational-insights/workspace:0.16.1' = {
@@ -1424,6 +1449,23 @@ output costExportSystemTopicName string = costExportSystemTopic.outputs.name
 
 @description('Blob container the Cost Management export writes to and the cost-ingest Function is granted Storage Blob Data Reader on — the subject filter for the event subscription, and the scope of F13\'s seventh grant.')
 output costExportContainerName string = costExportContainerName
+
+// --- the AWS trust identity (2026-09-16 aws-lakehouse-link Task 2), outside the four ---
+//
+// Surfaced here so Task 3's AWS IAM trust policy author can read the principal id straight
+// from `az deployment sub show --name layer-06 --query properties.outputs` without a
+// separate `az identity show` call — though either read is equally authoritative; what
+// matters is that it is READ, never predicted (naming.bicep resolves the string; only
+// Azure assigns the id, and it is reissued on every teardown/rebuild).
+
+@description('Principal (object) id of the AWS trust identity (mls-rg-identity, outside the four demo groups). This is what Task 3\'s AWS IAM trust policy `sub` condition is built from.')
+output awsIdentityPrincipalId string = awsIdentity.outputs.principalId
+
+@description('Client (application) id of the AWS trust identity. Task 6 requests a token from this identity specifically by client id.')
+output awsIdentityClientId string = awsIdentity.outputs.clientId
+
+@description('Resource group the AWS trust identity lives in — mls-rg-identity, deliberately not one of the four the standard teardown deletes.')
+output awsIdentityResourceGroupName string = awsIdentity.outputs.resourceGroupName
 
 @description('Names of the four demo resource groups, as created.')
 output resourceGroupNames object = {
