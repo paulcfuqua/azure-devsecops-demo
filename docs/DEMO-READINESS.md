@@ -9,11 +9,25 @@ common defect this project has recorded.
 A layer is done when the independent auditor says so, not when a deploy exits zero. Read
 the criterion tables, not the job status.
 
+**Refreshed 2026-09-16.** The previous refresh was 2026-09-04 and it had aged twelve days.
+Everything below was re-measured for this pass or is explicitly marked as not
+re-measured — there is a **freshness** column and it is the most important one on the page.
+What was checked, and how: the live estate via `az`, GitHub workflow runs and their logs via
+`gh`, `compliance/state/` and the git log on disk. What was *not* checked is named rather
+than assumed.
+
+> **One caveat on provenance, stated because this file's whole value is provenance.** The
+> live Azure reads in the estate table below were made from an ambient `admin@` Azure CLI
+> context, **not** as `mls-verifier`. That is a *wider* credential, so those reads may see
+> what an audit would not: treat them as evidence the resources exist, never as evidence
+> that the Verifier identity can see them. Every criterion verdict in this file comes from a
+> real audit job running as `mls-verifier` in CI, and each one carries its run id.
+
 The history — every defect found while building this, in order, including the diagnoses
 that turned out to be wrong — is a dated archive:
 **[2026-08-22 → 09-03](findings/2026-09-03-finding-register.md)** and
-**[2026-09-04](findings/2026-09-04-finding-register.md)**, which carries F190–F194 and the
-one still open. Nothing was removed from either.
+**[2026-09-04](findings/2026-09-04-finding-register.md)**, which carries F190–F200. Nothing
+was removed from either, and nothing in this refresh removed anything from them.
 
 ---
 
@@ -25,13 +39,51 @@ below and know what to do next.*
 
 `docs/BRIEF.md` commits to **four showpieces** and **twelve layers**.
 
+### THE DEADLINE — the estate shuts down around 2026-09-27
+
+**This is now the thing that orders all other work, so it goes first.** The subscription and
+trials behind this estate expire and the estate is scheduled for teardown **around
+2026-09-27**. That is roughly eleven days from this refresh.
+
+What that changes about priority:
+
+| | |
+|---|---|
+| **Capture evidence while the estate is up** | Screenshots, real rows, rendered dashboards. After shutdown these are unobtainable. The outbrief's *prose* can be written afterwards; its *screenshots* cannot |
+| **Land the AWS cross-cloud link** | Six of nine tasks remain and it is the newest showpiece-grade capability. See the workstream table below |
+| **Chase the phase-3 gaps that still have time** | The copilot eval (F184), V9.5, V6.2's first post-fix run |
+| **Instrument the final teardown** | The last teardown is itself evidence — the claim the repository exists to make. Run it as a measured demonstration, not as cleanup |
+
+**Two objects survive the teardown deliberately and need their own line items**, because
+`infra-down.yml` deletes four resource groups by name and neither of these is among them:
+`mls-rg-identity` (holding `mls-aws-demo-id`) and the AWS IAM role created by the
+sponsor-run trust-anchor scripts. They were placed outside the blast radius on purpose;
+delete them deliberately at the end rather than discovering them later.
+
+### The live estate, read 2026-09-16
+
+Read directly from Azure on 2026-09-16. Credential caveat above applies.
+
+| | |
+|---|---|
+| Resource groups | **5** — `mls-rg-apps`, `mls-rg-data`, `mls-rg-ops`, `mls-rg-platform` (the four the teardown deletes) plus **`mls-rg-identity`**, new and deliberately outside the blast radius |
+| Resources in the teardown blast radius | **30** — apps 10, ops 9, platform 8, data 3. The same 30 the 2026-09-03 rebuild produced |
+| Resources outside it | **1** — `mls-aws-demo-id`, the user-assigned identity the AWS trust chain federates from |
+| Container apps | **6 / 6** `Running` / `Succeeded` — compliance, control-tower, data-api, launch-ops, mcp, vuln-lab |
+| Region | `centralus`, all five groups |
+| Uptime | unattended since the 2026-09-03 rebuild — no redeploy of L2/L5/L6/L7 in thirteen days |
+
+**One live gap worth knowing before you plan AWS work.** `mls-aws-demo-id` exists, but
+`mls-mcp-demo-ca` still lists **only its own identity** — the AWS identity is wired in
+`infra/bicep/apps/main.bicep` and **has not been deployed**. L7 must be redeployed before
+any token exchange from that app can work. Verified 2026-09-16 by reading the container
+app's `identity` block directly.
+
 ### The teardown-and-rebuild, measured 2026-09-03
 
-This is the claim the repository exists to make, so it goes first.
-
-**Two full cycles were run on 2026-09-03.** The second existed because the fixes from the
-first had never been through a teardown — and it found four more defects, two of them in
-the repairs the first cycle produced.
+This is the claim the repository exists to make, so it keeps its place. **These figures are
+from 2026-09-03 and have not been re-measured** — there has been no teardown since. They are
+history, not current state, and the next teardown is the 2026-09-27 shutdown.
 
 | | |
 |---|---|
@@ -39,178 +91,308 @@ the repairs the first cycle produced.
 | Rebuild wall clock | **87 minutes** for the full ordered run |
 | Deploy work inside that | **~30 minutes** |
 | Verification inside that | **~84 minutes** |
-| Resources before / after | **30 / 30 / 30** across both cycles — four resource groups, one region, reproduced exactly each time |
+| Resources before / after | **30 / 30 / 30** across both cycles — reproduced exactly each time |
 | Container apps | **6 / 6**, same names and ingress shape |
 | ACA domain suffix | regenerates every rebuild, so no stored FQDN survives (F129's class) |
 | Log Analytics workspace | **three distinct identities across three builds** — `5c967cf4` → `87f95e84` → `e26c9dcb`. F107's purge holding across repeated cycles rather than once |
-| Managed identities | **all recreated with new principal ids**, e.g. the SQL server's `031dbb19` → `5e231db9` and data-api's client id `3dadafd7` → `ba91c8ea`. This is the condition F172 exists for, and the reason cycle 2 was worth running |
+| Managed identities | **all recreated with new principal ids**. This is the condition F172 exists for, and the reason cycle 2 was worth running |
 
 **The estate deploys in half an hour and takes three times that to verify.**
 `docs/runbooks/kill-rebuild.md` § 5 budgets "~8–10 min" for the audits and attributes the
-wall clock to the deploys; measured, that is inverted. Two audits — L5 at 31.2 min and L7
-at 50.6 min, both on their *failing* run — were 94% of the audit time. The `<60-minute`
-claim in § 5 is not currently met and the margin is eaten by audit retry windows, which
-that section's model does not represent at all.
+wall clock to the deploys; measured, that is inverted. The `<60-minute` claim in § 5 was not
+met on 2026-09-03 and the margin is eaten by audit retry windows, which that section's model
+does not represent at all. **Whether it is met now is unknown** — several audits have had
+their wait windows narrowed since (F169's class), and nothing has re-measured the total.
 
 ### The four showpieces
 
-| # | Showpiece | Status | Evidence |
-|---|---|---|---|
-| **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **working, and re-proven on the rebuilt estate** | **V7.6 PASSES**: the data API answers with rows, not merely a status code. This is the criterion that exists because an empty estate once signed off 5/5; it failed on the rebuild, was root-caused and fixed in the deploy path, and now passes. **Not re-opened in a browser since the rebuild** — the API is verified, the pixels are inferred |
-| **4** | **Compliance platform** — NIST 800-171 | 🟡 **shipped, and its state is five days stale** | `verification/layer-12-audit.ps1` reported 4 PASS + 2 SKIP on 2026-09-01 and **has not been re-run since the rebuild**. `compliance/state/` holds exactly two snapshots, newest **2026-08-29**, because F120 is still open — PR #147 has carried newer state since 2026-09-01 with **zero checks** and cannot merge. Committed figures: 110 requirements, **0 COMPLIANT**, 15 PARTIAL, 1 GAP, 94 NOT_ASSESSED; provenance **0 machine-verified**, 16 asserted |
-| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **agent survives the rebuild; the eval cannot yet grade it** | **F183 fixed and merged, so the eval finally runs**: it read the Direct Line secret as an identity holding no Key Vault role, reported the secret ABSENT rather than UNOBSERVABLE, and suppressed its own artifact — V8.2/V8.4/V8.5 skipped and L8 stayed green over an ungraded agent for the life of the project. **`layer-08-agent-eval` now uploads**, reporting 0/10, p95 4.0s, **0 tool calls**, no transport errors. **That result is not yet interpretable (F184)**: the eval connects with the Direct Line secret and no user token, and this agent authenticates manually (Entra ID V2, see F128), so a healthy agent may decline tools to an unauthenticated caller and produce exactly this signature. **The agent itself survives the rebuild** — sponsor-confirmed; the browser failure was an expired minted token with the sign-in button correctly offered, which is F142/F150 working. Next: can the eval authenticate as a user, and if not, should it report UNOBSERVABLE rather than 0/10 |
-| **3** | **Self-healing code** | ✅ **it healed something, on 2026-09-04, for the first time** | **Copilot Autofix wrote a real fix and the chain merged and deployed it unattended.** Seeded alert #2 `js/command-line-injection` → Autofix `status=success` → PR #226 → 18-check gauntlet → auto-merge `d77aabf` → witness revision `--0000003` stamped with that commit → alert `state=fixed`. **74 seconds from merge to closed alert.** Autofix replaced `cp.exec` on an interpolated shell string with `cp.execFile("git", [...])` on an argv array — the textbook fix, which we did not write. It had never run before because it *could not*: **F188**, no `schedule` arm in the lane picker, so Autofix was skipped on every scheduled run the repository has ever made. Three more defects were stacked behind it (**F188** tool filter, **F188b** missing labels, **F188c** the witness path) — see the blocker tree. The **Dependabot** lane still has no subject (**F126**, unresolved). **V10.1's verdict has not been re-run**, so this is an evidence trail, not a Verifier sign-off |
+| # | Showpiece | Status | Freshness | Evidence |
+|---|---|---|---|---|
+| **3** | **Self-healing code** | ✅ **working, and the only showpiece with a verdict measured today** | **current — 2026-09-16 18:27 UTC** | **All four criteria PASS**, read from `self-heal` run `35134434031`, verify job running as `mls-verifier`. **V10.1** the backlog drains, no healable finding past its declared SLO · **V10.2** every closure is traceable · **V10.3** the alert surface was readable, so a denial is never recorded as "nothing to heal" · **V10.4** pending-solution is not a dumping ground. The workflow runs **every 6 hours** (`cron: 13 */6 * * *`) and **the last twelve consecutive scheduled runs all concluded `success`** (2026-09-14 01:01 → 2026-09-16 18:26). This is no longer an evidence trail from one lucky day; it is a standing green criterion set re-measured four times daily |
+| **4** | **Compliance platform** — NIST 800-171 | 🟡 **the platform works and its history is now real; the content is still thin** | **current — 2026-09-16 20:34 UTC** | **V12.1, V12.2, V12.4, V12.6 PASS; V12.3 and V12.5 SKIP**, from `compliance` run `35147408731`. **V12.6 — "the collection history is a git history" — now passes**, which is BLOCKER-C closing. `compliance/state/` holds **fourteen** snapshots with an **unbroken daily run 2026-09-05 → 2026-09-16**, all committed to `main`. Latest artifact `state-latest.json`, collected `2026-09-16T20:35:03Z` at commit `5890313`. **The figures have not moved and that is the honest part**: 110 requirements, **0 COMPLIANT**, 15 PARTIAL, 1 GAP, 94 NOT_ASSESSED; provenance **0 machine-verified**, 16 asserted, 94 none. The freshness problem is fixed. The coverage problem is not, and was never the same problem |
+| **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | 🟡 **was working on 2026-09-03; no current verdict** | **stale — 13 days** | **V7.6 PASSED on 2026-09-03**: the data API answered with rows, not merely a status code. That is the criterion that exists because an empty estate once signed off 5/5. **L7 has not been audited since.** What *is* current: all six container apps are `Running` as of 2026-09-16. What is not: whether the API still returns rows, and whether the pixels render. **Not re-opened in a browser since the rebuild** — on 2026-09-03 the API was verified and the pixels inferred; today neither is |
+| **1** | **Copilot service** — Ask tab over Direct Line | 🟡 **agent survives the rebuild; the eval still cannot grade it** | **stale — 13 days** | Unchanged since 2026-09-03 and **not re-run**. F183 is fixed, so `layer-08-agent-eval` uploads and V8.2/V8.4/V8.5 no longer skip for want of an artifact. The eval reported 0/10, p95 4.0s, **0 tool calls**, no transport errors. **That result is still not interpretable (F184)**: the eval connects with the Direct Line secret and no user token, and this agent authenticates manually (Entra ID V2, F128), so a healthy agent declining tools to an unauthenticated caller produces exactly this signature. The open question is unchanged: can the eval authenticate as a user, and if not, should it report UNOBSERVABLE rather than a grade of zero |
 
 ### The twelve layers
 
-**Re-verified on the rebuilt estate (2026-09-03):**
+**Current verdicts — measured within the last 24 hours:**
 
-| Layer | Status | Note |
+| Layer | Status | Measured | Note |
+|---|---|---|---|
+| L3 Entra | ✅ **4 of 4 PASS** | **2026-09-16 20:32**, run `35147161355` | V3.1 object counts · V3.2 group memberships · V3.3 CA policy state, *and the enforced policy really enforces MFA* · V3.4 licensing 5 of 5. Re-run because the AWS workstream added a fifth app registration; it is current by accident of that work, not by schedule |
+| L10 self-healing | ✅ **4 of 4 PASS** | **2026-09-16 18:27**, run `35134434031` | V10.1–V10.4, policy-driven. See showpiece #3 |
+| L12 compliance | ✅ **4 PASS + 2 SKIP** | **2026-09-16 20:34**, run `35147408731` | V12.1/2/4/6 PASS, V12.3 and V12.5 SKIP. Runs nightly at 02:17 UTC and on every push to `main` |
+
+**Verified on the rebuilt estate 2026-09-03/04, and NOT re-audited since.** These are real
+verdicts against a real deploy — and they are twelve to thirteen days old, against an estate
+nobody has redeployed in that time. Treat them as *last known good*, not as current.
+
+| Layer | Last known | Measured | Note |
+|---|---|---|---|
+| L1 repo / IaC / OIDC | ✅ green | 2026-09-04, run `33834831053` | `verify-l1` concluded `success`. **Criterion-level verdicts were not re-read for this refresh**, so "green" here means the job, which is exactly the thing this file tells you not to trust. V1.5 (governance mode vs. the live ruleset) is the one worth re-running: `.github/governance-mode.json` still declares `development`, declared 2026-09-04 |
+| L2 landing zone | ✅ verified | 2026-09-03, inside `infra-up` | No standalone `layer-02-landing-zone` run has ever been made; its sign-off happens inside the ordered rebuild |
+| L4 Purview labels | ✅ **2 PASS + 1 by-design SKIP** | 2026-09-03, run `33753883078` | `V4.1` the four labels · `V4.2` survival across kill/rebuild, deferred to L11 by design · `V4.3` the label policy publishes the taxonomy. The first verdict this layer ever had. **V4.2 is still unproven by machine.** Nothing has touched Purview since, so this is likely still true — *likely* is not verified |
+| L5 Fabric | ✅ 4 of 4 | 2026-09-03, inside `infra-up` | First clean sign-off after F104/F105/F114. The last *standalone* `layer-05-fabric` run was 2026-09-01 and it **failed**; do not read that run as current either |
+| L6 platform | 🟡 **6 of 8, and V6.2's fix has never executed** | 2026-09-02 / 2026-09-03 | V6.1, V6.5, V6.7, V6.8 PASS; V6.3, V6.4 PENDING by design. **V6.2 is the live unknown — see the blocker tree, because the file's old account of it was wrong** |
+| L7 apps | ✅ 7 of 7 | 2026-09-03 | Including **V7.6** — the data API answers with rows — against a data-api identity whose client id had just changed, with Directory Readers holding zero members. F172's fix removed the dependency rather than automating it. **Now carries undeployed change**: `apps/main.bicep` wires the AWS identity into `mls-mcp-demo-ca` and that has not been applied |
+| L8 Copilot Studio | 🟡 V8.1 PASS, V8.2–V8.5 short of a verdict | 2026-09-03 | See showpiece #1. Also true regardless of the agent's health: the import job prints **"L8 — imported, NOT yet live"**, lists seven manual steps, and **reports success anyway**. A green L8 has never meant a live agent |
+| L9 DevSecOps chain | 🟡 partial | 2026-09-03, `zap` run `33720917308` | The DAST was re-run on the rebuilt estate and is real: six targets *derived from Azure*, three authenticated, **zero High-risk alerts**. V9.5 remains the gap and needs a Defender toggle round-trip, which is a G2 action. The last standalone `layer-09-devsecops` run was 2026-09-02 and **failed** |
+| L11 teardown / rebuild | ✅ V11.1 and V11.2 PASS | 2026-09-03, run `33751531348` | V11.2 — the criterion proving a teardown did not cross the G3 tenant-object line — reported for the first time ever, after three attempts and three distinct causes (F170, F180, and F180's own fix). **V11.3–V11.5 remain unreported**; the up-phase audit has not completed a run. **The 2026-09-27 shutdown is the next chance to get them, and probably the last** |
+
+### The cross-cloud AWS lakehouse link — a workstream this file has never carried
+
+**New since the last refresh, and it is where the active work is.** A link from the Copilot
+agent to the sponsor's **real** AWS Athena lakehouse (`launch-intel`), over **OIDC
+federation with no stored AWS credential** — which is the same trust model the Azure side
+already uses, extended across a cloud boundary.
+
+- Spec: [`docs/superpowers/specs/2026-09-16-aws-lakehouse-link-design.md`](superpowers/specs/2026-09-16-aws-lakehouse-link-design.md)
+- Plan: [`docs/superpowers/plans/2026-09-16-aws-lakehouse-link.md`](superpowers/plans/2026-09-16-aws-lakehouse-link.md)
+- Ledger: `.superpowers/sdd/2026-09-16-aws-lakehouse-link/progress.md` — **detailed, and the
+  best single account of what went wrong and why.** Read it before picking up a task
+
+**Three of nine tasks merged to `main`, all on 2026-09-16:**
+
+| Task | What it landed | PR |
 |---|---|---|
-| L2 landing zone | ✅ verified | deploy 8.3 min + verify 0.5 min. The runbook calls this an "idempotent no-op, ~1–2 min"; it is a no-op logically and still costs nine minutes of wall clock |
-| L3 Entra | ✅ verified | 4 of 4. Verify went **45.9 min → 0.9 min** once the drift sweep stopped inheriting a propagation window it could never need (F169) |
-| L5 Fabric | ✅ verified | **4 of 4**, first clean sign-off since F104/F105/F114. Seed took 4.0 min against a claimed 20–25 |
-| L6 platform | 🟡 **6 of 8, V6.2 failing on the rebuilt estate** | V6.1, V6.5, V6.7, V6.8 PASS; V6.3 and V6.4 PENDING by design (24 h cost-export window, 75 min SQL auto-pause). **V6.2 — a KQL query against the workspace — fails, twice, three hours apart (F182).** It reports *"the query returned no result (HTTP error, or the Reader identity cannot query this workspace)"*, which is two different diagnoses in one sentence and commits to neither. Its sibling V6.3, in the same file, names the likely mechanism exactly: the CI federated assertion expires after ~5 minutes and these audits run 14–16. **Unproven, deliberately** — see F182. V6.8 still confirms Key Vault references resolve and V6.7 that the Function Apps hold code |
-| L7 apps | ✅ **verified 7 of 7, and it is the session's strongest result** | Including **V7.6** — the data API answers with rows — against a data-api identity whose client id had just changed from `3dadafd7` to `ba91c8ea`, with **Directory Readers holding zero members**. The old path needed that privilege, bound to an identity destroyed with its resource group every teardown (F172). The fix removed the dependency rather than automating it, and the step whose job is to announce a failed grant **skipped**, where in cycle 1 it fired. A change is finished when a rebuild reproduces it; this one now is |
-| L8 Copilot Studio | 🟡 partial, and for a different reason than before | **V8.1 PASS**; V8.2–V8.5 still short of a verdict, but **no longer for want of an artifact** — F183 is fixed and `layer-08-agent-eval` now uploads, having never done so once. The eval reports 0/10 with **zero tool calls**, which **F184 says is not yet interpretable**: it connects with the Direct Line secret and no user token against an agent that authenticates manually. Also true regardless: the import job prints **"L8 — imported, NOT yet live"** with seven manual steps and reports **success** anyway, so a green L8 has never meant a live agent |
+| 1 | The AWS-facing Entra audience — a fifth app registration, tokenised in `infra/entra/manifest.json` | **#265** |
+| 2 | The durable trust identity `mls-aws-demo-id` in `mls-rg-identity`, outside the teardown blast radius | **#266** |
+| 3 | The sponsor-run AWS trust-anchor and Athena role scripts | **#267** |
 
-**Blocked, and honestly so:**
+**Six remain**: 4 the Trino dialect (in flight), 5 the Athena backend, 6 configuration and
+the token exchange, 7 tool registration, 8 the two new criteria, 9 deploy and probe against
+the real engine.
 
-| Layer | Status | Note |
-|---|---|---|
-| L4 Purview labels | ✅ **verified 2026-09-03 — the first verdict it has ever had** | `[PASS] V4.1` the four labels with expected GUIDs · `[SKIP] V4.2` survival across a kill/rebuild, deferred to L11 by design · `[PASS] V4.3` the label policy publishes the taxonomy. **2 PASS + 1 by-design SKIP.** The labels were always real; nothing could prove it. Three defects stacked behind one another and each hid the next — **F175** (the guard read a `verify` secret from a `demo` job, so the job went green in six seconds having skipped the audit), **F176** (`Connect-IPPSSession`'s `-CertificateThumbprint` is Windows-only, so on ubuntu the call died at binding), and **F177** (`mls-verifier` held neither `Exchange.ManageAsApp` nor any directory role). The first two were fixed in the repo; the third needed a human tenant grant, authorised by the sponsor and performed 2026-09-03 as g0-bootstrap step 11d. See **F179**. **V4.2 is still unproven by machine** — it is deferred to L11, whose V11.2 is the criterion that had never had evidence |
+**What this workstream has already taught, and it belongs in the outbrief.** The
+deploy-identity divergence recorded as a *deferred minor* after Task 1 — one deploy run
+under an ambient `admin@` token instead of CI's OIDC identity — was assumed self-closing.
+It was the cause of a **silent, unreportable write failure two tasks later in a different
+subsystem**: `mls-github-deployer` holds `Application.ReadWrite.OwnedBy` (narrowed
+deliberately by F8), the app created out of band had no owner, so L3 could never write it —
+and **could never have told us**, because a converged app issues no PATCH at all. The
+sponsor added the owner; L3 now returns the declared token version where it returned null.
+That is F125's class one level up: not a value that cannot be seen, but a *permission* that
+was never held, on an object nobody noticed was unowned.
 
-**Not re-run since the rebuild — no current verdict:**
-
-| Layer | Last known | Note |
-|---|---|---|
-| L1 repo / IaC / OIDC | ✅ | `oidc-login` passed inside the rebuild (V1.1); the full L1 audit has not been re-run |
-| L9 DevSecOps chain | 🟡 partial | **The DAST was re-run on the rebuilt estate and is real**: six targets *derived from Azure*, three of them authenticated, **zero High-risk alerts**. V9.5 remains the gap (needs a Defender toggle round-trip, a G2 action) |
-| L10 self-healing | ✅ **the chain completed end to end on 2026-09-04 — the first time in this repository's history** | All seven stages, on the seeded vuln-lab flaw, each read from an independent API: alert **#2** `js/command-line-injection` in `apps/vuln-lab/seeds/component-history.js` → **Copilot Autofix** `status=success` (run 33872767439) → **PR #226** labelled `security,self-heal` → 18-check gauntlet green → **auto-merged by automation** 12:35:39Z, merge commit `d77aabf` → witness revision `mls-vuln-lab-demo-ca--0000003` created 12:36:19Z carrying `MLS_HEAL_COMMIT=d77aabf` → alert **`state=fixed`** 12:36:53Z. Autofix's own diff replaced `cp.exec` on an interpolated shell string with `cp.execFile("git", [...])` on an argv array. **Four defects stacked behind one another and each hid the next** — **F188** (no `schedule)` arm in the lane picker, so `if: kind == 'code-scanning'` was false on every scheduled run and Autofix had *never* been invoked; V10.1 was unreachable, not merely failing), **F188** second half (the listing did not filter `tool_name=CodeQL`, and 37 of 44 open alerts are Trivy, which Autofix does not cover), **F188b** (`gh pr create --label` validates labels *before* opening anything and neither `security` nor `self-heal` had ever existed, so the first working run stranded a real fix on a branch), and **F188c** (only `apps/vuln-lab/**` merges re-stamp the witness, so stage 6 was unreachable for a heal anywhere else — proven by PR #225, a correct Autofix heal in `apps/mcp-tools` that merged itself and still could not complete a trail). **V10.1's own verdict has not been re-run since**, so this is an evidence trail, not a Verifier sign-off |
-| L11 teardown / rebuild | ✅ **V11.1 and V11.2 both PASS — V11.2 for the first time ever** | The criterion proving a teardown did not cross the G3 tenant-object line has finally reported. **It took three attempts and three distinct causes**: F170 (guard read a `verify` secret from a `demo` job), F180 (`cond && '' || '-Skip…'` can never yield the empty string, so the flag was always passed), and F180's own fix (an explanatory comment inside an `args: |` literal block reached the script as argv). Each was invisible without performing a teardown. V11.3–V11.5 remain unreported — the up-phase audit has not completed a run |
-| L12 compliance | ✅ (2026-09-01) | Not re-run since the rebuild |
+Two more from the same workstream, both caught in review rather than production: an S3
+statement conditioned on a key S3 never supplies for that action, which **granted nothing
+while reading as a tighter version of itself**; and a `mapfile` that macOS's bash 3 does not
+have, which under `set -u` would have silently dropped every check after it.
 
 ### The mission itself
 
 *"Fully agent-instantiated … destroyed and rebuilt on demand … the repo is the product."*
 
-**Demonstrated.** The estate was destroyed and rebuilt from a cold dispatch on 2026-09-03,
+**Demonstrated, on 2026-09-03.** The estate was destroyed and rebuilt from a cold dispatch,
 in layer order, with independent sign-off at each step, and came back with the same 30
-resources. Four fixes that had never been through a teardown were tested by it and all four
-survived: the derived DAST targets, the Entra probe roles, the Log Analytics purge (F107),
-and an Easy Auth audience that was correctly *erased* because the template no longer
-produces it.
+resources — which it still has today. Four fixes that had never been through a teardown were
+tested by it and all four survived: the derived DAST targets, the Entra probe roles, the Log
+Analytics purge (F107), and an Easy Auth audience that was correctly *erased* because the
+template no longer produces it.
 
-**What the rebuild cost, and this is the honest part.** It failed twice before it passed.
-It surfaced eight findings (F167–F177), of which the three most valuable were not bugs in
-the estate but **green checks that were verifying nothing** — L4's audit, V11.2, and a
+**What the rebuild cost, and this is the honest part.** It failed twice before it passed. It
+surfaced eleven findings (F167–F177), of which the three most valuable were not bugs in the
+estate but **green checks that were verifying nothing** — L4's audit, V11.2, and a
 grant-failure reporter that reported success. A rebuild is the only thing that finds those.
+
+**The claim is thirteen days old and the estate has run untouched since.** A rebuild proves
+reproducibility at the moment it runs. The 2026-09-27 shutdown is the next and final
+opportunity to prove it again, and it should be instrumented as evidence rather than run as
+cleanup.
 
 ---
 
 ## THE BLOCKER TREE
 
-*Ordered by how much each unblocks.*
+*Ordered by how much each unblocks. Entries that no longer describe reality are retired
+here, with what replaced them, rather than deleted.*
 
-- **BLOCKER-A is CLOSED (2026-09-03).** `mls-verifier` now holds `Exchange.ManageAsApp`
-  and **Global Reader** — read-only, deliberately not the Compliance Administrator role
-  `mls-purview` carries, because a Verifier credential that can *write* labels would itself
-  be a finding. The sponsor authorised the grant; it was performed as g0-bootstrap step 11d
-  and read back. L4 returned 2 PASS + 1 SKIP.
+- **BLOCKER-C is CLOSED (2026-09-05).** *The nightly compliance state could not merge
+  (F120).* PR #147 — the one this file recorded as open with zero checks — was **closed
+  2026-09-05**. The mechanism is fixed at the root: the commit job now pushes with
+  `SELF_HEAL_TOKEN` rather than `GITHUB_TOKEN`, and where a direct push to `main` is
+  available it takes it, so no pull request needs checks that can never report.
 
-  **Performing it surfaced F178, which is the more useful outcome.** The step as written
-  told the operator to run `az ad app permission admin-consent`, which **removed three
-  `Telemetry.Probe` grants and created nothing** — it reconciles against the app
-  registration's declared permissions rather than adding to what is there. Those three roles
-  are how the authenticated DAST gets past Easy Auth, so a documentation step would have
-  silently reverted L9's scan to scanning a login page. Repaired by re-running
-  `layer-03-entra.yml` — the deploy path fixing damage done from a terminal — and step 11d
-  now uses a direct additive POST with a warning block.
+  **The evidence is not the workflow's own success, it is the artifact.** `compliance/state/`
+  holds an **unbroken daily sequence 2026-09-05 → 2026-09-16** committed to `main`, each as a
+  `verify(compliance): state at <sha>` commit, and **V12.6 — "the collection history is a git
+  history" — PASSES** as of 2026-09-16 20:34. There is a visible gap 2026-08-30 → 2026-09-04,
+  which is exactly the nine days F120 ate; it is left in place because it is the record.
 
-- **BLOCKER-B is HALF CLOSED (2026-09-03).** The eval's result now *reaches* the audit:
-  F183 is fixed, `layer-08-agent-eval` uploads for the first time ever, and V8.2/V8.4/V8.5
-  can stop skipping on "no eval artifact". What replaces it is a sharper question — the
-  eval reports 0/10 with zero tool calls, and **cannot tell an unhealthy agent from an eval
-  that is not allowed to reach a healthy one** (F184). Next: can the eval authenticate as a
-  user, and if not, should it report UNOBSERVABLE rather than a grade of zero.
+  *What replaced it:* nothing blocking. The remaining compliance problem is **coverage, not
+  freshness** — 0 machine-verified of 110 requirements — and that is a different piece of
+  work that was never what BLOCKER-C described.
 
-  A second gap sits beside it and is independent of the agent's health: the import job
-  prints **"L8 — imported, NOT yet live"**, lists seven manual not-solution-aware steps
-  (publish, Entra ID V2 auth, MCP connection, generative orchestration, channel security,
-  sharing), and **reports success regardless**. A green L8 does not mean a live agent, and
-  nothing currently asserts the difference.
+- **BLOCKER-D is RETIRED, not fixed — the model it described no longer exists.** It read
+  *"self-healing has no subject: Dependabot opens no security PR for the three seeded CVEs,
+  so the lane has nothing to adopt."*
 
-- **BLOCKER-C — the nightly compliance state cannot merge (F120).** PR #147, open since
-  2026-09-01, **zero checks**, blocked. A `GITHUB_TOKEN` push triggers no workflow runs, so
-  no required check ever reports. `compliance/state/` is five days stale, which undercuts
-  showpiece #4's "the history is a git history" claim directly.
+  **PR #237 (merged 2026-09-07) retired the seeded-CVE plant by sponsor-approved design.**
+  The showpiece is no longer "a planted flaw gets healed". It is now four policy-driven
+  criteria over the *real* finding backlog, declared in
+  **`.github/self-heal-policy.json`** (`declaredAt: 2026-09-07`, `declaredBy: sponsor`) and
+  read by `verification/layer-10-audit.ps1`:
 
-- **BLOCKER-D — self-healing has no subject (F126).** Dependabot opens no *security* PR for
-  the three seeded CVEs, so the lane has nothing to adopt. Ruled out: the repo setting,
-  patched-version availability, ignore conditions, lingering branches. Leading candidate:
-  `open-pull-requests-limit: 0` on `/apps/vuln-lab`, whose exemption for security updates
-  is asserted in a comment and has never been verified. **Do not edit that limit casually**
-  — raising it also enables version-update PRs that would disarm the seed.
+  - **V10.1** the backlog drains — no healable finding open past its declared SLO, reported
+    **per lane and per severity, never blended into one number**
+  - **V10.2** every closure is traceable — a complete heal trail, or an explicit record of
+    being closed another way
+  - **V10.3** the alert surface was **readable** — a denial is never recorded as "nothing to
+    heal" (F102/F103/F105's rule, encoded)
+  - **V10.4** pending-solution is not a dumping ground — every finding held there is checked
+    for an upstream fix that actually exists
 
-  **This described the DEPENDABOT lane, and it hid a larger fact about the other one
-  (2026-09-04).** The CodeQL lane had a subject the whole time — seven open CodeQL alerts,
-  one of them the seeded vuln-lab flaw the criterion was written for — and never once
-  looked at it. The chain completed end to end that day, on that alert, and the layer row
-  above carries the trail. Four defects, each hiding the next:
+  `apps/vuln-lab` is now **excluded from the backlog by policy**, not by accident: it is a
+  manual demonstration generator a human arms deliberately, and its knowingly-vulnerable pins
+  must not age against an SLO the estate never intended to meet. The exclusion is from the
+  *backlog*, not from visibility — the alerts still exist, V10.3 still proves the surface was
+  readable, and the audit reports how many findings were excluded and why, so an empty backlog
+  cannot be manufactured by quietly adding a path.
 
-  - **F188.** The lane picker's `case "${EVENT}"` had arms for `workflow_dispatch` and
-    `repository_dispatch` and **none for `schedule`**, which is the workflow's normal
-    trigger. Every scheduled run fell through to the `kind="dependabot"` initialiser, so
-    `if: kind == 'code-scanning'` was false and **Copilot Autofix was never invoked, on any
-    run, since the repository was created**. V10.1 was unreachable, not failing.
-  - **F188, second half.** The code-scanning listing did not filter `tool_name=CodeQL`.
-    That surface also carries Trivy's uploaded SARIF — 37 of 44 open alerts on `main` — and
-    Autofix covers CodeQL only, so the lane could pick an alert it can never fix and report
-    "no autofix suggestion" forever, which is indistinguishable from the capability being
-    absent.
-  - **F188b.** `gh pr create --label` validates labels **before** opening anything, and
-    neither `security` nor `self-heal` had ever existed in this repository. The first run
-    that reached Autofix got a real fix, committed it to a branch, then exited 1 and
-    stranded it. The workflow now creates both itself with `--force`, because doing it by
-    hand fixes one clone and the rebuild walks straight back into it.
-  - **F188c.** Only a merge touching `apps/vuln-lab/**` re-stamps the deployment witness,
-    so V10.1 stage 6 is unreachable for a heal anywhere else. **PR #225 proved it**: a
-    correct Autofix patch in `apps/mcp-tools`, gauntlet green, merged itself, and still
-    could not complete a trail. The lane now prefers an alert whose heal can finish —
-    F137's rule, applied to the second lane.
+  **All four criteria PASS as of 2026-09-16 18:27**, and have done across twelve consecutive
+  scheduled runs. The F188/F188b/F188c story that sat under this entry is history now and
+  lives in the 2026-09-04 register; it is not restated here.
 
-  **Nothing about any of this was red.** A skipped job is not a failed one, and every run
-  went green on the lane it did take. It surfaced because a human looked at a notification
-  and asked why the job named after the product said "Skipped".
+- **DEADLINE — the `container-image` lane deferral expires 2026-10-07.** Declared in
+  `.github/self-heal-policy.json` under `laneDeferral`. Lane 3 has **no automated path on
+  this subscription**: ACR Tasks returns `TasksOperationsNotAllowed`, reproduced twice on two
+  registries in two resource groups, and the documented scheduled-rebuild fallback is not
+  built. Its findings do not count against V10.1 until that date, **at which point the
+  deferral stops applying by itself and V10.1 goes red if the lane still has no mechanism.**
 
-- **F187 — the L10 audit crashed instead of reporting, and the guard was dead code.**
-  `Get-RevisionAfter` declared `[AllowNull()][datetime]$MergedUtc` and guarded its body with
-  `if ($null -eq $MergedUtc)`. `[AllowNull()]` waives null *validation* but not type
-  *coercion*, and `$null` does not convert to a value type — so the binder threw before the
-  guard could run, and that guard had never executed since the day it was written. The
-  state that triggers it is the chain's most ordinary one: a PR armed for auto-merge and not
-  merged yet. Both trails had already diagnosed every other stage, and the exception text
-  replaced all of it. `verification/tests/failure-classes.Tests.ps1` now sweeps for the
-  shape — carrying its own detector test, because the first draft of that sweep **passed
-  against the very line it was written to catch** (a variable assigned in a Pester
-  `Describe` body is set during discovery and gone before the `It` runs).
+  The expiry is the design, not an oversight: *"an exclusion that cannot expire is exactly the
+  dumping ground V10.4 exists to prevent, one level up."* The audit prints the deferred count,
+  the expiry and the days remaining on **every** run. **This date falls after the 2026-09-27
+  shutdown**, so in practice it expires against an estate that no longer exists — which is
+  worth deciding about deliberately rather than discovering.
+
+- **DEADLINE — the one real Dependabot alert reaches its SLO on 2026-09-27.** Alert **#5**,
+  `esbuild`, severity **low**, on the root `package-lock.json`, created **2026-08-28**. The
+  policy declares **30 days** for `low`, so the clock runs out on **2026-09-27** — the same
+  day as the shutdown. It is currently the **only** open alert in the backlog: the other
+  three open Dependabot alerts (`semver` high, `minimist` critical, `json5` high) are all in
+  `apps/vuln-lab` and excluded by policy.
+
+  **This is what V10.1 is standing on.** A single low-severity finding inside its window is a
+  passing backlog, and it will stop being one on the 27th. Heal it, or record the decision
+  not to.
+
+- **F201 — `.github/dependabot.yml` declares per-directory npm entries for npm *workspace
+  members*, so its bump PRs are dead on arrival.** New, live, and unrecorded until this
+  refresh. **Verified 2026-09-16 against the four open Dependabot PRs**, not inferred.
+
+  Seven npm entries name directories that the root `package.json` also lists in
+  `workspaces` — `/apps/launch-ops`, `/apps/control-tower`, `/apps/mcp-tools`,
+  `/apps/data-api`, `/apps/directline-token`, `/apps/cost-ingest`,
+  `/apps/shared/spec-renderer`. A per-directory entry bumps that member's `package.json` and
+  **does not update the root `package-lock.json`**, which is the only lockfile root `npm ci`
+  reads. Every job that starts with `npm ci` then dies:
+
+  > `npm error code EUSAGE` · `` `npm ci` can only install packages when your package.json and package-lock.json … are in sync `` · `npm error Missing: @azure/monitor-opentelemetry-exporter@1.0.0-beta.45 from lock file`
+
+  | PR | Dependabot entry | Files changed | Outcome |
+  |---|---|---|---|
+  | **#261** | `/apps/data-api` — a workspace member | `apps/data-api/package.json` only | **6 checks FAIL**, root `npm ci` EUSAGE |
+  | **#262** | `/apps/mcp-tools` — a workspace member | its `package.json` + its *own* lockfile | **6 checks FAIL**, root `npm ci` EUSAGE |
+  | **#264** | `/` — the root entry | `apps/data-api/package.json` **+ root `package-lock.json`** | **green, 24 / 0** |
+
+  **#264 is the control that proves it.** It bumps *the same package* as #261, and it is green
+  purely because the root entry maintains the root lockfile. The per-directory entries are
+  both redundant with the root entry and broken; the root entry already covers every workspace
+  member.
+
+  **Do not fold PR #263 into this finding — it fails for a different, already-understood
+  reason.** #263 is the **root** group bump. It correctly updates the root `package.json`, the
+  root lockfile and seven member manifests, so root `npm ci` is fine. It fails two checks
+  because `apps/mcp-tools` carries a **standalone** `package-lock.json` that nothing at the
+  root maintains, and #263 left it behind — caught by `verification/tests/lockfile-sync.Tests.ps1`
+  (`apps/mcp-tools's lockfile is stale`) and again by the mcp-tools container build. That class
+  is documented at length in that test's own header, including the trap that causes it:
+  `npm install --package-lock-only` inside a workspace member updates the **root** lockfile
+  unless you pass `--no-workspaces`. Two adjacent lockfile defects, one fix each.
+
+  **No test reads `.github/dependabot.yml` for this shape.** That is the gap worth closing —
+  *"a class paid for once becomes a check, not just a finding"* — and
+  `verification/tests/failure-classes.Tests.ps1` is where it belongs.
+
+- **F182's leading hypothesis about V6.2 was WRONG, and F196 says so.** This file previously
+  presented that hypothesis as live. It is not.
+
+  F182 recorded V6.2 failing on the rebuilt estate with one sentence offering two readings and
+  committing to neither — *"the query returned no result (HTTP error, or the Reader identity
+  cannot query this workspace)"* — and named a leading, explicitly unproven hypothesis: that
+  V6.2 retries past the federated assertion's five-minute lifetime and reports the resulting
+  auth failure as "no result".
+
+  **The code disproves it.** `Invoke-MlsAz` matches the expired-assertion error and **throws**,
+  deliberately, even under `-AllowFailure`, with a comment explaining that swallowing it is how
+  *"an expired credential becomes 'the lakehouse has no tables'"*. An expired assertion reaches
+  a criterion as `check threw: … could not authenticate`, never as `no result`. Whatever V6.2
+  is hitting, it is not that.
+
+  **What was actually fixed (F196, 2026-09-05)** is the thing F182 asked for regardless of
+  which hypothesis won. On the failure path only — an extra token call on every pass would
+  spend the very assertion lifetime this reasons about — V6.2 now asks whether this identity
+  can mint a Log Analytics token: **no token → `SKIP`**, stating that reachability is
+  unobservable and that this is *not* evidence about the workspace or its role assignments;
+  **token obtained → `FAIL`**, pointing at workspace RBAC, which is a different fix by a
+  different person.
+
+  **V6.2 is not claimed fixed, and it still has no current verdict.** F196 is explicit that the
+  next real L6 run is what decides. **There has been no L6 run since 2026-09-02** — the fix has
+  never executed. Running `layer-06-platform` is a cheap, high-information action and it is
+  probably the single best-value audit anyone can run today.
+
+- **BLOCKER-B is still HALF CLOSED, and has not moved since 2026-09-03.** The eval's result
+  reaches the audit: F183 is fixed and `layer-08-agent-eval` uploads. What replaces it is the
+  sharper question — the eval reports 0/10 with zero tool calls and **cannot tell an unhealthy
+  agent from an eval that is not allowed to reach a healthy one** (F184). Next: can the eval
+  authenticate as a user, and if not, should it report UNOBSERVABLE rather than a grade of
+  zero. **Nothing has been attempted on this in thirteen days**, and it is one of the phase-3
+  gaps the shutdown deadline is now pressing on.
+
+  A second gap sits beside it and is independent of the agent's health: the import job prints
+  **"L8 — imported, NOT yet live"**, lists seven manual steps, and **reports success
+  regardless**. A green L8 does not mean a live agent, and nothing currently asserts the
+  difference.
+
+- **BLOCKER-A is CLOSED (2026-09-03)**, and the closure is confirmed by L4's verdict standing
+  since. `mls-verifier` holds `Exchange.ManageAsApp` and **Global Reader** — read-only,
+  deliberately not the Compliance Administrator role `mls-purview` carries, because a Verifier
+  credential that can *write* labels would itself be a finding.
+
+  **Performing it surfaced F178, which is the more useful outcome and is still a live hazard.**
+  `az ad app permission admin-consent` **RECONCILES** rather than adds: it removed three
+  `Telemetry.Probe` grants and created nothing. Those three roles are how the authenticated
+  DAST gets past Easy Auth. Repaired by re-running `layer-03-entra.yml`, and g0-bootstrap step
+  11d now uses a direct additive POST with a warning block. **Never run `admin-consent` against
+  `mls-verifier` — and if someone has, re-run L3.**
 
 - **BLOCKER-E is CLOSED (2026-09-03), by sponsor decision.**
   `scripts/bootstrap/02-fabric-capacity.ps1` defaulted `-ResourceGroup` to
-  `<prefix>-rg-platform`, which teardown deletes and nothing recreates — so on the paid path
-  an ordinary teardown destroyed the capacity, stranded the workspace, and made the *next*
-  teardown fail suspending a dead ARM id. It armed on the first teardown after the G2 move to
-  paid F2, i.e. the moment the estate starts costing money.
+  `<prefix>-rg-platform`, which teardown deletes and nothing recreates. The default is now
+  `<prefix>-rg-fabric`, outside the four groups the teardown deletes by name. Teaching
+  `infra-up.yml` to recreate it was rejected: that puts a paid capacity creation on every
+  rebuild, which is a G2 spend action happening automatically. A test asserts the default is
+  never one of the four, derived from `naming.bicep` so a rebrand cannot move it back inside
+  the blast radius.
 
-  The default is now `<prefix>-rg-fabric`, outside the four groups the teardown deletes by
-  name, which makes `kill-rebuild.md` § 1's long-standing claim that the capacity *persists*
-  true rather than aspirational. Teaching `infra-up.yml` to recreate it was rejected: that
-  puts a paid capacity creation on every rebuild, which is a G2 spend action happening
-  automatically. A test asserts the default is never one of the four, derived from
-  `naming.bicep` so a rebrand cannot move it back inside the blast radius.
+  **`mls-rg-identity` is the same pattern applied a second time**, for the AWS trust identity —
+  and it carries the same obligation: something outside the blast radius must be deleted
+  deliberately. It is on the shutdown checklist above.
 
-- **One open sub-item, not a blocker:** V8.1 now passes, but V8.3 still needs a Dataverse
-  read role for `mls-verifier`.
+- **Open sub-items, none of them blocking:**
+  - V8.3 still needs a Dataverse read role for `mls-verifier`.
+  - **F190 is open and worked around**: the vuln-lab cannot be re-armed through a pull
+    request, because code-scanning merge protection blocks the very alert the reseed exists to
+    raise. Less pressing since PR #237 made the lab non-load-bearing, but the documented path
+    still cannot complete.
+  - V11.3–V11.5 have never reported. The shutdown teardown is the last chance.
+  - **An id collision in this file's own history**: BLOCKER-D cited "F126" for *self-healing
+    has no subject*, while the 2026-09-03 register's F126 is *the self-heal notice named a
+    remedy that was already done (fixed 2026-09-01)*. Two different findings, one id. The
+    register is the archive and is not edited; this note is here so the next reader is not
+    misled by the collision.
 
 ---
 
@@ -220,16 +402,28 @@ grant-failure reporter that reported success. A rebuild is the only thing that f
   handed this repository, or your conversation has been compacted: read the tables above,
   pick the highest blocker you can actually act on, and **check its evidence yourself
   before acting on it**. That is not ceremony — the register records several confident
-  diagnoses that a second sample disproved, including two of mine from the 2026-09-03
-  rebuild.
-- **The history is in [findings/2026-09-03-finding-register.md](findings/2026-09-03-finding-register.md)**,
-  dated and complete. Nothing was removed from it when findings closed, including the
-  diagnoses that turned out to be wrong. Open it when you want to know *how* something came
-  to be true, or what a green check once hid. Do not mistake an entry from 2026-08-29 for
-  current state — that is what this file is for.
+  diagnoses that a second sample disproved, and this refresh found one more: F182's account
+  of V6.2, which this very file had been presenting as live for twelve days after F196
+  disproved it.
+- **Read the freshness column before the status column.** A green verdict from 2026-09-03 and
+  a green verdict from this morning are not the same claim. Three layers (L3, L10, L12) were
+  measured within the last day; everything else on this page is last-known-good from the
+  rebuild, and says so. **"Not re-run — no current verdict" is a legitimate row**, and it is
+  more useful than a stale green one.
+- **The history is in [findings/2026-09-03-finding-register.md](findings/2026-09-03-finding-register.md)
+  and [findings/2026-09-04-finding-register.md](findings/2026-09-04-finding-register.md)**,
+  dated and complete through F200. Nothing was removed from either when findings closed,
+  including the diagnoses that turned out to be wrong. Open them when you want to know *how*
+  something came to be true, or what a green check once hid. Do not mistake an entry from
+  2026-08-29 for current state — that is what this file is for.
 - **A finding with a test is closed. A finding with only prose is open.** Finding ids
-  (`F1`–`F177`) are greppable across `docs/`, `CLAUDE.md`, the layer runbooks under
+  (`F1`–`F201`) are greppable across `docs/`, `CLAUDE.md`, the layer runbooks under
   `docs/runbooks/layers/`, and `verification/tests/`.
 - **A layer is done when the Verifier says so, not when the deploy is green.** The
   2026-09-03 rebuild found three places where a green job had verified nothing at all —
   F170, F175 and F177. Read the criterion table, not the job status.
+- **The clock is the new constraint.** With shutdown around 2026-09-27, prefer work that
+  either captures evidence that becomes unobtainable afterwards, or proves a claim the
+  outbrief will make. A capability demonstrated over empty data demonstrates nothing, and a
+  screenshot is a claim — but an unrun audit on a live estate is a claim nobody can make at
+  all once the estate is gone.
