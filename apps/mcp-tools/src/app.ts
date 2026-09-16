@@ -95,6 +95,12 @@ export function createApp(deps: AppDeps = {}): Express {
         get_github_security: backends.githubSecurity.constructor.name,
         get_defender_posture: backends.defenderPosture.constructor.name,
         get_cost_series: backends.costSeries.constructor.name,
+        // Present only when the AWS lakehouse link is configured — absent,
+        // not a falsy placeholder, so this map's own keys already say whether
+        // query_aws_lakehouse_sql is live without reading toolNames.
+        ...(backends.awsLakehouseSql
+          ? { query_aws_lakehouse_sql: backends.awsLakehouseSql.constructor.name }
+          : {}),
       },
       // Whether spans are actually leaving the process. `reason` is deliberately
       // NOT exposed here — /healthz is unauthenticated at the ingress and the

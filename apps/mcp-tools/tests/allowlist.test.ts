@@ -1,6 +1,10 @@
 /**
  * V8.2 — tool allowlist enforcement. Exactly six tools are advertised over
- * MCP, and any other tool name is refused without execution.
+ * MCP on an un-configured (local) backend set, and any other tool name is
+ * refused without execution. A seventh, `query_aws_lakehouse_sql`, joins the
+ * allowlist and the live set together only when an AWS backend is configured
+ * (Task 6/7, tests/tools-registry.test.ts) — this file's server is always
+ * local, so it never sees that seventh tool, by design.
  *
  * These assertions run against the real MCP server through an in-memory
  * transport pair, so they exercise the same handlers the Copilot Studio agent
@@ -37,10 +41,17 @@ async function connectInMemory(): Promise<Client> {
 }
 
 describe("tool allowlist (V8.2)", () => {
-  it("declares exactly the six master-plan tools", () => {
+  it("declares exactly the six master-plan tools by default (no AWS backend)", () => {
+    // toolDefinitions is the module-level default (opts.aws unset), which is
+    // what every un-configured server — this repo's, and the local eval
+    // harness — actually serves. ALLOWED_TOOL_NAMES is broader: it is every
+    // name the server may EVER advertise, including query_aws_lakehouse_sql,
+    // which only joins the live set when an AWS backend is wired up (see
+    // tests/tools-registry.test.ts for that seventh name and its production
+    // wiring through ToolRegistry).
     expect(toolDefinitions.map((t) => t.name).sort()).toEqual(EXPECTED_NAMES);
     expect(toolDefinitions).toHaveLength(6);
-    expect(ALLOWED_TOOL_NAMES).toHaveLength(6);
+    expect(ALLOWED_TOOL_NAMES).toHaveLength(7);
   });
 
   it("isAllowedTool rejects unknown names", () => {

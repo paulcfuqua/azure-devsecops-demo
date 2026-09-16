@@ -1,8 +1,12 @@
 /**
- * Tool registry — EXACTLY six tools are exposed over MCP, and the server
- * refuses any tools/call whose name is not on this allowlist (master plan L8 /
+ * Tool registry — EXACTLY the allowlisted tools are exposed over MCP, and the
+ * server refuses any tools/call whose name is not on it (master plan L8 /
  * audit V8.2). Do not add tools here without a master-plan change. (Task 14
- * added the sixth, query_compliance, alongside the original five.)
+ * added the sixth, query_compliance, alongside the original five; the
+ * 2026-09-16 AWS lakehouse link added a seventh, query_aws_lakehouse_sql —
+ * additive and gated on configuration, so a server with no AWS backend still
+ * advertises exactly six. See `ToolRegistry`'s constructor and
+ * `buildToolDefinitions`'s `opts.aws` for where that gate lives.)
  *
  * THESE DESCRIPTIONS ARE AGENT-FACING SURFACE AREA. The Copilot Studio agent's
  * orchestrator reads nothing else about these tools: name, description and
@@ -28,6 +32,7 @@ import { DIALECTS, MAX_RESULT_ROWS, type DialectProfile, type SqlDialect } from 
 
 export const ALLOWED_TOOL_NAMES = [
   "query_lakehouse_sql",
+  "query_aws_lakehouse_sql",
   "query_log_analytics",
   "get_github_security",
   "get_defender_posture",
@@ -89,6 +94,68 @@ function lakehouseSqlTool(profile: DialectProfile): Tool {
       " Exactly one SELECT or WITH statement is accepted; INSERT, UPDATE, DELETE and DDL are " +
       `refused. Results are capped at ${MAX_RESULT_ROWS} rows, so aggregate in SQL (COUNT, SUM, ` +
       "AVG, GROUP BY) rather than fetching raw rows.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sql: {
+          type: "string",
+          description:
+            `A single read-only SELECT or WITH statement in ${profile.displayName}, e.g. ` +
+            `"${profile.example}".`,
+        },
+      },
+      required: ["sql"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  };
+}
+
+/**
+ * `query_aws_lakehouse_sql` — the sponsor's REAL AWS Athena lakehouse, over
+ * the Glue Data Catalog. Always Trino, regardless of which dialect the
+ * Meridian tool above is currently speaking: the two SQL tools read from two
+ * genuinely different engines and the AWS one never swaps.
+ *
+ * The description deliberately does NOT splice in `profile.idioms` verbatim
+ * the way `lakehouseSqlTool` does for its own profile: `DIALECTS.trino.idioms`
+ * names "DATEPART" in its own negation clause ("not T-SQL ...: strftime,
+ * DATEPART, ... do not exist here"), and this tool's description must be
+ * distinguishable from the Fabric/T-SQL one by an agent reading text alone —
+ * the exact latent break sql-dialect.ts exists to prevent, one level up. So
+ * the Trino-specific facts are restated here without that comparison clause;
+ * see DIALECTS.trino for the source of truth on the idioms themselves.
+ *
+ * Also unlike `lakehouseSqlTool`, no fixed schema is listed: this lakehouse
+ * belongs to an external account and its table layout is not this repo's to
+ * enumerate or keep in sync. The agent is told to discover it with ordinary
+ * read-only introspection queries instead.
+ */
+function awsLakehouseSqlTool(profile: DialectProfile): Tool {
+  return {
+    name: "query_aws_lakehouse_sql",
+    title: "Query the AWS launch-intelligence lakehouse (SQL)",
+    description:
+      `Run one read-only SQL query (${profile.displayName}) against the sponsor's REAL launch-` +
+      "provider data, held in an AWS Athena lakehouse over a Glue Data Catalog database — a " +
+      "live, external data source. This is NOT Meridian's own operations lakehouse: " +
+      "query_lakehouse_sql answers questions about Meridian's own launch history, fleet, " +
+      "parts, suppliers, cost ledger and security findings, a SYNTHETIC dataset for a " +
+      "different organisation. The two must never be mixed — a figure from one is never the " +
+      "answer to a question about the other. This lakehouse's table and column layout is not " +
+      "enumerated here because it belongs to an external account and can change independently " +
+      "of this tool: discover it first with ordinary read-only SELECTs, e.g. " +
+      "SELECT table_name FROM information_schema.tables, and SELECT column_name, data_type " +
+      "FROM information_schema.columns WHERE table_name = '...'. This is Trino (Athena engine " +
+      "v3): for day of week use day_of_week(actual_date), which is ISO-numbered 1=Monday .. " +
+      "7=Sunday — note this differs from the Fabric tool's 1=Sunday .. 7=Saturday, so never " +
+      "carry a weekday number from one tool to the other. day_of_week is confirmed against " +
+      "the live endpoint by a session probe at first query. To bucket by month use " +
+      "date_format(CAST(actual_date AS timestamp), '%Y-%m'). Use LIMIT n to take the top n " +
+      "rows, and || or concat(a, b) to join strings. Exactly one SELECT or WITH statement is " +
+      "accepted; INSERT, UPDATE, DELETE, DDL and Athena's UNLOAD (which writes results to S3) " +
+      `are refused. Results are capped at ${MAX_RESULT_ROWS} rows, so aggregate in SQL (COUNT, ` +
+      "SUM, AVG, GROUP BY) rather than fetching raw rows.",
     inputSchema: {
       type: "object",
       properties: {
@@ -342,25 +409,39 @@ function costSeriesTool(source: CostSource): Tool {
 }
 
 /**
- * The six MCP tool definitions for a given SQL dialect and cost backend. Order
- * is stable and `query_lakehouse_sql` is first — `tools/list` order is what an
- * orchestrator sees first, and the lakehouse tool answers most questions.
+ * The MCP tool definitions for a given SQL dialect and cost backend — six by
+ * default, seven when the AWS lakehouse is wired up. Order is stable and
+ * `query_lakehouse_sql` is first — `tools/list` order is what an orchestrator
+ * sees first, and the lakehouse tool answers most questions.
  *
  * `costSource` defaults to the local ledger so existing callers keep the
  * behaviour they had; the live set an agent sees comes from ToolRegistry, which
  * passes what the active backend declares.
+ *
+ * `opts.aws` is additive and gated on configuration (`Backends.awsLakehouseSql`
+ * being defined), never on `dialect`: the Meridian lakehouse tool's own
+ * dialect can be sqlite, tsql or (in tests) trino, independently of whether
+ * the AWS tool — which is ALWAYS Trino — is also present.
  */
 export function buildToolDefinitions(
   dialect: SqlDialect,
   costSource: CostSource = "lakehouse-ledger",
+  opts: { aws?: boolean } = {},
 ): Tool[] {
   const profile = DIALECTS[dialect];
   if (!profile) throw new Error(`unknown SQL dialect: ${dialect}`);
   const tools = [lakehouseSqlTool(profile), ...STATIC_TOOLS];
   // get_cost_series was fifth before it became backend-aware, and tools/list order
   // is agent-facing surface. Restore that position, so this change alters what the
-  // description SAYS and nothing else about what the orchestrator sees.
+  // description SAYS and nothing else about what the orchestrator sees. Spliced
+  // BEFORE the AWS tool below so this index stays relative to the six-tool baseline.
   tools.splice(4, 0, costSeriesTool(costSource));
+  if (opts.aws) {
+    // Immediately after the Fabric/local lakehouse tool: the two SQL tools
+    // belong together in what an orchestrator sees first. A deliberate
+    // position, not an accident of push order.
+    tools.splice(1, 0, awsLakehouseSqlTool(DIALECTS.trino));
+  }
   return tools;
 }
 
@@ -372,9 +453,23 @@ export function buildToolDefinitions(
 export const toolDefinitions: Tool[] = buildToolDefinitions("sqlite");
 
 // Load-time guard: the definitions and the allowlist must agree, in every dialect.
+//
+// query_aws_lakehouse_sql is ADDITIVE and gated on configuration, so the
+// six-tool baseline (`buildToolDefinitions(dialect)`, opts.aws unset) is no
+// longer expected to match ALLOWED_TOOL_NAMES.length exactly — it is expected
+// to be one SHORT of it, and never to contain the AWS name. What must still
+// hold, in every dialect: neither set ever names a tool off the allowlist,
+// turning `{ aws: true }` on reaches every allowlisted name with no
+// duplicates, and turning it off never invents a name turning it on lacks.
 for (const dialect of Object.keys(DIALECTS) as SqlDialect[]) {
-  const names = buildToolDefinitions(dialect).map((t) => t.name);
-  if (names.length !== ALLOWED_TOOL_NAMES.length || names.some((n) => !isAllowedTool(n))) {
+  const withoutAws = buildToolDefinitions(dialect).map((t) => t.name);
+  const withAws = buildToolDefinitions(dialect, undefined, { aws: true }).map((t) => t.name);
+  const outOfSync =
+    withAws.length !== ALLOWED_TOOL_NAMES.length ||
+    withAws.some((n) => !isAllowedTool(n)) ||
+    withoutAws.some((n) => !isAllowedTool(n)) ||
+    !withoutAws.every((n) => withAws.includes(n));
+  if (outOfSync) {
     throw new Error(`tool definitions out of sync with ALLOWED_TOOL_NAMES (dialect: ${dialect})`);
   }
 }
@@ -391,6 +486,7 @@ export function countRows(name: string, payload: unknown): number | undefined {
   const p = payload as any;
   switch (name) {
     case "query_lakehouse_sql":
+    case "query_aws_lakehouse_sql":
       return Array.isArray(p?.rows) ? p.rows.length : undefined;
     case "query_log_analytics":
       return Array.isArray(p?.tables)
@@ -425,10 +521,19 @@ export class ToolRegistry {
 
   constructor(private readonly backends: Backends) {
     this.dialect = backends.lakehouseSql.dialect;
-    this.cachedDefinitions = buildToolDefinitions(this.dialect, backends.costSeries.source);
+    // THE PRODUCTION WIRING: query_aws_lakehouse_sql is advertised if and only
+    // if an AWS backend was actually built for this instance. buildToolDefinitions
+    // is called from exactly here in the live server (src/app.ts constructs the
+    // one ToolRegistry the server uses) — a caller that widened
+    // ALLOWED_TOOL_NAMES and buildToolDefinitions without threading the flag
+    // through here would pass every unit test and never show the tool to an
+    // agent.
+    this.cachedDefinitions = buildToolDefinitions(this.dialect, backends.costSeries.source, {
+      aws: this.backends.awsLakehouseSql !== undefined,
+    });
   }
 
-  /** What `tools/list` returns: six tools, described for the ACTIVE backend. */
+  /** What `tools/list` returns: six or seven tools, described for the ACTIVE backend. */
   get definitions(): Tool[] {
     return this.cachedDefinitions;
   }
@@ -443,6 +548,22 @@ export class ToolRegistry {
     switch (name as AllowedToolName) {
       case "query_lakehouse_sql":
         return this.backends.lakehouseSql.query(String(args.sql ?? ""));
+      case "query_aws_lakehouse_sql": {
+        // The allowlist and the definitions can both name this tool while no
+        // backend is behind it in THIS instance — definitions come from what
+        // buildToolDefinitions was told (opts.aws), execute reads the live
+        // Backends. They are the same fact in this constructor (both derive
+        // from awsLakehouseSql !== undefined), but this check is what makes a
+        // future divergence a clear thrown error instead of a silent
+        // TypeError on `.query` of undefined.
+        if (!this.backends.awsLakehouseSql) {
+          throw new Error(
+            `Tool "${name}" is registered but no AWS lakehouse backend is configured on this ` +
+              "server instance.",
+          );
+        }
+        return this.backends.awsLakehouseSql.query(String(args.sql ?? ""));
+      }
       case "query_log_analytics":
         return this.backends.logAnalytics.query(
           String(args.query ?? ""),

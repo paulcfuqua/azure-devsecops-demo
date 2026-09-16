@@ -20,7 +20,11 @@ async function main(): Promise<void> {
     // loadConfig has already validated every required setting, so a failure here
     // is a real environment problem (no managed identity, missing package) and
     // is worth dying on rather than serving five broken tools.
-    backends = await createCloudBackends(config.cloud!);
+    //
+    // config.aws is passed through unconditionally (it may be undefined): the
+    // factory adds query_aws_lakehouse_sql's backend only when it is present,
+    // exactly as ToolRegistry only advertises the tool when the backend is.
+    backends = await createCloudBackends(config.cloud!, { aws: config.aws });
   } else {
     backends = createLocalBackends();
     // Warm the lakehouse at boot so the first tool call doesn't pay CSV-load

@@ -87,11 +87,84 @@ export interface CloudConfig {
   azureClientId: string | undefined;
 }
 
+/**
+ * `query_aws_lakehouse_sql`'s settings — the sponsor's real AWS Athena
+ * lakehouse, reached by exchanging an Entra token for temporary AWS
+ * credentials (see `tools/cloud/athena-sql.ts`).
+ *
+ * Independent of `backendMode`: this is a second, orthogonal axis of
+ * configuration (the AWS link), not a replacement for the Fabric/local
+ * lakehouse split. `loadConfig` resolves it the same way regardless of
+ * whether `MLS_TOOL_BACKENDS` is `local` or `cloud`.
+ */
+export interface AwsLakehouseConfig {
+  /** IAM role the Entra token is exchanged for, via AssumeRoleWithWebIdentity. */
+  roleArn: string;
+  /** Entra identifier URI (`api://...`) AWS's trust policy matches as `aud`. */
+  audience: string;
+  region: string;
+  /** The Glue Data Catalog database (`launch_intel_lakehouse`). */
+  database: string;
+  workgroup: string;
+  /** `s3://` URI Athena writes query results to — required because the workgroup carries no default of its own. */
+  outputLocation: string;
+}
+
+/** Env var -> what it is for, used to build the fail-fast message (see `loadAwsConfig`). */
+const REQUIRED_AWS_VARS: Array<[string, string]> = [
+  ["MLS_AWS_ROLE_ARN", "IAM role ARN the Entra token is exchanged for (AssumeRoleWithWebIdentity)"],
+  ["MLS_AWS_AUDIENCE", "Entra identifier URI (api://...) AWS's trust policy matches as aud"],
+  ["MLS_AWS_REGION", "AWS region for the Athena/STS clients"],
+  ["MLS_GLUE_DATABASE", "Glue Data Catalog database for query_aws_lakehouse_sql"],
+  ["MLS_ATHENA_WORKGROUP", "Athena workgroup query_aws_lakehouse_sql runs in"],
+  ["MLS_ATHENA_OUTPUT", "s3:// URI Athena writes query results to (the primary workgroup enforces no default)"],
+];
+
+/**
+ * Resolve `query_aws_lakehouse_sql`'s settings, or throw.
+ *
+ * Three outcomes, not two: an absent GitHub/env variable is the empty string,
+ * not an error (F125's lesson), so treating "none of the six are set" and
+ * "some of the six are set" the same way would let a partial configuration
+ * silently disable the tool — indistinguishable from one never built. So:
+ *   - none set    -> undefined (the tool is simply not offered);
+ *   - some set    -> throw, naming exactly what is missing;
+ *   - all six set -> the resolved config.
+ */
+export function loadAwsConfig(env: NodeJS.ProcessEnv): AwsLakehouseConfig | undefined {
+  const resolved: Record<string, string | undefined> = {};
+  for (const [name] of REQUIRED_AWS_VARS) resolved[name] = firstNonEmpty(env, name);
+
+  const present = REQUIRED_AWS_VARS.filter(([name]) => resolved[name] !== undefined);
+  if (present.length === 0) return undefined;
+
+  const missing = REQUIRED_AWS_VARS.filter(([name]) => resolved[name] === undefined);
+  if (missing.length > 0) {
+    throw new Error(
+      `query_aws_lakehouse_sql is partially configured, which is fatal rather than silently ` +
+        `disabling the tool: missing ${missing.length} required setting` +
+        `${missing.length === 1 ? "" : "s"}:\n` +
+        missing.map(([name, purpose]) => `  - ${name}: ${purpose}`).join("\n"),
+    );
+  }
+
+  return {
+    roleArn: resolved.MLS_AWS_ROLE_ARN as string,
+    audience: resolved.MLS_AWS_AUDIENCE as string,
+    region: resolved.MLS_AWS_REGION as string,
+    database: resolved.MLS_GLUE_DATABASE as string,
+    workgroup: resolved.MLS_ATHENA_WORKGROUP as string,
+    outputLocation: resolved.MLS_ATHENA_OUTPUT as string,
+  };
+}
+
 export interface McpToolsConfig {
   port: number;
   backendMode: BackendMode;
   /** Present only when backendMode === "cloud". */
   cloud?: CloudConfig;
+  /** Present only when all six AWS/Glue/Athena vars are set — see `loadAwsConfig`. */
+  aws?: AwsLakehouseConfig;
   /**
    * Who may call this server. Required in EVERY mode, not just cloud — the
    * container app's ingress is external by design regardless of backendMode,
@@ -172,6 +245,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): McpToolsConfig
     );
   }
   const port = env.PORT ? Number(env.PORT) : 8080;
+  // Independent of backendMode (see AwsLakehouseConfig's header comment): the AWS
+  // link is a second axis, resolved the same way whether the primary lakehouse
+  // tool is local or cloud.
+  const aws = loadAwsConfig(env);
   if (requested === "cloud") {
     // Order matters. loadCloudConfig reports EVERY missing upstream setting in one
     // message; running the auth gate first would pre-empt that with a single
@@ -179,7 +256,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): McpToolsConfig
     // loop this module exists to avoid. Auth is checked immediately after, and
     // gets its own message because it is a different kind of problem.
     const cloud = loadCloudConfig(env);
-    return { port, backendMode: "cloud", cloud, inboundAuth: loadInboundAuth(env, "cloud") };
+    return {
+      port,
+      backendMode: "cloud",
+      cloud,
+      ...(aws ? { aws } : {}),
+      inboundAuth: loadInboundAuth(env, "cloud"),
+    };
   }
-  return { port, backendMode: "local", inboundAuth: loadInboundAuth(env, "local") };
+  return {
+    port,
+    backendMode: "local",
+    ...(aws ? { aws } : {}),
+    inboundAuth: loadInboundAuth(env, "local"),
+  };
 }
