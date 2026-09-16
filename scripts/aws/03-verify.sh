@@ -9,6 +9,29 @@
 # exits non-zero at the end if any failed.
 set -uo pipefail
 
+# Windows path fix follow-up, 2026-09-16: fill in any variable NOT already
+# set in this shell from the anchor file 01-oidc-provider.sh and
+# 02-athena-role.sh write, so a sponsor who did not hand-paste their `export`
+# lines does not die here on an unset-variable error. A variable already
+# exported in this shell wins over the file -- this only fills gaps, it never
+# overrides. Resolved to this script's own directory, not the caller's cwd.
+# Silently skipped if the file does not exist.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ANCHOR_ENV="${SCRIPT_DIR}/.aws-anchor.env"
+if [ -f "${ANCHOR_ENV}" ]; then
+  echo "found ${ANCHOR_ENV} (written by 01-oidc-provider.sh / 02-athena-role.sh) -- filling in any variable not already set in this shell" >&2
+  while IFS='=' read -r _anchor_key _anchor_value; do
+    _anchor_key="${_anchor_key#export }"
+    _anchor_key="${_anchor_key%$'\r'}"
+    _anchor_value="${_anchor_value%$'\r'}"
+    [ -z "${_anchor_key}" ] && continue
+    if [ -z "${!_anchor_key+x}" ] || [ -z "${!_anchor_key}" ]; then
+      export "${_anchor_key}=${_anchor_value}"
+    fi
+  done < "${ANCHOR_ENV}"
+  unset _anchor_key _anchor_value
+fi
+
 : "${MLS_AWS_PROVIDER_ARN_V1:?set MLS_AWS_PROVIDER_ARN_V1 (printed by 01-oidc-provider.sh)}"
 : "${MLS_AWS_PROVIDER_ARN_V2:?set MLS_AWS_PROVIDER_ARN_V2 (printed by 01-oidc-provider.sh)}"
 : "${MLS_AWS_AUDIENCE:?set MLS_AWS_AUDIENCE (the v1 aud -- identifierUris[0] of the aws-athena app)}"

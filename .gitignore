@@ -50,3 +50,9 @@ pester-results.xml
 # estate.env.example is the template and IS committed; the real one never is.
 estate.env
 .playwright-mcp/
+
+# Cross-script export cache for the sponsor-run AWS trust-anchor scripts
+# (scripts/aws/01-oidc-provider.sh writes it, 02-athena-role.sh and
+# 03-verify.sh source it automatically). Holds a tenant id and a principal
+# id; never committed.
+scripts/aws/.aws-anchor.env
