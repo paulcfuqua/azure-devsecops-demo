@@ -50,6 +50,18 @@ mls-mcp-demo-ca ──► Entra token (IMDS, audience = the AWS-facing app id)
 An IAM OIDC identity provider trusting the Entra tenant's issuer, and a role —
 `mls-athena-reader` — whose trust policy conditions on **both** `aud` and `sub`.
 
+**The audience is not a bare `api://name` URI.** That was the original shape
+(`api://${prefix}-aws-athena-${env}`) and this tenant's default app-registration
+policy rejects it: an `identifierUris` value must embed a verified domain, the
+tenant id, or the app id. A verified domain doesn't exist here and an app id is
+reassigned every time the registration is recreated, which would silently break
+the AWS trust policy's `aud` condition on the next rebuild for a reason that
+looks like an AWS problem and is not — the same durability argument as §2.2's
+managed-identity blast radius, one layer up the chain. So the live audience
+embeds the **tenant id** instead: `api://<tenant-id>/mls-aws-athena-demo`. The
+tenant id is stable across every teardown and rebuild this estate performs, so
+the value the AWS-side scripts consume does not move underneath them.
+
 Permissions are scoped to the minimum that answers a question:
 
 | Service | Allowed | Scope |
