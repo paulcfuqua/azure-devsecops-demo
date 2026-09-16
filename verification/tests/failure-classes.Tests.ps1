@@ -2897,3 +2897,174 @@ Describe 'scripts/aws never hands a native CLI an mktemp path via file://' {
         $violations | Should -BeNullOrEmpty -Because 'a mktemp path handed to a native CLI as file:// is exactly the class that broke 02-athena-role.sh on the sponsor machine the night before the 2026-09-17 demo (F: Windows path fix) -- inline the file CONTENT instead, e.g. "$(cat "${VAR}")"'
     }
 }
+
+Describe 'every setting an app requires at boot is actually put on its container' {
+    # 2026-09-16 aws-lakehouse-link Task 9. A class paid for once, encoded so it cannot recur.
+    #
+    # The six MLS_AWS_* / MLS_GLUE_* / MLS_ATHENA_* variables were set on the demo environment,
+    # spelled correctly, and read by nothing: infra/bicep/apps/main.bicep declared no parameters
+    # for them, so query_aws_lakehouse_sql would have failed to register on a container whose
+    # unit tests were entirely green. Nothing in CI could have said so, because every layer of
+    # the chain was individually correct - the variable existed, the config reader was right, the
+    # tool builder was right, and the two ends were simply not joined.
+    #
+    # That is F122/F124/F125's shape: a value that exists, is spelled correctly, and cannot be
+    # SEEN by the thing that reads it. The question this test asks is the one those findings say
+    # to ask - not "is this value right" but "can the thing that reads it see it at all".
+    #
+    # DERIVED FROM THE APP, NOT RESTATED. The expected set is extracted from config.ts's own
+    # REQUIRED_* tables, so adding a required variable to the app and forgetting the template
+    # turns this red rather than leaving both halves internally consistent and mutually deaf.
+    BeforeAll {
+        $script:FcRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:McpConfig = Get-Content -LiteralPath (Join-Path $script:FcRoot 'apps/mcp-tools/src/config.ts') -Raw
+        $script:AppsBicep = Get-Content -LiteralPath (Join-Path $script:FcRoot 'infra/bicep/apps/main.bicep') -Raw
+
+        # config.ts accepts EITHER spelling for the GitHub token (firstNonEmpty(env,
+        # "GITHUB_TOKEN", "MLS_GITHUB_TOKEN")) and the template supplies the MLS_ one, so the
+        # same Key Vault secret serves mcp-tools and data-api. That is the only alias, and it
+        # is listed rather than pattern-matched so a second one cannot appear unnoticed.
+        $script:EnvAliases = @{ 'GITHUB_TOKEN' = @('GITHUB_TOKEN', 'MLS_GITHUB_TOKEN') }
+
+        function Get-RequiredVarName {
+            param([string]$Source, [string]$TableName)
+            $block = [regex]::Match(
+                $Source,
+                "(?s)const\s+$([regex]::Escape($TableName))\s*:\s*Array<\[string,\s*string\]>\s*=\s*\[(.*?)\n\];"
+            ).Groups[1].Value
+            if ([string]::IsNullOrWhiteSpace($block)) { return @() }
+            return [regex]::Matches($block, '\[\s*\r?\n?\s*"([A-Z0-9_]+)"') |
+                ForEach-Object { $_.Groups[1].Value }
+        }
+    }
+
+    It 'extracts a non-empty required set from config.ts, or this test proves nothing' {
+        # An empty regex match would make every assertion below vacuously true - the exact
+        # shape of an audit that reports absence when it could not observe.
+        (Get-RequiredVarName -Source $script:McpConfig -TableName 'REQUIRED_CLOUD_VARS').Count |
+            Should -BeGreaterThan 0 -Because 'REQUIRED_CLOUD_VARS must still be extractable from apps/mcp-tools/src/config.ts'
+        (Get-RequiredVarName -Source $script:McpConfig -TableName 'REQUIRED_AWS_VARS').Count |
+            Should -BeGreaterThan 0 -Because 'REQUIRED_AWS_VARS must still be extractable from apps/mcp-tools/src/config.ts'
+    }
+
+    It 'names every mcp-tools <table> variable somewhere in the apps template' -ForEach @(
+        @{ Table = 'REQUIRED_CLOUD_VARS' }
+        @{ Table = 'REQUIRED_AWS_VARS' }
+    ) {
+        $required = Get-RequiredVarName -Source $script:McpConfig -TableName $Table
+        $missing = @()
+        foreach ($name in $required) {
+            $spellings = if ($script:EnvAliases.ContainsKey($name)) { $script:EnvAliases[$name] } else { @($name) }
+            $found = $false
+            foreach ($spelling in $spellings) {
+                # The template emits env entries as `name: 'X'` or `{ name: 'X', value: ... }`.
+                if ($script:AppsBicep -match "name:\s*'$([regex]::Escape($spelling))'") { $found = $true; break }
+            }
+            if (-not $found) { $missing += $name }
+        }
+        $missing | Should -BeNullOrEmpty -Because "infra/bicep/apps/main.bicep must put every $Table setting on the mcp-tools container - a variable the app requires at boot and the template never emits is set, correct, and invisible (F122/F124/F125)"
+    }
+
+    It 'splices every env block it declares into the container that needs it' {
+        # Naming a variable in the template is necessary and not sufficient. An env array that
+        # is declared, correct, and never concatenated onto the container is the same defect one
+        # level up - present in the file, absent from the running app, and invisible to a
+        # reviewer reading either half on its own.
+        $envBlocks = @([regex]::Matches($script:AppsBicep, '(?m)^var\s+(mcpTools\w*Env)\s*=') |
+            ForEach-Object { $_.Groups[1].Value })
+        $envBlocks.Count | Should -BeGreaterThan 0 -Because 'main.bicep must still declare mcp-tools env blocks for this check to observe anything'
+
+        # The mcp-tools container's OWN env expression, not any other app's - four apps in this
+        # template build env with concat(), and matching the first one would have made this pass
+        # while mcp-tools' block went nowhere.
+        $mcpModule = [regex]::Match($script:AppsBicep, "(?s)module\s+mcpToolsApp\s.*?\n\}").Value
+        $mcpModule | Should -Not -BeNullOrEmpty -Because 'main.bicep must still declare the mcpToolsApp module'
+        $concat = [regex]::Match($mcpModule, '(?s)env:\s*concat\((.*)\)').Groups[1].Value
+        $concat | Should -Not -BeNullOrEmpty -Because 'the mcp-tools container must still build its env with concat() for this check to mean anything'
+
+        $unspliced = @($envBlocks | Where-Object { $concat -notmatch "\b$([regex]::Escape($_))\b" })
+        $unspliced | Should -BeNullOrEmpty -Because 'an env array the template declares and never splices onto the container is a setting that exists, is spelled correctly, and cannot be seen by the process that reads it'
+    }
+
+    It 'gives every AWS setting a parameter the deploy can supply, not just a literal' {
+        # A name appearing in the template is necessary but not sufficient: it also has to be
+        # REACHABLE from the deploy. Each of the six is a parameter read by demo.bicepparam from
+        # the demo environment; the seventh, MLS_AWS_CLIENT_ID, is deliberately DERIVED from the
+        # user-assigned identity instead, because a client id a human stores in a variable does
+        # not survive the rebuild this estate exists to demonstrate (F129).
+        $paramFile = Get-Content -LiteralPath (Join-Path $script:FcRoot 'infra/bicep/apps/demo.bicepparam') -Raw
+        $fromEnvironment = @(
+            'MLS_AWS_ROLE_ARN', 'MLS_AWS_AUDIENCE', 'MLS_AWS_REGION',
+            'MLS_GLUE_DATABASE', 'MLS_ATHENA_WORKGROUP', 'MLS_ATHENA_OUTPUT'
+        )
+        $unread = @($fromEnvironment | Where-Object {
+            $paramFile -notmatch "readEnvironmentVariable\('$([regex]::Escape($_))'"
+        })
+        $unread | Should -BeNullOrEmpty -Because 'each AWS setting must be read from the demo environment by demo.bicepparam, or the parameter it feeds can only ever hold its default'
+
+        $script:AppsBicep | Should -Match "name:\s*'MLS_AWS_CLIENT_ID'\s*,?\s*\r?\n?\s*value:\s*awsIdentity\.properties\.clientId" -Because 'MLS_AWS_CLIENT_ID must be derived from the AWS identity the template already references, never stored - the template and the assignment then cannot disagree'
+        $paramFile | Should -Not -Match "readEnvironmentVariable\('MLS_AWS_CLIENT_ID'" -Because 'deriving it and ALSO reading it from a variable would be two sources for one value, and the stored one would outrank the derived one on the next rebrand'
+    }
+
+    It 'passes every AWS setting to the job that deploys, not merely to the workflow' {
+        # F124 exactly: MLS_DIRECTLINE_TOKEN_URL reached the two jobs that did not need it and
+        # missed the one that did. A variable declared on the wrong job is as absent as one that
+        # was never set, and an unset GitHub variable is the empty string, not an error.
+        $wf = Get-Content -LiteralPath (Join-Path $script:FcRoot '.github/workflows/layer-07-apps.yml') -Raw
+        # The deploy job runs from `  deploy:` to the next top-level job key.
+        $deployBlock = [regex]::Match($wf, '(?s)\n  deploy:\r?\n(.*?)(?=\n  [a-z][a-z0-9-]*:\r?\n)').Groups[1].Value
+        $deployBlock | Should -Not -BeNullOrEmpty -Because 'layer-07-apps.yml must still have a deploy job for this check to mean anything'
+        $deployBlock | Should -Match 'environment:\s*demo' -Because 'vars.* resolve only for a job that declares the environment holding them'
+        foreach ($name in @('MLS_AWS_ROLE_ARN', 'MLS_AWS_AUDIENCE', 'MLS_AWS_REGION', 'MLS_GLUE_DATABASE', 'MLS_ATHENA_WORKGROUP', 'MLS_ATHENA_OUTPUT')) {
+            $deployBlock | Should -Match "$([regex]::Escape($name)):\s*\`$\{\{\s*vars\.$([regex]::Escape($name))\s*\}\}" -Because "the deploy job itself must carry $name, because that is the job whose step runs az deployment group create"
+        }
+    }
+}
+
+Describe 'a tool description promises no verification that does not happen' {
+    # 2026-09-16 aws-lakehouse-link Task 9, and the sharpest version of this repository's own
+    # defect aimed at its agent rather than at a reader. DIALECTS.trino's idiom text tells the
+    # model that day_of_week "is confirmed against the live endpoint by a session probe at first
+    # query". For four days that sentence was false: no probe existed. A description asserting a
+    # verification nothing performs is worse than saying nothing, because the agent then treats
+    # an assumption as a checked fact and composes weekday filters on it.
+    #
+    # The assertion is deliberately NOT "the trino idioms mention a probe" - that is the sentence
+    # itself, and a test that reads its own subject proves nothing. It is: IF a dialect's idiom
+    # text claims a session probe, THEN an adapter declaring that dialect must ship probe SQL.
+    It 'ships probe SQL for every dialect whose idioms claim one' {
+        $root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $dialects = Get-Content -LiteralPath (Join-Path $root 'apps/mcp-tools/src/tools/sql-dialect.ts') -Raw
+        $cloudDir = Join-Path $root 'apps/mcp-tools/src/tools/cloud'
+
+        $profiles = [regex]::Matches($dialects, "(?s)\n  ([a-z]+):\s*\{\s*\r?\n\s*id:\s*`"([a-z]+)`"(.*?)\n  \},")
+        $profiles.Count | Should -BeGreaterThan 0 -Because 'DIALECTS must still be parseable, or this check reports absence it never observed'
+
+        $claiming = @($profiles | Where-Object { $_.Groups[3].Value -match 'session probe' } |
+            ForEach-Object { $_.Groups[2].Value })
+        $claiming | Should -Not -BeNullOrEmpty -Because 'at least one dialect is expected to make the claim; if none does, this check has silently stopped testing anything'
+
+        foreach ($dialect in $claiming) {
+            $adapters = @(Get-ChildItem -Path $cloudDir -Filter '*.ts' -File | Where-Object {
+                (Get-Content -LiteralPath $_.FullName -Raw) -match "dialect:\s*SqlDialect\s*=\s*`"$([regex]::Escape($dialect))`""
+            })
+            $adapters | Should -Not -BeNullOrEmpty -Because "a dialect promising a session probe must have a cloud adapter that declares it, or nothing can run the probe for $dialect"
+            foreach ($adapter in $adapters) {
+                # COMMENTS STRIPPED FIRST, and that is the whole difference between a real
+                # check and a decorative one. This adapter's own header names Fabric's
+                # SESSION_PROBE_SQL in prose, so a raw match would pass on a file that talks
+                # about a probe and runs none - the same mistake as asserting a role
+                # assignment against an @description() that happens to mention it.
+                $source = Get-Content -LiteralPath $adapter.FullName -Raw
+                $code = [regex]::Replace($source, '(?s)/\*.*?\*/', '')
+                $code = [regex]::Replace($code, '(?m)^\s*//.*$', '')
+                $code | Should -Match 'SESSION_PROBE_SQL' -Because "$($adapter.Name) serves the $dialect dialect, whose description tells the agent a session probe runs at first query - so its CODE must run the probe SQL, not merely mention one in a comment"
+                # `this.` matters: the declaration `private async ensureXContract()` matches a
+                # bare pattern, so asserting without it would pass on a probe method that
+                # exists and is never called - the promise unmet with extra steps. Verified by
+                # deleting the call site and watching this go red.
+                $code | Should -Match 'this\.ensure\w*Contract\(\)' -Because "$($adapter.Name) must actually INVOKE the probe before answering, the way fabric-sql.ts calls this.ensureSessionContract()"
+            }
+        }
+    }
+}
