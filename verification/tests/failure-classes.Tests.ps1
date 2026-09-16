@@ -2696,3 +2696,32 @@ as 'nothing to report'.
 "@
     }
 }
+
+Describe 'AWS audience is tokenised, not hardcoded' {
+    # 2026-09-16 aws-lakehouse-link Task 1. The manifest's real top-level key for app
+    # registrations is 'appRegistrations' (keyed by 'appKey'), not the 'applications'/'key'
+    # shape a draft brief for this task assumed - infra/entra/apply-entra.ps1 and
+    # infra/entra/tests/apply-entra.Tests.ps1 both read appRegistrations/appKey throughout,
+    # and Assert-ManifestSchema treats appRegistrations as the array of L3-applied app
+    # registrations. This test is written against the schema the readers actually use.
+    #
+    # The URI TEMPLATE also differs from the brief's snippet, for a reason no reading of
+    # this repository could have surfaced: deploying the brief's literal
+    # 'api://${prefix}-aws-athena-${env}' against the real tenant returned Graph error
+    # InvalidUniqueTenantIdentifierAsPerAppPolicy - a newly-added identifierUris entry must
+    # contain a tenant verified domain, the tenant id, or the app id, and a bare custom
+    # string has none of those. ${appId} is a literal marker (not a Resolve-ManifestToken
+    # substitution) that infra/entra/apply-entra.ps1's Resolve-IdentifierUri fills in with
+    # the real application id once Graph assigns one - see that function's comment.
+    It 'declares the AWS athena audience with prefix, env and appId tokens' {
+        $manifest = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw | ConvertFrom-Json
+        $app = $manifest.appRegistrations | Where-Object { $_.appKey -eq 'aws-athena' }
+        $app | Should -Not -BeNullOrEmpty -Because 'Task 1 declares the AWS-facing audience'
+        $app.identifierUris[0] | Should -BeExactly 'api://${appId}/${prefix}-aws-athena-${env}'
+    }
+
+    It 'never hardcodes the mls prefix in the AWS audience' {
+        $raw = Get-Content "$PSScriptRoot/../../infra/entra/manifest.json" -Raw
+        $raw | Should -Not -Match 'api://mls-aws-athena'
+    }
+}

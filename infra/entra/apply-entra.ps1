@@ -408,6 +408,15 @@ function Assert-ManifestSchema {
             [string]::IsNullOrWhiteSpace([string](Get-Field -Object $app -Name 'verifierProbeRole'))) {
             $problems.Add("appRegistrations[$index] has an empty 'verifierProbeRole'; omit the field or name a role")
         }
+        # Same shape: a declared-but-empty identifierUris would silently manage nothing,
+        # which looks identical to "this app has no audience" until the AWS trust policy
+        # (or whatever else depends on it) fails with an opaque error far from here.
+        if (Test-Field -Object $app -Name 'identifierUris') {
+            $uris = @(Get-FieldArray -Object $app -Name 'identifierUris')
+            if ($uris.Count -eq 0 -or ($uris | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) })) {
+                $problems.Add("appRegistrations[$index] has an empty or blank 'identifierUris'; omit the field or name at least one URI")
+            }
+        }
         $index++
     }
 
@@ -530,7 +539,7 @@ function Get-EntraGroup {
 function Get-EntraApplication {
     param([Parameter(Mandatory)][string]$DisplayName)
     $literal = ConvertTo-ODataLiteral -Value $DisplayName
-    $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName,signInAudience,appRoles"
+    $response = Invoke-GraphApi -Method GET -Path "applications?`$filter=displayName eq '$literal'&`$select=id,appId,displayName,signInAudience,appRoles,identifierUris"
     $found = @(Get-ResponseValue -Response $response)
     if ($found.Count -ge 1) { return $found[0] }
     return $null
@@ -675,26 +684,69 @@ function Initialize-GroupMembership {
     return $added
 }
 
+function Resolve-IdentifierUri {
+    <# Substitute the literal token ${appId} with a real application (client) id.
+
+       TENANT POLICY, NOT A CHOICE. Entra rejects any newly-added identifierUris entry
+       that does not contain a tenant verified domain, the tenant id, or the app id
+       (InvalidUniqueTenantIdentifierAsPerAppPolicy) - confirmed against the tenant
+       2026-09-16 while wiring the aws-athena audience: a bare "api://mls-aws-athena-demo"
+       is refused outright. The app id is the only one of those three this script can use
+       without threading the tenant's verified domain (a value chosen per-tenant, never
+       part of this portable manifest) through every caller that touches an application.
+       ${appId} is a literal marker, not one Resolve-ManifestToken expands - it can only be
+       resolved once Graph has assigned an app id, i.e. after creation. #>
+    param([Parameter(Mandatory)][string[]]$Templates, [Parameter(Mandatory)][string]$AppId)
+    return @($Templates | ForEach-Object { $_.Replace('${appId}', $AppId) })
+}
+
 function Initialize-EntraApplication {
     <# Create-if-absent / update-on-drift app registration. Returns @{ AppId; ObjectId; AppRoles; Outcome }.
 
        AppId is the application (client) id, NOT the directory object id: it is what
        Conditional Access `includeApplications` addresses an application by, and carrying
        it out of here is what lets the CA loop below scope a policy to named applications
-       instead of 'All'. It is $null only under -WhatIf, where nothing was created. #>
+       instead of 'All'. It is $null only under -WhatIf, where nothing was created.
+
+       identifierUris is managed ONLY for a registration that declares it (e.g. the
+       2026-09-16 aws-lakehouse-link audience, aws-athena): sending an empty array for
+       every other app would CLEAR whatever Application ID URI it holds, and this script
+       has no business touching a value it was never told to manage. It is also never sent
+       on the CREATE call - see Resolve-IdentifierUri - so creation always PATCHes it in as
+       a second call once the app id exists. #>
     param([Parameter(Mandatory)]$App)
     $displayName = Get-Field -Object $App -Name 'displayName'
     $audience = Get-Field -Object $App -Name 'signInAudience'
     if (-not $audience) { $audience = 'AzureADMyOrg' }
+    $uriTemplates = @(Get-FieldArray -Object $App -Name 'identifierUris')
     $existing = Get-EntraApplication -DisplayName $displayName
     if ($existing) {
         $appId = Get-Field -Object $existing -Name 'appId'
         $objectId = Get-Field -Object $existing -Name 'id'
         $roles = @(Get-FieldArray -Object $existing -Name 'appRoles')
+        $updates = [ordered]@{}
         if ((Get-Field -Object $existing -Name 'signInAudience') -ne $audience) {
-            Invoke-GraphMutation -Target $displayName -Action "Update signInAudience -> $audience" `
+            $updates['signInAudience'] = $audience
+        }
+        if ($uriTemplates.Count -gt 0) {
+            # @(...) at the call site, not inside Resolve-IdentifierUri's return: PowerShell
+            # unrolls a returned one-element array back to a bare scalar (the same class
+            # Get-FieldArray's own docstring documents), and this is the single-URI case in
+            # practice. An unwrapped scalar here reaches ConvertTo-Json as a JSON string,
+            # and Graph rejects the PATCH with "'PrimitiveValue' ... 'StartArray' expected" -
+            # caught deploying this exact change against the real tenant.
+            $desiredUris = @(Resolve-IdentifierUri -Templates $uriTemplates -AppId $appId)
+            $existingUris = @(Get-FieldArray -Object $existing -Name 'identifierUris')
+            # Order-sensitive on purpose: identifierUris[0] is the exact string Task 3's
+            # AWS trust policy and Task 6's token scope both depend on.
+            if (($existingUris -join '|') -ne ($desiredUris -join '|')) {
+                $updates['identifierUris'] = $desiredUris
+            }
+        }
+        if ($updates.Count -gt 0) {
+            Invoke-GraphMutation -Target $displayName -Action "Update $($updates.Keys -join ', ')" `
                 -Method PATCH -Path "applications/$objectId" `
-                -Body @{ signInAudience = $audience } | Out-Null
+                -Body $updates | Out-Null
             return @{ AppId = $appId; ObjectId = $objectId; AppRoles = $roles; Outcome = 'Updated' }
         }
         return @{ AppId = $appId; ObjectId = $objectId; AppRoles = $roles; Outcome = 'Unchanged' }
@@ -711,9 +763,24 @@ function Initialize-EntraApplication {
         # after creating it is a read against a replica that may not have it yet - the
         # exact shape F70 cost a run - and it would silently skip the probe role rather
         # than fail, because "not found" and "no role needed" look identical downstream.
+        $newAppId = Get-Field -Object $created -Name 'appId'
+        $newObjectId = Get-Field -Object $created -Name 'id'
+        if ($uriTemplates.Count -gt 0) {
+            # A sentence here, not a parameter-binding stack trace: Graph always returns
+            # appId on a successful application create, so a blank one means the create
+            # response was malformed in a way nothing else here would have caught either.
+            if ([string]::IsNullOrWhiteSpace([string]$newAppId)) {
+                throw "Created app registration '$displayName' but Graph's response carried no appId - cannot resolve identifierUris '$($uriTemplates -join ', ')'."
+            }
+            # See the matching @(...) note in the update branch above - same unroll, same fix.
+            $resolvedUris = @(Resolve-IdentifierUri -Templates $uriTemplates -AppId $newAppId)
+            Invoke-GraphMutation -Target $displayName -Action 'Set identifierUris' `
+                -Method PATCH -Path "applications/$newObjectId" `
+                -Body @{ identifierUris = $resolvedUris } | Out-Null
+        }
         return @{
-            AppId    = (Get-Field -Object $created -Name 'appId')
-            ObjectId = (Get-Field -Object $created -Name 'id')
+            AppId    = $newAppId
+            ObjectId = $newObjectId
             AppRoles = @()
             Outcome  = 'Created'
         }
