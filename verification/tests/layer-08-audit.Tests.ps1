@@ -55,11 +55,15 @@ BeforeAll {
 </botcomponent_connectionreferenceset>
 '@
 
-    $script:AllowedTool = @('query_lakehouse_sql', 'query_log_analytics', 'get_github_security',
-        'get_defender_posture', 'get_cost_series')
+    # query_aws_lakehouse_sql is in the fixture's allowlist because V8.6's first half reads
+    # the SAME /healthz declaration V8.3 compares against: a fixture advertising five tools
+    # would make V8.6 legitimately fail for the AWS tool being absent, which is a different
+    # test from the ones below.
+    $script:AllowedTool = @('query_lakehouse_sql', 'query_aws_lakehouse_sql', 'query_log_analytics',
+        'get_github_security', 'get_defender_posture', 'get_cost_series')
     $script:EvalPath = Join-Path -Path $script:ReportRoot -ChildPath 'agent-eval-results.json'
     $script:EnvironmentVariable = @('MLS_POWER_PLATFORM_ENV_URL', 'MLS_DATAVERSE_TOKEN', 'MLS_EVAL_RESULTS',
-        'MLS_MCP_SERVER_URL', 'MLS_SQL_ENDPOINT')
+        'MLS_MCP_SERVER_URL', 'MLS_SQL_ENDPOINT', 'MLS_MCP_AUTH_TOKEN', 'MLS_GLUE_DATABASE')
     $script:SavedEnvironment = @{}
     foreach ($name in $script:EnvironmentVariable) { $script:SavedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
 
@@ -105,6 +109,36 @@ BeforeAll {
         return @($Context.Criterion | Where-Object { $_.Id -eq $Id })[0]
     }
 
+    # Builds the INPUT V8.6/V8.7 interpret: one already-classified result of the shape
+    # Invoke-MlsMcpToolCall returns. It deliberately does NOT decide anything the criteria
+    # decide - no PASS, no FAIL, no UNOBSERVABLE verdict, no floor comparison. The mapping
+    # from an HTTP 401/429/5xx or an isError payload ONTO these outcomes is the module's
+    # job and is tested against Invoke-WebRequest in MlsAudit.Tests.ps1, where a fixture
+    # that built the outcome directly would be a mirror.
+    function New-AwsToolResult {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+            Justification = 'Pure builder: returns an in-memory fixture object and changes no state anywhere.')]
+        param(
+            [ValidateSet('rows', 'tool-error', 'unobservable')][string]$Outcome = 'rows',
+            [object[]]$Row = @(),
+            [string]$Text = '',
+            [int]$ElapsedMs = 2550
+        )
+        $payload = $null
+        if ($Outcome -eq 'rows') {
+            $payload = [pscustomobject]@{ columns = @('n'); rows = @($Row); rowCount = @($Row).Count; truncated = $false }
+        }
+        return [pscustomobject]@{
+            ToolName   = 'query_aws_lakehouse_sql'
+            Outcome    = $Outcome
+            Reason     = $(if ($Outcome -eq 'unobservable') { $Text } else { '' })
+            HttpStatus = $(if ($Outcome -eq 'unobservable') { 401 } else { 200 })
+            ElapsedMs  = $ElapsedMs
+            ToolError  = $(if ($Outcome -eq 'tool-error') { $Text } else { '' })
+            Payload    = $payload
+        }
+    }
+
     function Invoke-AuditForTest {
         param(
             [switch]$NoRetry,
@@ -112,12 +146,15 @@ BeforeAll {
             [string]$SolutionPath = $script:SolutionPath,
             [string]$EvalResultPath = $script:EvalPath,
             [string]$McpServerUrl = 'https://mls-mcp-demo-ca.example.io/mcp',
-            [string]$SqlEndpoint = 'abc.datawarehouse.fabric.microsoft.com'
+            [string]$SqlEndpoint = 'abc.datawarehouse.fabric.microsoft.com',
+            [string]$McpAuthToken = 'mcp-token-for-test',
+            [string]$AwsGlueDatabase = 'launch_intel_lakehouse'
         )
         Invoke-Main -EnvironmentUrl $EnvironmentUrl -DataverseToken 'dv-token' -SolutionPath $SolutionPath `
             -EvalResultPath $EvalResultPath -McpServerUrl $McpServerUrl -AllowedTool $script:AllowedTool `
             -AdaptiveCardVersion '1.5' -LatencyBudgetSeconds 20 -EvalPassBar 9 -SqlEndpoint $SqlEndpoint `
-            -LakehouseName 'mls_operations' -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
+            -LakehouseName 'mls_operations' -McpAuthToken $McpAuthToken -AwsGlueDatabase $AwsGlueDatabase `
+            -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
 }
 
@@ -169,7 +206,12 @@ Describe 'layer-08-audit' {
             if ("$Uri" -notlike '*/healthz') { throw "unexpected HTTP call: $Uri" }
             return [pscustomobject]@{
                 StatusCode = $script:HealthStatus
-                Content    = (@{ ok = $true; tools = @($script:AdvertisedTool).Count; toolNames = @($script:AdvertisedTool) } | ConvertTo-Json -Depth 5)
+                Content    = (@{
+                        ok        = $true
+                        tools     = @($script:AdvertisedTool).Count
+                        toolNames = @($script:AdvertisedTool)
+                        adapters  = @{ query_aws_lakehouse_sql = 'AthenaLakehouseSqlBackend' }
+                    } | ConvertTo-Json -Depth 5)
                 Headers    = @{}
                 Error      = $null
             }
@@ -179,13 +221,31 @@ Describe 'layer-08-audit' {
             return @([pscustomobject]@{ weekday = 'Saturday'; launches = 309 })
         }
 
+        # V8.6/V8.7's three probes, answering as the live endpoint did on 2026-09-16:
+        # launches 286,473, launches_latest 7,969, and a five-entry Glue catalog. Each test
+        # below replaces one of these with a realistic wrong answer.
+        $script:AwsBaseResult = New-AwsToolResult -Row @(, @(286473)) -ElapsedMs 4431
+        $script:AwsViewResult = New-AwsToolResult -Row @(, @(7969)) -ElapsedMs 2550
+        $script:AwsCatalogResult = New-AwsToolResult -Row @(
+            @('agencies', 'EXTERNAL_TABLE'), @('agencies_latest', 'VIRTUAL_VIEW'),
+            @('launches', 'EXTERNAL_TABLE'), @('launches_latest', 'VIRTUAL_VIEW'),
+            @('schedule_events', 'EXTERNAL_TABLE')) -ElapsedMs 2560
+
+        Mock Invoke-MlsMcpToolCall {
+            $statement = "$($Argument['sql'])"
+            if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
+            if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
+            if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            throw "unexpected MCP tool call: $statement"
+        }
+
         Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
     }
 
     Context 'all criteria pass' {
-        It 'records V8.1-V8.5 as PASS and exits 0' {
+        It 'records V8.1-V8.7 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V8.1', 'V8.2', 'V8.3', 'V8.4', 'V8.5')
+            @($context.Criterion).Id | Should -Be @('V8.1', 'V8.2', 'V8.3', 'V8.4', 'V8.5', 'V8.6', 'V8.7')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -294,7 +354,7 @@ Describe 'layer-08-audit' {
         It 'records V8.2 as FAIL when the lakehouse re-derivation errors, and still evaluates the rest' {
             Mock Invoke-MlsSqlQuery { throw 'Login failed: the capacity is paused.' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 5
+            @($context.Criterion).Count | Should -Be 7
             (Get-Row -Context $context -Id 'V8.2').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V8.2').Observed | Should -BeLike '*capacity is paused*'
             (Get-Row -Context $context -Id 'V8.4').Status | Should -Be 'PASS'
@@ -304,8 +364,8 @@ Describe 'layer-08-audit' {
     Context 'missing input - the pre-L8 state, recorded as labelled SKIPs' {
         It 'records every criterion as SKIP when nothing is deployed yet, and never as a pass' {
             $context = Invoke-AuditForTest -EnvironmentUrl '' -EvalResultPath (Join-Path -Path $script:ReportRoot -ChildPath 'absent.json') `
-                -McpServerUrl '' -SqlEndpoint '' -NoRetry
-            @($context.Criterion).Count | Should -Be 5
+                -McpServerUrl '' -SqlEndpoint '' -McpAuthToken '' -AwsGlueDatabase '' -NoRetry
+            @($context.Criterion).Count | Should -Be 7
             @($context.Criterion | Where-Object { $_.Status -ne 'SKIP' }) | Should -BeNullOrEmpty
             (Get-Row -Context $context -Id 'V8.1').Detail | Should -BeLike '*Power Platform environment*'
             (Get-Row -Context $context -Id 'V8.2').Detail | Should -BeLike '*copilot-eval.yml*'
@@ -325,6 +385,306 @@ Describe 'layer-08-audit' {
             $row.Status | Should -Be 'SKIP'
             $row.Detail | Should -BeLike '*re-derive*'
         }
+    }
+}
+
+Describe 'V8.6 - the AWS lakehouse answers with ROWS, not with a status code' {
+    # The link began working on 2026-09-16 and the evidence was a scratch script that no
+    # longer exists. Everything below is what makes a teardown/rebuild mean something: an
+    # estate that answers from AWS and has no criterion asserting it is one rebuild from
+    # DEMO-READINESS section D's position, plumbing verified and water unverified.
+    BeforeEach {
+        foreach ($name in $script:EnvironmentVariable) { [Environment]::SetEnvironmentVariable($name, $null) }
+        Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
+        Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
+        New-EvalArtifact -Passing 10
+        $script:DeployedVersion = '1.0.0.7'
+        $script:DeployedComponent = @('mls_opsagent', 'Greeting', 'Sign in ', 'mls_opsagent.shared_mcp.abc123')
+        $script:UnmanagedLayer = $false
+        $script:AdvertisedTool = $script:AllowedTool
+        $script:HealthStatus = 200
+        Mock Invoke-MlsRest {
+            if ($Uri -like '*solutions*') {
+                return [pscustomobject]@{ value = @([pscustomobject]@{ uniquename = 'mlsopsagent'; version = $script:DeployedVersion; solutionid = 'sol-1' }) }
+            }
+            return [pscustomobject]@{ value = @($script:DeployedComponent | ForEach-Object {
+                        [pscustomobject]@{ msdyn_name = $_; msdyn_componenttype = 1; msdyn_unmanagedlayer = $script:UnmanagedLayer } }) }
+        }
+        Mock Invoke-MlsHttp {
+            return [pscustomobject]@{
+                StatusCode = $script:HealthStatus
+                Content    = (@{
+                        ok = $true; tools = @($script:AdvertisedTool).Count
+                        toolNames = @($script:AdvertisedTool)
+                        adapters = @{ query_aws_lakehouse_sql = 'AthenaLakehouseSqlBackend' }
+                    } | ConvertTo-Json -Depth 5)
+                Headers    = @{}
+                Error      = $null
+            }
+        }
+        Mock Invoke-MlsSqlQuery { return @([pscustomobject]@{ weekday = 'Saturday'; launches = 309 }) }
+        $script:AwsBaseResult = New-AwsToolResult -Row @(, @(286473)) -ElapsedMs 4431
+        $script:AwsViewResult = New-AwsToolResult -Row @(, @(7969)) -ElapsedMs 2550
+        $script:AwsCatalogResult = New-AwsToolResult -Row @(
+            @('agencies', 'EXTERNAL_TABLE'), @('agencies_latest', 'VIRTUAL_VIEW'),
+            @('launches', 'EXTERNAL_TABLE'), @('launches_latest', 'VIRTUAL_VIEW'),
+            @('schedule_events', 'EXTERNAL_TABLE')) -ElapsedMs 2560
+        Mock Invoke-MlsMcpToolCall {
+            $statement = "$($Argument['sql'])"
+            if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
+            if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
+            if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            throw "unexpected MCP tool call: $statement"
+        }
+        Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
+    }
+
+    It 'records the observation line for every probe, so the artifact can tell success from silence' {
+        # F162: an authenticated scan and a blocked one produced identical reports, and
+        # nothing recorded which had happened. One line per probe is what fixed it.
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.6'
+        $row.Status | Should -Be 'PASS'
+        $row.Observed | Should -BeLike '*base table launches -> authenticated Athena query -> 1 rows, 4431 ms*'
+        $row.Observed | Should -BeLike '*view launches_latest -> authenticated Athena query -> 1 rows, 2550 ms*'
+        $row.Observed | Should -BeLike '*count 286473, floor 100000*'
+    }
+
+    It 'fails when the counted value falls below the floor' {
+        $script:AwsBaseResult = New-AwsToolResult -Row @(, @(3))
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.6'
+        $row.Status | Should -Be 'FAIL'
+        $row.Observed | Should -BeLike '*counted 3, below the floor of 100000*'
+    }
+
+    It 'fails, and does NOT report unobservable, when the deployed server no longer declares the AWS tool' {
+        # The rebuild case, and the only half of this criterion that runs with no credential
+        # at all: the six AWS settings not reaching the container leaves a server declaring
+        # six tools instead of seven (F122/F124/F125).
+        $script:AdvertisedTool = @($script:AllowedTool | Where-Object { $_ -ne 'query_aws_lakehouse_sql' })
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -McpAuthToken '') -Id 'V8.6'
+        $row.Status | Should -Be 'FAIL'
+        $row.Observed | Should -BeLike '*none of them is query_aws_lakehouse_sql*'
+        $row.Observed | Should -Not -BeLike 'UNOBSERVABLE*' -Because '/healthz answered and listed what it serves, so this is an observation, not a blind spot'
+    }
+
+    It 'reports UNOBSERVABLE, never zero rows, when a probe could not be read' {
+        $script:AwsBaseResult = New-AwsToolResult -Outcome 'unobservable' `
+            -Text 'tools/call returned HTTP 429 Too Many Requests (retry-after 600)'
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.6'
+        $row.Observed | Should -BeLike 'UNOBSERVABLE*'
+        $row.Observed | Should -BeLike '*429*'
+        $row.Status | Should -Not -Be 'PASS'
+    }
+
+    It 'never reports the link as present when only one of the two probes could be read' {
+        # The symmetric error, and the worse one: an auditor that cannot see a control must
+        # not be able to report it PRESENT either.
+        $script:AwsViewResult = New-AwsToolResult -Outcome 'unobservable' -Text 'no HTTP response at all'
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.6'
+        $row.Status | Should -Not -Be 'PASS'
+        $row.Observed | Should -BeLike 'UNOBSERVABLE*'
+        $row.Observed | Should -BeLike '*286473*' -Because 'the probe that DID answer is still reported; a run returns everything it saw'
+    }
+
+    It 'fails when the VIEW is denied while the base table answers perfectly' {
+        # The five-table finding regressing. A role built from the three base-table names
+        # answers every base-table question and AccessDenies launches_latest - a partial
+        # failure that reads like a data problem, in front of an audience.
+        $script:AwsViewResult = New-AwsToolResult -Outcome 'tool-error' `
+            -Text 'AccessDenied: User is not authorized to perform: glue:GetTable on resource launches_latest'
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.6'
+        $row.Status | Should -Be 'FAIL'
+        $row.Observed | Should -BeLike '*view launches_latest -> DENIED*'
+        $row.Observed | Should -BeLike '*glue:GetTable*'
+    }
+
+    It 'skips rather than passing when no credential was supplied, and claims nothing about the lakehouse' {
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -McpAuthToken '') -Id 'V8.6'
+        $row.Status | Should -Be 'SKIP'
+        $row.Observed | Should -BeLike '*no credential, so no row was read*'
+        $row.Detail | Should -BeLike '*necessary and nowhere near sufficient*'
+    }
+
+    It 'reports UNOBSERVABLE when /healthz publishes no tool names at all' {
+        $script:AdvertisedTool = @()
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.6'
+        $row.Observed | Should -BeLike 'UNOBSERVABLE*'
+        $row.Status | Should -Not -Be 'PASS'
+    }
+}
+
+Describe 'V8.7 - a denial is never reported as an empty dataset (F105, one cloud over)' {
+    BeforeEach {
+        foreach ($name in $script:EnvironmentVariable) { [Environment]::SetEnvironmentVariable($name, $null) }
+        Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
+        Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
+        New-EvalArtifact -Passing 10
+        $script:DeployedVersion = '1.0.0.7'
+        $script:DeployedComponent = @('mls_opsagent', 'Greeting', 'Sign in ', 'mls_opsagent.shared_mcp.abc123')
+        $script:UnmanagedLayer = $false
+        $script:AdvertisedTool = $script:AllowedTool
+        $script:HealthStatus = 200
+        Mock Invoke-MlsRest {
+            if ($Uri -like '*solutions*') {
+                return [pscustomobject]@{ value = @([pscustomobject]@{ uniquename = 'mlsopsagent'; version = $script:DeployedVersion; solutionid = 'sol-1' }) }
+            }
+            return [pscustomobject]@{ value = @($script:DeployedComponent | ForEach-Object {
+                        [pscustomobject]@{ msdyn_name = $_; msdyn_componenttype = 1; msdyn_unmanagedlayer = $script:UnmanagedLayer } }) }
+        }
+        Mock Invoke-MlsHttp {
+            return [pscustomobject]@{
+                StatusCode = $script:HealthStatus
+                Content    = (@{
+                        ok = $true; tools = @($script:AdvertisedTool).Count
+                        toolNames = @($script:AdvertisedTool)
+                        adapters = @{ query_aws_lakehouse_sql = 'AthenaLakehouseSqlBackend' }
+                    } | ConvertTo-Json -Depth 5)
+                Headers    = @{}
+                Error      = $null
+            }
+        }
+        Mock Invoke-MlsSqlQuery { return @([pscustomobject]@{ weekday = 'Saturday'; launches = 309 }) }
+        $script:AwsBaseResult = New-AwsToolResult -Row @(, @(286473)) -ElapsedMs 4431
+        $script:AwsViewResult = New-AwsToolResult -Row @(, @(7969)) -ElapsedMs 2550
+        $script:AwsCatalogResult = New-AwsToolResult -Row @(
+            @('agencies', 'EXTERNAL_TABLE'), @('agencies_latest', 'VIRTUAL_VIEW'),
+            @('launches', 'EXTERNAL_TABLE'), @('launches_latest', 'VIRTUAL_VIEW'),
+            @('schedule_events', 'EXTERNAL_TABLE')) -ElapsedMs 2560
+        Mock Invoke-MlsMcpToolCall {
+            $statement = "$($Argument['sql'])"
+            if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
+            if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
+            if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            throw "unexpected MCP tool call: $statement"
+        }
+        Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
+    }
+
+    It 'passes on a non-empty catalog listing that carries the tables V8.6 queries' {
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.7'
+        $row.Status | Should -Be 'PASS'
+        $row.Observed | Should -BeLike '*5 rows, 2560 ms*'
+        $row.Observed | Should -BeLike '*launches_latest*'
+    }
+
+    It 'reports an EMPTY listing as UNOBSERVABLE and never as an empty lakehouse' {
+        # THE WHOLE CRITERION. Athena answers a Glue database the role may not read with an
+        # empty listing, exactly as Fabric answered /tables with [] while its SQL endpoint
+        # held 1,200 rows.
+        $script:AwsCatalogResult = New-AwsToolResult -Row @()
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.7'
+        $row.Observed | Should -BeLike 'UNOBSERVABLE*'
+        $row.Observed | Should -BeLike '*unprovable*'
+        $row.Status | Should -Not -Be 'PASS'
+    }
+
+    It 'never reports the catalog as absent when it could not look' {
+        $script:AwsCatalogResult = New-AwsToolResult -Outcome 'unobservable' `
+            -Text 'tools/call returned HTTP 429 Too Many Requests (retry-after 600): a THROTTLED response is not an empty one'
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.7'
+        $row.Observed | Should -BeLike 'UNOBSERVABLE*'
+        $row.Observed | Should -Not -BeLike '*missing*'
+        $row.Observed | Should -Not -BeLike '*has no tables*'
+    }
+
+    It 'never reports the catalog as present when it could not look' {
+        $script:AwsCatalogResult = New-AwsToolResult -Outcome 'unobservable' -Text 'no HTTP response at all'
+        (Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.7').Status | Should -Not -Be 'PASS'
+    }
+
+    It 'reports a refusal AS a refusal, in the words a reader would act on' {
+        $script:AwsCatalogResult = New-AwsToolResult -Outcome 'tool-error' `
+            -Text 'AccessDeniedException: User is not authorized to perform: glue:GetTables'
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.7'
+        $row.Status | Should -Be 'FAIL'
+        $row.Observed | Should -BeLike '*DENIED*'
+        $row.Detail | Should -BeLike '*do not read this as "the lakehouse has no tables"*'
+    }
+
+    It 'names a genuinely missing table only once the listing proved readable' {
+        $script:AwsCatalogResult = New-AwsToolResult -Row @(
+            @('agencies', 'EXTERNAL_TABLE'), @('launches', 'EXTERNAL_TABLE'))
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.7'
+        $row.Status | Should -Be 'FAIL'
+        # -Match, not -BeLike: [ ] is a wildcard character class, so -BeLike would be
+        # asserting something other than the literal the report prints.
+        $row.Observed | Should -Match 'missing \[launches_latest\]'
+        $row.Detail | Should -BeLike '*OBSERVED MISSING, not unobservable*'
+    }
+
+    It 'reports UNOBSERVABLE when the Glue database name could not be resolved' {
+        Mock Invoke-MlsAz { return '' }
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -AwsGlueDatabase '') -Id 'V8.7'
+        $row.Observed | Should -BeLike 'UNOBSERVABLE*'
+        $row.Status | Should -Not -Be 'PASS'
+    }
+
+    It 'skips, claiming nothing at all, when no credential was supplied' {
+        $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -McpAuthToken '') -Id 'V8.7'
+        $row.Status | Should -Be 'SKIP'
+        $row.Observed | Should -BeLike '*NOT probed*'
+        $row.Detail | Should -BeLike '*not that it is empty*'
+    }
+}
+
+Describe 'V8.6 and V8.7 declare their own wait windows rather than inheriting one' {
+    # Nineteen of forty-seven criteria once inherited a window nobody chose for them,
+    # including one whose answer was settled the moment the deploy step returned. Patience
+    # is opted into: V8.6 waits on a Container Apps cold start plus Athena's submit-poll-
+    # retrieve cycle, and V8.7 waits on catalog metadata only, on a container V8.6 has
+    # already woken - so the two numbers differ from each other and from the default.
+    BeforeEach {
+        foreach ($name in $script:EnvironmentVariable) { [Environment]::SetEnvironmentVariable($name, $null) }
+        Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
+        Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
+        New-EvalArtifact -Passing 10
+        $script:DeployedVersion = '1.0.0.7'
+        $script:DeployedComponent = @('mls_opsagent', 'Greeting', 'Sign in ', 'mls_opsagent.shared_mcp.abc123')
+        $script:UnmanagedLayer = $false
+        $script:AdvertisedTool = $script:AllowedTool
+        $script:HealthStatus = 200
+        Mock Invoke-MlsRest {
+            if ($Uri -like '*solutions*') {
+                return [pscustomobject]@{ value = @([pscustomobject]@{ uniquename = 'mlsopsagent'; version = $script:DeployedVersion; solutionid = 'sol-1' }) }
+            }
+            return [pscustomobject]@{ value = @($script:DeployedComponent | ForEach-Object {
+                        [pscustomobject]@{ msdyn_name = $_; msdyn_componenttype = 1; msdyn_unmanagedlayer = $script:UnmanagedLayer } }) }
+        }
+        Mock Invoke-MlsHttp {
+            return [pscustomobject]@{
+                StatusCode = 200
+                Content    = (@{ ok = $true; tools = 6; toolNames = @($script:AdvertisedTool)
+                        adapters = @{ query_aws_lakehouse_sql = 'AthenaLakehouseSqlBackend' } } | ConvertTo-Json -Depth 5)
+                Headers    = @{}
+                Error      = $null
+            }
+        }
+        Mock Invoke-MlsSqlQuery { return @([pscustomobject]@{ weekday = 'Saturday'; launches = 309 }) }
+        $script:AwsBaseResult = New-AwsToolResult -Row @(, @(286473))
+        $script:AwsViewResult = New-AwsToolResult -Row @(, @(7969))
+        $script:AwsCatalogResult = New-AwsToolResult -Row @(
+            @('launches', 'EXTERNAL_TABLE'), @('launches_latest', 'VIRTUAL_VIEW'))
+        Mock Invoke-MlsMcpToolCall {
+            $statement = "$($Argument['sql'])"
+            if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
+            if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
+            return $script:AwsBaseResult
+        }
+        Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
+    }
+
+    It 'gives each criterion a window it chose, shorter than the one it would have inherited' {
+        $context = Invoke-AuditForTest -NoRetry
+        # V8.4 takes the context default; the comparison is against THAT rather than a
+        # literal, so changing the default cannot silently make this assertion vacuous.
+        $inherited = (Get-Row -Context $context -Id 'V8.4').RetryWindowMinutes
+        $rows = (Get-Row -Context $context -Id 'V8.6').RetryWindowMinutes
+        $catalog = (Get-Row -Context $context -Id 'V8.7').RetryWindowMinutes
+        $rows | Should -Be 4
+        $catalog | Should -Be 2
+        $rows | Should -Not -Be $inherited
+        $catalog | Should -BeLessThan $rows -Because 'the catalog probe reads metadata with no S3 scan, on a container V8.6 already woke'
+        $rows | Should -BeLessThan 120 -Because 'nothing here waits on Entra or policy propagation'
     }
 }
 
