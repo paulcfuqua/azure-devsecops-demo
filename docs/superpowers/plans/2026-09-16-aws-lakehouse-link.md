@@ -168,10 +168,6 @@ param location string
 
 var identityRg = '${prefix}-rg-identity'
 
-resource rg 'Microsoft.Resources/resources@2021-04-01' existing = {
-  name: identityRg
-}
-
 module identity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.1' = {
   name: 'aws-identity'
   scope: resourceGroup(identityRg)
@@ -397,8 +393,13 @@ aws iam get-role-policy --role-name mls-athena-reader \
 
 echo "--- workgroup reachable, and capped ---"
 # The bytes-scanned cutoff is the spend control (spec section 6). Athena bills per
-# terabyte scanned, so an unbounded workgroup is an uncapped bill reachable by an
-# agent writing its own SQL. A workgroup with no cutoff is reported, not accepted.
+# terabyte scanned, so an unbounded workgroup is in principle an uncapped bill
+# reachable by an agent writing its own SQL.
+#
+# MEASURED, IT IS NOT A RISK HERE: the sponsor reports USD 0.20 of Athena spend
+# across a month on this dataset. The check stays because the reasoning is right
+# and the dataset could grow, but it PRINTS and does not block -- a warning that
+# demands action on a twenty-cent bill is how real warnings get ignored.
 aws athena get-work-group --work-group "${MLS_ATHENA_WORKGROUP:?}" \
   --query "WorkGroup.{name:Name,state:State,bytesScannedCutoff:Configuration.BytesScannedCutoffPerQuery}" \
   --output json
@@ -733,11 +734,13 @@ git commit -m "feat(mcp): Athena lakehouse backend behind an injectable executor
 **Files:**
 - Modify: `apps/mcp-tools/src/config.ts`
 - Modify: `apps/mcp-tools/src/tools/cloud/index.ts`
+- Modify: `apps/mcp-tools/src/tools/backends.ts`
 - Test: `apps/mcp-tools/tests/config.test.ts`
 
 **Interfaces:**
 - Consumes: `AthenaLakehouseOptions` from Task 5.
 - Produces: `McpToolsConfig.aws?: { roleArn, audience, region, database, workgroup, outputLocation }` — present only when all six env vars are set.
+- Produces: `Backends.awsLakehouseSql?: LakehouseSqlBackend` — **added by pre-flight ruling.** The `Backends` interface at `backends.ts:264` is the only route a backend has into `ToolRegistry`, and the plan's first draft named no task that widened it. Add the optional field and populate it from the cloud factory when `config.aws` is present; `createLocalBackends()` leaves it undefined.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -886,6 +889,15 @@ Three edits in `apps/mcp-tools/src/tools/index.ts`:
 3. Extend `buildToolDefinitions` with a third parameter `opts: { aws?: boolean } = {}`, splicing the AWS tool in at index 1.
 
 **The load-time guard at the bottom of the file will now check the new name in every dialect.** If it throws at import, the allowlist and the definitions disagree — which is the guard doing its job, not an obstacle to work around.
+
+**Added by pre-flight ruling — without this the tool never reaches production.** `buildToolDefinitions` is called in exactly one live place: the `ToolRegistry` constructor at `index.ts:428`. Two further edits are required, and a test for each:
+
+4. `ToolRegistry`'s constructor passes `{ aws: this.backends.awsLakehouseSql !== undefined }` as the third argument, so the live `tools/list` includes the AWS tool exactly when an AWS backend was built.
+5. `ToolRegistry`'s execute path routes `query_aws_lakehouse_sql` to `backends.awsLakehouseSql`, and throws a clear error if that name arrives with no backend behind it.
+
+Without both, the tool passes every test in this task and is **invisible to every agent** — the tool definitions the tests build are not the definitions the server serves. That is F125's class precisely: correct from every angle a reviewer checks, and never once executed. Add a test asserting `new ToolRegistry(backendsWithAws).definitions` contains the tool and `new ToolRegistry(createLocalBackends()).definitions` does not.
+
+Note `apps/mcp-tools/tests/allowlist.test.ts` holds an `EXPECTED_NAMES` list — a second reader of the tool set, and one Step 1's grep must surface.
 
 - [ ] **Step 5: Update V8.3's expectation**
 
