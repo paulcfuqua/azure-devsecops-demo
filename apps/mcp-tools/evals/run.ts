@@ -9,12 +9,19 @@
  * A pass means: this answer is reachable through the MCP tool surface. Pass bar
  * 10/10 — there is no model in this loop and therefore no excuse.
  *
- * It also asserts the surface itself: tools/list returns exactly the allowlist
- * (audit V8.2), and every tool on it answers a smoke call. The expected set is
- * ALLOWED_TOOL_NAMES itself, never a hardcoded count -- a literal `5` here went
+ * It also asserts the surface itself: tools/list returns exactly what a LOCAL
+ * server is supposed to serve (audit V8.2), and every tool on it answers a
+ * smoke call. The expected set is derived from `ToolRegistry` over
+ * `createLocalBackends()` — the same production wiring `src/index.ts` uses for
+ * `MLS_TOOL_BACKENDS=local` — never a hardcoded count: a literal `5` here went
  * red the moment the compliance platform added a sixth tool (query_compliance,
- * 2026-08-26) and made this whole workflow fail for a reason that had nothing to
- * do with the tool surface being wrong.
+ * 2026-08-26), and `ALLOWED_TOOL_NAMES` ITSELF stopped being that set the
+ * moment `query_aws_lakehouse_sql` joined it as a seventh, backend-gated name
+ * (Task 6/7): this harness never configures AWS, so the tool it is right to
+ * expect is six, not seven, and asserting against the raw allowlist would fail
+ * this workflow for a reason that has nothing to do with the tool surface
+ * being wrong — precisely the trap F145 describes for a list feeding two
+ * checks that expect different things of it.
  *
  * What it deliberately does NOT measure: whether the deployed Copilot Studio
  * agent picks the right tool and renders the right Adaptive Card. That is
@@ -32,7 +39,8 @@ import type { Server as HttpServer } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createApp, MCP_PATH } from "../src/app.js";
-import { ALLOWED_TOOL_NAMES } from "../src/tools/index.js";
+import { createLocalBackends } from "../src/tools/backends.js";
+import { ToolRegistry } from "../src/tools/index.js";
 import {
   goldenQuestions,
   resultContains,
@@ -101,8 +109,14 @@ async function main(): Promise<void> {
   /* ---- the tool surface itself (audit V8.2) ---- */
   const listed = (await client.listTools()).tools.map((t) => t.name).sort();
   const surfaceErrors: string[] = [];
-  const expected = [...(ALLOWED_TOOL_NAMES as readonly string[])].sort();
-  // Set equality against the allowlist, in both directions: an extra tool is a
+  // What a LOCAL server actually serves — not ALLOWED_TOOL_NAMES, which also
+  // names query_aws_lakehouse_sql, a tool this in-process harness never
+  // configures (see the header comment). Computed from the same
+  // ToolRegistry(createLocalBackends()) construction src/index.ts uses for
+  // MLS_TOOL_BACKENDS=local, so it stays correct if the local default set ever
+  // gains another conditionally-gated tool.
+  const expected = new ToolRegistry(createLocalBackends()).definitions.map((t) => t.name).sort();
+  // Set equality against that expected set, in both directions: an extra tool is a
   // governance failure, and a MISSING one is a regression that a bare "no tool off
   // the allowlist" check would wave through.
   for (const name of listed) {

@@ -390,3 +390,47 @@ Describe 'V8.1 builds its expected set from the whole solution tree (F145)' {
             Should -BeNullOrEmpty
     }
 }
+
+Describe "V8.3's -AllowedTool default stays in step with ALLOWED_TOOL_NAMES (F145's shape, again)" {
+    # ALLOWED_TOOL_NAMES in apps/mcp-tools/src/tools/index.ts is the one source of truth for
+    # which tools the server may ever advertise (its own load-time guard enforces that against
+    # the definitions it builds). This script's -AllowedTool default is a SEPARATE,
+    # hand-maintained PowerShell copy of that same list, because the Verifier runs no
+    # TypeScript and cannot import it directly. A tool added to one list and not the other is
+    # exactly F145's shape: a criterion whose expected set silently stopped meaning what a
+    # reader assumes it means -- V8.1's component list and V8.3's filtered subset drifted apart
+    # once before with nothing about the second list edited to show for it. This is the test
+    # that closes that path for THIS pair of lists: add an eighth tool to ALLOWED_TOOL_NAMES
+    # without touching this script's default (or the reverse), and it fails.
+    BeforeAll {
+        $script:F145Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:ToolsIndexPath = Join-Path $script:F145Root 'apps/mcp-tools/src/tools/index.ts'
+        $script:AuditScriptPath = Join-Path $script:F145Root 'verification/layer-08-audit.ps1'
+    }
+
+    It 'names exactly the same tools as ALLOWED_TOOL_NAMES, as a set' {
+        $tsSource = Get-Content -LiteralPath $script:ToolsIndexPath -Raw
+        $tsMatch = [regex]::Match($tsSource, 'export const ALLOWED_TOOL_NAMES = \[([\s\S]*?)\]')
+        $tsMatch.Success | Should -BeTrue -Because 'ALLOWED_TOOL_NAMES must exist verbatim in tools/index.ts'
+        $tsNames = @([regex]::Matches($tsMatch.Groups[1].Value, '"([a-z_]+)"') |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        # A regex that matched nothing is not the same fact as "the two lists agree" -- an
+        # empty expected set would pass every subset check below vacuously.
+        $tsNames.Count | Should -BeGreaterThan 0 -Because 'ALLOWED_TOOL_NAMES must contain at least one quoted name'
+
+        # [string[]]$AllowedTool appears TWICE in this script: the top-level param block
+        # (real names, matched first) and Invoke-Main's own pass-through parameter (default
+        # @(), empty). [regex]::Match returns the first match, which is the top-level one.
+        $psSource = Get-Content -LiteralPath $script:AuditScriptPath -Raw
+        $psMatch = [regex]::Match($psSource, '\[string\[\]\]\$AllowedTool = @\(\s*([\s\S]*?)\)')
+        $psMatch.Success | Should -BeTrue -Because 'layer-08-audit.ps1 must declare a non-empty -AllowedTool default'
+        $psNames = @([regex]::Matches($psMatch.Groups[1].Value, "'([a-z_]+)'") |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        $psNames.Count | Should -BeGreaterThan 0 -Because '-AllowedTool''s default must contain at least one quoted name'
+
+        $missingFromScript = @($tsNames | Where-Object { $_ -notin $psNames })
+        $extraInScript = @($psNames | Where-Object { $_ -notin $tsNames })
+        $missingFromScript | Should -BeNullOrEmpty -Because 'every name in ALLOWED_TOOL_NAMES must appear in -AllowedTool''s default'
+        $extraInScript | Should -BeNullOrEmpty -Because '-AllowedTool''s default must never claim a tool ALLOWED_TOOL_NAMES does not name'
+    }
+}

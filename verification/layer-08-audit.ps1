@@ -14,10 +14,14 @@
       V8.3  No tool invoked outside the tool allowlist and the agent declares exactly
             those tools. The master plan wrote "five-tool allowlist" in 2026-08-22, when
             there were five; the 2026-08-26 compliance-platform design added a sixth,
-            query_compliance (apps/mcp-tools/tests/allowlist.test.ts pins the server at
-            exactly six). The criterion is unchanged - no tool outside the DECLARED
-            allowlist - so -AllowedTool below carries six names, and a deployed server
-            advertising the old five would now fail this criterion for being short.
+            query_compliance, and the 2026-09-16 AWS lakehouse link added a seventh,
+            query_aws_lakehouse_sql (apps/mcp-tools/src/tools/index.ts's ALLOWED_TOOL_NAMES
+            is the source of truth; verification/tests/layer-08-audit.Tests.ps1 asserts this
+            default stays in step with it, so a future eighth tool fails a test rather than
+            silently going unaudited). The criterion is unchanged - no tool outside the
+            DECLARED allowlist - so -AllowedTool below carries seven names, and a deployed
+            server advertising only the prior six would now fail this criterion for being
+            short until the AWS backend is actually wired up and deployed (Task 9).
       V8.4  Every visual answer is an Adaptive Card payload that validates against the
             pinned Adaptive Cards schema; zero HTML/JS/JSX in any response.
       V8.5  p95 latency < 20 s.
@@ -46,12 +50,16 @@ param(
     [string]$EvalResultPath,
     [string]$McpServerUrl,
     # The allowlist the deployed MCP server must advertise, exactly. Kept in step with
-    # apps/mcp-tools/src/tools/index.ts; query_compliance is the sixth (compliance-platform
-    # design 2026-08-26 section 5.3). Test-ToolAllowlist below compares as a SET, so a name
-    # missing here fails the criterion just as loudly as an extra one on the server.
+    # apps/mcp-tools/src/tools/index.ts's ALLOWED_TOOL_NAMES; query_compliance is the sixth
+    # (compliance-platform design 2026-08-26 section 5.3) and query_aws_lakehouse_sql is the
+    # seventh (2026-09-16 AWS lakehouse link). Test-ToolAllowlist below compares as a SET, so
+    # a name missing here fails the criterion just as loudly as an extra one on the server.
+    # verification/tests/layer-08-audit.Tests.ps1 cross-checks this literal list against the
+    # TypeScript source so the two cannot silently drift again (F145's shape: a list feeding
+    # one check widened without checking what else reads it).
     [string[]]$AllowedTool = @(
-        'query_lakehouse_sql', 'query_log_analytics', 'get_github_security',
-        'get_defender_posture', 'get_cost_series', 'query_compliance'
+        'query_lakehouse_sql', 'query_aws_lakehouse_sql', 'query_log_analytics',
+        'get_github_security', 'get_defender_posture', 'get_cost_series', 'query_compliance'
     ),
     [string]$AdaptiveCardVersion = '1.5',
     [double]$LatencyBudgetSeconds = 20,
@@ -586,7 +594,7 @@ function Invoke-Main {
         -Test { Test-EvalSuite -Artifact $artifact -PassBar $EvalPassBar -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V8.3' -Control @('3.1.2', '3.4.6') `
-        -Description "No tool invoked outside the $($AllowedTool.Count)-tool allowlist and the agent declares exactly those $($AllowedTool.Count) (master plan wrote 'five-tool'; query_compliance was added 2026-08-26)" `
+        -Description "No tool invoked outside the $($AllowedTool.Count)-tool allowlist and the agent declares exactly those $($AllowedTool.Count) (master plan wrote 'five-tool'; query_compliance was added 2026-08-26, query_aws_lakehouse_sql 2026-09-16)" `
         -Command "runtime: every tool call recorded across every eval question`nstatic: MCP tools/list against the deployed server`nstatic: tool/connector components declared by the unpacked solution" `
         -Expected "runtime filter empty; tools/list returns exactly $($AllowedTool -join ', '); no additional tool, connector, agent flow or knowledge source beyond the MCP connection and (Fabric path) the single connected data agent" -NoRetry `
         -Test { Test-ToolAllowlist -Artifact $artifact -McpServerUrl $serverUrl -AllowedTool $AllowedTool -Committed $committed } | Out-Null
