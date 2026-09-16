@@ -329,6 +329,23 @@ resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' existing = {
   name: sqlServerResourceName
 }
 
+// The AWS trust identity (2026-09-16 aws-lakehouse-link Task 2), created by L6's
+// infra/bicep/modules/aws-identity.bicep in its own resource group — outside the four
+// this layer and platform/main.bicep otherwise own — for the same reason it is referenced
+// here as `existing` rather than declared: it must survive a teardown of mls-rg-apps, so
+// nothing in this template may own its lifecycle. mcpToolsApp below lists it in
+// userAssignedIdentities ALONGSIDE mcpToolsIdentity (not instead of it) because Task 6
+// requests a token from THIS identity specifically, by client id — a token minted from
+// whatever identity a container defaults to would carry the wrong `sub` claim and the AWS
+// trust policy would reject it.
+var identityRgName = naming.resourceGroupName(companyPrefix, 'identity')
+var awsIdentityName = naming.userAssignedIdentityName(companyPrefix, 'aws', env)
+
+resource awsIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
+  scope: az.resourceGroup(identityRgName)
+  name: awsIdentityName
+}
+
 // ------------------------------------------------------------------ names + tags
 
 var launchOpsName = naming.containerAppName(companyPrefix, naming.appKeys.launchOps, env)
@@ -1138,8 +1155,16 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
     ingressAllowInsecure: false
     ingressTargetPort: mcpToolsTargetPort
     scaleSettings: scaleToZero
+    // BOTH identities, deliberately. mcpToolsIdentity is what the container's own
+    // DefaultAzureCredential binds to (AZURE_CLIENT_ID below) for every Azure data plane
+    // this server already reads. awsIdentity is listed ALONGSIDE it, not instead of it,
+    // because Task 6 requests a token from awsIdentity SPECIFICALLY — by its own client id
+    // — to present to AWS as the OIDC-federated principal; a token minted from
+    // mcpToolsIdentity would carry a `sub` claim the AWS IAM trust policy (Task 3) does not
+    // recognise. Container Apps only lets a container's code request a token from an
+    // identity actually listed here.
     managedIdentities: {
-      userAssignedResourceIds: [mcpToolsIdentity.outputs.resourceId]
+      userAssignedResourceIds: [mcpToolsIdentity.outputs.resourceId, awsIdentity.id]
     }
     // One secret, and only one: the inbound auth token, resolved from Key
     // Vault rather than passed as a value. Every Azure upstream still

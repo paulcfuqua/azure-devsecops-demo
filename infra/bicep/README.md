@@ -11,6 +11,8 @@ Live deployment happens at L2 / L6 / L7 after G1b + G0, per the layer playbooks 
 infra/bicep/
 ├── bicepconfig.json                 # linter config for the whole tree
 ├── naming.bicep                     # single source of naming + tags (no other file says 'mls')
+├── modules/                         # shared across layers — read by both L6 and L7
+│   └── aws-identity.bicep           # the AWS trust identity, in its own 5th RG (mls-rg-identity)
 ├── landing-zone/                    # L2 — tenant-root MG scope
 │   ├── main.bicep
 │   └── demo.bicepparam
@@ -186,7 +188,8 @@ Every resource that has an AVM module uses one, pinned to an explicit version.
 | Purpose | AVM module | Version |
 |---|---|---|
 | Policy assignments (all 15) | `avm/ptn/authorization/policy-assignment` | 0.5.3 |
-| Resource groups (all 4) | `avm/res/resources/resource-group` | 0.4.4 |
+| Resource groups (the four demo RGs, `platform/main.bicep`) | `avm/res/resources/resource-group` | 0.4.4 |
+| Resource group (`mls-rg-identity`, `modules/aws-identity.bicep`) | `avm/res/resources/resource-group` | 0.4.4 |
 | Log Analytics workspace | `avm/res/operational-insights/workspace` | 0.16.1 |
 | Application Insights | `avm/res/insights/component` | 0.8.0 |
 | Container Apps environment | `avm/res/app/managed-environment` | 0.15.0 |
@@ -262,9 +265,30 @@ exhaustive -- an omission here is a grant nobody is reviewing:
    which is exactly why the Function does not share the cost-export account: doing so
    would make the container-scoped Reader grant above decorative.
 
-Four `existing` lookups (`apps/main.bicep`) read L6 resources this deployment does not
-own — the App Insights component above, the Log Analytics workspace, the Key Vault, and
-the SQL server. `existing` is a read, not a grant, and creates nothing.
+Five `existing` lookups (`apps/main.bicep`) read resources this deployment does not own
+— the App Insights component above, the Log Analytics workspace, the Key Vault, the SQL
+server (all four from L6), and the AWS trust identity (`awsIdentity`, from
+`modules/aws-identity.bicep` — see below) in its own resource group, `mls-rg-identity`.
+`existing` is a read, not a grant, and creates nothing.
+
+## The AWS trust identity (`modules/aws-identity.bicep`) — a fifth resource group
+
+2026-09-16 aws-lakehouse-link Task 2. `infra/bicep/modules/aws-identity.bicep` is a
+subscription-scope module, invoked from `platform/main.bicep` (L6) but living in its own
+top-level `modules/` directory rather than `platform/modules/` or `apps/modules/`,
+because it is read by both layers: L6 creates it, L7's `apps/main.bicep` references it as
+`existing` to list it in the MCP tool server's `userAssignedIdentities`.
+
+It creates a **fifth** resource group, `mls-rg-identity` — deliberately outside the four
+`platform/main.bicep`'s "single owner of RG creation" block creates and `infra-down.yml`
+deletes by name. A user-assigned identity's principal id is destroyed and reissued on
+every teardown; an AWS IAM trust policy (a later task) is conditioned on this identity's
+principal id specifically, so the identity has to survive a teardown the four demo
+resource groups do not. Same move, same reason, as the Fabric capacity's `rg-fabric`
+default (`scripts/bootstrap/02-fabric-capacity.ps1`).
+`verification/tests/failure-classes.Tests.ps1` ("AWS trust identity survives teardown")
+keeps it there across a rebrand, deriving the four teardown-owned groups from
+`naming.bicep` rather than a restated literal.
 
 ## `[derived]` decisions
 

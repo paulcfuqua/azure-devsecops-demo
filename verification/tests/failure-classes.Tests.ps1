@@ -2738,3 +2738,39 @@ Describe 'AWS audience is tokenised, not hardcoded' {
         $raw | Should -Not -Match 'api://mls-aws-athena'
     }
 }
+
+Describe 'AWS trust identity survives teardown' {
+    # 2026-09-16 aws-lakehouse-link Task 2, BLOCKER-E's lesson applied to a second resource.
+    # A managed identity's principal id is destroyed and reissued on every teardown - the
+    # 2026-09-03 rebuild moved data-api's from 3dadafd7 to ba91c8ea. Task 3 conditions an AWS
+    # IAM trust policy's `sub` on THIS identity's principal id, so if it lived inside one of
+    # the four resource groups teardown deletes by name, the next rebuild would silently
+    # reissue the id and the trust policy would start failing with an opaque AccessDenied that
+    # looks like an AWS problem, not an Azure one. Same move, same reason, as the Fabric
+    # capacity's rg-fabric default (scripts/bootstrap/02-fabric-capacity.ps1).
+    #
+    # The four deleted groups are DERIVED from naming.bicep's `rgPurposes` map rather than
+    # restated as literals here, so a rebrand (F90's class) cannot quietly move the identity
+    # back inside the blast radius without this test noticing. naming.bicep never spells
+    # "rg-platform"/"rg-apps"/"rg-data"/"rg-ops" out as adjacent literals anywhere in its own
+    # text (the closest is a single doc-comment "mls-rg-platform|apps|data|ops", which a naive
+    # `rg-(platform|apps|data|ops)` sweep only matches once, against "rg-platform") - the four
+    # purposes exist as `rgPurposes` map VALUES, combined with the `rg-` prefix only inside
+    # `resourceGroupName()`. So the derivation reads the map's values and rebuilds the "rg-<x>"
+    # form itself, the same shape `resourceGroupName(prefix, purpose)` produces.
+    It 'lives in a resource group that teardown does not delete' {
+        $naming = Get-Content "$PSScriptRoot/../../infra/bicep/naming.bicep" -Raw
+        $rgPurposesBlock = [regex]::Match($naming, '(?s)var\s+rgPurposes\s*=\s*\{(.*?)\}').Groups[1].Value
+        $rgPurposesBlock | Should -Not -BeNullOrEmpty -Because 'naming.bicep must still declare the rgPurposes map for this derivation to mean anything'
+        $deleted = [regex]::Matches($rgPurposesBlock, "'([a-z]+)'") |
+            ForEach-Object { "rg-$($_.Groups[1].Value)" } | Sort-Object -Unique
+        $deleted.Count | Should -BeGreaterOrEqual 4 -Because 'naming.bicep must still name all four demo resource-group purposes'
+
+        $module = Get-Content "$PSScriptRoot/../../infra/bicep/modules/aws-identity.bicep" -Raw
+        foreach ($g in $deleted) {
+            $module | Should -Not -Match "rg-identity'?\s*==\s*'?$g" -Because "the module must never resolve its resource group to $g"
+            $module | Should -Not -Match "'\S*$g'" -Because "the module must never hardcode the $g resource group name"
+        }
+        $module | Should -Match 'rg-identity' -Because 'the identity must be declared in its own, fifth resource group'
+    }
+}
