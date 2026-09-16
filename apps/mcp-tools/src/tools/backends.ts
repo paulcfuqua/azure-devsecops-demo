@@ -236,6 +236,12 @@ export {
   type TdsExecutor,
   type TdsQueryResult,
 } from "./cloud/fabric-sql.js";
+export {
+  AthenaLakehouseSqlBackend,
+  type AthenaExecutor,
+  type AthenaLakehouseOptions,
+  type AthenaRawResult,
+} from "./cloud/athena-sql.js";
 export { AzureLogAnalyticsBackend } from "./cloud/log-analytics.js";
 export { LiveGithubSecurityBackend } from "./cloud/github-security.js";
 export { AzureDefenderPostureBackend } from "./cloud/defender-posture.js";
@@ -268,6 +274,15 @@ export interface Backends {
   defenderPosture: DefenderPostureBackend;
   costSeries: CostSeriesBackend;
   compliance: ComplianceBackend;
+  /**
+   * `query_aws_lakehouse_sql`, the sponsor's real AWS Athena lakehouse — a
+   * SEVENTH, additive tool, not a replacement for `lakehouseSql` above.
+   * Present only when the cloud factory was given AWS settings (config.aws);
+   * `createLocalBackends()` below leaves it undefined, and `ToolRegistry`
+   * reads its presence/absence to decide whether to advertise the tool at
+   * all (see tools/index.ts).
+   */
+  awsLakehouseSql?: LakehouseSqlBackend;
 }
 
 /** Phase P default: all-local backends. */
