@@ -101,6 +101,27 @@ param fabricSqlEndpoint = readEnvironmentVariable('MLS_FABRIC_SQL_ENDPOINT', '')
 param fabricDatabase = readEnvironmentVariable('MLS_FABRIC_DATABASE', 'mls_operations')
 param githubRepository = readEnvironmentVariable('MLS_GITHUB_REPO', '')
 
+// The AWS lakehouse link (2026-09-16). Six demo environment variables, read under
+// exactly the names the demo environment holds them under, with '' meaning "no AWS
+// link" — a supported deployment that simply serves six tools instead of seven.
+//
+// These existed as demo variables for a day before any parameter read them, which is
+// the same shape as F98's: a value set correctly, in the right place, reaching nothing,
+// because nothing on the path between it and the container declared it. There is no
+// 'unset' sentinel here and none is needed — unlike the Easy Auth client IDs above,
+// empty and absent mean the same thing for this link, so F26's two-spellings problem
+// does not arise.
+//
+// THE SEVENTH SETTING IS NOT HERE. MLS_AWS_CLIENT_ID is derived by main.bicep from the
+// mls-rg-identity user-assigned identity itself, not typed into a variable, so it cannot
+// disagree with the identity actually assigned to the container app.
+param awsRoleArn = readEnvironmentVariable('MLS_AWS_ROLE_ARN', '')
+param awsAudience = readEnvironmentVariable('MLS_AWS_AUDIENCE', '')
+param awsRegion = readEnvironmentVariable('MLS_AWS_REGION', '')
+param glueDatabase = readEnvironmentVariable('MLS_GLUE_DATABASE', '')
+param athenaWorkgroup = readEnvironmentVariable('MLS_ATHENA_WORKGROUP', '')
+param athenaOutput = readEnvironmentVariable('MLS_ATHENA_OUTPUT', '')
+
 // Owner tag. Neutral fallback so a downstream deployment never inherits the
 // original author's GitHub handle on every resource group (policy-enforced tag).
 param owner = readEnvironmentVariable('MLS_OWNER', 'mls-demo')

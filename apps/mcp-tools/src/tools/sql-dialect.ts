@@ -63,6 +63,27 @@ export const TSQL_SATURDAY_WEEKDAY = 7;
 /** The value `strftime('%w', …)` yields for Saturday in SQLite. */
 export const SQLITE_SATURDAY_WEEKDAY = "6";
 
+/**
+ * The Trino/Athena half of the same contract, and the reason the trino idioms
+ * paragraph below is allowed to promise a numbering to the agent at all.
+ *
+ * `2026-08-22` is Track A's master seed date and a **Saturday**. Trino's
+ * `day_of_week` is documented as ISO — 1=Monday .. 7=Sunday — which makes
+ * Saturday **6**, one lower than T-SQL's `DATEPART(weekday, …)` under the pinned
+ * `SET DATEFIRST 7`, and that one-off difference is exactly the kind an agent
+ * carries silently from one tool to the other. Athena has no session state to
+ * pin (no `SET` equivalent, and `SET SESSION` is refused by the read-only gate),
+ * so the guarantee cannot be *established* the way `TSQL_SESSION_PROLOGUE`
+ * establishes its own — it can only be **observed**, once, before the first real
+ * answer depends on it. `athena-sql.ts`'s `ensureDialectContract` does that and
+ * refuses to serve the tool if the engine disagrees.
+ */
+export const TRINO_SESSION_PROBE_DATE = "2026-08-22";
+export const TRINO_SESSION_PROBE_SQL = `SELECT day_of_week(DATE '${TRINO_SESSION_PROBE_DATE}') AS seed_date_weekday`;
+
+/** The number `day_of_week(…)` yields for Saturday under Trino's ISO numbering. */
+export const TRINO_SATURDAY_WEEKDAY = 6;
+
 export interface DialectProfile {
   id: SqlDialect;
   /** Name used in the agent-facing description's opening clause. */

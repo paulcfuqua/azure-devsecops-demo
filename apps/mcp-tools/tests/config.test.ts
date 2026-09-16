@@ -15,6 +15,14 @@ import { loadConfig } from "../src/config.js";
 // about AWS config resolution, not auth.
 const open = { MCP_ALLOW_UNAUTHENTICATED: "true" };
 
+// Seven, not six. MLS_AWS_CLIENT_ID joined the required set at Task 9 and is as
+// load-bearing as the role ARN: the container carries two user-assigned managed
+// identities and the AWS trust policy's `sub` is pinned to one of them, so a
+// token minted from the other is refused by STS with a message that blames the
+// trust policy. Required — not optional-with-a-fallback — so that a missing one
+// is a boot error naming the variable rather than an AccessDenied in AWS.
+// The id itself is the allowlisted synthetic placeholder; no live identity is
+// involved and none could be, since nothing here acquires a token.
 const awsVars = {
   MLS_AWS_ROLE_ARN: "arn:aws:iam::1:role/r",
   MLS_AWS_AUDIENCE: "api://a",
@@ -22,12 +30,13 @@ const awsVars = {
   MLS_GLUE_DATABASE: "launch",
   MLS_ATHENA_WORKGROUP: "wg",
   MLS_ATHENA_OUTPUT: "s3://r/",
+  MLS_AWS_CLIENT_ID: "11111111-1111-1111-1111-111111111111",
 };
 
 const full = { ...open, ...awsVars };
 
 describe("aws config", () => {
-  it("is present when all six are set", () => {
+  it("is present when all seven are set", () => {
     const config = loadConfig(full as never);
     expect(config.aws?.roleArn).toBe("arn:aws:iam::1:role/r");
     expect(config.aws).toEqual({
@@ -37,7 +46,16 @@ describe("aws config", () => {
       database: "launch",
       workgroup: "wg",
       outputLocation: "s3://r/",
+      clientId: "11111111-1111-1111-1111-111111111111",
     });
+  });
+
+  // The one that would otherwise be silent. Six of seven set is exactly what a
+  // template that threaded the demo variables but forgot to derive the identity
+  // would produce, and it must not resolve to "configured".
+  it("treats the six demo variables WITHOUT the derived client id as fatal, naming it", () => {
+    const { MLS_AWS_CLIENT_ID: _omitted, ...sixOnly } = awsVars;
+    expect(() => loadConfig({ ...open, ...sixOnly } as never)).toThrow(/MLS_AWS_CLIENT_ID/);
   });
 
   it("is absent when none are set", () => {
@@ -45,7 +63,9 @@ describe("aws config", () => {
   });
 
   it.each(Object.keys(awsVars))("treats an EMPTY %s as unconfigured, not as configured", (k) => {
-    expect(() => loadConfig({ ...full, [k]: "" } as never)).toThrow(/MLS_AWS|MLS_GLUE|MLS_ATHENA/);
+    expect(() => loadConfig({ ...full, [k]: "" } as never)).toThrow(
+      new RegExp(`- ${k}:`),
+    );
   });
 
   it("names exactly the missing variables and none of the present ones", () => {
