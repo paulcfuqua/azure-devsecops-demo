@@ -89,14 +89,14 @@
       "name": "verification-suite",
       "status": "ok",
       "recordCount": 5,
-      "limitation": "Reads committed Verifier audit reports. It reports what an audit run observed at the time that report was written, not the state of the estate now. Nothing in this estate has been deployed, so there are no reports to read.",
+      "limitation": "Reads committed Verifier audit reports under verification/reports/. It reports what an audit run observed at the time that report was written, never the state of the estate now. It read 5 evidence records from the reports committed there.",
       "error": null
     },
     {
       "name": "repo-static",
       "status": "ok",
       "recordCount": 8,
-      "limitation": "Reads the working tree. Every record describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence that anything runs.",
+      "limitation": "Reads the working tree. Every record describes what the repository declares, not what is deployed, so it is not evidence that anything runs.",
       "error": null
     },
     {
