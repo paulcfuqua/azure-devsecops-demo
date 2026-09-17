@@ -658,6 +658,68 @@ jobs:
           resolve "${DATA_API_IMAGE:-}" "${CA_DATA_API}" DATA_API_IMAGE_DIGEST
           resolve "${COMPLIANCE_IMAGE:-}" "${CA_COMPLIANCE}" COMPLIANCE_IMAGE_DIGEST
 
+      # The Verifier needs to read ONE Key Vault secret - mcp-auth-token - so L8's
+      # V8.6 can ask the deployed MCP tool for a row from the AWS lakehouse and
+      # V8.7 can tell a denial from an empty catalog. Without it both criteria
+      # report SKIP, which is honest and asserts nothing, and the AWS link has no
+      # criterion behind it across a teardown and rebuild.
+      #
+      # Resolved here, not stored. `az ad sp show` against the client id the demo
+      # environment already carries is the one source that cannot drift from the
+      # identity L8's verify job actually logs in as - and an object id typed into
+      # a GitHub variable is both an estate identifier in configuration and one
+      # more value that can be wrong with nothing saying so (F124).
+      #
+      # Written to GITHUB_ENV rather than a step output so the what-if and the
+      # deploy below see the SAME value. A parameter that reaches one of the two
+      # produces a what-if diff that does not describe the deployment - F124's
+      # class in the step that exists to preview it.
+      #
+      # Empty is a supported state and not a failure: main.bicep grants nothing
+      # without it, the estate deploys, and L8 skips rather than passing falsely.
+      # Reading a service principal needs Directory.Read.All or
+      # Application.Read.All on the deployer - the same requirement the L6
+      # deployer-object-id step already carries.
+      - name: Resolve the Verifier's object id for the mcp-auth-token grant
+        id: verifier
+        env:
+          VERIFIER_CLIENT_ID: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+        run: |
+          set -uo pipefail
+          object_id=""
+
+          if [ -z "${VERIFIER_CLIENT_ID}" ]; then
+            echo "::warning title=No Verifier identity configured::AZURE_VERIFIER_CLIENT_ID is unset on the demo environment, so there is no principal to grant. Nothing was looked up and nothing is claimed about the tenant. L8's V8.6/V8.7 will report SKIP - the AWS lakehouse link will have no criterion asserting it returns rows."
+          else
+            # STDERR IS KEPT, NOT DISCARDED. `2>/dev/null || true` collapses "no such
+            # service principal", "you may not read it" and "the CLI was throttled" into
+            # the same empty string, and the step then announces whichever one it happened
+            # to name - which is F183 exactly, in the workflow one layer over, and F105's
+            # class generally. Three causes, three messages.
+            stderr_file="$(mktemp)"
+            set +e
+            object_id="$(az ad sp show --id "${VERIFIER_CLIENT_ID}" --query id -o tsv 2>"${stderr_file}")"
+            lookup_rc=$?
+            set -e
+            lookup_err="$(cat "${stderr_file}")"
+            rm -f "${stderr_file}"
+
+            if [ "${lookup_rc}" -ne 0 ] || [ -z "${object_id}" ]; then
+              object_id=""
+              if printf '%s' "${lookup_err}" | grep -qiE 'forbidden|authoriz|access denied|insufficient privileges'; then
+                echo "::warning title=Verifier object id UNOBSERVABLE::The deployer was REFUSED when reading the service principal for ${VERIFIER_CLIENT_ID}, so this step cannot say whether that identity exists and will not guess. Reading a service principal needs Directory.Read.All or Application.ReadWrite.OwnedBy on mls-github-deployer. The mcp-auth-token grant is skipped and L8's V8.6/V8.7 will report SKIP. Azure said: ${lookup_err}"
+              elif printf '%s' "${lookup_err}" | grep -qiE 'does not exist|not found|Request_ResourceNotFound'; then
+                echo "::warning title=No Verifier service principal::The read SUCCEEDED and the tenant genuinely has no service principal for ${VERIFIER_CLIENT_ID}. Run scripts/bootstrap/02-verifier-identity.ps1, or correct AZURE_VERIFIER_CLIENT_ID. The mcp-auth-token grant is skipped and L8's V8.6/V8.7 will report SKIP. Azure said: ${lookup_err}"
+              else
+                echo "::warning title=Verifier object id lookup failed::Neither a permissions error nor a not-found, so this step will not classify it and claims nothing about the tenant - a throttled CLI looks exactly like this. The mcp-auth-token grant is skipped and L8's V8.6/V8.7 will report SKIP. Azure said: ${lookup_err}"
+              fi
+            else
+              echo "Verifier object id resolved for the mcp-auth-token grant."
+            fi
+          fi
+
+          echo "MLS_VERIFIER_OBJECT_ID=${object_id}" >> "${GITHUB_ENV}"
+
       - name: What-if the apps deployment
         env:
           RG_APPS: ${{ steps.names.outputs.rg-apps }}
