@@ -491,3 +491,116 @@ Describe 'F24: data-api is granted the Fabric workspace Viewer role after L7 cre
     }
 }
 
+Describe 'the Verifier reads ONE secret, and the grant that lets it is in the template' {
+    # NOT A WORKLOAD GRANT, and it lives here anyway because this file is where this
+    # repository keeps "an RBAC assignment expressed in Bicep, asserted by GUID and by
+    # SCOPE rather than by the comment beside it". The principal is mls-verifier, the
+    # read-only auditor, and the reason it needs a credential at all is that L8's V8.6
+    # asserts the AWS Athena lakehouse answers with ROWS: a row is only observable by
+    # asking for one, /healthz publishes tool names and never data, and the deployed MCP
+    # endpoint is behind mcp-auth-token.
+    #
+    # THE GRANT WAS HAND-APPLIED ON 2026-09-16 and that is what these assertions are
+    # really about. A role assignment that exists only in the estate works today and is
+    # erased by the next teardown, after which V8.6 and V8.7 quietly return to SKIP -
+    # and a criterion that has stopped asserting looks exactly like one that never did
+    # (F159). The scope assertions matter just as much as the existence one: the same
+    # vault holds the Direct Line secret and data-api's GitHub PAT, so a grant that
+    # widened to the vault would hand the auditor two more of the things it audits
+    # without a single comment needing to change.
+
+    BeforeAll {
+        $script:KvSecretRoleModulePath = Join-Path $script:RepoRoot 'infra/bicep/apps/modules/key-vault-secret-role.bicep'
+        $script:KvSecretRoleModule = Get-Content -LiteralPath $script:KvSecretRoleModulePath -Raw
+
+        # Comments and @description() stripped before every match below, for the reason
+        # this file's header gives at length: a green check satisfied by prose describing
+        # the thing it is supposed to assert is the failure mode, not the exception.
+        $script:KvSecretRoleCode = (
+            ($script:KvSecretRoleModule -split "`n") |
+                Where-Object { $_ -notmatch '^\s*@description\(' } |
+                ForEach-Object { $_ -replace '//.*$', '' }
+        ) -join "`n"
+
+        $script:KeyVaultSecretsUserGuid = '4633458b-17de-408a-b874-0445c86b69e6'
+    }
+
+    It 'invokes the secret-scoped module from the apps template, not only from a comment' {
+        $script:StrippedBicep['main'] | Should -Match 'modules/key-vault-secret-role\.bicep' `
+            -Because 'the hand-applied grant is only reproduced by a rebuild if the template actually calls the module'
+        $script:StrippedBicep['main'] | Should -Match 'verifierMcpTokenGrant'
+    }
+
+    It 'binds the assignment to the SECRET, never to the vault' {
+        # The distinction the whole module exists for. `scope: keyVault` compiles, grants
+        # read on every secret in the vault, and looks identical in a PR.
+        $script:KvSecretRoleCode | Should -Match 'scope:\s*keyVault::secret' `
+            -Because 'Key Vault RBAC''s narrowest data scope is the individual secret, and this vault is RBAC-enabled so it is available'
+        $script:KvSecretRoleCode | Should -Not -Match '(?m)scope:\s*keyVault\s*$' `
+            -Because 'a vault-scoped assignment would also hand the auditor the Direct Line secret and data-api''s GitHub PAT'
+        $script:KvSecretRoleCode | Should -Match "resource secret 'secrets' existing"
+    }
+
+    It 'assigns Key Vault Secrets User by GUID, and assigns nothing else' {
+        $guidPattern = "'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'"
+        $observed = @([regex]::Matches($script:KvSecretRoleCode, $guidPattern) |
+                ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() } | Sort-Object -Unique)
+        $observed | Should -Be @($script:KeyVaultSecretsUserGuid) `
+            -Because 'one module, one role; a second GUID here is a grant nobody argued for'
+    }
+
+    It 'names the secret once in the template, so the grant cannot drift from the app that reads it' {
+        # mcp-auth-token is read by four places in main.bicep: the container app secret,
+        # its keyVaultUrl, the env var that references it, and this grant. Spelled four
+        # times, a rename fixes three of them and the grant silently covers a secret that
+        # no longer exists - which ARM reports as a scope error at deploy time if you are
+        # lucky and as a working deployment with an unreadable token if you are not.
+        $literal = [regex]::Matches($script:StrippedBicep['main'], "'mcp-auth-token'").Count
+        $literal | Should -Be 1 -Because 'one source: the var, not the literal, is what the other three sites use'
+        $script:StrippedBicep['main'] | Should -Match 'var mcpAuthSecretName\s*='
+        $script:StrippedBicep['main'] | Should -Match 'secretName:\s*mcpAuthSecretName'
+    }
+
+    It 'grants nothing when no Verifier principal is supplied, so an unconfigured estate still deploys' {
+        $script:StrippedBicep['main'] | Should -Match 'if \(!empty\(verifierPrincipalId\)\)' `
+            -Because 'a clone with no Verifier identity must still come up; the honest consequence is an L8 SKIP, not a failed deployment'
+    }
+
+    It 'resolves the principal at deploy time and hardcodes no object id anywhere' {
+        # V1.3 sweeps the repository for GUIDs and allowlisting an estate identifier is
+        # itself a finding (F62). It is also the durable choice: the object id survives a
+        # teardown today, and a pasted one would be wrong the first time it does not.
+        $script:Layer07 | Should -Match 'az ad sp show --id "\$\{VERIFIER_CLIENT_ID\}"'
+        $script:Layer07 | Should -Match 'MLS_VERIFIER_OBJECT_ID='
+        $bicepparam = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'infra/bicep/apps/demo.bicepparam') -Raw
+        $bicepparam | Should -Match "readEnvironmentVariable\('MLS_VERIFIER_OBJECT_ID'"
+        $bicepparam | Should -Not -Match '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+    }
+
+    It 'keeps the audit taking the token as an INPUT and never reading a vault itself' {
+        # The contract the criteria were built on, and the reason the grant is this narrow.
+        # An audit that can fetch its own credential is an auditor that can authorise
+        # itself; the workflow does the read, under the Verifier's own login, and hands the
+        # value over as an environment variable.
+        $audit = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'verification/layer-08-audit.ps1') -Raw
+        $code = (($audit -split "`n") | ForEach-Object { $_ -replace '#.*$', '' }) -join "`n"
+        $code | Should -Not -Match 'az keyvault|Get-AzKeyVaultSecret|vault\.azure\.net' `
+            -Because 'the audit reads mcp-auth-token from its -McpAuthToken parameter or MLS_MCP_AUTH_TOKEN, and from nowhere else'
+        $code | Should -Match 'MLS_MCP_AUTH_TOKEN'
+    }
+
+    It 'passes the token to the audit by environment, never as a process argument' {
+        $l8 = Get-Content -LiteralPath (Join-Path $script:RepoRoot '.github/workflows/layer-08-copilot-studio.yml') -Raw
+        $l8 | Should -Match 'MLS_MCP_AUTH_TOKEN=\$\{token\}" >> "\$\{GITHUB_ENV\}"'
+        $l8 | Should -Match '::add-mask::\$\{token\}'
+
+        # Comment lines removed first. The step's own header NAMES the -McpAuthToken
+        # parameter in order to explain why it is not used, and a check that cannot tell
+        # an explanation from an invocation is the failure mode this file's header spends
+        # forty lines on.
+        $executable = (($l8 -split "`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+        $executable | Should -Not -Match '-McpAuthToken' `
+            -Because 'process arguments are visible in the runner - .github/actions/layer-audit/action.yml says exactly that about secrets'
+    }
+}
+

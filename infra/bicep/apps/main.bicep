@@ -227,6 +227,9 @@ param dataApiBackendMode string = ''
 @description('Name of the Key Vault secret holding a GitHub read-only token for the three GitHub feeds data-api serves. EMPTY IS A SUPPORTED DEPLOYMENT: the feeds then fail closed with a typed 503 naming what is missing, which is the correct default for a clone that has no token. Supplying a name wires the secret by REFERENCE (keyVaultUrl + identity) — the value never enters this template, demo.bicepparam, ARM deployment history or a what-if log. The secret must already exist in the vault; this template never writes a secret value (hard rule 5).')
 param githubTokenSecretName string = ''
 
+@description('Object (principal) id of the read-only Verifier service principal, granted Key Vault Secrets User on the mcp-auth-token SECRET ALONE so L8 V8.6/V8.7 can ask the deployed MCP tool for a row instead of reporting SKIP. EMPTY IS A SUPPORTED DEPLOYMENT and grants nothing. Resolved from AZURE_VERIFIER_CLIENT_ID at deploy time rather than stored: an object id typed into configuration is one more value that can be wrong with nothing saying so (F124).')
+param verifierPrincipalId string = ''
+
 @description('Fabric lakehouse SQL analytics endpoint FQDN (the L5 lakehouse metadata\'s sqlEndpointProperties.connectionString). Not derivable from ARM: Fabric is not an ARM resource here, so this arrives from the L5 outputs at deploy time.')
 param fabricSqlEndpoint string = ''
 
@@ -457,6 +460,14 @@ module mcpToolsIdentity 'br/public:avm/res/managed-identity/user-assigned-identi
   }
 }
 
+// The MCP server's inbound auth token, by NAME. One source, read by four
+// places: the container app's secret entry, its keyVaultUrl, the env var that
+// references it, and the Verifier's secret-scoped grant below. Spelling it
+// four times is how the grant and the secret it is meant to cover start to
+// drift — and a grant on the wrong secret name is a deployment failure at
+// best and a silent SKIP at worst.
+var mcpAuthSecretName = 'mcp-auth-token'
+
 // Grants this identity 'Key Vault Secrets User' on the platform vault so the
 // container app can resolve mcp-auth-token via keyVaultUrl at runtime — see
 // the "MCP INBOUND AUTH TOKEN" header block (Task 5, F2 infra half). Scoped to
@@ -467,6 +478,38 @@ module mcpKvGrant 'modules/key-vault-secrets-user-role.bicep' = {
   params: {
     keyVaultName: platformKv.name
     principalId: mcpToolsIdentity.outputs.principalId
+  }
+}
+
+// Grants the READ-ONLY VERIFIER 'Key Vault Secrets User' on the mcp-auth-token
+// SECRET ALONE — a different module from the grant directly above, and the
+// difference is the point (modules/key-vault-secret-role.bicep; see its header).
+//
+// WHY THE VERIFIER NEEDS A CREDENTIAL AT ALL. L8's V8.6 asserts that the AWS
+// Athena lakehouse answers through the deployed tool with ROWS rather than with
+// a status code, and V8.7 asserts that a denial from it is never reported as an
+// empty dataset. A row is only observable by asking for one, /healthz publishes
+// tool names and never data, and this estate holds no AWS credential by design —
+// so the deployed MCP endpoint is the only surface that can produce a row, and
+// it is behind this token. Without the grant both criteria report SKIP, which is
+// honest and asserts nothing: the AWS link then has no criterion behind it
+// across a teardown and rebuild.
+//
+// WHY THE SCOPE IS ONE SECRET. The same vault holds the Direct Line secret and
+// data-api's GitHub PAT. Vault scope would make the auditor a fully authorised
+// caller of two more things it audits; secret scope buys exactly the one
+// observation the criteria need. mls-verifier still holds only Reader elsewhere.
+//
+// THIS WAS HAND-APPLIED ON 2026-09-16 and is expressed here so the rebuild
+// reproduces it (F159): configuration that exists only in the estate is a demo
+// that works once. Empty principal id grants nothing and still deploys.
+module verifierMcpTokenGrant 'modules/key-vault-secret-role.bicep' = if (!empty(verifierPrincipalId)) {
+  name: 'l7-verifier-mcp-token-grant'
+  scope: az.resourceGroup(platformRgName)
+  params: {
+    keyVaultName: platformKv.name
+    secretName: mcpAuthSecretName
+    principalId: verifierPrincipalId
   }
 }
 
@@ -1191,8 +1234,8 @@ var mcpToolsGitHubEnv = empty(githubTokenSecretName) || mcpToolsMode != 'cloud'
 var mcpToolsSecrets = concat(
   [
     {
-      name: 'mcp-auth-token'
-      keyVaultUrl: '${platformKv.properties.vaultUri}secrets/mcp-auth-token'
+      name: mcpAuthSecretName
+      keyVaultUrl: '${platformKv.properties.vaultUri}secrets/${mcpAuthSecretName}'
       identity: mcpToolsIdentity.outputs.resourceId
     }
   ],
@@ -1274,7 +1317,7 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
           [
             {
               name: 'MCP_AUTH_TOKEN'
-              secretRef: 'mcp-auth-token'
+              secretRef: mcpAuthSecretName
             }
             {
               // F2's other half: the backend set is now a deployment decision,
@@ -1426,6 +1469,11 @@ output mcpToolsAwsLinkConfigured bool = awsSettingsSupplied
 
 @description('Client id of the AWS trust identity the container requests its AWS-bound token from (MLS_AWS_CLIENT_ID). Derived from the mls-rg-identity user-assigned identity rather than stored, so it cannot drift from the identity actually assigned to the app. Empty-by-omission is impossible here: if the identity does not exist the deployment fails rather than shipping a container that would ask the wrong principal for a token.')
 output mcpToolsAwsIdentityClientId string = awsIdentity.properties.clientId
+
+@description('The SECRET-scoped resource id the Verifier was granted Key Vault Secrets User on, or empty when no Verifier principal was supplied and nothing was granted. Emitted rather than inferred so a reader can tell "granted on one secret" from "granted on the vault" from "not granted at all" — three states an L8 SKIP cannot distinguish, and the difference between V8.6 asserting a row and asserting nothing.')
+output verifierMcpTokenGrantScope string = empty(verifierPrincipalId)
+  ? ''
+  : verifierMcpTokenGrant!.outputs.scopeResourceId
 
 @description('Client ID of the data-api user-assigned identity — the principal that needs the SQL contained-database user, the Fabric workspace Viewer role, Log Analytics Reader and Security Reader.')
 output dataApiIdentityClientId string = dataApiIdentity.outputs.clientId

@@ -356,10 +356,20 @@ jobs:
             echo "2. Reconfigure authentication (Authenticate manually → Entra ID V2), then publish again."
             echo "3. Paid-F2 path only: re-create the Fabric connection and re-attach the data"
             echo "   agent under **Agents** (a connected agent, not a knowledge source)."
-            echo "4. Create the MCP connection; confirm the tool list populates."
+            echo "4. Create the MCP connection; confirm the tool list populates with **all 7** tools,"
+            echo "   then **toggle every tool ON and publish again**. A newly discovered tool arrives"
+            echo "   **disabled**, and a disabled tool is indistinguishable from an absent one (F202):"
+            echo "   the agent answers from whatever source remains, confidently and plausibly. Counting"
+            echo "   the list does not detect it — read the toggles. A save alone does not reach the"
+            echo "   published agent; publish."
             echo "5. Re-enable generative orchestration — both Fabric and MCP need it."
             echo "6. Configure the Custom website channel + Web channel security; capture the Token Endpoint."
             echo "7. Re-apply sharing and Fabric read access for the demo users."
+            echo "8. **Confirm by arithmetic, not by appearance.** Ask \"how many rows are in the launches"
+            echo "   table?\" — the agent must name **both** lakehouses: **1,200** (Meridian, synthetic)"
+            echo "   and **286,473** (AWS launch-intelligence, real). Both have a table called"
+            echo "   \`launches\` and both return plausible vehicle names, so only the numbers"
+            echo "   discriminate. A single unqualified 1,200 means the AWS tool is not reachable."
             echo
             echo "Detail: \`infra/copilot-studio/README.md\` section 6."
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -679,6 +689,80 @@ jobs:
           client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # V8.6 asks the deployed MCP tool for a ROW from the AWS Athena lakehouse
+      # and V8.7 asks it for the catalog; both are behind mcp-auth-token, and
+      # without it they report SKIP - honest, and asserting nothing. This is the
+      # one line of wiring layer-08-audit.ps1 was built to wait for.
+      #
+      # THE AUDIT NEVER READS A VAULT. It takes the token as an explicit input
+      # (-McpAuthToken / $env:MLS_MCP_AUTH_TOKEN) and that contract is deliberate:
+      # an auditor that can reach into Key Vault on its own behalf is a fully
+      # authorised caller of everything the vault holds. The READ happens here,
+      # once, under the Verifier's own login, and the value is handed to the audit
+      # as an environment variable - never as a process argument, which is visible
+      # in the runner (.github/actions/layer-audit/action.yml says exactly that).
+      #
+      # THE GRANT IS IN THE TEMPLATE. infra/bicep/apps/main.bicep's
+      # verifierMcpTokenGrant binds Key Vault Secrets User to mls-verifier on the
+      # mcp-auth-token SECRET ALONE - not the vault, which also holds the Direct
+      # Line secret and data-api's GitHub PAT. So this read succeeds for exactly
+      # one name and returns Forbidden for every other, and a rebuild reproduces
+      # it rather than depending on a grant somebody once applied by hand (F159).
+      #
+      # REFUSED IS NOT ABSENT (F105). The three outcomes are reported as three
+      # different things: a value, a secret that genuinely is not there, and a
+      # caller that was not allowed to look. Only the first feeds the criteria;
+      # the other two leave MLS_MCP_AUTH_TOKEN unset, so V8.6/V8.7 SKIP with
+      # their own reason rather than failing on a credential problem or, worse,
+      # passing on one.
+      - name: Read mcp-auth-token for V8.6/V8.7 (Verifier, one secret only)
+        if: ${{ needs.preflight.outputs.verifier == 'true' }}
+        env:
+          KEY_VAULT_NAME: ${{ steps.names.outputs.key-vault }}
+          SECRET_NAME: mcp-auth-token
+        run: |
+          set -uo pipefail
+
+          # stderr to a file, never merged into stdout: the VALUE is on stdout and
+          # merging them would put a secret and an error message in one string. The
+          # eval job above reads the Direct Line secret exactly this way, and for the
+          # same second reason - `2>/dev/null || true` collapses a 403 and a 404 into
+          # the same empty string, which is how that step announced an absent secret
+          # on every run it ever made (F147).
+          stderr_file="$(mktemp)"
+          set +e
+          token="$(az keyvault secret show \
+            --vault-name "${KEY_VAULT_NAME}" \
+            --name "${SECRET_NAME}" \
+            --query value -o tsv 2>"${stderr_file}")"
+          read_rc=$?
+          set -e
+          read_err="$(cat "${stderr_file}")"
+          rm -f "${stderr_file}"
+
+          if [ "${read_rc}" -eq 0 ] && [ -n "${token}" ]; then
+            # Masked before it is used anywhere, so a stack trace or a set -x cannot
+            # leak it into the log, and passed by ENVIRONMENT - never as an argument,
+            # which is visible in the runner.
+            echo "::add-mask::${token}"
+            echo "MLS_MCP_AUTH_TOKEN=${token}" >> "${GITHUB_ENV}"
+            echo "Read '${SECRET_NAME}' from ${KEY_VAULT_NAME}. V8.6 and V8.7 will probe the AWS lakehouse instead of skipping."
+          elif printf '%s' "${read_err}" | grep -qiE 'SecretNotFound|was not found|not found in this key vault'; then
+            echo "::warning title=No MCP auth token::${KEY_VAULT_NAME} genuinely holds no '${SECRET_NAME}' - the read SUCCEEDED and the secret is absent. That secret is G0 item C11, and without it the MCP server has no inbound credential to compare against. V8.6/V8.7 will report SKIP, which asserts nothing about the AWS lakehouse."
+          elif printf '%s' "${read_err}" | grep -qiE 'forbidden|authoriz|access denied|does not have secrets get'; then
+            echo "::warning title=Cannot read the MCP auth token::UNOBSERVABLE, not absent. The Verifier was REFUSED by ${KEY_VAULT_NAME} when reading '${SECRET_NAME}', so this job cannot say whether the secret exists and must not guess. The grant lives in infra/bicep/apps/main.bicep (module verifierMcpTokenGrant, scoped to that one secret) and is written at L7 deploy time from AZURE_VERIFIER_CLIENT_ID - re-run L7 if it has not deployed since that landed, and allow for RBAC propagation. V8.6/V8.7 will report SKIP. Azure said: ${read_err}"
+          else
+            echo "::warning title=MCP auth token read failed::Neither a not-found nor a permissions error, so this step will not classify it and claims nothing about the secret. V8.6/V8.7 will report SKIP. Azure said: ${read_err}"
+          fi
+
+          # THIS STEP IS DELIBERATELY ALLOWED TO FAIL SOFT, and the thing that watches
+          # it is the audit itself. Exiting non-zero here would starve the verification
+          # that judges the layer - a credential problem must not be able to prevent the
+          # other criteria from reporting. What replaces the exit code is V8.6 and V8.7:
+          # each records SKIP naming the missing credential, so "the token could not be
+          # read" is a visible line in the committed L8 report rather than a red step
+          # nobody reads (CLAUDE.md: assert the EFFECT, not the exit code).
 
       # V8.2 re-derives every figure the agent stated by running the fixture's
       # pinned reference SQL against the lakehouse itself. Without the module the

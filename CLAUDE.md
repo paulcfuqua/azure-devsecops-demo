@@ -38,6 +38,25 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
      (`infra/{entra,policy,purview}/teardown.ps1`) keep refusing to run unattended in CI
      without `-AllowAutomation`, and no workflow passes it.
 
+   **THE AMENDMENT NAMES FOUR SYSTEMS AND THE ESTATE NOW REACHES A FIFTH.** Since
+   2026-09-16 this estate holds a live link to the sponsor's own **AWS** account
+   (`launch-intel`, an Athena lakehouse). The amendment names Azure, Entra, Fabric and
+   GitHub; it says nothing about a second cloud, and **it does not extend to one by
+   analogy**. So:
+   - **Agents author the AWS scripts; the sponsor runs them.** `scripts/aws/*.sh` are
+     written here and executed there. Two agents were explicitly authorised to create the
+     IAM role, both were blocked by the harness permission classifier, and **neither
+     decomposed the script into individual calls to route around the block** — that
+     restraint is the behaviour, not an obstacle to it. The harness's permission layer is
+     separate from the sponsor's authorisation, and an authorisation is not a licence to
+     evade a refusal.
+   - **Deleting the AWS role or either OIDC provider is G3-equivalent**: nothing in the
+     Azure deploy path can recreate it. `scripts/aws/teardown.sh` refuses to run unattended
+     in CI without `-AllowAutomation`, matching the three tenant-level teardowns above.
+   - **AWS spend is the sponsor's**, so no Azure spend profile changes and G2 is not
+     triggered on this side. Athena still bills per terabyte scanned and **nothing in this
+     estate observes that** — say so rather than implying the link is free.
+
    The Verifier's independence is unchanged: it runs only code in `verification/`, as
    `mls-verifier`, never as the deployer.
 2. **Gates:** G0 bootstrap (agent-run since 2026-08-29; previously human-only); G1
@@ -257,6 +276,19 @@ is a wish.
   hand and silent about the half it depended on. A guard has a precondition; test the
   precondition, or the guard is a well-tested branch that never executes.
 
+- **An error names the system that raised it, not the one that broke it. Suspect the shell
+  between you and the API before you suspect the API.** Three failures in one session, in
+  three unrelated subsystems, were one defect: Git Bash (MSYS) rewrites a bare
+  `/subscriptions/...` or `/providers/...` argument into a Windows path before `az` ever
+  sees it, and the result comes back as **`MissingSubscription`** — an error naming Azure,
+  which was fine, and sending you to check subscription context, `az account set` and the
+  scope string, none of which is wrong. The same class produced the AWS `file://`
+  policy-document failures the same day. The guard is `MSYS_NO_PATHCONV=1` on the
+  invocation, or a doubled leading slash. **This one is closed as a check**, not as prose:
+  `verification/tests/failure-classes.Tests.ps1` sweeps the repository for an unguarded
+  leading-slash ARM path handed to a native CLI. The general lesson survives the specific
+  fix - when a remote service reports something structurally impossible, the argument may
+  not have reached it in the shape you wrote.
 - **File CONTENT is written with a file tool, never through a shell heredoc.** Content sent
   through a heredoc crosses two escaping layers - the shell, then the Python or PowerShell
   string literal inside it - and backslash sequences are silently transformed on the way. In
