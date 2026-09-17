@@ -1,7 +1,32 @@
 # Cross-cloud lakehouse link — Azure agent, AWS Athena
 
-**Status:** approved in conversation 2026-09-16, sponsor-decided. Built against a hard
-estate shutdown of ~2026-09-27.
+**Status: SHIPPED, 2026-09-16 → 2026-09-17.** All nine plan tasks merged to `main`
+(PRs #265, #266, #267, #269, #271, #272, #275, #276, #277). The agent answers from both
+lakehouses and distinguishes them unprompted. Approved in conversation 2026-09-16,
+sponsor-decided; built against a hard estate shutdown of ~2026-09-27.
+
+**What shipping proved, and what it did not.** The link answered on 2026-09-16 at ~23:15Z —
+`SELECT COUNT(*) FROM launches` → **286,473 rows in 4,431 ms** — with no redeploy and no
+hand-patch, from an Azure-hosted agent holding no AWS credential. **V8.6 and V8.7 have
+passed exactly once** (run `35166952968`, 2026-09-17T00:38Z) against an estate that has
+never been torn down since they existed. That is an observation. The rebuild is what would
+make it a property, and §2.2 already says so about the durability argument this whole design
+rests on.
+
+**Five design assumptions were wrong, all of them in instructive ways**, and each is
+corrected in place below rather than being quietly overwritten:
+
+| § | What the design assumed | What was true |
+|---|---|---|
+| 2.1 | audience `api://${prefix}-aws-athena-${env}` | rejected by this tenant's policy; the live value embeds the **tenant id** |
+| 2.1 | one OIDC provider, v2.0 issuer | the token version was an **undeclared null**, meaning v1; two providers registered, and the version is now declared |
+| 2.1 | data and results in **two** buckets | **one** bucket at two prefixes, which makes the write confinement load-bearing |
+| 2.1 | **three** tables | **five** — two are Glue `VIRTUAL_VIEW`s needing `glue:GetTable` on their own ARNs |
+| 7 | the eval would not grade AWS answers | it now grades **9/10**, and the answers carry AWS figures |
+
+Four of the five are the same rule paying out: **a constant that names something in another
+system is resolved against that system, not written from memory.** The fifth (the eval) is
+a scope boundary that moved for an unrelated reason.
 
 **Goal.** The agent answers questions about real launch-provider data held in an existing
 AWS lakehouse (S3 + Glue, queried through Athena), alongside the synthetic Fabric lakehouse
@@ -91,7 +116,7 @@ query needs more than the obvious six actions:
 |---|---|---|
 | Athena | `StartQueryExecution`, `GetQueryExecution`, `GetQueryResults`, `StopQueryExecution`, `GetWorkGroup` | one workgroup |
 | Athena | `GetDataCatalog` | `AwsDataCatalog` only |
-| Glue | `GetDatabase(s)`, `GetTable(s)`, `GetPartition(s)`, `BatchGetPartition` | one database, three named tables |
+| Glue | `GetDatabase(s)`, `GetTable(s)`, `GetPartition(s)`, `BatchGetPartition` | one database, **five** named tables — see below |
 | S3 | `GetBucketLocation` | the bucket |
 | S3 | `ListBucket` (conditioned on `s3:prefix`) | the three data prefixes and the results prefix |
 | S3 | `GetObject` | the three data prefixes, read only |
@@ -99,6 +124,16 @@ query needs more than the obvious six actions:
 
 The results prefix is the single place this role may write, because Athena cannot return a
 result without staging it. Nothing else in the account is reachable.
+
+*Three tables became five, and that one is worth the most.* The catalog holds
+`launches`, `agencies` and `schedule_events` **plus two `VIRTUAL_VIEW`s**,
+`launches_latest` and `agencies_latest`. A Glue view is a catalog object in its own right
+and needs `glue:GetTable` on **its own ARN**; the base table's grant does not reach it. A
+role built from the three names every document in this plan carried would have answered
+every base-table question perfectly and `AccessDenied`-ed the views — a *partial* failure
+that reads like a data problem rather than a policy one, which is the expensive kind to
+diagnose live. It was caught by enumerating the live catalog instead of trusting the
+written list. The S3 prefixes stay at three on purpose: a view holds no objects of its own.
 
 **The issuer and audience values are resolved against the live tenant, never written from
 memory.** CLAUDE.md's rule about constants that name something in another system applies
@@ -231,6 +266,25 @@ incapable of reporting it as present, when it cannot see.
 **Both criteria declare their own timeout.** Athena is asynchronous — submit, poll,
 retrieve — so the wait is real and must be stated with the number and what it waits on.
 Nineteen of forty-seven criteria once inherited a 30-minute window nobody chose for them.
+As built: V8.6 waits **4 minutes** (Container Apps scale-from-zero plus Athena's async
+cycle), V8.7 **2 minutes** (catalog metadata, on a container V8.6 has already woken).
+
+**Built and passed once — 2026-09-17T00:38Z, run `35166952968`.** Both PASS. Two things
+about that verdict are load-bearing and easy to lose:
+
+- **The criteria were unfed for a day.** They need a credential for the MCP endpoint
+  (`mcp-auth-token`), which neither `mls-verifier` nor `admin@` could read — verified
+  Forbidden, not assumed — so V8.6 reported SKIP and never a pass. A sponsor-approved grant
+  of **Key Vault Secrets User scoped to that one secret** closed it. **That grant exists in
+  Bicep and has never deployed**; the live assignment is hand-applied, so a teardown returns
+  both criteria to SKIP. A criterion that stops asserting is indistinguishable from one that
+  never did.
+- **V8.6's floors are 100,000 and 1,000, against observed 286,473 and 7,969.** Deliberately
+  loose, because the lakehouse is the sponsor's and refreshes from an upstream feed, so a
+  pinned equality fails on correct data. The cost of that choice, stated plainly: **V8.6
+  would not catch a lakehouse that lost 60 % of its rows.** It catches *nothing*, a status
+  code, a denial, and a view the role cannot read — which is what it was written for. Exact
+  counts belong to V5.3, over a dataset this repo seeds.
 
 **A repo sweep asserts no AWS key material exists** anywhere in the repository, the CI
 secret list or Key Vault. The claim is zero stored credentials; something must be able to
@@ -279,18 +333,38 @@ workstation with different credentials in the environment.
 
 - Writing to AWS. The role reads; the only write is Athena's own results staging.
 - Replacing or migrating the Fabric lakehouse.
-- Cost attribution for AWS spend in the control tower's FinOps tab.
+- Cost attribution for AWS spend in the control tower's FinOps tab. **Still out of scope.**
 - Making the L8 agent eval grade AWS answers. The eval's own interpretability is F184 and
   is tracked separately; adding a second data source does not depend on it and must not
   wait for it.
+
+  **This boundary moved underneath us, and in the good direction.** On 2026-09-17T00:37Z the
+  eval scored **9/10 with `unobservable: 0`** — it grades now — and its answers carry AWS
+  figures, because the agent volunteers both lakehouses for an ambiguous question. Its
+  *golden expectations remain Fabric-only*, so **no eval question asserts an AWS number**
+  and this item is still out of scope as written. What changed is that the artifact now
+  contains AWS evidence a reader could mistake for a graded assertion. It is not one; V8.6
+  is.
 
 ---
 
 ## 8. Open risks
 
-| Risk | Mitigation |
-|---|---|
-| OIDC trust policy fails with an opaque `AccessDenied` | Setup script resolves and prints issuer, audience and ARN, and re-reads them back. Expect two attempts; budget for it. |
-| Athena latency exceeds the agent's patience | Declared timeout per criterion; workgroup data-scanned cap keeps queries small. |
-| The Glue schema is unknown to the tool description | The tool advertises the dialect, not the schema; a schema-listing call resolves tables at runtime rather than pinning names written from memory. |
-| Sponsor round-trip on AWS scripts consumes the window | AWS scripts are authored and handed over **first**, before the Azure backend, so the round-trip overlaps with Azure-side work instead of following it. |
+| Risk | Mitigation | Outcome |
+|---|---|---|
+| OIDC trust policy fails with an opaque `AccessDenied` | Setup script resolves and prints issuer, audience and ARN, and re-reads them back. Expect two attempts; budget for it. | **Did not materialise.** The trust policy was right first time because all three of its values were read from live systems. The `AccessDenied` that *did* appear was the honest one — no role existed yet — and it was diagnostic, not opaque: an STS refusal is unreachable without presenting a web identity token, so it proved the Azure half worked |
+| Athena latency exceeds the agent's patience | Declared timeout per criterion; workgroup data-scanned cap keeps queries small. | **Partly materialised, one level up.** Athena itself was fine (4,431 ms for 286,473 rows). What is over budget is the *agent's* p95 — 34.18 s observed against V8.5's 20 s, driven by a cold start on the first question and by disambiguation querying both lakehouses |
+| The Glue schema is unknown to the tool description | The tool advertises the dialect, not the schema; a schema-listing call resolves tables at runtime rather than pinning names written from memory. | **Held, and paid for itself twice.** Runtime enumeration is what found the two views, and it is what let the agent list all five tables live during the demo. Separately the dialect's promise was made true rather than decorative: the session probe `SELECT day_of_week(DATE '2026-08-22')` met a real engine and returned **6**. Had it returned 7 — Fabric's numbering, the most plausible wrong answer — the tool would have refused |
+| Sponsor round-trip on AWS scripts consumes the window | AWS scripts are authored and handed over **first**, before the Azure backend, so the round-trip overlaps with Azure-side work instead of following it. | **Worked as designed, and the round trip was still the long pole.** Two agents were authorised to create the role and both were blocked by the harness permission classifier; neither routed around it. The sponsor ran it, and the entire Azure side was already waiting and correct |
+
+**Deferred, and still open at hand-back:**
+
+- **The Key Vault grant has never deployed.** In Bicep, live only by hand. First `layer-07-apps`
+  run after 2026-09-17T00:51Z fixes it; until then a teardown costs two criteria.
+- **`mls-rg-identity` and the AWS IAM role survive the teardown by design**, and so do both
+  OIDC providers — those two because `01-oidc-provider.sh` recorded them as pre-existing and
+  `teardown.sh` refuses to delete what it did not create. Four objects needing four deliberate
+  decisions at shutdown, not one.
+- **No AWS cost telemetry anywhere.** Athena bills per terabyte scanned against the sponsor's
+  account and nothing in this estate observes it. Out of scope by §7 and worth naming as a gap
+  rather than a silence.
