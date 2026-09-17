@@ -3359,3 +3359,170 @@ Describe 'a leading-slash ARM path is never handed to a native CLI unguarded' {
             -Because 'a runbook command is copied and pasted verbatim, so the guard belongs in the command and not in a paragraph near it'
     }
 }
+
+Describe 'no per-app npm entry in dependabot.yml targets a workspace member (F201)' {
+
+    # F201: `.github/dependabot.yml` declared a per-directory npm entry for every
+    # workspace member (apps/launch-ops, apps/control-tower, apps/data-api,
+    # apps/directline-token, apps/cost-ingest, apps/shared/spec-renderer, and for a
+    # few weeks apps/mcp-tools too). None of those directories carries its own
+    # lockfile - the root `package-lock.json` governs every member, npm's own
+    # workspace design - so a bump from a per-app entry touched only that member's
+    # `package.json` and never the root lockfile npm ci needs to agree with it.
+    # Root `npm ci` then failed in about ten seconds with "Missing: X from lock
+    # file", and every pull request from one of those entries was unmergeable by
+    # construction, not occasionally broken. PR #264 (the root entry, same bump:
+    # green) versus PR #261 (the identical bump from the old per-app data-api
+    # entry: six failures) is the side-by-side proof.
+    #
+    # Derived from the root package.json's `workspaces` array, not a hardcoded
+    # list of directories, so a member added later inherits this check instead of
+    # a blind spot. apps/vuln-lab is deliberately OUTSIDE `workspaces` (it must
+    # never be hoisted-and-patched - see package.json's `//workspaces` comment)
+    # and keeps its own per-app entry for that reason; this check does not (and
+    # must not) touch it.
+
+    BeforeAll {
+        function script:Get-DependabotNpmDirectory {
+            <# Every `directory:` value declared under a `package-ecosystem: npm`
+               entry in a dependabot.yml document's text. Deliberately a
+               line-oriented parser rather than a YAML library: this repository's
+               Pester environment installs only PSScriptAnalyzer, Pester and
+               SqlServer (see lint-ci.yml) - no YAML module - and the `updates:`
+               list's shape (each entry opens with a `- package-ecosystem:` line,
+               a `directory:` line follows a few lines below it, and the next
+               entry opens the same way) is regular enough that a block boundary
+               needs nothing smarter than "the next `- package-ecosystem:` line,
+               or end of file". #>
+            param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+
+            $directories = [System.Collections.Generic.List[string]]::new()
+            $inNpmBlock = $false
+
+            foreach ($line in ($Text -split '\r?\n')) {
+                if ($line -match '^\s*-\s*package-ecosystem:\s*"?([\w-]+)"?\s*$') {
+                    $inNpmBlock = ($Matches[1] -eq 'npm')
+                    continue
+                }
+                if ($inNpmBlock -and $line -match '^\s*directory:\s*"?([^"#]+?)"?\s*(#.*)?$') {
+                    $directories.Add($Matches[1].Trim())
+                    # One `directory:` per entry - stop matching until the next
+                    # block header, so a stray later line that happens to start
+                    # with `directory:` (there is none today, but nothing stops
+                    # one) cannot be attributed to this block.
+                    $inNpmBlock = $false
+                }
+            }
+            return $directories.ToArray()
+        }
+
+        function script:Get-DependabotNpmMemberOffender {
+            <# npm directories from dependabot.yml text that are workspace
+               members per the given glob patterns. Root ("/") and any directory
+               outside every pattern (apps/vuln-lab) are never offenders. #>
+            param(
+                [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+                [Parameter(Mandatory)][string[]]$WorkspacePatterns
+            )
+            foreach ($dir in (script:Get-DependabotNpmDirectory -Text $Text)) {
+                $trimmed = $dir.TrimStart('/')
+                if ([string]::IsNullOrEmpty($trimmed)) { continue }
+                foreach ($pattern in $WorkspacePatterns) {
+                    if ($trimmed -like $pattern) { $dir; break }
+                }
+            }
+        }
+    }
+
+    It 'has a detector that fires on the known-bad shape and not on the guarded one' {
+        # NON-VACUITY. Fixture text, not the repository file, so this cannot go
+        # green because somebody fixed the file it was sampling.
+        $memberPattern = @('apps/data-api')
+
+        $bad = @'
+updates:
+  - package-ecosystem: npm
+    directory: /apps/data-api
+    schedule:
+      interval: weekly
+'@
+        @(script:Get-DependabotNpmMemberOffender -Text $bad -WorkspacePatterns $memberPattern) |
+            Should -Be @('/apps/data-api') -Because 'a per-app entry for a declared workspace member is exactly the shape F201 fixed'
+
+        $rootOnly = @'
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /apps/data-api
+    schedule:
+      interval: weekly
+'@
+        @(script:Get-DependabotNpmMemberOffender -Text $rootOnly -WorkspacePatterns $memberPattern) |
+            Should -BeNullOrEmpty -Because 'the root npm entry ("/") is never a member, and a docker entry for the same directory is a different ecosystem entirely'
+
+        $vulnLab = @'
+updates:
+  - package-ecosystem: npm
+    directory: /apps/vuln-lab
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+'@
+        @(script:Get-DependabotNpmMemberOffender -Text $vulnLab -WorkspacePatterns $memberPattern) |
+            Should -BeNullOrEmpty -Because 'apps/vuln-lab is deliberately excluded from workspaces and must keep its own per-app entry'
+    }
+
+    It 'went red against the pre-F201 config, proving this is not vacuous' {
+        # The npm entries this repository actually shipped 2026-09-14 through
+        # 2026-09-16, before F201's fix - trimmed to what matters here. Frozen
+        # text rather than reading history via `git show`: this assertion is
+        # about the DETECTOR and must keep working even if that commit is later
+        # rewritten, squashed, or garbage-collected.
+        $preF201 = @'
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /apps/launch-ops
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /apps/data-api
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /apps/vuln-lab
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+'@
+        $rootPkg = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'package.json') -Raw | ConvertFrom-Json -AsHashtable
+        $patterns = @($rootPkg['workspaces'])
+
+        $offenders = @(script:Get-DependabotNpmMemberOffender -Text $preF201 -WorkspacePatterns $patterns)
+        $offenders | Should -Contain '/apps/launch-ops' -Because 'this is the real shape F201 fixed; a detector that does not flag it here would not have caught the actual defect either'
+        $offenders | Should -Not -Contain '/apps/vuln-lab' -Because 'vuln-lab is excluded from workspaces on purpose and must never be flagged'
+    }
+
+    It 'no npm entry directory in the current file is a root workspace member' {
+        $dependabotPath = Join-Path $script:RepoRoot '.github' -AdditionalChildPath 'dependabot.yml'
+        $rootPkg = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'package.json') -Raw | ConvertFrom-Json -AsHashtable
+        $patterns = @($rootPkg['workspaces'])
+        $patterns.Count | Should -BeGreaterThan 0 -Because 'the root manifest must declare workspaces, or this test checks nothing'
+
+        $text = Get-Content -LiteralPath $dependabotPath -Raw
+        $offenders = @(script:Get-DependabotNpmMemberOffender -Text $text -WorkspacePatterns $patterns)
+
+        $offenders -join ', ' | Should -BeNullOrEmpty -Because (
+            'a per-directory npm entry for a root workspace member bumps only that ' +
+            'member''s package.json and never the root package-lock.json that npm ci ' +
+            'needs it to agree with, so every such pull request fails root `npm ci` with ' +
+            '"Missing: X from lock file" (F201). The root npm entry already covers every ' +
+            'member and its lockfile in one PR; delete the per-app entry rather than adding one.')
+    }
+}
