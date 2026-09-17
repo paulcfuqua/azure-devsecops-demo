@@ -3068,3 +3068,116 @@ Describe 'a tool description promises no verification that does not happen' {
         }
     }
 }
+
+Describe 'the AWS lakehouse link stores no credential, anywhere' {
+    # 2026-09-16 aws-lakehouse-link. The claim the whole design rests on is that an
+    # Azure-hosted agent reads the sponsor's AWS lakehouse while HOLDING NO AWS CREDENTIAL:
+    # the container's Entra token is exchanged for temporary credentials through
+    # AssumeRoleWithWebIdentity, and nothing is stored on either side.
+    #
+    # That claim was true on the day it was made and nothing could fail if it stopped being
+    # true. The cheapest way for it to stop being true is also the most likely: somebody
+    # debugging an STS refusal at 1am pastes an access key into a variable, the link starts
+    # working, and every other check in this repository goes on passing. This is the check
+    # that does not.
+    #
+    # WHAT THIS CAN AND CANNOT SEE, stated so nobody reads a green run as more than it is.
+    # It reads the repository and the DECLARED credential inventories - CLAUDE.md rule 5 and
+    # gitleaks.yml's rotation table, which between them are this estate's statement of what
+    # lives in Key Vault. It does not connect to Key Vault; a unit test must not, and
+    # mls-verifier holds no data-plane role there in any case. The completeness of that
+    # declaration is enforced one Describe above, by 'every credential a runbook creates is
+    # in the closed inventory' - so the pair is: that check keeps the list honest about the
+    # vault, and this one keeps the list free of AWS keys.
+
+    BeforeAll {
+        $script:AwsRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        # Tracked files only: node_modules holds third-party fixtures this repository does
+        # not ship, and a finding there is a different conversation from this one.
+        Push-Location -LiteralPath $script:AwsRoot
+        try { $script:TrackedFile = @(& git ls-files) } finally { Pop-Location }
+
+        # A[KS]IA + 16 uppercase alphanumerics: the AWS access-key-id shape, long-lived
+        # (AKIA) and temporary (ASIA) alike. This pattern does not match its own source, so
+        # this file needs no exemption from the sweep it defines.
+        $script:AwsKeyIdPattern = '(?-i)A[KS]IA[0-9A-Z]{16}'
+
+        # Names that only appear where a STATIC credential is being supplied. The SDK's
+        # web-identity path never mentions them.
+        $script:AwsStaticCredentialPattern =
+            'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|aws_access_key_id|aws_secret_access_key|accessKeyId|secretAccessKey'
+
+        # Where configuration lives. Deliberately NOT the whole repository: a planning
+        # document quoting the name of an environment variable is prose, not a credential,
+        # and a sweep that cannot tell those apart is one people start excluding things from.
+        $script:AwsConfigFile = @($script:TrackedFile | Where-Object {
+                $_ -like '.github/*' -or $_ -like 'infra/*' -or $_ -like 'scripts/*' -or
+                $_ -like 'apps/*/src/*' -or $_ -like 'apps/*/*.json' -or $_ -like 'compliance/*'
+            })
+    }
+
+    It 'has files to search, and the AWS adapter is among them' {
+        # A sweep whose file list silently went empty passes every assertion below without
+        # observing anything - absence reported from a search that never ran.
+        $script:TrackedFile.Count | Should -BeGreaterThan 100
+        $script:AwsConfigFile | Should -Contain 'apps/mcp-tools/src/tools/cloud/athena-sql.ts' `
+            -Because 'the adapter that talks to AWS must be inside the configuration sweep, or the sweep is testing somewhere the credential would not be'
+    }
+
+    It 'carries no AWS access key id in any tracked file' {
+        $hit = @($script:TrackedFile | ForEach-Object {
+                $path = Join-Path $script:AwsRoot $_
+                if (Test-Path -LiteralPath $path -PathType Leaf) {
+                    Select-String -LiteralPath $path -Pattern $script:AwsKeyIdPattern -List -ErrorAction SilentlyContinue
+                }
+            } | ForEach-Object { $_.Path })
+        $hit -join ', ' | Should -BeNullOrEmpty -Because 'the estate''s claim is that it holds no AWS credential; an access key id in the repository is that claim being false in the most direct way available'
+    }
+
+    It 'configures no static AWS credential in any workflow, template, script or source file' {
+        $hit = @($script:AwsConfigFile | ForEach-Object {
+                $path = Join-Path $script:AwsRoot $_
+                if (Test-Path -LiteralPath $path -PathType Leaf) {
+                    Select-String -LiteralPath $path -Pattern $script:AwsStaticCredentialPattern -List -ErrorAction SilentlyContinue
+                }
+            } | ForEach-Object { $_.Path })
+        $hit -join ', ' | Should -BeNullOrEmpty -Because 'these names appear only where a STATIC credential is supplied - the web-identity exchange never mentions them - so one of them in a workflow, a template or the adapter means somebody replaced federation with a key'
+    }
+
+    It 'names no AWS credential in CLAUDE.md rule 5 or the gitleaks rotation table' {
+        # The two declared inventories of what this estate stores. An AWS credential
+        # appearing in either is the moment the design changed, whether or not the code did.
+        foreach ($file in @('CLAUDE.md', '.github/workflows/gitleaks.yml')) {
+            $text = Get-Content -LiteralPath (Join-Path $script:AwsRoot $file) -Raw
+            $text | Should -Not -Match 'AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|aws-access-key|aws-secret' `
+                -Because "$file is one of the two lists this estate keeps of the credentials it holds; an AWS key named there is a stored AWS credential by declaration"
+        }
+    }
+
+    It 'has no runbook creating an AWS credential in Key Vault' {
+        # The vault inventory, read the way the Describe above reads it. This cannot see the
+        # vault - it sees what the runbooks put there, which is the same source that check
+        # holds CLAUDE.md to.
+        $created = @(
+            Get-ChildItem -Path (Join-Path $script:AwsRoot 'docs/runbooks') -Filter '*.md' -Recurse -File |
+                ForEach-Object { Select-String -LiteralPath $_.FullName -Pattern 'keyvault secret set[^\r\n]*--name\s+([A-Za-z0-9$_"{}-]+)' -AllMatches } |
+                ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value.Trim('"') } |
+                Sort-Object -Unique
+        )
+        $created.Count | Should -BeGreaterThan 0 -Because 'if no runbook creates a secret, this assertion observes nothing and passes vacuously'
+        @($created | Where-Object { $_ -match '(?i)aws' }) -join ', ' | Should -BeNullOrEmpty `
+            -Because 'the AWS link is federated end to end: there is nothing about it that a vault should be holding'
+    }
+
+    It 'still obtains AWS credentials by exchanging an Entra token, not by reading one' {
+        # The positive half. The four assertions above say what must not appear; this one
+        # says what must still be there, because "no key anywhere" is also satisfied by an
+        # adapter that no longer authenticates at all, and a check that only forbids can be
+        # satisfied by deleting the feature.
+        $adapter = Get-Content -LiteralPath (Join-Path $script:AwsRoot 'apps/mcp-tools/src/tools/cloud/athena-sql.ts') -Raw
+        $code = [regex]::Replace($adapter, '(?s)/\*.*?\*/', '')
+        $code = [regex]::Replace($code, '(?m)^\s*//.*$', '')
+        $code | Should -Match 'fromWebToken\(' `
+            -Because 'the AWS credential must still come from AssumeRoleWithWebIdentity over the container''s Entra token - that exchange IS the zero-stored-credential claim, and comments naming it are not it'
+    }
+}
