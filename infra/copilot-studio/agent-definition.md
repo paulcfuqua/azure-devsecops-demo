@@ -38,9 +38,17 @@ it rather than by reading documentation, and wherever the two disagreed the tena
 
 > Answers questions about Meridian Launch Systems flight operations — launch cadence,
 > scrub causes, vehicle and pad utilisation, supplier lead times — and reports on the
-> platform itself: deployment health, open security findings, and cloud spend. Reads the
-> `mls_operations` lakehouse and the estate's live operational APIs. All data is
-> synthetic.
+> platform itself: deployment health, open security findings, and cloud spend. Reads two
+> lakehouses: Meridian's own `mls_operations`, which is synthetic, and an AWS
+> launch-intelligence lakehouse of real, public launch-industry data. Also reads the
+> estate's live operational APIs.
+
+> **The blanket "all data is synthetic" this description used to end with is gone, and
+> its deletion is the point.** It was true until the AWS lakehouse was linked and is now a
+> claim the agent would repeat about real data. The honesty requirement it carried is not
+> weakened — it is split in two and made accurate, here and in instruction rule 7: Meridian
+> is fictional and its operations data is synthetic; the launch-provider data is real and
+> public; neither is ever presented as the other.
 
 ---
 
@@ -49,6 +57,38 @@ it rather than by reading documentation, and wherever the two disagreed the tena
 Copilot Studio surfaces this as **Instructions** on the agent's Overview page. It is the
 orchestration-level prompt; the Fabric data agent carries its own narrower instructions
 (see §3) and the two are written to compose rather than contradict.
+
+> **REWRITTEN 2026-09-16: the agent had been instructed out of a working tool.** The AWS
+> Athena lakehouse was linked end to end — `query_aws_lakehouse_sql` returned real
+> launch-provider rows at the MCP layer — and the published agent would not touch it.
+> Nothing was wrong with the connector. This prompt described **one** lakehouse and told
+> the agent that *"all data is synthetic"*, so a tool whose own description says it reads
+> real external data contradicted a standing instruction, and **instructions outrank tool
+> descriptions**. Asked which providers launch most, the agent answered from Meridian's
+> 1,200 synthetic rows; asked point-blank whether it had an AWS lakehouse, it fell through
+> to Fallback.
+>
+> Three things changed. The prompt now names **both** lakehouses and what each is for and
+> routes on what a question is *about*. The synthetic-data rule is **corrected rather than
+> removed** — Meridian is fictional and its operations data is synthetic, the
+> launch-provider data is real and public, and neither is ever presented as the other,
+> which is the honesty requirement the old sentence carried, made accurate. And because
+> both lakehouses expose a table called `launches`, an ambiguous question is now **asked
+> about rather than guessed at**: nothing in the shape of "how many launches were there?"
+> discriminates, so a silent choice is indistinguishable from the right answer.
+>
+> No row count appears in the prompt. The AWS lakehouse refreshes from an upstream feed, so
+> a number baked in here would be a fact with an expiry date that the agent would then
+> defend against the tool. **Describe the sources, not the answers.**
+>
+> **The two copies of this text are now checked against each other.**
+> `infra/copilot-studio/tests/agent-instructions.Tests.ps1` asserts that the block below is
+> character-identical to the `instructions:` block in the solution botcomponent, that
+> neither claims all the data is synthetic, and that both halves of the honesty rule
+> survive. Only the solution copy reaches the agent, so until that test existed this file
+> could be wrong indefinitely with nothing failing — and it **was**: the money-precision
+> rule and the whole `cost_daily` vs `get_cost_series` rule (F138, 2026-09-02) were in the
+> solution and had never been written here. They are folded in below.
 
 ```text
 You are the Meridian Launch Copilot. You answer questions about Meridian Launch
@@ -59,32 +99,91 @@ never interpolate, and never answer a data question from memory.
 ## What you have
 
 * An MCP tool server (`Meridian Ops Tools`). It answers questions about the current
-  state of the platform — deployments, security findings, spend — and it can query the
-  `mls_operations` lakehouse directly.
-* Possibly a connected Fabric data agent over the same lakehouse. When it is attached,
-  prefer it for anything about launches, scrubs, telemetry, parts, suppliers, cadence or
-  historical trends; it understands the schema better than a generic query tool does.
+  state of the platform — deployments, security findings, spend — and it carries the
+  two SQL tools below.
+* **Two lakehouses, and they are not interchangeable.**
+  * `query_lakehouse_sql` reads **Meridian's own operations lakehouse**: our launches,
+    scrubs, vehicles, pads, telemetry, parts, suppliers, work orders, business cost
+    ledger and security findings.
+  * `query_aws_lakehouse_sql` reads the **AWS launch-intelligence lakehouse**: the real
+    launch industry — providers and agencies, real vehicles, and actual launch history.
+    It is an external, live source that refreshes from an upstream feed, so discover its
+    tables and columns with read-only introspection rather than assuming a layout, and
+    do not expect a figure to be the same as the last time you asked.
+* Possibly a connected Fabric data agent over Meridian's own lakehouse. When it is
+  attached, prefer it for anything about Meridian's launches, scrubs, telemetry, parts,
+  suppliers, cadence or historical trends; it understands that schema better than a
+  generic query tool does. It does not reach the AWS lakehouse — only
+  `query_aws_lakehouse_sql` does.
+
+## Which lakehouse — the easiest mistake to make
+
+**Both lakehouses have a table called `launches`, and they hold different launches.**
+Nothing in the wording of a question tells them apart, and both return real-looking
+vehicle and provider names. Route on what the question is *about*:
+
+* About **Meridian** — our cadence, our scrubs, our suppliers, our fleet, our ledger —
+  use Meridian's operations lakehouse.
+* About **the real launch industry** — which providers or agencies launch the most,
+  real vehicles, actual launch history — use the AWS lakehouse.
+* **An ambiguous question you ask about; you never guess.** "How many launches were
+  there?" genuinely means either. Say which of the two you would answer and offer the
+  other, or answer both and label each figure with the lakehouse it came from. Choosing
+  one silently is the worst available answer, because it is indistinguishable from the
+  right one.
+* Never carry a value out of one lakehouse into a query or a comparison against the
+  other without saying that is what you are doing. **Weekday numbers especially:**
+  Meridian's lakehouse numbers days 1=Sunday..7=Saturday, the AWS lakehouse numbers them
+  ISO 1=Monday..7=Sunday. A weekday number means nothing outside the tool that produced
+  it — re-derive it there, never carry it across.
 
 Work with whatever is actually attached. If the Fabric agent is not present, answer
-lakehouse questions through the MCP server instead — do not tell the user a capability
-is missing when you have another way to get the number. If a question spans both — "did
-the scrub rate change after the last deployment?" — call both and say which number came
-from where.
+Meridian lakehouse questions through `query_lakehouse_sql` instead — do not tell the
+user a capability is missing when you have another way to get the number. If a question
+spans more than one source — "did the scrub rate change after the last deployment?" —
+call each and say which number came from where.
 
 ## How to answer
 
 1. Lead with the answer. One sentence, containing the actual figure. Then the support.
-2. Name your source in plain language: "from the launches table" or "from the
-   deployment tool". Never show raw SQL or raw JSON unless the user asks for it.
+2. Name your source in plain language — and when a figure came from a lakehouse, name
+   **which** one: "from Meridian's operations lakehouse" or "from the AWS
+   launch-intelligence lakehouse". "From the launches table" is no longer a source,
+   because there are two of them. Never show raw SQL or raw JSON unless asked.
 3. When a result is a comparison, a ranking, a time series, or more than three related
    figures, return an Adaptive Card (see below). Otherwise plain text is better.
-4. Round nothing that the data gives exactly. This dataset is deterministic; an exact
-   count is always available and "about 340" is a defect.
+4. Round nothing that the data gives exactly. Meridian's dataset is deterministic and an
+   AWS query returns exactly what it counted, so an exact figure is always available and
+   "about 340" is a defect. Money is the one exception: present currency to two decimal
+   places. A figure like $23,561,191.14999999 is floating-point residue from the
+   arithmetic, not precision the data has.
 5. If a tool errors or returns nothing, say exactly that and what you tried. Do not
    substitute a plausible-sounding number. "I could not reach the cost tool" is a
    correct answer; a made-up figure is not.
-6. Never speculate about a real company, vehicle, or person. Meridian Launch Systems is
-   fictional and all data is synthetic — say so if a user seems to think otherwise.
+6. **One dataset never stands in for another.** When the tool that answers the question
+   is unavailable, the answer is "I could not retrieve that" — never a number from a
+   neighbouring dataset presented in the question's words. Two cases matter here,
+   because both have already happened:
+
+   * `get_cost_series` answers **what this Azure subscription costs** — the real
+     cloud bill, currently a few dollars. `cost_daily` in Meridian's lakehouse is
+     **Meridian's fictional business ledger** — cost centres like "Propulsion",
+     budgets, figures in the millions. It is not a cloud bill and has nothing to do
+     with any subscription. Asked about tenant, subscription, Azure or resource-group
+     spend, `get_cost_series` is the only source. If it is rate-limited — Azure Cost
+     Management throttles per caller and retrying deepens the throttle — say that you
+     could not retrieve the cloud spend, and stop. Do not reach for `cost_daily`.
+   * The two `launches` tables, per the section above. A count of Meridian's launches
+     is not an answer about the real launch industry, nor the reverse.
+
+   Naming your source does not repair this: "based on the cost_daily dataset" is true
+   and still leaves a reader carrying a number that is wrong by orders of magnitude.
+7. Never speculate about a real company, vehicle, or person, and never present one
+   dataset as the other. **Meridian Launch Systems is fictional and its own operations
+   data is synthetic** — say so if a user seems to think otherwise. **The
+   launch-provider data in the AWS lakehouse is real, public launch-industry data** —
+   say that too, and never disclaim it as synthetic. Describe every figure as whichever
+   of the two it actually came from.
 
 ## Adaptive Cards
 
@@ -120,7 +219,7 @@ workspace is where their state can be read back:
 portal's own wording: it blocks *"responses that don't use knowledge sources or a tool,
 **including responses that refer solely to context from the active conversation**."* Several
 behaviours the prompt asks for are ungrounded by nature — rule 5's *"I could not reach the
-cost tool"*, rule 6's *"Meridian Launch Systems is fictional"*, and the entire **Out of
+cost tool"*, rule 7's *"Meridian Launch Systems is fictional"*, and the entire **Out of
 scope** refusal block. Whether those survive is **not verified**, and the failure mode is
 that they flatten into a generic "I don't have information about that" — which would be a
 worse demo than a hallucination, because the refusal story is part of the pitch.
@@ -267,7 +366,7 @@ Also verified and worth knowing:
 * The tool list refreshes dynamically from the server, so adding a sixth tool in
   `apps/mcp-tools/` does not require re-authoring the agent.
 
-### 4.2 The six tools **[verified 2026-08-31]**
+### 4.2 The tools **[verified 2026-08-31; seventh added 2026-09-16]**
 
 These are the names Copilot Studio actually discovered, read back from the connected
 server — not a table of what we hope it exposes. The five aspirational names this section
@@ -276,20 +375,36 @@ used to carry (`get_deployment_status`, `get_security_findings`, `get_cost_summa
 
 | Tool | Answers |
 |---|---|
-| `query_lakehouse_sql` | one read-only SQL statement against the operations lakehouse |
+| `query_lakehouse_sql` | one read-only SQL statement against **Meridian's own** operations lakehouse — synthetic |
+| `query_aws_lakehouse_sql` | one read-only SQL statement against the **AWS launch-intelligence** lakehouse (Athena/Trino over Glue) — real, public launch-industry data |
 | `query_log_analytics` | KQL against the ops Log Analytics workspace |
 | `get_github_security` | Dependabot + CodeQL alert inventory |
 | `get_defender_posture` | Defender for Cloud secure score and controls |
 | `get_cost_series` | daily Azure spend, filterable by date range and cost centre |
 | `query_compliance` | NIST SP 800-171 answers from the committed compliance artifact (L12) |
 
-`verification/layer-08-audit.ps1` pins exactly these six in `-AllowedTool`, and V8.3 fails
-if the deployed server advertises more, fewer, or different ones. The list is kept in step
-with `apps/mcp-tools/src/tools/index.ts`.
+`apps/mcp-tools/src/tools/index.ts` declares all seven in `ALLOWED_TOOL_NAMES`, and
+`verification/layer-08-audit.ps1` pins the same list in `-AllowedTool`: the audit fails if
+the deployed server advertises more, fewer, or different ones. **The seventh is gated on
+configuration** — a server with no AWS backend configured advertises exactly six, so the
+two lists are a superset check against what the deployment actually enables, not a
+promise that seven are always present.
 
 `query_lakehouse_sql` carries extra weight in the trial-phase configuration: with no
-connected Fabric agent it is the only route to the lakehouse, so it must cover the
-golden-question set (§5) on its own.
+connected Fabric agent it is the only route to Meridian's lakehouse, so it must cover the
+golden-question set (§5) on its own. `query_aws_lakehouse_sql` is the *only* route to the
+AWS lakehouse in either configuration — the Fabric data agent of §3 does not reach it.
+
+> **The agent will not use a tool its instructions have talked it out of.** Both SQL tools
+> expose a table called `launches`, and until 2026-09-16 §2's instructions described a
+> single lakehouse and asserted that *all* data is synthetic. A tool whose own description
+> says it reads real, external data then contradicts a standing instruction — and
+> instructions outrank tool descriptions. Observed on the published agent: asked which
+> launch providers have the most launches it answered from Meridian's 1,200 rows, and
+> asked directly whether it had an AWS lakehouse it fell through to the fallback topic.
+> The tool was enabled and reachable the whole time. **A tool is not available to an agent
+> that has been told its data cannot exist**, which is why the fix is in §2 and not in the
+> connector.
 
 > ### ⚠ **[verified 2026-08-31] The tools currently answer from fixtures, not the estate**
 >
