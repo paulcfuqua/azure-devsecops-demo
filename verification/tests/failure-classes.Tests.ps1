@@ -716,6 +716,96 @@ Describe 'a deploy path preserves the commit provenance another layer audits' {
 }
 
 
+Describe 'the operator text an engineer reads first agrees with the design it cites' {
+    # The self-heal chain's "no adoptable alert" warning is the first sentence an operator
+    # reads when the chain finds nothing to heal, and it told them the opposite of what was
+    # decided: that apps/vuln-lab is retired, that re-arming is F190, and that the seeded
+    # pins were being deleted. Section 7 of the design it cites by name says the lab,
+    # reseed.ps1 and vuln-lab-witness.yml STAY in the repository and stop being
+    # load-bearing, and that F190 DISSOLVES - the loop was the verification demanding a
+    # re-seed every cycle, not the act.
+    #
+    # THE CLASS IS GUIDANCE THAT OUTLIVES THE DECISION IT CITES. It is not a broken check;
+    # it is worse, because it is confident, specific, cites chapter and verse, and is read
+    # at exactly the moment someone is deciding what to do. The same four sentences had
+    # drifted in the workflow, the L10 playbook, the lab's own README and the re-seed
+    # script's warning - four copies, one decision, no link between them.
+    #
+    # ASSERTED POSITIVELY, AND ANCHORED TO THE SPEC. Sweeping for the WRONG sentences would
+    # fail on the corrected text, which quotes them in order to say they were wrong. So each
+    # file must carry the two load-bearing facts instead - a revert to the old text carries
+    # neither - and the first assertion re-reads section 7, so a genuine change of design
+    # makes this fail loudly rather than quietly enforcing a superseded rule.
+
+    BeforeAll {
+        $script:DriftRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $specPath = Join-Path $script:DriftRoot 'docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md'
+        $specText = Get-Content -LiteralPath $specPath -Raw
+        $script:DriftSection = ''
+        if ($specText -match '(?s)##\s*7\.\s*What happens to the vuln-lab(?<body>.*?)(?=\r?\n##\s)') {
+            # Markdown emphasis is presentation; strip it so an assertion is about the words.
+            $script:DriftSection = $Matches['body'] -replace '\*', ''
+        }
+
+        # Every file that tells a human what to do about the lab. Inventory-based: a fifth
+        # copy of this guidance has to be added here, which is the only moment anyone is
+        # forced to notice there are now five.
+        $script:DriftFiles = @(
+            '.github/workflows/self-heal.yml'
+            'docs/runbooks/layers/L10.md'
+            'apps/vuln-lab/README.md'
+            'apps/vuln-lab/reseed.ps1'
+        )
+
+        $script:DriftKeeps = '(?i)(stay|stays|keep|keeps)[^.]{0,90}in the repository'
+        $script:DriftF190 = '(?i)F190 dissolve[sd]?|(?i)(is|it is) not F190'
+    }
+
+    It 'section 7 of the cited design still says what this Describe enforces' {
+        $script:DriftSection | Should -Not -BeNullOrEmpty `
+            -Because 'section 7 is the authority for every assertion below; if it has been renamed or removed, these sweeps are enforcing a rule from memory'
+        $script:DriftSection | Should -Match '(?i)stay in the repository'
+        $script:DriftSection | Should -Match '(?i)F190 dissolves'
+        $script:DriftSection | Should -Match '(?i)manual demonstration generator'
+    }
+
+    It 'every file that tells an operator about the lab says it stays, and that F190 dissolved' {
+        $wrong = [System.Collections.Generic.List[string]]::new()
+        foreach ($relative in $script:DriftFiles) {
+            $path = Join-Path $script:DriftRoot $relative
+            if (-not (Test-Path -LiteralPath $path)) { $wrong.Add("$relative is missing"); continue }
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -notmatch $script:DriftKeeps) {
+                $wrong.Add("$relative does not say the lab stays in the repository")
+            }
+            if ($text -notmatch $script:DriftF190) {
+                $wrong.Add("$relative does not record that F190 dissolved")
+            }
+        }
+        $wrong -join '; ' | Should -BeNullOrEmpty `
+            -Because 'each of these is read at the moment someone decides whether to re-arm, and the pre-2026-09-17 text told them the plant was retired, that re-arming is F190, and that the seeds were being deleted - none of which section 7 says'
+    }
+
+    It 'no operator text claims the seeds are being removed' {
+        # The one negative worth keeping: these two phrasings have no honest reading left,
+        # and both appeared verbatim in the drifted copies.
+        $claims = @(
+            'seeded pins are being deleted'
+            '(?i)(removes|deletes) (this package|this lab|apps/vuln-lab)'
+        )
+        $found = [System.Collections.Generic.List[string]]::new()
+        foreach ($relative in $script:DriftFiles) {
+            $text = Get-Content -LiteralPath (Join-Path $script:DriftRoot $relative) -Raw
+            foreach ($claim in $claims) {
+                if ($text -match $claim) { $found.Add("$relative matches '$claim'") }
+            }
+        }
+        $found -join '; ' | Should -BeNullOrEmpty `
+            -Because 'the three seeded CVEs stay on purpose: a quiet week with no real findings would otherwise leave the chain unexercised and rotting unnoticed (spec section 7)'
+    }
+}
+
+
 Describe 'every base image an app pulls is declared where its CVE posture is recorded' {
     # The container-image lane of .github/self-heal-policy.json is DEFERRED, which means
     # twelve open pcre2 alerts on apps/data-api and apps/mcp-tools do not count against
