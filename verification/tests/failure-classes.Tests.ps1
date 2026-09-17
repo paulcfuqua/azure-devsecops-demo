@@ -581,6 +581,141 @@ Describe 'a deploy default never stands up a placeholder image' {
 }
 
 
+Describe 'a deploy path preserves the commit provenance another layer audits' {
+    # F203. Two showpieces share one set of container apps, and exercising one erased the
+    # other's evidence. L10's V10.2 traces a heal to a deployment by reading the running
+    # image's tag: app CI pushes `sha-<first 7 of the merge commit>`, so "the running image
+    # names its own commit" (F197). layer-07-apps.yml deployed the SAME BYTES under
+    # `latest`, which names nothing - and V10.2 correctly reported `could not establish`
+    # and went red after twelve green runs.
+    #
+    # THE DEPLOY DEGRADED TRACEABILITY, NOT FUNCTION, which is why nothing caught it. All
+    # seven V7 criteria passed on the very same revision, because not one of them asks what
+    # commit an image came from. The damage was visible only from another layer's audit,
+    # four hours later, on a schedule.
+    #
+    # So the class is not "a bad default". It is a WRITER and a READER of the same field
+    # living in different layers with nothing holding them together - F145's shape, pointed
+    # at evidence instead of at data. These tests hold the two ends together:
+    #   * the reader's pattern is read out of verification/layer-10-audit.ps1
+    #   * the writer's pattern is read out of .github/workflows/layer-07-apps.yml
+    #   * neither is retyped here, and they must agree on every sample tag
+    # Deleting the resolver, renaming the reader, or loosening either pattern turns this
+    # red, which is the coupling made visible rather than merely removed.
+
+    BeforeAll {
+        $script:F203Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:F203AuditPath = Join-Path $script:F203Root 'verification/layer-10-audit.ps1'
+        $script:F203DeployPath = Join-Path $script:F203Root '.github/workflows/layer-07-apps.yml'
+        $script:F203Audit = Get-Content -LiteralPath $script:F203AuditPath -Raw
+        $script:F203Deploy = Get-Content -LiteralPath $script:F203DeployPath -Raw
+
+        # THE READER. Test-ImageCarriesCommit parses the commit off a running image
+        # reference; everything V10.2 can say about a heal's deployment hangs off it.
+        $script:F203ReaderPattern = $null
+        if ($script:F203Audit -match '(?m)^\s*if \("\$Image" -notmatch ''(?<pattern>[^'']+)''\) \{') {
+            $script:F203ReaderPattern = $Matches['pattern']
+        }
+
+        # THE WRITER. layer-07-apps.yml resolves a floating tag to an immutable tag of
+        # this shape before anything is deployed.
+        $script:F203WriterPattern = $null
+        if ($script:F203Deploy -match '(?m)^\s*provenance_tag_pattern=''(?<pattern>[^'']+)''\s*$') {
+            $script:F203WriterPattern = $Matches['pattern']
+        }
+
+        # Samples chosen so a one-sided loosening shows up: case, both length bounds, a
+        # short sha, a non-hex body, and the two floating names that caused F203.
+        $script:F203SampleTags = @(
+            'sha-473452b'
+            'sha-473452B'
+            'sha-473452bdeadbeefdeadbeefdeadbeefdeadbeef'
+            'sha-4734'
+            'sha-zzzzzzz'
+            'latest'
+            'v1.2.3'
+        )
+    }
+
+    It 'V10.2 still reads the commit off the running image, so this Describe is not vacuous' {
+        $script:F203ReaderPattern | Should -Not -BeNullOrEmpty `
+            -Because 'V10.2 traces a heal to a deployment through Test-ImageCarriesCommit''s image-reference pattern; if that has been renamed or removed, the deploy side is now pinning a tag for a reader that no longer exists'
+        'ghcr.io/owner/repo/mcp-tools:sha-473452b' | Should -Match $script:F203ReaderPattern
+        'ghcr.io/owner/repo/mcp-tools:latest' | Should -Not -Match $script:F203ReaderPattern
+    }
+
+    It 'the L7 deploy path declares the tag shape it must produce' {
+        $script:F203WriterPattern | Should -Not -BeNullOrEmpty `
+            -Because 'layer-07-apps.yml must declare the provenance tag shape it resolves to, so this test can compare it against the one V10.2 parses'
+    }
+
+    It 'the writer and the reader agree about every sample tag' {
+        # The contract, asserted rather than assumed. A tag the deploy path is willing to
+        # ship must be one the audit can read, and the reverse - a reader widened without
+        # the writer is how a criterion starts passing on evidence nobody produces.
+        $disagree = [System.Collections.Generic.List[string]]::new()
+        foreach ($tag in $script:F203SampleTags) {
+            $writerAccepts = [bool]($tag -match $script:F203WriterPattern)
+            $readerAccepts = [bool]("ghcr.io/owner/repo/mcp-tools:$tag" -match $script:F203ReaderPattern)
+            if ($writerAccepts -ne $readerAccepts) {
+                $disagree.Add("$tag (deploy=$writerAccepts, V10.2=$readerAccepts)")
+            }
+        }
+        $disagree -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a tag one side treats as carrying provenance and the other does not is exactly F203: the deploy succeeds, every V7 criterion passes, and V10.2 cannot trace the heal'
+    }
+
+    It 'the L7 deploy resolves a floating tag rather than deploying it verbatim' {
+        $script:F203Deploy | Should -Match 'immutable_tag\(\)' `
+            -Because 'without the resolver, layer-07-apps.yml republishes all five apps under the requested floating tag and erases the sha- tags app CI left behind (F203)'
+        # ASSERTED POSITIVELY, AND THAT MATTERS. The first draft of this asserted the
+        # absence of `:${IMAGE_TAG}` and passed against a revert that reintroduced the
+        # defect, because the reverted line spells the app as ${app} rather than a literal
+        # name - the test was checking a shape the defect no longer has to wear. What makes
+        # the deploy safe is that the tag written to GITHUB_ENV came OUT OF the resolver;
+        # assert that, not one spelling of its opposite.
+        $script:F203Deploy | Should -Match '_IMAGE=\$\{registry\}/\$\{app\}:\$\{resolved_tag\}' `
+            -Because 'the container image written to GITHUB_ENV must carry the tag the resolver produced, not the tag the caller requested'
+        # The literal-per-app form this loop replaced, kept as a guard against a revert to it.
+        $script:F203Deploy | Should -Not -Match '_IMAGE=\$\{registry\}/[a-z-]+:\$\{IMAGE_TAG\}' `
+            -Because 'enumerating the five apps with the raw input tag is the exact code F203 was filed against'
+    }
+
+    It 'a deploy that cannot resolve an immutable tag names the criterion it degrades' {
+        # The fallback is correct - refusing to deploy over a traceability problem would be
+        # worse - but a silent fallback is F102's class: the audit goes red four hours later
+        # and nothing in the deploy log connects the two.
+        $script:F203Deploy | Should -Match 'No immutable tag for' `
+            -Because 'the fallback must be announced, not silent'
+        $script:F203Deploy | Should -Match 'V10\.2' `
+            -Because 'the warning has to name the criterion that will go red, or the operator has no way to connect an L7 deploy to an L10 failure - which is precisely how F203 survived unnoticed'
+    }
+
+    It 'every per-app CI workflow deploys the tag that names its commit' {
+        # The other producer of running images. app-<name>-ci.yml pushes both `sha-<short>`
+        # and `latest` to one digest and must roll the app onto the FORMER; rolling `latest`
+        # here would reintroduce F203 from the day-to-day deploy path instead of the
+        # declarative one.
+        $ciWorkflows = @(Get-ChildItem -Path (Join-Path $script:F203Root '.github/workflows') -Filter 'app-*-ci.yml' -File)
+        $ciWorkflows.Count | Should -BeGreaterThan 0 `
+            -Because 'if no per-app CI workflow is found, this assertion is vacuous'
+
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in $ciWorkflows) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -notmatch 'tag="sha-\$\{GITHUB_SHA:0:7\}"') {
+                $offender.Add("$($file.Name): does not compute a sha- tag from GITHUB_SHA")
+            }
+            if ($text -match '(?m)^\s*IMAGE:\s*\$\{\{\s*needs\.image\.outputs\.registry\s*\}\}:latest') {
+                $offender.Add("$($file.Name): rolls the floating latest tag onto the container app")
+            }
+        }
+        $offender -join '; ' | Should -BeNullOrEmpty `
+            -Because 'V10.2 can only trace a heal whose image names the commit it was built from (F197/F203)'
+    }
+}
+
+
 Describe 'an identity the estate authenticates to actually exists' {
     # Four app registrations sat in a live tenant with no service principal. Nothing failed
     # visibly: an application object is a DEFINITION, and Entra creates the principal on
