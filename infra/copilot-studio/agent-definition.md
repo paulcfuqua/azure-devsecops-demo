@@ -363,8 +363,16 @@ Also verified and worth knowing:
   **Prompts are not supported.**
 * **Generative orchestration must be enabled** to use MCP at all — same switch the
   Fabric binding needs.
-* The tool list refreshes dynamically from the server, so adding a sixth tool in
-  `apps/mcp-tools/` does not require re-authoring the agent.
+* The connector **discovers** a new tool from the server without re-authoring the agent —
+  but **it arrives switched OFF, and a disabled tool behaves exactly like an absent one
+  (F202).** Corrected 2026-09-16. This bullet used to read *"the tool list refreshes
+  dynamically from the server, so adding a sixth tool does not require re-authoring the
+  agent"*, which was recorded when `query_compliance` became the sixth tool — **before the
+  connector existed**, so it had never been exercised by adding a tool to a live
+  connection. When `query_aws_lakehouse_sql` became the seventh, it was listed, it was off,
+  and the agent answered from the other lakehouse with a confident and plausible citation.
+  Enabling it takes a toggle **and a publish**; a save alone does not reach the published
+  agent. Post-import checklist step 4 is where this is enforced.
 
 ### 4.2 The tools **[verified 2026-08-31; seventh added 2026-09-16]**
 

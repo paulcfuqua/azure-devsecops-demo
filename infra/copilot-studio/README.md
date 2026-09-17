@@ -311,10 +311,23 @@ None of this travels in a solution. Verified, not guessed.
 3. **Paid-F2 path only:** re-create the Fabric connection and re-attach the data agent
    under **Agents** (a connected agent, not a knowledge source). Skip on the trial
    capacity — tools-only is the default there.
-4. **Create the MCP connection** and confirm the tool list populates from the server —
-   **six** tools (`agent-definition.md` §4.2); fewer with no error usually means a rejected
-   API key, because a 401 during discovery surfaces as an empty list rather than an auth
-   message. **[verified 2026-08-31]** `pac solution create-settings` emits a
+4. **Create the MCP connection, confirm the tool list populates, and TOGGLE EVERY TOOL ON,
+   then publish.** The list should carry **seven** tools (`agent-definition.md` §4.2);
+   fewer with no error usually means a rejected API key, because a 401 during discovery
+   surfaces as an empty list rather than an auth message — *or* that the AWS settings did
+   not resolve inside the running container, which makes `query_aws_lakehouse_sql` decline
+   to register and the server advertise six.
+
+   **[verified 2026-09-16 — F202]** A tool the connector newly *discovers* arrives
+   **disabled**, and a disabled tool is indistinguishable from an absent one: the agent
+   answers from whatever source remains, confidently and with a plausible citation. Count
+   is not enough — **read the toggles.** Then **publish**; a save alone does not reach the
+   published agent that Direct Line serves. Confirm by arithmetic afterwards: *"how many
+   rows are in the launches table?"* must name **both** lakehouses — **1,200** (Meridian,
+   synthetic) and **286,473** (AWS launch-intelligence, real). A single unqualified 1,200
+   means the AWS tool is not reachable no matter what the list shows.
+
+   **[verified 2026-08-31]** `pac solution create-settings` emits a
    `ConnectionReferences` entry with an empty `ConnectionId`, so this step is automatable
    via `pac solution import --settings-file` rather than manual. Warm the container first:
    `minReplicas: 0` measured a 26.9 s cold start and connector validation can time out
