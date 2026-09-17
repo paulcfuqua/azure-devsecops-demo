@@ -15,6 +15,51 @@ estate — that amendment says nothing about a second cloud, so this is on you.
 Prerequisites on your machine: `aws` CLI configured with credentials
 (`launch-intel-agent`), `curl`, `python3`.
 
+## This has already been run once — 2026-09-16
+
+**Status: done, and it worked.** You ran these scripts on 2026-09-16 and the role
+`launch-intel-athena-reader` landed at **23:12:07Z**. The Azure side needed **no redeploy
+and no hand-patch**: the identical call against the unchanged container revision went from
+`Not authorized to perform sts:AssumeRoleWithWebIdentity` to rows, which is the cleanest
+available proof that the Azure half had been correct all along and this role was the only
+missing object.
+
+What answered, through the deployed agent:
+`SELECT COUNT(*) FROM launches` → **286,473 rows in 4,431 ms**;
+`launches_latest` (a view) → **7,969**; the read-only gate refused `UNLOAD` in 44 ms with a
+message that tells the agent how to reformulate.
+
+**The rest of this file is still the runbook, and it is written for the next run — read it
+that way.** The estate is scheduled for shutdown around 2026-09-27 and there is a
+teardown/rebuild before then, so the next run is a real possibility rather than a
+hypothetical.
+
+**What a re-run means, precisely.** `01` and `02` are idempotent: re-running updates the
+provider and the role in place, including the trust policy, rather than silently doing
+nothing. Two things are genuinely worth knowing before you do:
+
+- **Nothing on the Azure side forces a re-run after a standard teardown.** All three values
+  the trust policy conditions on survive it — the tenant id by definition, the audience
+  because it embeds the tenant id rather than the app id (§3), and the `sub` because
+  `mls-aws-demo-id` lives in `mls-rg-identity`, outside the four resource groups the
+  teardown deletes by name. That was the point of putting it there.
+- **A re-run with the wrong `MLS_GLUE_TABLES` would NARROW the role, not widen it.**
+  `02-athena-role.sh` replaces the inline policy, so re-running it with the three-name value
+  this file carried until 2026-09-17 would remove `glue:GetTable` from both views and break
+  exactly the question that shows the link working. Check that variable before you re-run;
+  see the warning under §2.
+
+**Both OIDC providers pre-existed and `teardown.sh` will therefore skip them.**
+`./.aws-anchor.env` (git-ignored, on the machine that ran this) records
+`MLS_AWS_PROVIDER_V1_PREEXISTED=true` and `MLS_AWS_PROVIDER_V2_PREEXISTED=true`, so both
+Entra issuers were already registered in the account before `01` ran and `01` correctly
+adopted rather than created them. `teardown.sh` deletes a provider only when its
+`_PREEXISTED` variable is the literal string `false` (§8), which is the right default — a
+provider this setup did not create may be load-bearing for something else. The consequence
+is that **the final teardown removes the role and leaves both providers standing**, and
+that needs to be a decision you make rather than a thing you discover. It is on the
+shutdown checklist in `docs/DEMO-READINESS.md`.
+
 **The scripts are committed executable (mode 755).** If your checkout somehow
 loses that bit (a zip download, some Windows tooling), run
 `chmod +x *.sh` first, or just invoke them as `bash ./01-oidc-provider.sh`
@@ -23,6 +68,14 @@ so the first command never fails on "Permission denied" regardless of how the
 files reached your disk.
 
 ## 0. Before you start: your own AWS credentials need two things they do not have today
+
+> **Kept as written, because it is about *your* policy and this repository cannot see
+> whether you changed it.** The 2026-09-16 run succeeded, so either both gaps were closed or
+> the run used a wider principal than `launch-intel-agent`. Re-read this section before a
+> re-run rather than assuming it is spent. Related and larger than this link:
+> `aws sts get-caller-identity` on the machine that ran these scripts returned
+> `arn:aws:iam::<account>:root`, against which `BOOTSTRAP.md`'s careful scoping of
+> `launch-intel-agent` constrains nothing at all.
 
 `BOOTSTRAP.md`'s policy for `launch-intel-agent` was written before this link
 existed, and two gaps in it will make `01-oidc-provider.sh` and
@@ -148,13 +201,32 @@ The rest describe **your real `launch-intel` lakehouse**, verified against
 | `MLS_AWS_ACCOUNT_ID` | `634008058936` | The AWS account holding the lakehouse |
 | `MLS_AWS_REGION` | `us-east-1` | |
 | `MLS_GLUE_DATABASE` | `launch_intel_lakehouse` | The Glue Data Catalog database |
-| `MLS_GLUE_TABLES` | `launches,agencies,schedule_events` | Comma-separated table names |
+| `MLS_GLUE_TABLES` | `launches,launches_latest,agencies,agencies_latest,schedule_events` | **FIVE names, not three** — see the warning below |
 | `MLS_ATHENA_WORKGROUP` | `primary` | |
 | `MLS_LAKEHOUSE_BUCKET` | `launch-intel-lakehouse-634008058936` | **The one bucket** — data and Athena results live here at different prefixes, not in separate buckets |
 | `MLS_DATA_PREFIXES` | `launches,agencies,schedule_events` | Comma-separated **read-only** prefixes (matches the table names, but is a separate variable in case that ever changes) |
 | `MLS_RESULTS_PREFIX` | `athena-results/` | The **one** prefix this role may write |
 | `MLS_AWS_ROLE_NAME` | `launch-intel-athena-reader` | See §0 for why this default, not `mls-athena-reader` |
 | `MLS_ATHENA_OUTPUT` | `s3://launch-intel-lakehouse-634008058936/athena-results/` | Full results URI. The `primary` workgroup enforces **no default output location** (confirmed in `LAKEHOUSE_SETUP.md`) — `03-verify.sh` checks this live and reports it, but this value is what Task 6's caller must pass explicitly on every query regardless. |
+
+> **`MLS_GLUE_TABLES` is FIVE names and this file said three until 2026-09-17. Do not
+> revert it.** `launches_latest` and `agencies_latest` are Glue **`VIRTUAL_VIEW`s**, and a
+> Glue view needs `glue:GetTable` on **its own ARN** — a view is a catalog object in its own
+> right, not a shortcut to the base table's grant. `02-athena-role.sh` builds one
+> `arn:aws:glue:…:table/<db>/<name>` per entry in this variable (line ~135), so a role built
+> from the three base-table names answers **every base-table question perfectly and
+> `AccessDenied`s the views** — a partial failure that reads like a data problem in front of
+> an audience, on the one question that looks most like a bug in the data rather than in a
+> policy.
+>
+> It was caught by enumerating the live Glue catalog rather than trusting the ledger, which
+> had recorded three. The role created on 2026-09-16 was built with all five and both views
+> answer: `launches` returns 286,473 rows and `launches_latest` returns 7,969.
+>
+> **`MLS_DATA_PREFIXES` stays at three**, deliberately. A view holds no objects of its own —
+> it reads the base tables' S3 prefixes — so widening the S3 grant to match would grant
+> access to prefixes that do not exist. The two variables are separate precisely so they can
+> legitimately differ, and this is the case that proves it.
 
 Two more are **produced by `01-oidc-provider.sh`, not set by you**:
 `MLS_AWS_PROVIDER_ARN_V1`, `MLS_AWS_PROVIDER_ARN_V2` (and their
@@ -209,7 +281,7 @@ done
 export MLS_AWS_ACCOUNT_ID=634008058936
 export MLS_AWS_REGION=us-east-1
 export MLS_GLUE_DATABASE=launch_intel_lakehouse
-export MLS_GLUE_TABLES=launches,agencies,schedule_events
+export MLS_GLUE_TABLES=launches,launches_latest,agencies,agencies_latest,schedule_events
 export MLS_ATHENA_WORKGROUP=primary
 export MLS_LAKEHOUSE_BUCKET=launch-intel-lakehouse-634008058936
 export MLS_DATA_PREFIXES=launches,agencies,schedule_events
@@ -255,6 +327,9 @@ output location (it does not, per §2) — if it ever starts enforcing one,
 this is where you'd see that change.
 
 ## 6. What to send back
+
+**Already sent, 2026-09-16** — these six values are live in the `demo` GitHub environment
+and the container consumes them. This section is kept for the next run, not outstanding.
 
 The full output of `03-verify.sh`, plus these **six lines**, exactly as it
 prints them at the end:
