@@ -26,6 +26,15 @@
  * this adapter starts with is the Entra identity already running the
  * container app.
  *
+ * WHICH Entra identity is not a detail. The container app carries two
+ * user-assigned managed identities, and the AWS IAM trust policy's `sub`
+ * condition is pinned to one of them; `TokenProvider` here is built on a
+ * credential naming that one explicitly (`cloud/index.ts`), never the shared
+ * Azure one. When the exchange fails anyway, STS answers `AccessDenied` and
+ * names neither the identity nor the audience it rejected — so `query()` adds
+ * both, plus the role, to the error rather than leaving a reader to diff three
+ * systems by hand against a message that blames the trust policy.
+ *
  * ── No workgroup default (confirmed from the sponsor's Terraform state) ─────
  * The `primary` workgroup in this account has no `aws_athena_workgroup`
  * resource behind it, so it enforces no result configuration of its own.
@@ -44,14 +53,23 @@
  * caller's `maxRows` worth of data rows back up to `query()`, which then
  * applies the shared `MAX_RESULT_ROWS + 1` probe every adapter uses.
  *
- * ── What is NOT here ─────────────────────────────────────────────────────────
- * The trino dialect's idioms text (`sql-dialect.ts`) promises that
- * `day_of_week`'s numbering "is confirmed against the live endpoint by a
- * session probe at first query", mirroring Fabric's `SESSION_PROBE_SQL`. That
- * probe is separate, later work; this file does not add one, and the promise
- * stays unmet until it lands.
+ * ── The session probe ────────────────────────────────────────────────────────
+ * The trino dialect's idioms text (`sql-dialect.ts`) tells the agent that
+ * `day_of_week`'s ISO numbering "is confirmed against the live endpoint by a
+ * session probe at first query". It now is — see `ensureDialectContract` below,
+ * which mirrors Fabric's `SESSION_PROBE_SQL` and fails loudly rather than
+ * warning. A description asserting a verification that never happens is this
+ * repository's signature defect aimed at its own agent, and the cheapest place
+ * to catch it is the first query rather than the answer it silently skews.
  */
-import { assertReadOnlySingleStatement, MAX_RESULT_ROWS, type SqlDialect } from "../sql-dialect.js";
+import {
+  assertReadOnlySingleStatement,
+  MAX_RESULT_ROWS,
+  TRINO_SATURDAY_WEEKDAY,
+  TRINO_SESSION_PROBE_DATE,
+  TRINO_SESSION_PROBE_SQL,
+  type SqlDialect,
+} from "../sql-dialect.js";
 import { AdapterError, isAdapterError } from "../errors.js";
 import type { TokenProvider } from "../auth.js";
 import type { LakehouseQueryResult } from "../../data/lakehouse.js";
@@ -91,6 +109,13 @@ export interface AthenaLakehouseOptions {
    */
   outputLocation: string;
   tokens: TokenProvider;
+  /**
+   * Client id of the managed identity `tokens` was built on. Diagnostic only —
+   * nothing authenticates with it here — but an STS `AccessDenied` names neither
+   * the identity nor the audience it refused, and those are two of the three
+   * values that have to match for the exchange to work.
+   */
+  identityClientId?: string;
   /** Injected by tests; the default lazily builds an `AthenaClient`. */
   executor?: AthenaExecutor;
   /** How long to wait for a query to leave QUEUED/RUNNING before giving up. */
@@ -109,8 +134,10 @@ export class AthenaLakehouseSqlBackend implements LakehouseSqlBackend {
   private readonly workgroup: string;
   private readonly outputLocation: string;
   private readonly tokens: TokenProvider;
+  private readonly identityClientId: string | undefined;
   private readonly pollTimeoutMs: number;
   private executor: AthenaExecutor | undefined;
+  private dialectContract: Promise<void> | undefined;
 
   constructor(options: AthenaLakehouseOptions) {
     this.roleArn = options.roleArn;
@@ -120,6 +147,7 @@ export class AthenaLakehouseSqlBackend implements LakehouseSqlBackend {
     this.workgroup = options.workgroup;
     this.outputLocation = options.outputLocation;
     this.tokens = options.tokens;
+    this.identityClientId = options.identityClientId;
     this.pollTimeoutMs = options.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
     this.executor = options.executor;
   }
@@ -170,12 +198,106 @@ export class AthenaLakehouseSqlBackend implements LakehouseSqlBackend {
     });
   }
 
+  /**
+   * Turn an STS refusal into something a reader can act on.
+   *
+   * `AssumeRoleWithWebIdentity` answers `AccessDenied` and names none of the
+   * three values that had to match — the role, the `aud` claim, and the `sub`
+   * claim, which is decided by WHICH managed identity minted the token. A
+   * container with two user-assigned identities can produce a perfectly valid
+   * token from the wrong one, and the resulting message blames the AWS trust
+   * policy for what is an Azure credential-selection problem. So say which three
+   * were used; comparing them against the trust policy is then a diff rather
+   * than an investigation across two clouds.
+   *
+   * Matched on the error text rather than an SDK error class because the
+   * credential provider surfaces these through several wrapper types, and a
+   * missed hint costs nothing while an absent one costs a demo.
+   */
+  private exchangeHint(message: string): string {
+    if (!/AccessDenied|WebIdentity|InvalidIdentityToken|IDPRejectedClaim|not authorized/i.test(message)) {
+      return "";
+    }
+    return (
+      ` — this is the STS credential exchange, not the SQL. The token was requested from ` +
+      `managed identity client id ${this.identityClientId ?? "(not recorded)"} for audience ` +
+      `${this.audience}, and exchanged for ${this.roleArn}. The IAM trust policy must match ` +
+      `that audience as 'aud' and that identity's PRINCIPAL id (not its client id) as 'sub'. ` +
+      `A wrong identity here produces exactly this message while the trust policy is correct.`
+    );
+  }
+
+  /**
+   * Run once per process, before the first real answer: prove the engine numbers
+   * `day_of_week` the way this tool's description tells the agent it does.
+   *
+   * `2026-08-22` is a Saturday, so ISO numbering must return 6. This is the
+   * Trino counterpart of `FabricLakehouseSqlBackend.ensureSessionContract`, with
+   * one difference that matters: Fabric PINS its numbering with `SET DATEFIRST 7`
+   * and probes to confirm the pin took, while Athena offers nothing to pin, so
+   * the probe is the only thing standing between the description and a guess.
+   *
+   * It FAILS rather than warns. A warning would be read by nobody and the agent
+   * would carry on composing weekday filters against a numbering the tool told
+   * it was verified — an answer that is wrong by exactly one day, in the
+   * direction the Fabric tool's own numbering would produce, which is the least
+   * detectable wrong answer available.
+   */
+  private async ensureDialectContract(): Promise<void> {
+    if (!this.dialectContract) {
+      this.dialectContract = (async () => {
+        const executor = this.getExecutor();
+        let probe: AthenaRawResult;
+        try {
+          probe = await this.withPollTimeout(executor.run(TRINO_SESSION_PROBE_SQL, 2));
+        } catch (err) {
+          if (isAdapterError(err)) throw err;
+          // The probe is the FIRST thing that touches AWS, so the credential
+          // exchange fails here rather than on the agent's own statement. Same
+          // typed shape and same hint as `query()` gives — an untyped throw out
+          // of a private method is how a credential problem ends up reported as
+          // a tool crash.
+          const message = err instanceof Error ? err.message : String(err);
+          throw new AdapterError(
+            "upstream",
+            `The Athena dialect probe failed before any query ran: ${message}` +
+              `${this.exchangeHint(message)}`,
+            { service: "athena-sql", cause: err },
+          );
+        }
+        const index = probe.columns.findIndex((c) => c.toLowerCase() === "seed_date_weekday");
+        const weekday = Number(probe.rows[0]?.[index === -1 ? 0 : index]);
+        if (weekday !== TRINO_SATURDAY_WEEKDAY) {
+          throw new AdapterError(
+            "config",
+            `The Athena engine does not number day_of_week the way this tool's description ` +
+              `promises: expected day_of_week(DATE '${TRINO_SESSION_PROBE_DATE}')=` +
+              `${TRINO_SATURDAY_WEEKDAY} (a Saturday, ISO 1=Monday..7=Sunday), got ` +
+              `${Number.isNaN(weekday) ? "no usable value" : weekday}. The tool description ` +
+              `states this is confirmed by a session probe at first query, so refusing is the ` +
+              `only honest outcome — returning weekday numbers that mean something else would ` +
+              `be wrong by one day in exactly the direction the Fabric tool's numbering ` +
+              `produces.`,
+            { service: "athena-sql" },
+          );
+        }
+      })().catch((err) => {
+        // A failed probe must be retried on the next call, not cached forever —
+        // a throttled STS exchange or a cold Athena queue is a normal transient.
+        this.dialectContract = undefined;
+        throw err;
+      });
+    }
+    return this.dialectContract;
+  }
+
   async query(sql: string): Promise<LakehouseQueryResult> {
     // The same gate every backend runs, in Trino mode: single statement,
     // SELECT/WITH only, no UNLOAD/CALL/session-state verbs — checked before
     // the engine (or the credential exchange) is ever touched.
     const statement = assertReadOnlySingleStatement(sql, "trino");
 
+    await this.ensureDialectContract();
     const executor = this.getExecutor();
 
     let result: AthenaRawResult;
@@ -187,7 +309,7 @@ export class AthenaLakehouseSqlBackend implements LakehouseSqlBackend {
       // plain text on the FAILED query execution's StateChangeReason; that
       // upstream message is what the agent needs in order to reformulate.
       const message = err instanceof Error ? err.message : String(err);
-      throw new AdapterError("upstream", `Athena query failed: ${message}`, {
+      throw new AdapterError("upstream", `Athena query failed: ${message}${this.exchangeHint(message)}`, {
         service: "athena-sql",
         cause: err,
       });
@@ -200,6 +322,9 @@ export class AthenaLakehouseSqlBackend implements LakehouseSqlBackend {
 
   async close(): Promise<void> {
     this.executor = undefined;
+    // The contract belongs to the executor that observed it, not to the object:
+    // a new executor is a new session and must re-prove it.
+    this.dialectContract = undefined;
   }
 }
 

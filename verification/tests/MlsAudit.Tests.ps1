@@ -1001,3 +1001,199 @@ Describe 'an expired federated assertion is RECOVERED before it is raised' {
         }
     }
 }
+
+Describe 'Invoke-MlsMcpToolCall - the one tool call the audit may make' {
+    # V8.6 cannot be answered from metadata: a ROW is only observable by asking for one, and
+    # /healthz publishes tool names and adapter class names, never data. So the "the audit
+    # never invokes a tool" contract gains exactly one narrow exception, and this is where
+    # the narrowness is asserted.
+    #
+    # These tests mock Invoke-WebRequest - the real transport boundary - deliberately. The
+    # layer-08 tests mock this function and interpret its OUTCOME; if they also decided what
+    # an HTTP 429 means, nothing anywhere would be testing the mapping, and a fixture that
+    # built the outcome directly would be a mirror rather than a test.
+
+    Context 'the read-only gate' {
+        It 'refuses a tool that is not on the invocable list' {
+            { Assert-MlsReadOnlyMcpToolCall -ToolName 'query_lakehouse_sql' -Argument @{ sql = 'SELECT 1' } } |
+                Should -Throw '*Refusing MCP tools/call*'
+        }
+
+        It 'refuses a statement that does not begin SELECT or WITH' {
+            { Assert-MlsReadOnlyMcpToolCall -ToolName 'query_aws_lakehouse_sql' -Argument @{ sql = 'DELETE FROM launches' } } |
+                Should -Throw '*begin*SELECT or WITH*'
+        }
+
+        It 'refuses a second statement hiding behind a semicolon' {
+            { Assert-MlsReadOnlyMcpToolCall -ToolName 'query_aws_lakehouse_sql' -Argument @{ sql = 'SELECT 1; DROP TABLE launches' } } |
+                Should -Throw '*SINGLE statement*'
+        }
+
+        It 'refuses UNLOAD, which is how Athena writes to S3 without saying INSERT' {
+            { Assert-MlsReadOnlyMcpToolCall -ToolName 'query_aws_lakehouse_sql' -Argument @{ sql = 'SELECT * FROM launches UNLOAD TO ''s3://x''' } } |
+                Should -Throw '*write verb (UNLOAD)*'
+        }
+
+        It 'permits the two statements the criteria actually send' {
+            { Assert-MlsReadOnlyMcpToolCall -ToolName 'query_aws_lakehouse_sql' -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } } |
+                Should -Not -Throw
+            { Assert-MlsReadOnlyMcpToolCall -ToolName 'query_aws_lakehouse_sql' -Argument @{ sql = "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = 'db'" } } |
+                Should -Not -Throw
+        }
+
+        It 'does not mistake a column name for a write verb' {
+            # \b after the verb is what keeps `update_ts` and `deleted_flag` legal. Without
+            # it the gate refuses correct read-only SQL, which is the kind of check people
+            # switch off rather than trust.
+            { Assert-MlsReadOnlyMcpToolCall -ToolName 'query_aws_lakehouse_sql' -Argument @{ sql = 'SELECT update_ts, deleted_flag FROM launches' } } |
+                Should -Not -Throw
+        }
+
+        It 'refuses before any request leaves the machine' {
+            Mock Invoke-WebRequest { throw 'the gate let a write through' } -ModuleName 'MlsAudit'
+            { Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                    -Argument @{ sql = 'INSERT INTO launches VALUES (1)' } } | Should -Throw '*Refusing MCP tools/call*'
+            Should -Invoke Invoke-WebRequest -ModuleName 'MlsAudit' -Exactly -Times 0
+        }
+    }
+
+    Context 'classifying what came back' {
+        BeforeEach {
+            $script:McpStatus = 200
+            $script:McpBody = ''
+            $script:McpHeaders = @{}
+            $script:InitializeStatus = 200
+            Mock Invoke-WebRequest {
+                if ("$Body" -like '*"initialize"*') {
+                    return [pscustomobject]@{ StatusCode = $script:InitializeStatus; Content = '{"jsonrpc":"2.0","id":1,"result":{}}'; Headers = @{} }
+                }
+                if ("$Body" -like '*notifications/initialized*') {
+                    return [pscustomobject]@{ StatusCode = 202; Content = ''; Headers = @{} }
+                }
+                return [pscustomobject]@{ StatusCode = $script:McpStatus; Content = $script:McpBody; Headers = $script:McpHeaders }
+            } -ModuleName 'MlsAudit'
+        }
+
+        # Every test below calls Invoke-MlsMcpToolCall directly rather than through a local
+        # helper. A wrapper would be one more thing between the assertion and the function
+        # under test, and this file's whole subject is what that function decides.
+
+        It 'reads a JSON result into a payload' {
+            $script:McpBody = '{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"result":{"columns":["n"],"rows":[[286473]],"rowCount":1,"truncated":false}}}}'
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'rows'
+            $result.Payload.rowCount | Should -Be 1
+            $result.Payload.rows[0][0] | Should -Be 286473
+        }
+
+        It 'reads an SSE-framed result the same way, because status and framing are negotiated' {
+            # F158: a detector validated against a friendlier client than production uses has
+            # tested a different system. The MCP transport answers application/json OR
+            # text/event-stream for the identical request.
+            $script:McpBody = "event: message`ndata: {`"jsonrpc`":`"2.0`",`"id`":2,`"result`":{`"structuredContent`":{`"result`":{`"rows`":[[7969]],`"rowCount`":1}}}}`n`n"
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'rows'
+            $result.Payload.rows[0][0] | Should -Be 7969
+        }
+
+        It 'falls back to the text content when there is no structuredContent' {
+            $script:McpBody = '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"rows\":[[12600]],\"rowCount\":1}"}]}}'
+            $text = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $text.Payload.rowCount | Should -Be 1
+        }
+
+        It 'calls an HTTP 401 from the auth gate UNOBSERVABLE, not an empty result' {
+            $script:McpStatus = 401
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'unobservable'
+            $result.Reason | Should -BeLike '*auth gate*'
+            $result.Reason | Should -BeLike '*says nothing about whether the lakehouse answers*'
+        }
+
+        It 'calls an HTTP 429 UNOBSERVABLE and says a throttled response is not an empty one' {
+            # The real instance: `az containerapp exec` answers 429 with retry-after 600
+            # after roughly three calls, and a throttled response looks exactly like an
+            # empty value. Two present environment variables were nearly recorded absent.
+            $script:McpStatus = 429
+            $script:McpHeaders = @{ 'retry-after' = '600' }
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'unobservable'
+            $result.Reason | Should -BeLike '*429*'
+            $result.Reason | Should -BeLike '*retry-after 600*'
+            $result.Reason | Should -BeLike '*not an empty one*'
+        }
+
+        It 'calls a 5xx UNOBSERVABLE' {
+            $script:McpStatus = 503
+            $unavailable = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $unavailable.Outcome | Should -Be 'unobservable'
+        }
+
+        It 'calls a body with no JSON-RPC envelope UNOBSERVABLE rather than zero rows' {
+            $script:McpBody = '<html>Service Unavailable</html>'
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'unobservable'
+            $result.Reason | Should -BeLike '*no JSON-RPC envelope*'
+        }
+
+        It 'reports a TOOL error as an observation about the estate, not as a blind spot' {
+            # The tool ran and refused. That is a fact about the link being broken, and it
+            # is actionable; treating it as unobservable would lose a real failure.
+            $script:McpBody = '{"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[{"type":"text","text":"query_aws_lakehouse_sql failed: AccessDenied on glue:GetTable"}]}}'
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'tool-error'
+            $result.ToolError | Should -BeLike '*AccessDenied*'
+        }
+
+        It 'reports a THROTTLED tool error as unobservable, because a throttle is not an answer' {
+            $script:McpBody = '{"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[{"type":"text","text":"query_aws_lakehouse_sql failed: ThrottlingException: Rate exceeded"}]}}'
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'unobservable'
+            $result.Reason | Should -BeLike '*throttled*'
+        }
+
+        It 'reports a JSON-RPC protocol error as unobservable' {
+            $script:McpBody = '{"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not allowed"}}'
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'unobservable'
+            $result.Reason | Should -BeLike '*protocol error*'
+        }
+
+        It 'stops at a failed initialize and names that stage' {
+            $script:InitializeStatus = 401
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            $result.Outcome | Should -Be 'unobservable'
+            $result.Reason | Should -BeLike 'initialize*'
+        }
+
+        It 'sends the credential as a bearer and never returns it' {
+            # Hard rule 5: the audit report is committed to a public repository, so the
+            # result object deliberately carries no copy of what was sent.
+            $script:McpBody = '{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"result":{"rows":[[1]],"rowCount":1}}}}'
+            $result = Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret'
+            Should -Invoke Invoke-WebRequest -ModuleName 'MlsAudit' -Times 1 -ParameterFilter {
+                $Headers['Authorization'] -eq 'Bearer shared-secret' -and "$Body" -like '*tools/call*'
+            }
+            ($result | ConvertTo-Json -Depth 6) | Should -Not -BeLike '*shared-secret*'
+        }
+
+        It 'never sends tools/call with a method other than POST' {
+            $script:McpBody = '{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"result":{"rows":[[1]],"rowCount":1}}}}'
+            Invoke-MlsMcpToolCall -Uri 'https://mcp.example/mcp' -ToolName 'query_aws_lakehouse_sql' `
+                -Argument @{ sql = 'SELECT COUNT(*) AS n FROM launches' } -AuthToken 'shared-secret' | Out-Null
+            Should -Invoke Invoke-WebRequest -ModuleName 'MlsAudit' -Times 0 -ParameterFilter { $Method -ne 'POST' }
+        }
+    }
+}

@@ -240,6 +240,40 @@ param mcpToolsBackendMode string = ''
 @description('owner/repo the data-api Dev/Sec feeds read through the GitHub API. No default on purpose: a public reference repo must not ship the upstream repo as a fallback. Supplied via MLS_GITHUB_REPO in demo.bicepparam; empty is valid and simply leaves the GitHub feeds unconfigured, which data-api reports at boot in cloud mode.')
 param githubRepository string = ''
 
+// ------------------------------------------------------------------ the AWS lakehouse link (2026-09-16)
+//
+// query_aws_lakehouse_sql's six settings. Until these parameters existed the six
+// `demo` environment variables were SET and reached nothing: apps/mcp-tools reads
+// them from its own process environment, and no step put them there, so the tool
+// silently never registered however green the unit tests were. That is F122/F124/F125's
+// class exactly - a value that exists, is spelled correctly, and cannot be seen by the
+// thing that reads it - and it is why these are parameters rather than a hand-patch onto
+// the running app (F159: configuration that exists only in the estate is a demo that
+// works once).
+//
+// Every one of them is empty by default, and empty is a SUPPORTED deployment: the AWS
+// link is optional and an estate without it simply serves six tools instead of seven.
+// What is NOT supported is a PARTIAL configuration, and this template deliberately does
+// not paper over one - see mcpToolsAwsEnv below for why.
+
+@description('IAM role ARN the container\'s Entra token is exchanged for via AssumeRoleWithWebIdentity (arn:aws:iam::<account>:role/<name>). Empty leaves the AWS lakehouse tool unconfigured, which is a supported deployment. Supplied via MLS_AWS_ROLE_ARN.')
+param awsRoleArn string = ''
+
+@description('Entra identifier URI (api://...) the AWS IAM trust policy matches as the token\'s `aud`. The app registration is token version 1, so this is the api:// identifier URI, not a v2 App ID URI. Supplied via MLS_AWS_AUDIENCE.')
+param awsAudience string = ''
+
+@description('AWS region for the Athena and STS clients. Supplied via MLS_AWS_REGION.')
+param awsRegion string = ''
+
+@description('Glue Data Catalog database query_aws_lakehouse_sql reads. Supplied via MLS_GLUE_DATABASE.')
+param glueDatabase string = ''
+
+@description('Athena workgroup queries run in. Supplied via MLS_ATHENA_WORKGROUP.')
+param athenaWorkgroup string = ''
+
+@description('s3:// URI Athena writes query results to. Required explicitly rather than inherited: the workgroup in the sponsor\'s account has no aws_athena_workgroup resource behind it and therefore enforces no result configuration of its own. Supplied via MLS_ATHENA_OUTPUT.')
+param athenaOutput string = ''
+
 @description('[derived] Timespan for data-api\'s app-requests Log Analytics query, ISO-8601.')
 param logAnalyticsTimespan string = 'P14D'
 
@@ -1101,6 +1135,47 @@ var mcpToolsCloudEnv = mcpToolsMode != 'cloud'
       { name: 'AZURE_SUBSCRIPTION_ID', value: subscription().subscriptionId }
     ]
 
+// The AWS lakehouse link (2026-09-16). SEVEN settings, not six.
+//
+// The seventh, MLS_AWS_CLIENT_ID, is the whole reason this block is not just a
+// pass-through of the six demo variables. The container carries TWO user-assigned
+// identities (see managedIdentities below), and AZURE_CLIENT_ID above binds
+// DefaultAzureCredential to mcpToolsIdentity for every Azure data plane this server
+// reads. The AWS IAM trust policy's `sub` condition is pinned to awsIdentity's PRINCIPAL
+// id, so a token minted from mcpToolsIdentity is rejected by AWS — as an AccessDenied
+// that reads exactly like a broken trust policy when it is an Azure credential-selection
+// problem. athena-sql.ts therefore builds its own credential naming this client id.
+//
+// It is DERIVED from the identity, not stored as a variable, deliberately: F129's lesson
+// is to prefer a value the template computes over one a human types, because a name a
+// human stores cannot survive the rebuild this demo exists to show. awsIdentity is the
+// same `existing` reference mcpToolsApp's managedIdentities already uses, so the client
+// id and the assignment cannot disagree.
+var awsSettingsSupplied = !empty(awsRoleArn) || !empty(awsAudience) || !empty(awsRegion) || !empty(glueDatabase) || !empty(athenaWorkgroup) || !empty(athenaOutput)
+
+// PARTIAL CONFIGURATION IS PASSED THROUGH, NOT SWALLOWED. apps/mcp-tools/src/config.ts's
+// loadAwsConfig has three outcomes on purpose — none set means the tool is not offered,
+// all set means it is, and SOME set throws at boot naming exactly what is missing. A
+// template that emitted nothing unless all six were present would collapse the third
+// outcome into the first and make a typo in one demo variable indistinguishable from a
+// deliberate decision not to wire AWS at all. So: any one supplied and all seven are
+// emitted, and the app fails loudly rather than the tool silently going missing.
+//
+// NOT gated on mcpToolsMode. loadAwsConfig is resolved independently of
+// MLS_TOOL_BACKENDS by design (the AWS link is an orthogonal axis, not a third backend
+// mode), and this template must not invent a coupling the app does not have.
+var mcpToolsAwsEnv = !awsSettingsSupplied
+  ? []
+  : [
+      { name: 'MLS_AWS_ROLE_ARN', value: awsRoleArn }
+      { name: 'MLS_AWS_AUDIENCE', value: awsAudience }
+      { name: 'MLS_AWS_REGION', value: awsRegion }
+      { name: 'MLS_GLUE_DATABASE', value: glueDatabase }
+      { name: 'MLS_ATHENA_WORKGROUP', value: athenaWorkgroup }
+      { name: 'MLS_ATHENA_OUTPUT', value: athenaOutput }
+      { name: 'MLS_AWS_CLIENT_ID', value: awsIdentity.properties.clientId }
+    ]
+
 // The one credential-shaped input, and only when a secret name was supplied.
 // config.ts accepts GITHUB_TOKEN or MLS_GITHUB_TOKEN; the latter matches data-api,
 // so the same Key Vault secret serves both and no seventh credential appears.
@@ -1210,7 +1285,8 @@ module mcpToolsApp 'br/public:avm/res/app/container-app:0.23.0' = {
             }
           ],
           mcpToolsCloudEnv,
-          mcpToolsGitHubEnv
+          mcpToolsGitHubEnv,
+          mcpToolsAwsEnv
         )
       }
     ]
@@ -1344,6 +1420,12 @@ output dataApiBackendModeResolved string = dataApiMode
 
 @description('Backend mode mcp-tools actually resolved to. Emitted for the same reason the data-api one is: the mode is derived, so the only honest way to know which one shipped is to ask the template that decided. F133 shipped local silently and the Copilot agent answered with a missing-data error through a chain that was otherwise working end to end.')
 output mcpToolsBackendModeResolved string = mcpToolsMode
+
+@description('Whether the AWS lakehouse link (query_aws_lakehouse_sql) was wired onto mcp-tools by this deployment. Emitted for the same reason the two backend modes are, and because an audit that cannot tell a configured link from an absent one is not evidence (F162): the seven MLS_AWS_*/MLS_GLUE_*/MLS_ATHENA_* settings are optional, so "the tool did not answer" has two very different causes and only the template knows which.')
+output mcpToolsAwsLinkConfigured bool = awsSettingsSupplied
+
+@description('Client id of the AWS trust identity the container requests its AWS-bound token from (MLS_AWS_CLIENT_ID). Derived from the mls-rg-identity user-assigned identity rather than stored, so it cannot drift from the identity actually assigned to the app. Empty-by-omission is impossible here: if the identity does not exist the deployment fails rather than shipping a container that would ask the wrong principal for a token.')
+output mcpToolsAwsIdentityClientId string = awsIdentity.properties.clientId
 
 @description('Client ID of the data-api user-assigned identity — the principal that needs the SQL contained-database user, the Fabric workspace Viewer role, Log Analytics Reader and Security Reader.')
 output dataApiIdentityClientId string = dataApiIdentity.outputs.clientId

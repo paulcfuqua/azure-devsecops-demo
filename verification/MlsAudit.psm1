@@ -141,6 +141,25 @@ $script:GhReadOnlyCommand = @(
 
 $script:McpReadOnlyMethod = @('initialize', 'notifications/initialized', 'tools/list')
 
+# The MCP tools the audit may actually INVOKE, and it is deliberately a list of one.
+# Invoke-MlsMcpToolCall (and Assert-MlsReadOnlyMcpToolCall with it) is the only route,
+# and it exists because V8.6 cannot be answered from metadata: /healthz publishes tool
+# names and adapter class names, never a row.
+$script:McpReadOnlyToolCall = @('query_aws_lakehouse_sql')
+
+# Group 1 is the offending verb, so the refusal can name it.
+$script:SqlWriteVerbPattern = '(?i)\b(INSERT|UPDATE|DELETE|MERGE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|UNLOAD|CALL|EXECUTE|MSCK)\b'
+
+# Version advertised on `initialize`. The server answers with a version IT supports, so a
+# mismatch degrades to negotiation rather than to a wrong verdict.
+$script:McpProtocolVersion = '2025-06-18'
+
+# A THROTTLED ANSWER IS NOT AN ANSWER, and it is shaped exactly like an empty one. Athena,
+# STS and the Container Apps management plane all refuse under load with a message and no
+# data; `az containerapp exec` answers HTTP 429 with retry-after 600 after roughly three
+# calls, and that response was very nearly recorded as two absent environment variables.
+$script:ThrottlePattern = '(?i)throttl|TooManyRequests|Rate exceeded|SlowDown|\b429\b'
+
 # Entra audience for the SQL data plane. Both endpoints the audit queries - the Fabric
 # lakehouse SQL analytics endpoint (V5.3, V8.2) and the Entra-only Azure SQL database -
 # speak TDS and accept an access token for this resource, which is exactly the audience
@@ -1264,6 +1283,262 @@ function Invoke-MlsMcpToolCatalog {
     return Invoke-RestMethod -Uri $Uri -Method POST -Headers $headers -Body $body -TimeoutSec $TimeoutSec
 }
 
+function Assert-MlsReadOnlyMcpToolCall {
+    <#
+    .SYNOPSIS
+        Refuse any tools/call the audit is not allowed to make.
+    .DESCRIPTION
+        Invoke-MlsMcpToolCatalog's contract is "the audit never invokes a tool", and that
+        held for exactly as long as every question could be answered from metadata. V8.6
+        cannot be: a ROW is only observable by asking for one, and /healthz publishes tool
+        NAMES and adapter class names, never data. So the audit may invoke exactly the
+        tools whose own contract refuses to write, and nothing else.
+
+        This re-states that gate on THIS side of the wire. The server already enforces it
+        (apps/mcp-tools/src/tools/sql-dialect.ts's assertReadOnlySingleStatement: one
+        statement, SELECT or WITH, UNLOAD explicitly refused) - and an audit that can only
+        write when the thing it audits stops refusing writes is not read-only, it is
+        read-only by someone else's permission. Adding a name to $script:McpReadOnlyToolCall
+        means asserting the same thing about that tool.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ToolName,
+        [Parameter(Mandatory)][hashtable]$Argument
+    )
+    if ($ToolName -notin $script:McpReadOnlyToolCall) {
+        throw "Refusing MCP tools/call '$ToolName': the audit may only invoke $($script:McpReadOnlyToolCall -join ', ') - tools whose own contract refuses to write."
+    }
+    if (-not $Argument.ContainsKey('sql')) { return }
+    $sql = "$($Argument['sql'])"
+    if ($sql -notmatch '^\s*(?i:SELECT|WITH)\b') {
+        throw "Refusing MCP tools/call '$ToolName': the audit may only send a statement beginning SELECT or WITH."
+    }
+    if ($sql -match ';\s*\S') {
+        throw "Refusing MCP tools/call '$ToolName': the audit may only send a SINGLE statement, and this one continues past a semicolon."
+    }
+    if ($sql -match $script:SqlWriteVerbPattern) {
+        throw "Refusing MCP tools/call '$ToolName': the statement names a write verb ($($Matches[1].ToUpperInvariant()))."
+    }
+}
+
+function ConvertFrom-MlsMcpBody {
+    <#
+    .SYNOPSIS
+        Parse one MCP Streamable HTTP response body, which may be JSON or SSE.
+    .DESCRIPTION
+        The transport is content-negotiated: the same request answers `application/json`
+        or `text/event-stream` depending on the server and the SDK version behind it. A
+        parser that understands only one of them reports a perfectly good answer as
+        unreadable - "a probe must be made with the client that will make it" (F158), and
+        here the client is this function.
+
+        Returns $null when the body carries no JSON-RPC envelope at all. The caller must
+        treat $null as UNOBSERVABLE, never as an empty result.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Body)
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
+    $candidate = $Body.Trim()
+    # SSE framing: one or more `data:` lines, the last of which carries the response.
+    # '\r?\n' as an explicit regex rather than a double-quoted "`r?`n": the latter happens to
+    # produce the same pattern and reads like a typo, which is how a working line gets
+    # "fixed" into a broken one.
+    $dataLine = @($Body -split '\r?\n' | Where-Object { $_ -match '^data:\s*(.+)$' } |
+            ForEach-Object { ($_ -replace '^data:\s*', '').Trim() })
+    if ($dataLine.Count -gt 0) { $candidate = $dataLine[-1] }
+    try { return $candidate | ConvertFrom-Json }
+    catch { return $null }
+}
+
+function Invoke-MlsMcpToolCall {
+    <#
+    .SYNOPSIS
+        Invoke ONE read-only MCP tool against the deployed server and classify the outcome
+        as data, an observed tool failure, or UNOBSERVABLE.
+    .DESCRIPTION
+        The full client handshake, because a probe must be made with the client that will
+        make it: `initialize`, then the optional `notifications/initialized`, then
+        `tools/call`, carrying `mcp-session-id` back if the server issues one. The shipped
+        server is stateless (a fresh Server + transport per POST, app.ts says so), so the
+        handshake buys nothing there - and a stateful one would refuse a bare tools/call,
+        which is a failure this audit must not be one deploy away from.
+
+        THE OUTCOME IS THREE-VALUED, deliberately:
+
+          rows          a tool payload came back and can be read.
+          tool-error    the TOOL ran and reported a failure. That is an observation about
+                        the ESTATE - the link is broken - and it is a FAIL, not a blind
+                        spot. Athena/STS throttling is the exception and is classified
+                        unobservable below, because a throttled answer is not an answer.
+          unobservable  everything UPSTREAM of the tool: no response, the auth gate, a 429,
+                        a 5xx, a body with no JSON-RPC envelope. This audit could not see,
+                        so it says so. It never reports the data as absent (F105) and it
+                        never reports the link as present either - an auditor that cannot
+                        see a control must not be able to report it PRESENT.
+
+        .Reason always says which, in words a reader can act on. $AuthToken is sent and
+        never returned, logged or echoed: the result object carries no copy of the request.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+        Justification = '$Uri and $TimeoutSec are consumed inside the $post scriptblock, which closes over them; PSSA cannot see through a closure.')]
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$ToolName,
+        [Parameter(Mandatory)][hashtable]$Argument,
+        [AllowEmptyString()][AllowNull()][string]$AuthToken = '',
+        [int]$TimeoutSec = 120
+    )
+    Assert-MlsReadOnlyMcpToolCall -ToolName $ToolName -Argument $Argument
+
+    $header = @{ 'Content-Type' = 'application/json'; 'Accept' = 'application/json, text/event-stream' }
+    if (-not [string]::IsNullOrWhiteSpace($AuthToken)) { $header['Authorization'] = "Bearer $AuthToken" }
+
+    $post = {
+        param($body, $extraHeader)
+        $requestHeader = @{}
+        foreach ($key in $header.Keys) { $requestHeader[$key] = $header[$key] }
+        foreach ($key in $extraHeader.Keys) { $requestHeader[$key] = $extraHeader[$key] }
+        try {
+            $response = Invoke-WebRequest -Uri $Uri -Method POST -Headers $requestHeader -Body $body `
+                -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
+            $status = [int](Get-MlsProperty -InputObject $response -Name 'StatusCode')
+            $content = ''
+            try { $content = [string](Get-MlsProperty -InputObject $response -Name 'Content') } catch { $content = '' }
+            $responseHeader = @{}
+            try { $responseHeader = (Get-MlsProperty -InputObject $response -Name 'Headers') } catch { $responseHeader = @{} }
+            return [pscustomobject]@{ StatusCode = $status; Content = $content; Headers = $responseHeader; Error = $null }
+        }
+        catch {
+            return [pscustomobject]@{ StatusCode = 0; Content = ''; Headers = @{}; Error = $_.Exception.Message }
+        }
+    }
+
+    $unreadable = {
+        param($reason, $status, $ms)
+        [pscustomobject]@{
+            ToolName = $ToolName; Outcome = 'unobservable'; Reason = $reason
+            HttpStatus = $status; ElapsedMs = $ms; ToolError = ''; Payload = $null
+        }
+    }
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+    $initializeBody = @{
+        jsonrpc = '2.0'; id = 1; method = 'initialize'
+        params  = @{
+            protocolVersion = $script:McpProtocolVersion
+            capabilities    = @{}
+            # No company prefix here, deliberately: this string is cosmetic (it reaches the
+            # server's logs and nothing else) and a prefixed literal is one more place a
+            # rebrand has to reach (F90). The estate's own sweep caught this one.
+            clientInfo      = @{ name = 'verifier-audit'; version = '1.0' }
+        }
+    } | ConvertTo-Json -Depth 6
+    $initialize = & $post $initializeBody @{}
+    $describe = Get-MlsMcpHttpProblem -Response $initialize -Stage 'initialize'
+    if ($describe) { return & $unreadable $describe $initialize.StatusCode ([int]$stopwatch.Elapsed.TotalMilliseconds) }
+
+    $session = ''
+    try { $session = "$($initialize.Headers['mcp-session-id'])" } catch { $session = '' }
+    $sessionHeader = @{}
+    if (-not [string]::IsNullOrWhiteSpace($session)) { $sessionHeader['mcp-session-id'] = $session }
+
+    # Fire and forget, by definition: a notification has no response to be wrong about, so
+    # its outcome is deliberately not inspected. A check that could fail here would be a
+    # check that fails on a step with no answer.
+    & $post (@{ jsonrpc = '2.0'; method = 'notifications/initialized'; params = @{} } | ConvertTo-Json -Depth 4) $sessionHeader | Out-Null
+
+    $callBody = @{
+        jsonrpc = '2.0'; id = 2; method = 'tools/call'
+        params  = @{ name = $ToolName; arguments = $Argument }
+    } | ConvertTo-Json -Depth 8
+    $call = & $post $callBody $sessionHeader
+    $stopwatch.Stop()
+    $elapsedMs = [int]$stopwatch.Elapsed.TotalMilliseconds
+
+    $describe = Get-MlsMcpHttpProblem -Response $call -Stage 'tools/call'
+    if ($describe) { return & $unreadable $describe $call.StatusCode $elapsedMs }
+
+    $envelope = ConvertFrom-MlsMcpBody -Body $call.Content
+    if ($null -eq $envelope) {
+        return & $unreadable "tools/call returned HTTP $($call.StatusCode) with a body that carries no JSON-RPC envelope, so nothing in it can be read as a result" $call.StatusCode $elapsedMs
+    }
+    $rpcError = Get-MlsProperty -InputObject $envelope -Name 'error'
+    if ($null -ne $rpcError) {
+        return & $unreadable "tools/call returned a JSON-RPC protocol error: $(Get-MlsProperty -InputObject $rpcError -Name 'message')" $call.StatusCode $elapsedMs
+    }
+    $result = Get-MlsProperty -InputObject $envelope -Name 'result'
+    if ($null -eq $result) {
+        return & $unreadable "tools/call returned HTTP $($call.StatusCode) with neither a result nor an error" $call.StatusCode $elapsedMs
+    }
+
+    $text = ''
+    $content = @(Get-MlsProperty -InputObject $result -Name 'content')
+    if ($content.Count -gt 0) { $text = "$(Get-MlsProperty -InputObject $content[0] -Name 'text')" }
+
+    if ([bool](Get-MlsProperty -InputObject $result -Name 'isError')) {
+        # A THROTTLED ANSWER IS NOT AN ANSWER. Athena and STS both refuse under load with a
+        # message and no data, and the shape of that refusal is indistinguishable from a
+        # small result unless something looks for it - which is the same mistake
+        # `az containerapp exec`'s HTTP 429 nearly produced when a throttled response was
+        # first read as an absent environment variable.
+        if ($text -match $script:ThrottlePattern) {
+            return & $unreadable "the tool was throttled rather than answering: $text" $call.StatusCode $elapsedMs
+        }
+        return [pscustomobject]@{
+            ToolName = $ToolName; Outcome = 'tool-error'; Reason = "the tool ran and reported a failure: $text"
+            HttpStatus = $call.StatusCode; ElapsedMs = $elapsedMs; ToolError = $text; Payload = $null
+        }
+    }
+
+    $payload = Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $result -Name 'structuredContent') -Name 'result'
+    if ($null -eq $payload -and -not [string]::IsNullOrWhiteSpace($text)) {
+        try { $payload = $text | ConvertFrom-Json } catch { $payload = $null }
+    }
+    if ($null -eq $payload) {
+        return & $unreadable "tools/call succeeded but carried no readable payload, so the result could not be inspected" $call.StatusCode $elapsedMs
+    }
+    return [pscustomobject]@{
+        ToolName = $ToolName; Outcome = 'rows'; Reason = ''
+        HttpStatus = $call.StatusCode; ElapsedMs = $elapsedMs; ToolError = ''; Payload = $payload
+    }
+}
+
+function Get-MlsMcpHttpProblem {
+    <#
+    .SYNOPSIS
+        Describe why an MCP HTTP response cannot be read, or return '' when it can.
+    .DESCRIPTION
+        Every branch here is a reason the AUDIT could not see, never a statement about what
+        the estate contains. 401/403 is the audit's own credential; 429 is a throttle, which
+        looks exactly like an empty value and is the reason this function exists separately
+        from the status check it replaces; 5xx is the server, not the data.
+    #>
+    param(
+        [Parameter(Mandatory)]$Response,
+        [Parameter(Mandatory)][string]$Stage
+    )
+    $status = [int](Get-MlsProperty -InputObject $Response -Name 'StatusCode')
+    $transportError = "$(Get-MlsProperty -InputObject $Response -Name 'Error')"
+    if ($status -eq 0) {
+        return "$Stage produced no HTTP response at all$(if ($transportError) { ": $transportError" })"
+    }
+    if ($status -eq 401 -or $status -eq 403) {
+        return "$Stage returned HTTP $status from the MCP auth gate: this audit holds no credential for the endpoint, so it could not ask the question. That is a gap in what the AUDIT can see, and says nothing about whether the lakehouse answers."
+    }
+    if ($status -eq 429) {
+        $retryAfter = ''
+        try { $retryAfter = "$((Get-MlsProperty -InputObject $Response -Name 'Headers')['retry-after'])" } catch { $retryAfter = '' }
+        return "$Stage returned HTTP 429 Too Many Requests$(if ($retryAfter) { " (retry-after $retryAfter)" }): a THROTTLED response is not an empty one, and reading it as absence is exactly how a present environment variable was nearly recorded as missing."
+    }
+    if ($status -ge 500) {
+        return "$Stage returned HTTP $status from the server, so no tool result exists to read"
+    }
+    if ($status -lt 200 -or $status -ge 300) {
+        return "$Stage returned HTTP $status, which carries no readable tool result"
+    }
+    return ''
+}
+
 function Invoke-MlsLocalCommand {
     <#
     .SYNOPSIS
@@ -2055,6 +2330,10 @@ Export-ModuleMember -Function @(
     'Get-MlsLabel',
     'Get-MlsLabelPolicy',
     'Invoke-MlsMcpToolCatalog',
+    'Assert-MlsReadOnlyMcpToolCall',
+    'ConvertFrom-MlsMcpBody',
+    'Invoke-MlsMcpToolCall',
+    'Get-MlsMcpHttpProblem',
     'Invoke-MlsLocalCommand',
     'Invoke-MlsChildAudit',
     'New-MlsCheckResult',

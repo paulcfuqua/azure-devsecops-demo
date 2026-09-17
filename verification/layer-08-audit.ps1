@@ -4,8 +4,9 @@
     L8 Verifier audit - the Copilot Studio agent (showpiece #1). READ-ONLY.
 
 .DESCRIPTION
-    Implements the five master-plan Verify criteria owned by
-    docs/runbooks/layers/L08.md section Validation cycle, and nothing else:
+    Implements the Verify criteria owned by docs/runbooks/layers/L08.md section Validation
+    cycle, and nothing else. Five came from the master plan; V8.6 and V8.7 were derived for
+    the 2026-09-16 AWS lakehouse link and are written up in that same section:
 
       V8.1  Deployed agent's solution unique name + version + component list match the
             committed solution exactly, and its published state is current.
@@ -25,6 +26,27 @@
       V8.4  Every visual answer is an Adaptive Card payload that validates against the
             pinned Adaptive Cards schema; zero HTML/JS/JSX in any response.
       V8.5  p95 latency < 20 s.
+      V8.6  The AWS Athena lakehouse answers through the deployed query_aws_lakehouse_sql
+            tool with ROWS, not merely with a status code - V7.6's rule, one cloud over,
+            and against a base table AND a Glue VIEW.
+      V8.7  A denial from that lakehouse is never reported as an empty dataset: the
+            criterion establishes it could observe the Glue catalog before reporting
+            anything about what is in it, and fails UNOBSERVABLE when it could not.
+
+    V8.6 AND V8.7 ARE THE ONLY TWO THINGS IN THIS REPOSITORY THAT INVOKE A TOOL. Every
+    other criterion reads metadata, and MlsAudit's own contract said "the audit never
+    invokes a tool" for exactly as long as that was enough. It is not enough here: a ROW is
+    only observable by asking for one. Invoke-MlsMcpToolCall is the single narrow route,
+    gated by Assert-MlsReadOnlyMcpToolCall to one named tool and one SELECT-or-WITH
+    statement, so the audit cannot send a write even if the server's own gate regressed.
+
+    THE CREDENTIAL IS NOT GRANTED ANYWHERE. mcp-auth-token lives in Key Vault, mls-verifier
+    cannot read it, and this script never tries: -McpAuthToken / $env:MLS_MCP_AUTH_TOKEN is
+    an explicit input and absence is a labelled SKIP. So V8.6's row assertion and the whole
+    of V8.7 are dark until somebody decides, deliberately, to supply it. The half that runs
+    with no credential at all is still worth having: /healthz declares its tool set, and a
+    rebuild whose six AWS settings never reached the container advertises six tools instead
+    of seven, which V8.6 fails on.
 
     NOTHING IN THIS LAYER EXISTS BEFORE L8 DEPLOYS: Copilot Studio is cloud-only, the
     Power Platform environment and Direct Line channel arrive at L8, and the Fabric data
@@ -70,6 +92,41 @@ param(
     # runner - or omit both and MlsAudit mints one from the mls-verifier login.
     [string]$SqlAccessToken,
     [string]$LakehouseName = 'mls_operations',
+    # --- V8.6 / V8.7: the AWS Athena lakehouse behind query_aws_lakehouse_sql -------------
+    #
+    # THE CREDENTIAL IS AN EXPLICIT INPUT AND NOTHING ELSE. The audit never reads it from
+    # Key Vault, never mints it, never stores it and never logs it, and this repository
+    # grants mls-verifier no way to obtain it. Without it V8.6/V8.7 report SKIP naming
+    # exactly what is missing - never a pass, and never a claim about the lakehouse.
+    #
+    # That is a deliberate stop rather than an oversight: mcp-auth-token is compared with
+    # timingSafeEqual, so it IS the capability, and an auditor holding a working credential
+    # for the thing it audits is a concession somebody has to make on purpose. Wiring it
+    # into the L8 verify job is a decision for whoever owns the estate's credential list
+    # (CLAUDE.md hard rule 5), not one an audit script may make by reading a vault.
+    [string]$McpAuthToken,
+    # The base table and the VIEW V8.6 queries. Both, deliberately: a Glue view needs
+    # glue:GetTable on its OWN arn, so a role granted the three base tables answers every
+    # base-table question perfectly and AccessDenies the view - a partial failure that reads
+    # like a data problem, in front of an audience. V8.7's expected inventory is derived
+    # from these two names rather than restated, because a second list is the thing that
+    # drifts (F145).
+    [string]$AwsBaseTable = 'launches',
+    [string]$AwsView = 'launches_latest',
+    # FLOORS, NOT EQUALITIES, and the distinction is the criterion's own reasoning: this
+    # lakehouse belongs to the sponsor and refreshes from an upstream launch feed, so an
+    # exact count is guaranteed to go stale and a stale equality FAILS ON CORRECT DATA. The
+    # criterion asks whether the link answers with real data, not whether the feed stopped;
+    # V5.3 owns exact counts, over a dataset this repo seeds. Observed 2026-09-16:
+    # launches 286,473 and launches_latest 7,969, so both floors sit far below a live value
+    # and far above the zero a broken link returns.
+    [int]$AwsBaseTableFloor = 100000,
+    [int]$AwsViewFloor = 1000,
+    # The Glue database the catalog probe asks about. Resolved from the RUNNING container's
+    # own MLS_GLUE_DATABASE when not supplied, because a value the estate derives cannot
+    # disagree with the estate (F129).
+    [string]$AwsGlueDatabase,
+    [int]$AwsQueryTimeoutSeconds = 120,
     [string]$ReportRoot,
     [switch]$NoRetry,
     # Run only these criteria (e.g. -OnlyCriterion V8.2). Everything else reports SKIP
@@ -494,6 +551,317 @@ function Test-LatencyBudget {
         -Detail 'A breach on a clean run - capacity resumed, MCP container warm, conversation already open - is a FAIL, not a retry (L08.md V8.5).'
 }
 
+$script:AwsToolName = 'query_aws_lakehouse_sql'
+
+# A refusal, spelled however the upstream spells it. Athena surfaces a missing Glue or S3
+# grant as a message, never as a status code this side can read, and the whole of V8.7 is
+# the difference between "denied" and "empty".
+$script:AwsDenialPattern = '(?i)AccessDenied|not authorized|is not allowed|Insufficient (permissions|Lake Formation)|Unauthorized|AssumeRoleWithWebIdentity|EntityNotFound|HIVE_METASTORE_ERROR'
+
+function Get-McpHealth {
+    <#
+    .SYNOPSIS
+        The unauthenticated /healthz payload of the deployed MCP server.
+    .DESCRIPTION
+        The one place the backend selection is observable from outside the process, and the
+        only thing V8.6 can read WITHOUT a credential. Returns the status code alongside the
+        payload so the caller can tell three different situations apart, which is the whole
+        point: nothing answered (unobservable), the server answered badly (the app), or the
+        server answered and declared what it serves (a fact about the estate).
+    #>
+    param([AllowEmptyString()][string]$McpServerUrl)
+    $health = "$McpServerUrl" -replace '/[^/]*$', '/healthz'
+    $response = Invoke-MlsHttp -Uri $health -TimeoutSec 30
+    $status = [int](Get-MlsProperty -InputObject $response -Name 'StatusCode')
+    $payload = $null
+    if ($status -eq 200) {
+        try { $payload = "$(Get-MlsProperty -InputObject $response -Name 'Content')" | ConvertFrom-Json }
+        catch { $payload = $null }
+    }
+    return [pscustomobject]@{ Uri = $health; StatusCode = $status; Payload = $payload }
+}
+
+function Get-AwsQueryObservation {
+    <#
+    .SYNOPSIS
+        Run one read-only SQL probe through the deployed tool and reduce it to an
+        observation line plus a verdict.
+    .DESCRIPTION
+        The observation line is the point, not a by-product. An authenticated scan and a
+        blocked one once produced byte-identical reports, so nothing in the artifact could
+        answer "did this work" at all (F162); one recorded line per target fixed it and
+        found a real bug on its first run. So every probe records what it SAW - row count,
+        elapsed milliseconds, and the first value - whether it passed, failed or could not
+        be read, and the wording for "could not be read" is never the wording for "empty".
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$Sql,
+        [AllowEmptyString()][AllowNull()][string]$AuthToken,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+    $call = Invoke-MlsMcpToolCall -Uri $Uri -ToolName $script:AwsToolName -Argument @{ sql = $Sql } `
+        -AuthToken $AuthToken -TimeoutSec $TimeoutSeconds
+
+    if ($call.Outcome -eq 'unobservable') {
+        return [pscustomobject]@{
+            Label = $Label; Observable = $false; Denied = $false
+            Line = "$Label -> UNOBSERVABLE after $($call.ElapsedMs) ms: $($call.Reason)"
+            Reason = $call.Reason; RowCount = -1; FirstValue = $null; Row = @(); ElapsedMs = $call.ElapsedMs
+        }
+    }
+    if ($call.Outcome -eq 'tool-error') {
+        $denied = [bool]($call.ToolError -match $script:AwsDenialPattern)
+        return [pscustomobject]@{
+            Label = $Label; Observable = $true; Denied = $denied
+            Line = "$Label -> $(if ($denied) { 'DENIED' } else { 'TOOL ERROR' }) after $($call.ElapsedMs) ms: $($call.ToolError)"
+            Reason = $call.ToolError; RowCount = -1; FirstValue = $null; Row = @(); ElapsedMs = $call.ElapsedMs
+        }
+    }
+
+    $rowCount = Get-MlsProperty -InputObject $call.Payload -Name 'rowCount'
+    $rows = @(Get-MlsProperty -InputObject $call.Payload -Name 'rows')
+    if ($null -eq $rowCount) { $rowCount = $rows.Count }
+    $first = $null
+    if ($rows.Count -gt 0) { $first = @($rows[0])[0] }
+    return [pscustomobject]@{
+        Label = $Label; Observable = $true; Denied = $false
+        # The exact line the brief asks for, per probe, so the artifact can distinguish
+        # success from silence without a reader inferring anything.
+        Line = "$Label -> authenticated Athena query -> $([int]$rowCount) rows, $($call.ElapsedMs) ms$(if ($null -ne $first) { ", first value $first" })"
+        Reason = ''; RowCount = [int]$rowCount; FirstValue = $first; Row = $rows; ElapsedMs = $call.ElapsedMs
+    }
+}
+
+function Get-AwsGlueDatabaseName {
+    <#
+    .SYNOPSIS
+        The Glue database the deployed tool is pointed at, preferring the value the estate
+        DERIVES over any a human stored.
+    .DESCRIPTION
+        Explicit argument, then the environment, then the running container's own
+        MLS_GLUE_DATABASE read over ARM with the Verifier's Reader credential. The last is
+        the one that cannot disagree with the estate: a database name typed into a variable
+        can outlive the deployment that used it, and a rebuild is exactly when this
+        criterion matters (F129). Returns '' when none of the three answers - the caller
+        reports that as UNOBSERVABLE, never as an empty catalog.
+    #>
+    param(
+        [AllowEmptyString()][string]$Supplied,
+        [AllowEmptyString()][string]$McpServerUrl,
+        [AllowEmptyString()][string]$ResourceGroupName
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Supplied)) { return $Supplied }
+    $fromEnvironment = [Environment]::GetEnvironmentVariable('MLS_GLUE_DATABASE')
+    if (-not [string]::IsNullOrWhiteSpace($fromEnvironment)) { return $fromEnvironment }
+    if ([string]::IsNullOrWhiteSpace($McpServerUrl) -or [string]::IsNullOrWhiteSpace($ResourceGroupName)) { return '' }
+    # The app NAME is the first label of the host in the URL the workflow already resolved
+    # from ARM, so nothing here reconstructs a hostname that a rebuild invalidates.
+    $appName = ''
+    try { $appName = ([uri]$McpServerUrl).Host.Split('.')[0] } catch { $appName = '' }
+    if ([string]::IsNullOrWhiteSpace($appName)) { return '' }
+    $value = "$(Invoke-MlsAz -AllowFailure -Raw -Argument @(
+        'containerapp', 'show', '--resource-group', $ResourceGroupName, '--name', $appName,
+        '--query', "properties.template.containers[0].env[?name=='MLS_GLUE_DATABASE'].value | [0]",
+        '--output', 'tsv'))".Trim()
+    if ($value -eq 'None') { return '' }
+    return $value
+}
+
+function Test-AwsLakehouseRow {
+    <# V8.6 - THE AWS LAKEHOUSE ANSWERS WITH ROWS, NOT WITH A STATUS CODE.
+
+       V7.6's rule, one cloud over. On 2026-09-16 the link began working - 286,473 rows in
+       4,431 ms through the live MCP endpoint against the sponsor's real Athena lakehouse -
+       and the evidence was a scratch script that no longer exists. An estate that answers
+       from AWS with no criterion asserting it is one teardown away from the position
+       docs/DEMO-READINESS.md section D describes: plumbing verified, water unverified,
+       which is how an empty estate signed off 5/5 for two days.
+
+       Three assertions, in the order they can be made:
+
+         1. The deployed server DECLARES the tool. /healthz is unauthenticated, so this
+            half runs on every audit with no credential at all - and it is the half that
+            catches a rebuild where the six AWS settings never reached the container
+            (F122/F124/F125), because the tool is gated on configuration and a server with
+            no AWS config advertises six tools instead of seven.
+         2. A known-answer query against the BASE TABLE returns rows, above a floor.
+         3. The same against a VIRTUAL_VIEW, which needs glue:GetTable on its own arn.
+
+       Declaring the tool is NECESSARY AND NOT SUFFICIENT, so step 1 alone is never a pass:
+       "the tool is registered" is the artefact that usually accompanies "the lakehouse
+       answers", and this criterion exists because the two came apart once already. #>
+    param(
+        [AllowEmptyString()][string]$McpServerUrl,
+        [AllowEmptyString()][AllowNull()][string]$McpAuthToken,
+        [Parameter(Mandatory)][string]$BaseTable,
+        [Parameter(Mandatory)][int]$BaseTableFloor,
+        [Parameter(Mandatory)][string]$View,
+        [Parameter(Mandatory)][int]$ViewFloor,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+    if ([string]::IsNullOrWhiteSpace($McpServerUrl)) {
+        return New-MlsCheckResult -Status 'SKIP' -Observed 'no deployed MCP server to ask' `
+            -Detail 'Pass -McpServerUrl / $env:MLS_MCP_SERVER_URL. The AWS lakehouse is reachable only through the deployed query_aws_lakehouse_sql tool: this estate holds no AWS credential, by design, so there is no second route to the same fact.'
+    }
+
+    $health = Get-McpHealth -McpServerUrl $McpServerUrl
+    if ($health.StatusCode -eq 0) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "UNOBSERVABLE: GET $($health.Uri) produced no HTTP response, so the declared tool set could not be read" `
+            -Detail 'UNOBSERVABLE, never "the AWS tool is missing": a request that never arrived says nothing about what the server declares.'
+    }
+    if ($health.StatusCode -ne 200 -or $null -eq $health.Payload) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "UNOBSERVABLE: GET $($health.Uri) returned HTTP $($health.StatusCode) with no readable payload" `
+            -Detail 'The MCP server answered, but not with something this criterion can read. Fix the server or the path before reading anything into the AWS link.'
+    }
+
+    $declared = @(Get-MlsProperty -InputObject $health.Payload -Name 'toolNames')
+    if ($declared.Count -eq 0) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed 'UNOBSERVABLE: /healthz carries no toolNames field, so the declared tool set could not be read' `
+            -Detail 'A deployed image predating F100 publishes no tool names. Absent evidence, not evidence of absence - this is never "the server declares no AWS tool".'
+    }
+    $adapter = "$(Get-MlsProperty -InputObject (Get-MlsProperty -InputObject $health.Payload -Name 'adapters') -Name $script:AwsToolName)"
+    if ($script:AwsToolName -notin $declared) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "the deployed server declares $($declared.Count) tool(s) and none of them is $($script:AwsToolName): $($declared -join ', ')" `
+            -Detail 'OBSERVED, not unobservable: /healthz answered and listed what it serves. The AWS tool registers only when all six AWS settings resolve INSIDE the running process, so this is the signature of a rebuild where infra/bicep/apps/main.bicep''s AWS parameters did not reach the container - a value that exists, is spelled correctly, and cannot be seen by the thing that reads it (F122/F124/F125).'
+    }
+
+    $declaredLine = "declared: $($script:AwsToolName) present on /healthz, adapter $(if ($adapter) { $adapter } else { '(unnamed)' })"
+
+    if ([string]::IsNullOrWhiteSpace($McpAuthToken)) {
+        return New-MlsCheckResult -Status 'SKIP' -Observed "$declaredLine - no credential, so no row was read" `
+            -Detail 'The tool is DECLARED and no row was read, which is necessary and nowhere near sufficient: an empty lakehouse and a broken link both declare exactly this. The MCP endpoint is behind mcp-auth-token (Key Vault) and this audit is given no way to obtain it; pass -McpAuthToken / $env:MLS_MCP_AUTH_TOKEN to complete the criterion. Until then L8 is NOT asserting that the AWS lakehouse answers.'
+    }
+
+    $observation = [System.Collections.Generic.List[string]]::new()
+    $observation.Add($declaredLine)
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $blind = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($probe in @(
+            @{ Label = "base table $BaseTable"; Sql = "SELECT COUNT(*) AS n FROM $BaseTable"; Floor = $BaseTableFloor },
+            @{ Label = "view $View"; Sql = "SELECT COUNT(*) AS n FROM $View"; Floor = $ViewFloor })) {
+        # A RUN IS AN EXPENSIVE, RATE-LIMITED OBSERVATION: both probes are made and both are
+        # reported, so one failure does not hide the other's answer. Stopping at the first
+        # would make the discovery rate equal to the audit rate.
+        $result = Get-AwsQueryObservation -Label $probe.Label -Uri $McpServerUrl -Sql $probe.Sql `
+            -AuthToken $McpAuthToken -TimeoutSeconds $TimeoutSeconds
+        $observation.Add($result.Line)
+        if (-not $result.Observable) { $blind.Add("$($probe.Label): $($result.Reason)"); continue }
+        if ($result.Denied -or $result.RowCount -lt 0) { $problem.Add($result.Line); continue }
+        if ($result.RowCount -lt 1) {
+            $problem.Add("$($probe.Label) returned $($result.RowCount) row(s); a COUNT query always returns one, so the tool answered with a shape this criterion cannot read")
+            continue
+        }
+        $value = 0L
+        if (-not [long]::TryParse("$($result.FirstValue)", [ref]$value)) {
+            $problem.Add("$($probe.Label) returned '$($result.FirstValue)', which is not a count")
+            continue
+        }
+        if ($value -lt $probe.Floor) {
+            $problem.Add("$($probe.Label) counted $value, below the floor of $($probe.Floor)")
+        }
+        $observation[$observation.Count - 1] = "$($result.Line) (count $value, floor $($probe.Floor))"
+    }
+
+    if ($blind.Count -gt 0) {
+        # NEVER PASS AND NEVER "ABSENT". One unreadable probe is enough: an auditor that
+        # could not see one half must not report the whole as present, and must not report
+        # the lakehouse as empty either.
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed ("UNOBSERVABLE: " + ($blind -join ' | ') + ' | ' + ($observation -join '; ')) `
+            -Detail 'UNOBSERVABLE, not FAIL-as-absent and not PASS. Something upstream of the tool - the auth gate, a throttle, a 5xx, a body with no envelope - stopped this audit reading the answer. Establish that the query can be made before reading anything into what it returned.'
+    }
+    if ($problem.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true -Observed ($observation -join '; ')
+    }
+    return New-MlsCheckResult -Passed $false -Observed (($observation -join '; ') + ' | ' + ($problem -join ' | ')) -Final `
+        -Detail 'A DENIED probe on the view with a working base table is the five-table finding regressing: a Glue view needs glue:GetTable on its own arn, and a role built from the base-table names answers everything else perfectly. A count below the floor is a data problem upstream in the sponsor''s account, not a link problem - the two are different failures and the observation lines above name which.'
+}
+
+function Test-AwsCatalogObservability {
+    <# V8.7 - A DENIAL IS NEVER REPORTED AS AN EMPTY DATASET.
+
+       F105's exact shape, one cloud over. Fabric answered /tables with [] to a caller
+       without OneLake read, and V5.2 called the lakehouse empty while its SQL endpoint
+       held 1,200 rows: a confident, specific, WRONG answer that looked like an ordinary
+       red criterion. Athena does the same thing - information_schema.tables against a Glue
+       database the role cannot read can come back EMPTY rather than 403 - so absence is
+       unprovable here and a zero-row listing is UNOBSERVABLE, never "the database has no
+       tables".
+
+       The criterion therefore establishes that it COULD observe before reporting what it
+       saw, and it is structurally incapable of both errors: it cannot report the link
+       absent when it could not look, and it cannot report it present either. The expected
+       inventory is DERIVED from V8.6's own table and view parameters rather than restated,
+       because a second copy of a list is the thing that drifts while nothing about it is
+       edited (F145). #>
+    param(
+        [AllowEmptyString()][string]$McpServerUrl,
+        [AllowEmptyString()][AllowNull()][string]$McpAuthToken,
+        [AllowEmptyString()][AllowNull()][string]$GlueDatabase,
+        [Parameter(Mandatory)][string[]]$ExpectedTable,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+    if ([string]::IsNullOrWhiteSpace($McpServerUrl)) {
+        return New-MlsCheckResult -Status 'SKIP' -Observed 'no deployed MCP server to ask' `
+            -Detail 'The Glue catalog is reachable only through the deployed tool; pass -McpServerUrl / $env:MLS_MCP_SERVER_URL.'
+    }
+    if ([string]::IsNullOrWhiteSpace($McpAuthToken)) {
+        return New-MlsCheckResult -Status 'SKIP' -Observed 'no credential for the MCP endpoint, so the catalog was NOT probed' `
+            -Detail 'Nothing is claimed about the catalog: not that it is readable, not that it is empty, not that it is denied. Pass -McpAuthToken / $env:MLS_MCP_AUTH_TOKEN to complete the criterion.'
+    }
+    if ([string]::IsNullOrWhiteSpace($GlueDatabase)) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed 'UNOBSERVABLE: the Glue database name could not be resolved from -AwsGlueDatabase, $env:MLS_GLUE_DATABASE or the running container''s MLS_GLUE_DATABASE' `
+            -Detail 'UNOBSERVABLE, never "the catalog is empty": with no database name there is no question to ask, so nothing here is evidence about the catalog either way.'
+    }
+
+    $sql = "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = '$GlueDatabase' ORDER BY table_name"
+    $result = Get-AwsQueryObservation -Label "catalog $GlueDatabase" -Uri $McpServerUrl -Sql $sql `
+        -AuthToken $McpAuthToken -TimeoutSeconds $TimeoutSeconds
+
+    if (-not $result.Observable) {
+        return New-MlsCheckResult -Passed $false -Final -Observed "UNOBSERVABLE: $($result.Line)" `
+            -Detail 'UNOBSERVABLE. Something upstream of the tool stopped this audit reading the catalog, so it reports neither that the tables are there nor that they are missing. A throttled response in particular is not an empty one.'
+    }
+    if ($result.Denied) {
+        return New-MlsCheckResult -Passed $false -Final -Observed $result.Line `
+            -Detail 'DENIED, AND SAID SO. This is the criterion working: the role cannot read the Glue catalog, and that is reported as a refusal rather than as an empty database. Fix the role''s glue:GetTables/glue:GetTable grants - do not read this as "the lakehouse has no tables".'
+    }
+    if ($result.RowCount -lt 0) {
+        return New-MlsCheckResult -Passed $false -Final -Observed $result.Line `
+            -Detail 'The tool ran and failed for a reason that is not a refusal. Read the message above; it is the engine''s own.'
+    }
+    if ($result.RowCount -eq 0) {
+        # THE WHOLE CRITERION, IN ONE BRANCH. Athena answers a Glue database the role may
+        # not read with an empty listing, so zero rows here is exactly as consistent with a
+        # denial as with an empty database - and only one of those is a fact.
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "UNOBSERVABLE: $($result.Line) - an empty information_schema listing is what Athena returns BOTH for a database with no tables AND for one this role may not read, so emptiness here is unprovable" `
+            -Detail 'Never "the lakehouse is empty" and never a pass. Establish catalog read independently - the base-table probe in V8.6 returning rows is the cheapest proof - before treating this listing as an inventory.'
+    }
+
+    # Only now is the listing evidence of anything. The names come from the rows this probe
+    # already returned - asking a second time would be a second observation, and the two
+    # could disagree.
+    $name = @(@($result.Row) | ForEach-Object { "$(@($_)[0])" } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $missing = @($ExpectedTable | Where-Object { $_ -notin $name })
+    $observed = "$($result.Line); catalog names [$($name -join ', ')]"
+    if ($missing.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed "$observed | missing [$($missing -join ', ')]" `
+            -Detail 'OBSERVED MISSING, not unobservable: the catalog answered with a non-empty listing, so this audit could see it, and the named tables are genuinely not in it. That is a real change to the sponsor''s lakehouse or to what this criterion expects of it.'
+    }
+    return New-MlsCheckResult -Passed $true -Observed $observed
+}
+
 function Invoke-Main {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
         Justification = 'Every parameter is consumed inside the criterion scriptblocks; PSSA cannot see through scriptblock closures.')]
@@ -510,6 +878,13 @@ function Invoke-Main {
         [string]$SqlEndpoint,
         [string]$SqlAccessToken,
         [string]$LakehouseName = 'mls_operations',
+        [string]$McpAuthToken,
+        [string]$AwsBaseTable = 'launches',
+        [string]$AwsView = 'launches_latest',
+        [int]$AwsBaseTableFloor = 100000,
+        [int]$AwsViewFloor = 1000,
+        [string]$AwsGlueDatabase,
+        [int]$AwsQueryTimeoutSeconds = 120,
         [string]$ReportRoot,
         [switch]$NoRetry,
         [string[]]$OnlyCriterion = @()
@@ -563,6 +938,23 @@ function Invoke-Main {
     $sqlToken = $SqlAccessToken
     if ([string]::IsNullOrWhiteSpace($sqlToken)) { $sqlToken = [Environment]::GetEnvironmentVariable('MLS_SQL_ACCESS_TOKEN') }
 
+    # V8.6/V8.7's credential for the deployed MCP endpoint. Explicit argument or environment
+    # ONLY: nothing here reads a vault, and its absence is a labelled SKIP rather than a
+    # pass. Never logged, never written to a report - only whether one was supplied.
+    $mcpToken = $McpAuthToken
+    if ([string]::IsNullOrWhiteSpace($mcpToken)) { $mcpToken = [Environment]::GetEnvironmentVariable('MLS_MCP_AUTH_TOKEN') }
+    # Resolved only when there is something to ask: with no credential no catalog probe is
+    # made, so an ARM round trip to name the database it would not have queried buys nothing.
+    $glueDatabase = ''
+    if (-not [string]::IsNullOrWhiteSpace($mcpToken)) {
+        $naming = Get-MlsEstateNaming -RepoRoot $repoRoot
+        $glueDatabase = Get-AwsGlueDatabaseName -Supplied $AwsGlueDatabase -McpServerUrl $serverUrl `
+            -ResourceGroupName "$($naming.Prefix)-rg-apps"
+    }
+    # ONE SOURCE for both criteria: V8.7's expected inventory is V8.6's two probe targets,
+    # not a second list that can drift while nothing about it is edited (F145).
+    $awsExpectedTable = @($AwsBaseTable, $AwsView)
+
     $context = New-MlsAuditContext -Layer 8 -Title 'Copilot: custom Copilot Studio agent' `
         -ScriptName 'verification/layer-08-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
         -OnlyCriterion $OnlyCriterion
@@ -573,6 +965,12 @@ function Invoke-Main {
     Add-MlsPreflight -Context $context -Name 'Lakehouse SQL endpoint' -Value "$endpoint" -Status $(if ($endpoint) { 'OK' } else { 'ABSENT' })
     Add-MlsPreflight -Context $context -Name 'SQL access token' `
         -Value $(if ($sqlToken) { 'supplied (value never logged)' } else { 'minted from the current az login at query time' })
+    Add-MlsPreflight -Context $context -Name 'MCP endpoint credential (V8.6/V8.7)' `
+        -Value $(if ($mcpToken) { 'supplied (value never logged)' } else { 'NOT SUPPLIED - no row can be read from the AWS lakehouse, and V8.6/V8.7 report SKIP rather than a pass' }) `
+        -Status $(if ($mcpToken) { 'OK' } else { 'ABSENT' })
+    Add-MlsPreflight -Context $context -Name 'AWS Glue database' `
+        -Value $(if ($glueDatabase) { $glueDatabase } elseif ($mcpToken) { 'could not be resolved from -AwsGlueDatabase, $env:MLS_GLUE_DATABASE or the running container' } else { 'not resolved - no MCP credential, so no catalog probe is made' }) `
+        -Status $(if ($glueDatabase) { 'OK' } else { 'ABSENT' })
     if ($null -ne $artifact) {
         $path = "$(Get-MlsProperty -InputObject $artifact -Name 'path')"
         Add-MlsNote -Context $context -Message "Eval path recorded by the run: '$path' (fabric-data-agent or mcp-tools-only). Both paths must pass V8.2 identically; the report names the path so the evidence is unambiguous (L08.md fallback)."
@@ -612,6 +1010,38 @@ function Invoke-Main {
         -Expected "p95 < $LatencyBudgetSeconds seconds" -NoRetry `
         -Test { Test-LatencyBudget -Artifact $artifact -BudgetSeconds $LatencyBudgetSeconds } | Out-Null
 
+    # V8.6 - V7.6's rule, one cloud over: the criterion that closes DEMO-READINESS section D
+    # for the AWS lakehouse. 4 MINUTES, AND THE NUMBER IS CHOSEN, NOT INHERITED. It waits on
+    # two things and neither is Azure propagation: mls-mcp-demo-ca scales to zero with a
+    # 900 s cooldown, so the first question after an idle gap pays a container cold start,
+    # and Athena is asynchronous - submit, poll, retrieve - so a queued query is a real wait.
+    # Observed warm end to end on 2026-09-16: 4,431 ms. Four minutes covers two cold starts
+    # and a queue; nothing here gets better by waiting longer than that.
+    Invoke-MlsCriterion -Context $context -Id 'V8.6' -Control @('3.4.1') `
+        -Description 'The AWS Athena lakehouse answers through the deployed tool with ROWS, not merely with a status code' `
+        -Command "GET <mcpServerUrl>/healthz   # assert $($script:AwsToolName) is DECLARED - no credential needed, and this half alone is never a pass`nPOST <mcpServerUrl> tools/call $($script:AwsToolName) {`"sql`":`"SELECT COUNT(*) AS n FROM $AwsBaseTable`"}`nPOST <mcpServerUrl> tools/call $($script:AwsToolName) {`"sql`":`"SELECT COUNT(*) AS n FROM $AwsView`"}   # a VIRTUAL_VIEW: needs glue:GetTable on its own arn" `
+        -Expected "the deployed server declares $($script:AwsToolName); the base table counts >= $AwsBaseTableFloor and the view >= $AwsViewFloor. FLOORS, NOT EQUALITIES: this lakehouse is the sponsor's and refreshes from an upstream feed, so a pinned count would fail on correct data - the criterion asks whether the link answers with real data, and V5.3 owns exact counts over a dataset this repo seeds. An HTTP 200 alone is NOT sufficient." `
+        -RetryWindowMinutes 4 -PollIntervalSeconds 30 `
+        -Test {
+        Test-AwsLakehouseRow -McpServerUrl $serverUrl -McpAuthToken $mcpToken `
+            -BaseTable $AwsBaseTable -BaseTableFloor $AwsBaseTableFloor `
+            -View $AwsView -ViewFloor $AwsViewFloor -TimeoutSeconds $AwsQueryTimeoutSeconds
+    } | Out-Null
+
+    # V8.7 - 2 MINUTES, and shorter than V8.6 on purpose. This probe reads Glue catalog
+    # metadata with no S3 scan behind it, and it runs after V8.6 on a container V8.6 has
+    # already woken - propagation is shared wall clock, and the second criterion does not
+    # start the clock again.
+    Invoke-MlsCriterion -Context $context -Id 'V8.7' -Control @('3.1.2') `
+        -Description 'A denial from the AWS lakehouse is never reported as an empty dataset: observability is established before anything is reported' `
+        -Command "POST <mcpServerUrl> tools/call $($script:AwsToolName) {`"sql`":`"SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = '<glueDatabase>'`"}`n# zero rows -> UNOBSERVABLE, because Athena answers a database the role may not read with an EMPTY listing`n# a refusal -> DENIED, reported as a refusal and never as an empty database" `
+        -Expected "a non-empty catalog listing containing $($awsExpectedTable -join ', '). An empty listing, a refusal, a throttle or an unreadable response is UNOBSERVABLE or DENIED - never 'the lakehouse is empty', and never a pass." `
+        -RetryWindowMinutes 2 -PollIntervalSeconds 30 `
+        -Test {
+        Test-AwsCatalogObservability -McpServerUrl $serverUrl -McpAuthToken $mcpToken `
+            -GlueDatabase $glueDatabase -ExpectedTable $awsExpectedTable -TimeoutSeconds $AwsQueryTimeoutSeconds
+    } | Out-Null
+
     return $context
 }
 
@@ -621,7 +1051,10 @@ if (-not $env:MLS_SKIP_MAIN) {
             -SolutionPath $SolutionPath -EvalResultPath $EvalResultPath -McpServerUrl $McpServerUrl `
             -AllowedTool $AllowedTool -AdaptiveCardVersion $AdaptiveCardVersion `
             -LatencyBudgetSeconds $LatencyBudgetSeconds -EvalPassBar $EvalPassBar -SqlEndpoint $SqlEndpoint `
-            -SqlAccessToken $SqlAccessToken -LakehouseName $LakehouseName -ReportRoot $ReportRoot -NoRetry:$NoRetry `
+            -SqlAccessToken $SqlAccessToken -LakehouseName $LakehouseName -McpAuthToken $McpAuthToken `
+            -AwsBaseTable $AwsBaseTable -AwsView $AwsView -AwsBaseTableFloor $AwsBaseTableFloor `
+            -AwsViewFloor $AwsViewFloor -AwsGlueDatabase $AwsGlueDatabase `
+            -AwsQueryTimeoutSeconds $AwsQueryTimeoutSeconds -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion
     }
     catch {

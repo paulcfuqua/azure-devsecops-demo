@@ -202,6 +202,36 @@ jobs:
       # so readEnvironmentVariable in demo.bicepparam sees a variable that IS set
       # and never returns its 'unset' default (F26). main.bicep fails closed on
       # both spellings: no client ID means INTERNAL ingress and no authConfig.
+      #
+      # ---- The AWS lakehouse link (2026-09-16) -------------------------------
+      # query_aws_lakehouse_sql's six settings, straight from the demo environment
+      # to demo.bicepparam's readEnvironmentVariable calls and onto the mcp-tools
+      # container. They are declared HERE, at job level, and not on either
+      # deployment step, so that BOTH the what-if and the deploy see the same
+      # values: F124 is a variable that reached the two jobs not needing it and
+      # missed the one that did, and a what-if computed without these would show a
+      # container-env diff the deploy then contradicts.
+      #
+      # Job level is safe for these where it is not for the Easy Auth client IDs
+      # above: nothing in this job writes any of these six names to GITHUB_ENV, so
+      # there is no second source to race (the F36 rule is about the collision, not
+      # about job-level `env:` being wrong).
+      #
+      # An undefined variable expands to '' here too, and '' is the honest answer:
+      # no AWS link, six tools instead of seven. A PARTIAL set is passed through
+      # rather than suppressed, and apps/mcp-tools fails at boot naming exactly
+      # what is missing - see the mcpToolsAwsEnv block in infra/bicep/apps/main.bicep.
+      #
+      # The seventh setting, MLS_AWS_CLIENT_ID, is deliberately absent: main.bicep
+      # DERIVES it from the mls-aws-demo-id user-assigned identity it already
+      # references, because a client id a human stores in a variable cannot survive
+      # the rebuild this demo exists to show (F129).
+      MLS_AWS_ROLE_ARN: ${{ vars.MLS_AWS_ROLE_ARN }}
+      MLS_AWS_AUDIENCE: ${{ vars.MLS_AWS_AUDIENCE }}
+      MLS_AWS_REGION: ${{ vars.MLS_AWS_REGION }}
+      MLS_GLUE_DATABASE: ${{ vars.MLS_GLUE_DATABASE }}
+      MLS_ATHENA_WORKGROUP: ${{ vars.MLS_ATHENA_WORKGROUP }}
+      MLS_ATHENA_OUTPUT: ${{ vars.MLS_ATHENA_OUTPUT }}
     steps:
       - uses: actions/checkout@v7
 
@@ -685,6 +715,7 @@ jobs:
 
           data_api_mode="$(jq -r '.dataApiBackendModeResolved.value // "unknown"' l7-manifest.json)"
           mcp_tools_mode="$(jq -r '.mcpToolsBackendModeResolved.value // "unknown"' l7-manifest.json)"
+          aws_link="$(jq -r '.mcpToolsAwsLinkConfigured.value // "unknown"' l7-manifest.json)"
           # F4 (compliance/findings/2026-08-26-prepublication-review.md#f4,
           # Task 8): the full manifest carries container app resource IDs (each
           # embedding the subscription ID) and data-api's internal-only origin
@@ -718,7 +749,18 @@ jobs:
             echo
             echo "data-api backend mode: \`${data_api_mode}\`"
             echo "mcp-tools backend mode: \`${mcp_tools_mode}\`"
+            echo "mcp-tools AWS lakehouse link (query_aws_lakehouse_sql): \`${aws_link}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+          # One recorded observation, not an inference from a green step (F162: a
+          # report that cannot distinguish success from silence is not evidence).
+          # "the AWS tool did not answer" has two very different causes - the link
+          # was never wired, or it was wired and failed - and only the template
+          # knows which, so it says so here rather than leaving a reader to guess.
+          echo "mcp-tools AWS lakehouse link configured -> ${aws_link}"
+          if [ "${aws_link}" != "true" ]; then
+            echo "::notice title=No AWS lakehouse link::The six MLS_AWS_*/MLS_GLUE_*/MLS_ATHENA_* demo variables resolved empty, so mcp-tools deploys WITHOUT query_aws_lakehouse_sql and serves six tools instead of seven. That is a supported deployment, not a failure - but if you expected the AWS lakehouse tool, this is where it went missing."
+          fi
 
           if [ "${mcp_tools_mode}" != "cloud" ]; then
             echo "::warning title=mcp-tools is not in cloud mode::The template resolved MLS_TOOL_BACKENDS='${mcp_tools_mode}'. LOCAL mode reads data/generated, which is not in the image, so every Copilot tool call answers 'Generated data not found at /repo/data/generated' - the agent, Direct Line and the connector all working and the answer empty (F133). Set MLS_SQL_ENDPOINT on the demo environment so the mode derives to cloud, or set MLS_TOOL_BACKENDS explicitly."
