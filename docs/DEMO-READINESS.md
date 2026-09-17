@@ -24,6 +24,14 @@ assumed.
 > that the Verifier identity can see them. Every criterion verdict in this file comes from a
 > real audit job running as `mls-verifier` in CI, and each one carries its run id.
 
+**The demo script is no longer the stale document it was.**
+[`docs/runbooks/demo-script.md`](runbooks/demo-script.md) carried a "CANNOT BE PERFORMED"
+box dated 2026-09-01 whose rows had been false since 09-03, and six drifted facts underneath
+it — including a `GAP` row it told a presenter to click that is `PARTIAL`, and counts that
+were wrong in five places. It was corrected against this estate on 2026-09-17 and now
+carries a **Variant B running order** for a live estate. If you are presenting, read that;
+if you are fixing, read this.
+
 The history — every defect found while building this, in order, including the diagnoses
 that turned out to be wrong — is a dated archive:
 **[2026-08-22 → 09-03](findings/2026-09-03-finding-register.md)**,
@@ -93,17 +101,20 @@ Read directly from Azure. Credential caveat above applies.
 `infra/bicep/apps/main.bicep` was deployed by L7 run `35151079462`. Verified 2026-09-17 by
 reading the container app's `identity` block directly.
 
-**A new one opened in its place, and it is F203.** The estate's image tags are now **mixed**:
+**A new one opened in its place — F203 — and by 01:55 UTC the estate had healed itself of
+the symptom while keeping the defect.** Read 2026-09-17 01:55 UTC, every app is back on a
+`sha-` tag:
 
-| app | running image | deployed by |
-|---|---|---|
-| `mls-compliance-demo-ca` | `compliance:sha-c1b7c91` | its own app CI |
-| `mls-control-tower-demo-ca` | `control-tower:sha-7945931` | its own app CI |
-| `mls-mcp-demo-ca` · `mls-data-api-demo-ca` · `mls-launch-ops-demo-ca` | **`:latest`** | `layer-07-apps` |
+| app | running image |
+|---|---|
+| `mls-compliance-demo-ca` | `compliance:sha-b251218` |
+| `mls-mcp-demo-ca` · `mls-data-api-demo-ca` · `mls-launch-ops-demo-ca` · `mls-control-tower-demo-ca` | `…:sha-473452b` |
 
-`layer-07-apps.yml` declares `image_tag` with `default: latest`, so an L7 deploy replaces
-the `sha-` tag app CI wrote. **That erased the commit provenance V10.2 reads, and turned
-showpiece #3 red four hours later.** See the blocker tree.
+The three that were on `:latest` were retagged by **their own app CI**, which runs on every
+push to `main` and writes `sha-${GITHUB_SHA:0:7}`. Nothing was fixed; a later deploy simply
+overwrote the floating tag. **The defect is entirely intact**: `layer-07-apps.yml` still
+declares `image_tag` with `default: latest`, so the next L7 run erases the provenance again.
+See the blocker tree — and **do not run L7 on a demo morning**.
 
 ### The teardown-and-rebuild, measured 2026-09-03
 
@@ -137,7 +148,7 @@ wait rather than a hang.
 |---|---|---|---|---|
 | **1** | **Copilot service** — Ask tab over Direct Line | ✅ **working, and it now answers from two clouds and says which is which** | **current — 2026-09-17 00:37 UTC** | **The eval grades, for the first time in this project's life: 9 / 10, bar 9, `unobservable: 0`**, over Direct Line against the deployed agent (`layer-08-copilot-studio` run `35166952968`, path `mcp-tools-only`). For a fortnight it returned 0/10 with zero tool calls. Asked *"how many rows are in the launches table"* the agent answers **both** lakehouses unprompted — **1,200** (Meridian, synthetic) and **286,473** (AWS, real launch-industry data) — *"because the question is ambiguous"*. **Two cautions carried deliberately:** this is the **eval's artifact, not a V8.2 verdict** (V8.1–V8.5 all reported `(not selected)` in that run, which was filtered for V8.6/V8.7); and the same artifact records **p95 34.18 s against V8.5's 20 s budget**, driven by an un-warmed first question. See F216 |
 | **2** | **Control tower** — Dev/Sec/Ops on Well-Architected pillars | ✅ **7 of 7, on the revision carrying the AWS link** | **current — 2026-09-17 00:38 UTC** | **V7.1–V7.7 all PASS**, `layer-07-apps` run `35160458879`, verify job as `mls-verifier`. Including **V7.6 — the data API answers with rows, not merely a status code**, the criterion that exists because an empty estate once signed off 5/5. **V7.6 is the FABRIC-backed data API. No L7 criterion touches the AWS link at all** — a green 7/7 sitting beside tonight's 286,473 rows is *two independent facts that look like one*, and reading them as one re-creates § D's failure one tool over |
-| **3** | **Self-healing code** | ❌ **V10.2 FAILED tonight, after twelve consecutive green runs** | **current — 2026-09-17 00:58 UTC** | `self-heal` run `35168595017`: **V10.1 PASS · V10.2 FAIL · V10.3 PASS · V10.4 PASS**. One unexplained closure: `#9 code-scanning js/trivial-conditional fixed but mls-mcp-demo-ca: could not establish whether the running image carries this heal — the running image carries no sha- tag`. **The criterion is behaving correctly; the estate changed underneath it.** An L7 deploy retagged the app to `:latest` and erased the commit binding F197's fix reads. This is **F203**, it is not a regression in the heal chain, and the chain itself ran: the Dependabot lane's gauntlet job succeeded in the same run |
+| **3** | **Self-healing code** | ✅ **GREEN AGAIN — V10.1–V10.4 all PASS** | **current — 2026-09-17 01:56 UTC** | `self-heal` run `35172433866`, read from the criterion table rather than the job status. **This row said FAIL an hour earlier** (run `35168595017`, 00:58 UTC) and the entry below explains why it recovered on its own. The failing closure was `#9 code-scanning js/trivial-conditional … the running image carries no sha- tag` — **F203, the criterion behaving correctly while the estate changed underneath it** |
 | **4** | **Compliance platform** — NIST 800-171 | 🟡 **the platform works and its history is real; the content is still thin** | **current — 2026-09-17 00:52 UTC** | **V12.1, V12.2, V12.4, V12.6 PASS; V12.3 and V12.5 SKIP**, from `compliance` run `35168252498`. `compliance/state/` holds **fifteen dated snapshots** in an unbroken daily run 2026-09-05 → 2026-09-17, all committed to `main`; `state-latest.json` collected `2026-09-17T00:51:54Z` at commit `7945931`. **The figures have not moved and that is the honest part**: 110 requirements, **0 COMPLIANT**, 15 PARTIAL, 1 GAP, 94 NOT_ASSESSED; provenance **0 machine-verified**, 16 asserted, 94 none. The freshness problem is fixed. The coverage problem is not, and was never the same problem |
 
 ### The twelve layers
@@ -149,7 +160,7 @@ wait rather than a hang.
 | L3 Entra | ✅ **4 of 4 PASS** | **2026-09-16 20:32**, run `35147161355` | V3.1 object counts · V3.2 group memberships · V3.3 CA policy state, *and the enforced policy really enforces MFA* · V3.4 licensing 5 of 5. Re-run because the AWS workstream added a fifth app registration |
 | L7 apps | ✅ **7 of 7 PASS** | **2026-09-17 00:38**, run `35160458879` | V7.1–V7.7, on the revision that carries the AWS link. **No L7 criterion touches AWS** |
 | L8 Copilot Studio | 🟡 **V8.6 + V8.7 PASS; V8.1–V8.5 have no verdict** | **2026-09-17 00:38**, run `35166952968` | The first time L8 has ever asserted that the AWS lakehouse **answers**. V8.1–V8.5 reported `(not selected)` — a filtered run, deliberately exiting 3 so nothing downstream reads a diagnostic as a sign-off, which is why the job shows a red X |
-| L10 self-healing | ❌ **3 PASS, 1 FAIL** | **2026-09-17 00:58**, run `35168595017` | V10.2 fails on one unexplained closure. Cause is F203, outside L10 |
+| L10 self-healing | ✅ **4 of 4 PASS** | **2026-09-17 01:56**, run `35172433866` | Recovered without a code change — see F203. The 00:58 run (`35168595017`) was 3 PASS / 1 FAIL |
 | L12 compliance | ✅ **4 PASS + 2 SKIP** | **2026-09-17 00:52**, run `35168252498` | V12.1/2/4/6 PASS, V12.3 and V12.5 SKIP. Runs nightly at 02:17 UTC and on every push to `main` |
 
 **Verified on the rebuilt estate 2026-09-03/04, and NOT re-audited since.** These are real
@@ -237,8 +248,14 @@ than run as cleanup.
 here, with what replaced them, rather than deleted.*
 
 - **F203 — an L7 deploy retags every app to `:latest` and erases the provenance V10.2
-  reads. Showpiece #3 is red because of it.** New tonight, and the highest-value fix on this
-  page because it is small, understood, and holding a showpiece down.
+  reads. Still open; the showpiece is green again anyway, which is the trap.**
+
+  **Updated 2026-09-17 02:00 UTC.** Showpiece #3 went green on its own (run `35172433866`,
+  4/4) because each app's CI redeployed it on a `sha-` tag. **Nothing was fixed.** A latent
+  defect that intermittently repairs itself is worse than one that stays red: the next L7
+  deploy re-breaks V10.2, and it will look like a new and mysterious regression rather than
+  this entry. **Fix it before the next L7 run, not after** — and the next L7 run is needed,
+  because it is what deploys the Key Vault grant two entries below.
 
   `.github/workflows/layer-07-apps.yml` declares `image_tag` with `default: latest` and
   applies it to all five apps. F197 fixed V10.2 by asking whether the **running image
@@ -291,12 +308,19 @@ here, with what replaced them, rather than deleted.*
 
   **Do not fold PR #263/#273 into this** — the root group bump fails for a *different*,
   adjacent reason: `apps/mcp-tools` carries a **standalone** lockfile nothing at the root
-  maintains. Two defects, one fix each. #263 has been closed; **#273 is the same bump and
-  fails the same two checks today.**
+  maintains. Two defects, one fix each. #263 has been closed.
 
-  **No test reads `.github/dependabot.yml` for this shape.** That is the gap worth closing —
-  *a class paid for once becomes a check* — and `failure-classes.Tests.ps1` is where it
-  belongs. Full detail in the [2026-09-16 register](findings/2026-09-16-finding-register.md).
+  **Updated 2026-09-17 02:00 UTC — the config half is fixed and #273 is now green.** PR
+  **#279** landed the `dependabot.yml` correction, and **#273 now reports 24 SUCCESS / 5
+  SKIPPED and `mergeStateStatus: CLEAN`** — verified against the PR, not inferred from the
+  merge. It is **deliberately NOT merged**: it is a twelve-package bump touching all five
+  running apps, and merging it hours before a demo buys backlog hygiene at the cost of a
+  change nobody has watched run. Merge it after the demo.
+
+  **No test reads `.github/dependabot.yml` for this shape.** That is the gap still worth
+  closing — *a class paid for once becomes a check* — and `failure-classes.Tests.ps1` is
+  where it belongs. Full detail in the
+  [2026-09-16 register](findings/2026-09-16-finding-register.md).
 
 - **The Key Vault grant that feeds V8.6/V8.7 is in Bicep and has never deployed.** One L7
   run fixes it. Until then, tonight's two PASSes rest on a hand-applied role assignment, and
@@ -366,8 +390,13 @@ here, with what replaced them, rather than deleted.*
   a direct push to `main` is available it takes it, so no pull request needs checks that can
   never report. **The evidence is the artifact, not the workflow's success**:
   `compliance/state/` holds an unbroken daily sequence 2026-09-05 → 2026-09-17 committed to
-  `main`, and **V12.6 PASSES** as of 2026-09-17 00:52. The visible gap 2026-08-30 → 09-04 is
-  exactly the nine days F120 ate; it is left in place because it is the record.
+  `main`, and **V12.6 PASSES** as of 2026-09-17 00:52. The visible gap is left in place
+  because it is the record.
+
+  **Arithmetic corrected 2026-09-17:** this said the gap was "exactly the nine days F120
+  ate". Counted from `compliance/state/`, the series runs 08-28, 08-29, then 09-05 — **six
+  missing dates** (08-30 → 09-04), not nine. However long F120 was live, **six** is the
+  number a reader can count on the screen, and it is the one the demo script now quotes.
 
   *What replaced it:* nothing blocking. The remaining compliance problem is **coverage, not
   freshness** — 0 machine-verified of 110 — and that was never what BLOCKER-C described.
