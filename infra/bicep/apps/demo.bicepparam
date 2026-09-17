@@ -169,3 +169,15 @@ param maxReplicas = 2
 // the lakehouse, not GitHub - is unaffected. Set MLS_GITHUB_TOKEN_SECRET to the
 // secret's name (mls-data-api-github-token) once it exists in the vault.
 param githubTokenSecretName = readEnvironmentVariable('MLS_GITHUB_TOKEN_SECRET', '')
+
+// The Verifier's OBJECT id, so main.bicep can grant it Key Vault Secrets User on
+// the mcp-auth-token SECRET ALONE and L8's V8.6/V8.7 can ask the deployed MCP
+// tool for a row instead of reporting SKIP.
+//
+// DERIVED, not stored. The layer-07 workflow resolves it from
+// AZURE_VERIFIER_CLIENT_ID at deploy time with `az ad sp show`; an object id
+// typed into a GitHub variable is one more value that can be wrong with nothing
+// saying so (F124), and it would also be an estate identifier in configuration.
+// Empty is a supported deployment: nothing is granted, the estate still comes up,
+// and L8 reports SKIP rather than a false pass.
+param verifierPrincipalId = readEnvironmentVariable('MLS_VERIFIER_OBJECT_ID', '')

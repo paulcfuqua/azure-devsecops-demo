@@ -179,8 +179,17 @@ export function App({ provider, agent }: AppProps): JSX.Element {
         </main>
         <footer className={styles.footer}>
           <Text size={200}>
-            Data source: {provider.source}. Synthetic data — Meridian Launch Systems is
-            fictional.
+            {/*
+              HALF OF THIS USED TO BE FALSE, and it sat directly beneath an answer
+              that got it right. The Ask tab now reaches two lakehouses, and the
+              agent distinguishes them unprompted: Meridian's operations data is
+              synthetic, the AWS launch-intelligence data is real. A blanket
+              "synthetic data" line contradicted the panel above it — on stage.
+              Corrected the same way the agent's own instructions were.
+            */}
+            Data source: {provider.source}. Meridian Launch Systems is fictional and its
+            operations data synthetic; AWS launch-intelligence data is real public
+            launch-industry data.
           </Text>
         </footer>
       </div>

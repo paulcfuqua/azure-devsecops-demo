@@ -3181,3 +3181,181 @@ Describe 'the AWS lakehouse link stores no credential, anywhere' {
             -Because 'the AWS credential must still come from AssumeRoleWithWebIdentity over the container''s Entra token - that exchange IS the zero-stored-credential claim, and comments naming it are not it'
     }
 }
+
+Describe 'a leading-slash ARM path is never handed to a native CLI unguarded' {
+    # THE CLASS: MSYS path translation, and it presents as an error naming the wrong system.
+    #
+    # Git Bash rewrites any argument that looks like a POSIX absolute path into a Windows
+    # path before the native program sees it. So `az ... --scope /subscriptions/<id>/...`
+    # arrives at az.exe as `C:/Program Files/Git/subscriptions/<id>/...`, and az answers
+    # `MissingSubscription` - which sends the operator to the Azure portal to check a
+    # subscription that was never the problem. It bit three times in one session on
+    # 2026-09-16, and docs/runbooks/g0-bootstrap.md carried a note blaming
+    # `az role assignment create` and recommending `az rest` instead, which "worked" only
+    # because a URL starting with https:// is not a path MSYS rewrites. A wrong diagnosis
+    # written down is worse than none: it stops the next person looking.
+    #
+    # Same shape as the AWS `file://` policy-document failure the sweep two Describes up
+    # was written for, one CLI over.
+    #
+    # THE GUARD is `MSYS_NO_PATHCONV=1` on the invocation, or a doubled leading slash
+    # (`//subscriptions/...`), which MSYS leaves alone. Both are no-ops off Windows.
+    #
+    # WHAT THIS SCANS AND WHAT IT DOES NOT. Tracked `*.sh` files and the runbooks under
+    # docs/runbooks/, because those are the two places a human runs a command in whatever
+    # shell they happen to have open. It deliberately does NOT scan .github/workflows/:
+    # those run on ubuntu-latest, where there is no MSYS layer to rewrite anything, and
+    # flagging them is how a sweep starts collecting exclusions instead of findings. It
+    # also does not scan .ps1 files - pwsh passes arguments through unchanged, which is
+    # why CLAUDE.md's "local orchestration targets PowerShell 7" makes the repo's own
+    # scripts immune and leaves only the copy-paste commands exposed.
+
+    BeforeAll {
+        $script:MsysRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        Push-Location -LiteralPath $script:MsysRoot
+        try { $script:MsysTracked = @(& git ls-files) } finally { Pop-Location }
+
+        $script:MsysShellFile = @($script:MsysTracked | Where-Object { $_ -like '*.sh' })
+        $script:MsysDocFile = @($script:MsysTracked | Where-Object { $_ -like 'docs/runbooks/*.md' })
+
+        # A leading-slash ARM resource path. The lookbehind keeps
+        # `https://management.azure.com/subscriptions/...` out: that is a URL, MSYS does
+        # not rewrite it, and flagging it is how a sweep earns its first exclusion.
+        $script:MsysArmPathPattern = '(?<![\w:/.])/(subscriptions|providers)/'
+
+        # The programs MSYS hands rewritten arguments to. A shell builtin, a variable
+        # assignment or a `case` glob is not an argument to a native binary and is not
+        # affected - which is why the pattern requires the program name rather than just
+        # the path.
+        $script:MsysNativeCliPattern = '(^|[\s;&|(`])(az|aws|pac|docker|kubectl)\s'
+
+        # The guard ON THE INVOCATION: an inline `MSYS_NO_PATHCONV=1 az ...` prefix, or a
+        # doubled leading slash, which MSYS leaves alone.
+        $script:MsysGuardPattern = 'MSYS_NO_PATHCONV\s*=|//subscriptions/|//providers/'
+
+        # The guard set ONCE for a whole script or block. It has to be an ASSIGNMENT at the
+        # start of a line, not the mere presence of the word: a first version of this
+        # accepted `MSYS_NO_PATHCONV` anywhere in the span, and the mutation test passed
+        # with the real prefix removed, because the COMMENT explaining the prefix satisfied
+        # it. That is the same defect the 'classifies permission errors' check above records
+        # having had, and it is the reason these two patterns are separate.
+        $script:MsysGuardAssignmentPattern = '(?m)^[ \t]*(export[ \t]+)?MSYS_NO_PATHCONV[ \t]*='
+
+        # Returns one string per unguarded invocation found in $Text.
+        #
+        # Line-continuations are JOINED FIRST, and that is the whole reason this is a
+        # function rather than a `Select-String`. The ARM path is almost always on a
+        # continuation line, so a per-line scan sees `--scope "/subscriptions/..."` with no
+        # `az` anywhere on it, finds nothing, and reports the repository clean.
+        function script:Find-MsysUnguardedArmScope {
+            param(
+                [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+                [Parameter(Mandatory)][string]$Label
+            )
+
+            $joined = [regex]::Replace($Text, '\\\r?\n[ \t]*', ' ')
+            $found = [System.Collections.Generic.List[string]]::new()
+            foreach ($line in ($joined -split '\r?\n')) {
+                # Comment lines are prose that happens to live in a code block. They are
+                # where the broken form gets QUOTED in order to warn about it.
+                if ($line -match '^[ \t]*#') { continue }
+                if ($line -notmatch $script:MsysArmPathPattern) { continue }
+                if ($line -notmatch $script:MsysNativeCliPattern) { continue }
+                if ($line -match $script:MsysGuardPattern) { continue }
+                $found.Add("${Label}: $($line.Trim())")
+            }
+            return $found.ToArray()
+        }
+
+        # Every span of a markdown file that a reader will COPY: fenced blocks with their
+        # fences dropped, plus inline `backtick` spans outside them. Prose is excluded
+        # because prose legitimately DISCUSSES the broken form - g0-bootstrap.md's own
+        # warning quotes `--scope /subscriptions/...` verbatim in order to explain it, and
+        # a sweep that cannot tell an example of the bug from the bug is one people start
+        # adding exclusions to.
+        #
+        # Inline spans are in scope and not an afterthought: this runbook's step C9 gives
+        # the create command in a fence and the VERIFY command as an inline span, and the
+        # verify command is the one an operator runs more than once.
+        function script:Get-MsysCodeSpan {
+            param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+
+            $spans = [System.Collections.Generic.List[string]]::new()
+            $current = $null
+            $prose = [System.Collections.Generic.List[string]]::new()
+            foreach ($line in ($Text -split '\r?\n')) {
+                if ($line -match '^\s*```') {
+                    if ($null -eq $current) { $current = [System.Collections.Generic.List[string]]::new() }
+                    else { $spans.Add(($current -join "`n")); $current = $null }
+                    continue
+                }
+                if ($null -ne $current) { $current.Add($line) } else { $prose.Add($line) }
+            }
+            foreach ($match in [regex]::Matches(($prose -join "`n"), '`([^`\r\n]+)`')) {
+                $spans.Add($match.Groups[1].Value)
+            }
+            return $spans.ToArray()
+        }
+    }
+
+    It 'has a detector that fires on the known-bad shape and not on the guarded one' {
+        # NON-VACUITY, and the only assertion here that does not read the repository. Every
+        # other It below passes when the scanner is broken in exactly the way a scanner
+        # breaks: silently matching nothing. Fixtures, not repository text, so they cannot
+        # go green because somebody fixed the file they were sampling.
+        $bad = @(script:Find-MsysUnguardedArmScope -Text 'az role assignment create --scope "/subscriptions/$sub/resourceGroups/rg"' -Label 'fixture')
+        $bad.Count | Should -Be 1 -Because 'this is the exact line shape that arrives at az.exe as C:/Program Files/Git/subscriptions/...'
+
+        $continued = @(script:Find-MsysUnguardedArmScope -Text "az role assignment create --role Owner \`n  --scope /subscriptions/x" -Label 'fixture')
+        $continued.Count | Should -Be 1 -Because 'the ARM path is usually on a continuation line; a scanner that does not join them reports every file clean'
+
+        $guarded = @(script:Find-MsysUnguardedArmScope -Text 'MSYS_NO_PATHCONV=1 az role assignment create --scope "/subscriptions/$sub"' -Label 'fixture')
+        $guarded.Count | Should -Be 0 -Because 'the guard is the fix, so a detector that still fires on it cannot be satisfied'
+
+        $url = @(script:Find-MsysUnguardedArmScope -Text 'az rest --url "https://management.azure.com/subscriptions/$sub/providers/X?api-version=2023-08-01"' -Label 'fixture')
+        $url.Count | Should -Be 0 -Because 'MSYS does not rewrite a https:// URL, and flagging one is how a sweep earns an exclusion it should not need'
+
+        $glob = @(script:Find-MsysUnguardedArmScope -Text '  /subscriptions/*) echo matched ;;' -Label 'fixture')
+        $glob.Count | Should -Be 0 -Because 'a case glob is not an argument to a native binary'
+    }
+
+    It 'has files to search, and the AWS trust scripts are among them' {
+        $script:MsysShellFile.Count | Should -BeGreaterThan 0 -Because 'a sweep whose file list went empty reports absence from a search that never ran'
+        $script:MsysShellFile | Should -Contain 'scripts/aws/02-athena-role.sh' `
+            -Because 'the AWS trust-anchor scripts are the shell this repository actually ships, and the file:// half of this same class was found in them'
+        $script:MsysDocFile | Should -Contain 'docs/runbooks/g0-bootstrap.md' `
+            -Because 'the bootstrap runbook is where a human copies az commands into whatever shell is open, and it is where this class was found'
+    }
+
+    It 'hands no unguarded ARM path to a native CLI in any tracked shell script' {
+        # A script may set the guard once at the top, so the whole file counts as guarded.
+        $hit = @($script:MsysShellFile | ForEach-Object {
+                $path = Join-Path $script:MsysRoot $_
+                if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+                $text = Get-Content -LiteralPath $path -Raw
+                if ($null -eq $text) { return }
+                if ($text -match $script:MsysGuardAssignmentPattern) { return }
+                script:Find-MsysUnguardedArmScope -Text $text -Label $_
+            })
+        $hit -join ' | ' | Should -BeNullOrEmpty `
+            -Because 'on a Windows operator''s machine this fails as MissingSubscription, an error naming the subscription rather than the shell that broke it - prefix the invocation with MSYS_NO_PATHCONV=1'
+    }
+
+    It 'hands no unguarded ARM path to a native CLI in any runbook code span' {
+        # Per SPAN, not per file: a guard eleven steps earlier is not carried by the
+        # command someone copies out of this one.
+        $hit = @($script:MsysDocFile | ForEach-Object {
+                $doc = $_
+                $path = Join-Path $script:MsysRoot $doc
+                if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+                $text = Get-Content -LiteralPath $path -Raw
+                if ($null -eq $text) { return }
+                foreach ($span in (script:Get-MsysCodeSpan -Text $text)) {
+                    if ($span -match $script:MsysGuardAssignmentPattern) { continue }
+                    script:Find-MsysUnguardedArmScope -Text $span -Label $doc
+                }
+            })
+        $hit -join ' | ' | Should -BeNullOrEmpty `
+            -Because 'a runbook command is copied and pasted verbatim, so the guard belongs in the command and not in a paragraph near it'
+    }
+}
