@@ -716,6 +716,105 @@ Describe 'a deploy path preserves the commit provenance another layer audits' {
 }
 
 
+Describe 'every base image an app pulls is declared where its CVE posture is recorded' {
+    # The container-image lane of .github/self-heal-policy.json is DEFERRED, which means
+    # twelve open pcre2 alerts on apps/data-api and apps/mcp-tools do not count against
+    # V10.1. A deferral is only honest if its SCOPE is legible: "container images" is not a
+    # scope, three named base images are.
+    #
+    # THE CLASS IS AN EXCLUSION THAT QUIETLY WIDENS. Nothing about changing a FROM line
+    # looks like touching a security policy, and nothing about the deferral would have
+    # changed to show for it - so the next base could arrive carrying a posture nobody had
+    # looked at, inside an exclusion somebody wrote for a different image. This is
+    # V10.4's principle - pending-solution is not a dumping ground - applied one level down
+    # to the deferral itself, and it is inventory-based for the same reason the transport
+    # sweep at the top of this file is: a new entry nobody thought about does not inherit
+    # an exemption.
+    #
+    # WHAT THIS DOES NOT CHECK, stated so nobody reads a green run as more than it is: it
+    # compares two files. It cannot tell you whether a declared image is still free of the
+    # CVE it was cleared of - that needs a registry, and it is Trivy's job in app CI. The
+    # value here is that a CHANGE cannot happen silently.
+
+    BeforeAll {
+        $script:BaseRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:BasePolicy = Get-Content -LiteralPath (Join-Path $script:BaseRoot '.github/self-heal-policy.json') -Raw |
+            ConvertFrom-Json
+
+        # Every FROM in every app Dockerfile, minus the internal stage references - a
+        # `FROM deps AS build` resolves inside the same file and pulls nothing.
+        $script:BaseObserved = [System.Collections.Generic.List[pscustomobject]]::new()
+        foreach ($dockerfile in (Get-ChildItem -Path (Join-Path $script:BaseRoot 'apps') -Filter 'Dockerfile' -File -Recurse)) {
+            $relative = $dockerfile.FullName.Substring($script:BaseRoot.Length + 1).Replace('\', '/')
+            $stages = [System.Collections.Generic.List[string]]::new()
+            foreach ($line in (Get-Content -LiteralPath $dockerfile.FullName)) {
+                if ($line -notmatch '^\s*FROM\s+(?<image>\S+)(\s+AS\s+(?<stage>\S+))?\s*$') { continue }
+                $image = $Matches['image']
+                if ($Matches['stage']) { $stages.Add($Matches['stage']) }
+                if ($stages -contains $image) { continue }
+                $script:BaseObserved.Add([pscustomobject]@{ Dockerfile = $relative; Image = $image })
+            }
+        }
+
+        $script:BaseDeclared = @($script:BasePolicy.laneDeferral.'container-image'.baseImages.declared)
+    }
+
+    It 'finds base images to check, so the comparison is not vacuous' {
+        $script:BaseObserved.Count | Should -BeGreaterThan 0 `
+            -Because 'if no FROM line is parsed out of apps/*/Dockerfile, the two assertions below both pass while comparing nothing'
+        $script:BaseDeclared.Count | Should -BeGreaterThan 0 `
+            -Because 'the container-image deferral must name the images it defers findings for'
+    }
+
+    It 'no app pulls a base image the policy does not declare' {
+        $undeclared = [System.Collections.Generic.List[string]]::new()
+        foreach ($observed in $script:BaseObserved) {
+            $entry = @($script:BaseDeclared | Where-Object { $_.image -eq $observed.Image })
+            if ($entry.Count -ne 1) {
+                $undeclared.Add("$($observed.Dockerfile) pulls '$($observed.Image)'")
+                continue
+            }
+            if ($entry[0].usedBy -notcontains $observed.Dockerfile) {
+                $undeclared.Add("$($observed.Dockerfile) pulls '$($observed.Image)' but is not in its usedBy list")
+            }
+        }
+        $undeclared -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a base image nobody declared is a base image whose CVE posture nobody resolved, sitting inside a deferral written for a different image (.github/self-heal-policy.json, laneDeferral.container-image.baseImages)'
+    }
+
+    It 'the policy declares no base image the estate has stopped using' {
+        $stale = [System.Collections.Generic.List[string]]::new()
+        foreach ($entry in $script:BaseDeclared) {
+            if (-not ($script:BaseObserved | Where-Object { $_.Image -eq $entry.image })) {
+                $stale.Add("'$($entry.image)' is declared but no app Dockerfile pulls it")
+                continue
+            }
+            foreach ($claim in @($entry.usedBy)) {
+                if (-not ($script:BaseObserved | Where-Object { $_.Dockerfile -eq $claim -and $_.Image -eq $entry.image })) {
+                    $stale.Add("'$($entry.image)' claims $claim, which does not pull it")
+                }
+            }
+        }
+        $stale -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a declaration describing an image the estate no longer pulls is a posture record about nothing, and it makes the deferral look narrower or wider than it is'
+    }
+
+    It 'each observation on the deferral carries evidence and a stated action' {
+        # An entry saying "no fix exists" with no evidence is the shape of an exclusion
+        # nobody can challenge - the reason notAutomatable demands a reason per entry.
+        $thin = [System.Collections.Generic.List[string]]::new()
+        foreach ($observation in @($script:BasePolicy.laneDeferral.'container-image'.baseImages.observations)) {
+            if ([string]::IsNullOrWhiteSpace($observation.finding)) { $thin.Add('an observation with no finding'); continue }
+            if (@($observation.evidence).Count -lt 1) { $thin.Add("$($observation.finding): no evidence") }
+            if ([string]::IsNullOrWhiteSpace($observation.action)) { $thin.Add("$($observation.finding): no stated action") }
+            if ([string]::IsNullOrWhiteSpace($observation.reviewWhen)) { $thin.Add("$($observation.finding): nothing that would make anyone look again") }
+        }
+        $thin -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a held finding needs evidence for why it is held, what was decided, and what event reopens the question - otherwise the deferral ages into folklore'
+    }
+}
+
+
 Describe 'an identity the estate authenticates to actually exists' {
     # Four app registrations sat in a live tenant with no service principal. Nothing failed
     # visibly: an application object is a DEFINITION, and Entra creates the principal on
