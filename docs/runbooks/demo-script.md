@@ -67,6 +67,24 @@ budgets follow from it.
 **This is the one to run on 2026-09-17.** The Variant A checklist below it opens on a torn
 down subscription and does not apply. Times are measured, not estimated.
 
+**Step 0 — resolve the URLs. Do this first; everything below needs them.**
+
+```bash
+az containerapp list -g mls-rg-apps \
+  --query "[?properties.configuration.ingress.fqdn].{app:name,url:properties.configuration.ingress.fqdn}" -o tsv
+```
+
+**No URL is written down in this file on purpose.** The Container Apps domain suffix
+regenerates on every rebuild, so a stored FQDN is wrong the first time the estate is
+rebuilt and *looks* right until someone clicks it — that is F129's class, and it has
+already cost this project a shipped image that could not reach its own token endpoint.
+Derive them, paste them into the browser tabs in step 9, and do not commit them back here.
+
+That command returns **five** rows. Only **four are browsable** — `mls-data-api-demo-ca`'s
+FQDN carries an **`.internal.`** segment and is reachable only from inside the Container
+Apps environment, which is deliberate (it is the app the dashboards proxy to server-side).
+`mls-vuln-lab-demo-ca` has no ingress at all and does not appear.
+
 | # | Check | How | Pass state |
 |---|---|---|---|
 | 1 | **The estate is up and is the estate you think it is** | `az containerapp list -o table` | **6/6 `Running`**: compliance, control-tower, data-api, launch-ops, mcp, vuln-lab. `vuln-lab` has **no ingress and runs the helloworld image** — that is correct, it is L10's witness, not a broken app |
