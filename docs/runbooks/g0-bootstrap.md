@@ -363,7 +363,10 @@ it is still about sign-in risk and auto-labeling, nothing else.
       subscription) and run:
 
       ```
-      az role assignment create --assignee-object-id <new-admin-object-id> \
+      # MSYS_NO_PATHCONV=1 is for Git Bash on Windows; harmless anywhere else. Without it
+      # the --scope argument is rewritten into a Windows path and az answers
+      # MissingSubscription - see the warning below this step.
+      MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id <new-admin-object-id> \
         --assignee-principal-type User --role Owner \
         --scope /subscriptions/<sub-id>
       ```
@@ -725,14 +728,23 @@ it is still about sign-in risk and auto-labeling, nothing else.
     #    grant no data-plane access at all: `secret set` returns Forbidden. Grant yourself
     #    Key Vault Secrets Officer first and wait ~60s for it to propagate.
     #
-    # Note `az role assignment create` may itself fail with (MissingSubscription) even with
-    # --subscription supplied; `az rest` against the same ARM endpoint works.
+    # 3. CORRECTED 2026-09-17. This note used to read: "`az role assignment create` may
+    #    itself fail with (MissingSubscription) even with --subscription supplied; `az rest`
+    #    against the same ARM endpoint works." That blamed the wrong system twice over.
+    #    `az` is fine and the subscription is fine: on Windows, GIT BASH rewrites the
+    #    leading-slash --scope argument into C:/Program Files/Git/subscriptions/... before
+    #    az ever sees it, and the CLI then reports MissingSubscription - an error naming
+    #    your subscription rather than your shell (the same class as item 1, one layer
+    #    down). `az rest` appeared to work only because its --url starts with https://,
+    #    which MSYS does not touch. The fix is the MSYS_NO_PATHCONV=1 prefix below; run
+    #    from pwsh and it is unnecessary but harmless. This bit three times in one session
+    #    on 2026-09-16 and the wrong diagnosis is why.
 
     kv=mls-sec-demo-kv     # or <prefix>-sec-<env>-kv from infra/bicep/naming.bicep
     me=$(az ad signed-in-user show --query id -o tsv)
     sub=$(az account show --query id -o tsv)
 
-    az role assignment create --assignee "$me" --role "Key Vault Secrets Officer" \
+    MSYS_NO_PATHCONV=1 az role assignment create --assignee "$me" --role "Key Vault Secrets Officer" \
       --scope "/subscriptions/$sub/resourceGroups/mls-rg-platform/providers/Microsoft.KeyVault/vaults/$kv"
 
     az keyvault secret set --vault-name "$kv" --name mcp-auth-token \
@@ -1069,7 +1081,10 @@ it is still about sign-in risk and auto-labeling, nothing else.
     Global Administrator:
 
     ```
-    az monitor diagnostic-settings create \
+    # MSYS_NO_PATHCONV=1 is for Git Bash on Windows; harmless anywhere else. Without it
+    # --resource arrives as C:/Program Files/Git/providers/microsoft.aadiam and the call
+    # fails naming a resource you did not ask for.
+    MSYS_NO_PATHCONV=1 az monitor diagnostic-settings create \
       --name <prefix>-entra-law \
       --resource "/providers/microsoft.aadiam" \
       --workspace <LAW resource id> \
@@ -1085,7 +1100,7 @@ it is still about sign-in risk and auto-labeling, nothing else.
     `mls-rg-platform`, since that mints a new workspace resource ID and the old
     setting is left pointing at a deleted one.
 
-    Verify: `az monitor diagnostic-settings list --resource "/providers/microsoft.aadiam"`
+    Verify: `MSYS_NO_PATHCONV=1 az monitor diagnostic-settings list --resource "/providers/microsoft.aadiam"`
     lists the setting with both `SignInLogs` and `AuditLogs` enabled, and the `SigninLogs`
     / `AuditLogs` tables in the Log Analytics workspace populate within about 15 minutes
     of the next sign-in or directory change — distinct from `AzureActivity`, which is the
