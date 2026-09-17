@@ -44,10 +44,13 @@ on:
       image_tag:
         description: >-
           GHCR tag to deploy for all five apps. Defaults to `latest`, which is what
-          the per-app CI workflows publish. Set it to the empty string to deploy the
-          `containerapps-helloworld` placeholder instead - a deliberate choice, not
-          the default, because a placeholder estate reports success while serving
-          none of the demo (F88).
+          the per-app CI workflows publish. A FLOATING tag is resolved per app to the
+          immutable `sha-` tag pointing at the same digest before anything is
+          deployed, so the bytes are identical and the running image still names the
+          commit it was built from - which is the evidence L10's V10.2 reads (F203).
+          Set it to the empty string to deploy the `containerapps-helloworld`
+          placeholder instead - a deliberate choice, not the default, because a
+          placeholder estate reports success while serving none of the demo (F88).
         type: string
         required: false
         default: latest
@@ -73,10 +76,13 @@ on:
       image_tag:
         description: >-
           GHCR tag to deploy for all five apps. Defaults to `latest`, which is what
-          the per-app CI workflows publish. Set it to the empty string to deploy the
-          `containerapps-helloworld` placeholder instead - a deliberate choice, not
-          the default, because a placeholder estate reports success while serving
-          none of the demo (F88).
+          the per-app CI workflows publish. A FLOATING tag is resolved per app to the
+          immutable `sha-` tag pointing at the same digest before anything is
+          deployed, so the bytes are identical and the running image still names the
+          commit it was built from - which is the evidence L10's V10.2 reads (F203).
+          Set it to the empty string to deploy the `containerapps-helloworld`
+          placeholder instead - a deliberate choice, not the default, because a
+          placeholder estate reports success while serving none of the demo (F88).
         type: string
         required: false
         default: latest
@@ -260,18 +266,155 @@ jobs:
           # answer nothing - which is exactly what F88 was: L7 reported success while
           # every app served `containerapps-helloworld`, and V7.1, V7.3 and V7.5 all
           # failed downstream of that one fact.
+          #
+          # -------------------------------------------------------------------
+          # F203 - AND IT DECIDES THE TAG'S *NAME* SEPARATELY FROM THE IMAGE.
+          #
+          # `latest` and `sha-<short>` are the SAME BYTES: app-<name>-ci.yml pushes
+          # both in one docker/build-push-action call, to one digest. They are not
+          # the same EVIDENCE. L10's V10.2 traces a heal to a deployment by reading
+          # the running image's tag and asking GitHub whether that commit contains
+          # the merge - "the running image names its own commit" (F197). A tag of
+          # `latest` names nothing, so V10.2 correctly reports `could not establish`
+          # and stays red.
+          #
+          # So deploying showpiece #2 turned showpiece #3 red. The two L7 runs of
+          # 2026-09-16 republished all five apps under `latest`, erased the `sha-`
+          # tags app CI had left on three of them, and the scheduled self-heal run
+          # at 00:56Z failed V10.2 after twelve consecutive green runs. Every V7
+          # criterion passed on the same revision, because none of them asks what
+          # commit an image came from: the deploy degraded TRACEABILITY, not
+          # function, and the damage was visible only from another layer's audit.
+          #
+          # The repair is to deploy the same bytes under the name that carries the
+          # provenance. Per app, resolve the requested tag to its digest and find
+          # the `sha-` tag in GHCR pointing at that same digest - DERIVED from the
+          # registry rather than stored by a human (F129), and byte-identical to
+          # what the floating tag would have deployed.
+          #
+          # Anonymous pull token, because the packages are public and this workflow
+          # holds no registry credential. If GHCR cannot be read, or no `sha-` tag
+          # shares the digest (an image pushed by hand, say), the requested tag is
+          # used UNCHANGED and the step says so, naming V10.2 - an honest
+          # degradation that leaves the audit reporting `could not establish`,
+          # rather than failing a deploy for a traceability reason.
+          # -------------------------------------------------------------------
           if [ -z "${IMAGE_TAG}" ]; then
             echo "::warning title=Deploying placeholder images::image_tag is empty, so all five apps deploy the containerapps-helloworld placeholder on port 80. The estate will provision and serve NONE of the demo, and V7.1/V7.3/V7.5 will fail - correctly."
             port=80
           else
-            registry="ghcr.io/$(printf '%s' "${REPO}" | tr '[:upper:]' '[:lower:]')"
+            repo_path="$(printf '%s' "${REPO}" | tr '[:upper:]' '[:lower:]')"
+            registry="ghcr.io/${repo_path}"
+
+            # The tag shape V10.2 parses off a running image. Kept in step with
+            # verification/layer-10-audit.ps1 by the F203 block in
+            # verification/tests/failure-classes.Tests.ps1, which fails if the two
+            # patterns disagree about any sample tag.
+            provenance_tag_pattern='^sha-[0-9a-fA-F]{7,40}$'
+
+            # `tr -d '\r'` on every value that becomes part of a URL: a carriage
+            # return survives word-splitting (IFS does not contain it), and curl
+            # then rejects the request with "Malformed input to a URL function" -
+            # an error naming curl, about a byte neither curl nor the registry put
+            # there. Cheap to strip, expensive to diagnose.
+            ghcr_pull_token() {
+              curl -sS --max-time 30 \
+                "https://ghcr.io/token?scope=repository:${repo_path}/$1:pull&service=ghcr.io" |
+                jq -r '.token // empty' | tr -d '\r'
+            }
+
+            manifest_digest() {
+              # $1 package, $2 bearer token, $3 tag. HEAD only - the manifest is not
+              # downloaded and the image certainly is not.
+              curl -sS --max-time 30 -I \
+                -H "Authorization: Bearer $2" \
+                -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+                "https://ghcr.io/v2/${repo_path}/$1/manifests/$3" |
+                tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }' | tail -1
+            }
+
+            # Echoes the immutable tag on success; returns non-zero and puts the
+            # reason on stderr when it cannot establish one. Called in an `if`
+            # condition, so `set -e` is suspended inside it and every step is
+            # checked explicitly.
+            immutable_tag() {
+              local app="$1" want="$2" token target tags candidate found probes
+              if printf '%s' "${want}" | grep -Eq "${provenance_tag_pattern}"; then
+                printf '%s' "${want}"
+                return 0
+              fi
+              token="$(ghcr_pull_token "${app}")"
+              if [ -z "${token}" ]; then
+                echo "no anonymous pull token was issued for ghcr.io/${repo_path}/${app}" >&2
+                return 1
+              fi
+              target="$(manifest_digest "${app}" "${token}" "${want}")"
+              if [ -z "${target}" ]; then
+                echo "ghcr.io/${repo_path}/${app}:${want} returned no manifest digest" >&2
+                return 1
+              fi
+              tags="$(curl -sS --max-time 30 -H "Authorization: Bearer ${token}" \
+                "https://ghcr.io/v2/${repo_path}/${app}/tags/list" |
+                jq -r --arg pattern "${provenance_tag_pattern}" \
+                  '(.tags // []) | map(select(test($pattern))) | reverse | .[]' | tr -d '\r')"
+              probes=0
+              found=''
+              for candidate in ${tags}; do
+                probes=$((probes + 1))
+                # Bounded: the list comes back in push order, so the match is
+                # normally the first probe. An unbounded walk would turn a missing
+                # sibling tag into dozens of requests per app.
+                if [ "${probes}" -gt 12 ]; then break; fi
+                if [ "$(manifest_digest "${app}" "${token}" "${candidate}")" = "${target}" ]; then
+                  found="${candidate}"
+                  break
+                fi
+              done
+              if [ -z "${found}" ]; then
+                echo "none of the newest ${probes} sha- tag(s) shares digest ${target} with '${want}'" >&2
+                return 1
+              fi
+              printf '%s' "${found}"
+            }
+
+            # Rows accumulate in a file rather than a variable: a shell variable
+            # holding embedded newlines cannot be written inside a YAML block
+            # scalar without the closing quote landing at column 0 and silently
+            # ending the block.
+            summary_rows="$(mktemp)"
+            for entry in launch-ops:LAUNCH_OPS control-tower:CONTROL_TOWER mcp-tools:MCP_TOOLS data-api:DATA_API compliance:COMPLIANCE; do
+              app="${entry%%:*}"
+              var="${entry##*:}"
+              reason_file="$(mktemp)"
+              if resolved_tag="$(immutable_tag "${app}" "${IMAGE_TAG}" 2>"${reason_file}")" && [ -n "${resolved_tag}" ]; then
+                # One recorded observation per target, never an inference from a
+                # green step (F162): an operator can tell "resolved" from "fell
+                # back" by reading this line.
+                echo "${app}: ${IMAGE_TAG} -> ${resolved_tag} (immutable; names the commit V10.2 reads)"
+                printf '| %s | %s | %s | preserved |\n' \
+                  "${app}" "${IMAGE_TAG}" "${resolved_tag}" >> "${summary_rows}"
+              else
+                reason="$(cat "${reason_file}")"
+                resolved_tag="${IMAGE_TAG}"
+                echo "::warning title=No immutable tag for ${app}::Deploying ghcr.io/${repo_path}/${app}:${IMAGE_TAG} under its floating tag because ${reason:-the lookup returned nothing}. The image is correct and the app will serve it; what is lost is PROVENANCE - the running image will not name the commit it was built from, so L10's V10.2 reports 'could not establish whether the running image carries this heal' for any heal touching this app, and showpiece #3 stays red until app CI re-tags it (F203)."
+                printf '| %s | %s | %s | **LOST - V10.2 cannot trace a heal to this app** |\n' \
+                  "${app}" "${IMAGE_TAG}" "${IMAGE_TAG}" >> "${summary_rows}"
+              fi
+              rm -f "${reason_file}"
+              echo "${var}_IMAGE=${registry}/${app}:${resolved_tag}" >> "${GITHUB_ENV}"
+            done
+
             {
-              echo "LAUNCH_OPS_IMAGE=${registry}/launch-ops:${IMAGE_TAG}"
-              echo "CONTROL_TOWER_IMAGE=${registry}/control-tower:${IMAGE_TAG}"
-              echo "MCP_TOOLS_IMAGE=${registry}/mcp-tools:${IMAGE_TAG}"
-              echo "DATA_API_IMAGE=${registry}/data-api:${IMAGE_TAG}"
-              echo "COMPLIANCE_IMAGE=${registry}/compliance:${IMAGE_TAG}"
-            } >> "${GITHUB_ENV}"
+              echo "### L7 image tags - what each app is actually deployed as"
+              echo
+              echo "The requested tag is resolved per app to the immutable sha- tag pointing at the same GHCR digest, so an ordinary L7 converge deploys identical bytes without erasing the commit provenance L10's V10.2 reads (F203)."
+              echo
+              echo "| App | Requested | Deployed | Commit provenance |"
+              echo "|---|---|---|---|"
+              cat "${summary_rows}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            rm -f "${summary_rows}"
+
             # Every app Dockerfile EXPOSEs 8080 (nginx listens 8080 on the three
             # static frontends; Node binds it on data-api and mcp-tools). Verified
             # against the Dockerfiles rather than remembered - CLAUDE.md's rule for
