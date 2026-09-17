@@ -356,10 +356,10 @@ export function Board({ state, catalog, framework, onSelectControl }: BoardProps
  * Collector health, rendered where a viewer actually sees it -- previously
  * `collectors[].status/limitation/error` and `assessmentProblems` were
  * declared in the data contract and read nowhere in `src/`, so a run where
- * several collectors died rendered identically to a healthy one, and the
- * single most important fact about this estate (nothing in it has ever
- * been deployed -- see `verification-suite`'s own limitation below) reached
- * a reader only by clicking into one of a handful of specific controls.
+ * several collectors died rendered identically to a healthy one, and what
+ * the machine-verified path actually had to read (see `verification-suite`'s
+ * own limitation below) reached a reader only by clicking into one of a
+ * handful of specific controls.
  *
  * `verification-suite` is looked up BY NAME (a stable data-contract key),
  * never by matching English text in its `limitation` string -- if that

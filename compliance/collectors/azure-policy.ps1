@@ -6,9 +6,10 @@
     built-in "NIST SP 800-53 Rev. 5" regulatory compliance initiative.
 
 .DESCRIPTION
-    Nothing in this estate has been deployed (no G0 yet), so today this collector
-    collects nothing - and that must render as a clean empty result, never an error and
-    never a fabricated verdict about a tenant that does not exist.
+    Where no policy state can be read - an estate that was never deployed, or a caller
+    that cannot see it - this collector collects nothing, and that must render as a clean
+    empty result: never an error, and never a fabricated verdict about a tenant it did
+    not observe. An empty result here says what this collector read, never what exists.
 
     THE JOIN: 800-53 CONTROL GROUP -> 800-171 REQUIREMENT
     -----------------------------------------------------------
@@ -48,8 +49,8 @@
       { assignment: { enforcementMode: 'Default' | 'DoNotEnforce' },
         policyStates: [ { resourceId, policyAssignmentId, policyDefinitionGroupNames: [...],
                            complianceState: 'Compliant' | 'NonCompliant' }, ... ] }
-    $null when the source (a live tenant) was not queried or is unreachable - the normal
-    state today, since nothing in this estate has been deployed yet.
+    $null when the source (a live tenant) was not queried or is unreachable. That is a
+    statement about this collector's input, never about what the tenant contains.
 
 .OUTPUTS
     Zero or more validated EvidenceRecord objects (compliance/collectors/

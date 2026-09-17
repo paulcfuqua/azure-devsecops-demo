@@ -101,7 +101,8 @@ describe("Board framework views (relabel/filter the same 110 records, no second 
     expect(screen.queryByText(/95 of 110/)).toBeNull();
 
     // The cross-tab's cells sum to the framework's denominator, not 110, and
-    // every machine-verified cell is zero because nothing has been deployed.
+    // every machine-verified cell is zero because no collector has produced a
+    // machine-verified record, not because the estate is absent.
     const table = screen.getByRole("table", { name: /provenance and status/i });
     const assertedRow = within(table).getByText("asserted").closest("tr")!;
     const assertedCells = within(assertedRow)

@@ -511,8 +511,8 @@ $collectorArgument['azure-policy'] = @{}
 $collectorArgument['manual'] = @{ AssessmentRoot = $AssessmentRoot }
 
 $collectorLimitation = @{
-    'verification-suite' = 'Reads committed Verifier audit reports. It reports what an audit run observed at the time that report was written, not the state of the estate now. Nothing in this estate has been deployed, so there are no reports to read.'
-    'repo-static'        = 'Reads the working tree. Every record describes what the repository declares, not what is deployed - nothing in this estate has been deployed, so it is not evidence that anything runs.'
+    'verification-suite' = 'Reads committed Verifier audit reports under verification/reports/. It reports what an audit run observed at the time that report was written, never the state of the estate now.'
+    'repo-static'        = 'Reads the working tree. Every record describes what the repository declares, not what is deployed, so it is not evidence that anything runs.'
     'github-security'    = 'Reads a GET /repos/{owner}/{repo} response. It observes which GitHub Advanced Security features are switched on, never whether any finding they produced was acted on.'
     'azure-policy'       = 'Reads Azure Policy compliance state. The built-in "NIST SP 800-53 Rev. 5" initiative is a Regulatory Compliance initiative composed almost entirely of audit and auditIfNotExists policies, so an assignment-level enforcementMode of Default is NOT evidence that anything is enforced; the field that would settle it, policyDefinitionAction, is absent from the response shape this platform consumes. Treat every record from this collector as an audit observation, never as enforcement.'
     'manual'             = 'Transcribes an authored assertion from the register into an evidence record. It is a human claim carried forward verbatim, not an observation, and it can never drive a control to COMPLIANT.'
@@ -542,11 +542,28 @@ foreach ($name in @($collectorArgument.Keys)) {
         $errorText = $_.Exception.Message
         Write-Warning "Invoke-MlsCompliance: collector '$name' failed - $errorText"
     }
+    # The board surfaces verification-suite's limitation VERBATIM as its most prominent
+    # banner, so every clause in it is read by a human as a statement of fact. This
+    # collector can observe exactly one thing - whether any committed report yielded a
+    # usable criterion row - and it cannot observe the estate at all. So the clause about
+    # what it found is DERIVED from what it found, and nothing here says whether the
+    # estate is deployed. A static 'nothing in this estate has been deployed' outlived the
+    # deploy by fourteen days and rendered as fact on that banner against a live estate.
+    $limitation = $collectorLimitation[$name]
+    if ($name -eq 'verification-suite' -and $status -eq 'ok') {
+        $limitation += if ($count -gt 0) {
+            " It read $count evidence record$(if ($count -ne 1) { 's' }) from the reports committed there."
+        }
+        else {
+            ' No report committed there yielded a usable criterion row, so this collector contributed no evidence - which is a fact about what the repository holds, not about whether the estate is deployed.'
+        }
+    }
+
     $collectorResult.Add([pscustomobject][ordered]@{
             name        = $name
             status      = $status
             recordCount = $count
-            limitation  = $collectorLimitation[$name]
+            limitation  = $limitation
             error       = $errorText
         })
 }

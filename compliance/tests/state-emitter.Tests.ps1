@@ -474,6 +474,37 @@ Describe 'Invoke-MlsCompliance (state emitter)' {
             $repo.limitation | Should -Match '(?i)not.*deployed'
         }
 
+        It 'derives verification-suite''s limitation from what it read, rather than asserting it' {
+            # The board surfaces THIS string verbatim as its most prominent banner, so
+            # every clause in it is read as fact. Both branches are exercised against real
+            # runs: the fixture root holds reports, an empty root holds none.
+            $withReports = $script:HonestyState.collectors | Where-Object name -EQ 'verification-suite'
+            $withReports.recordCount | Should -BeGreaterThan 0
+            $withReports.limitation | Should -Match "It read $($withReports.recordCount) evidence record"
+
+            $emptyRoot = Join-Path -Path $TestDrive -ChildPath 'no-reports'
+            New-Item -Path $emptyRoot -ItemType Directory -Force | Out-Null
+            $barrenArgs = @{} + $script:GoldenArgs
+            $barrenArgs['OutputRoot'] = Join-Path -Path $TestDrive -ChildPath 'barren'
+            $barrenArgs['VerificationReportRoot'] = $emptyRoot
+            $barren = script:Invoke-Runner -Argument $barrenArgs
+            $none = $barren.collectors | Where-Object name -EQ 'verification-suite'
+            $none.recordCount | Should -Be 0
+            $none.limitation | Should -Match '(?i)contributed no evidence'
+            $none.limitation | Should -Not -Be $withReports.limitation
+        }
+
+        It 'never lets a collector assert whether the estate is deployed - it cannot observe that' {
+            # F103/F105's class, in prose: a static claim that nothing had been deployed
+            # outlived the deploy by fourteen days and rendered as fact on the board's own
+            # banner against a live 30-resource estate. A collector reports what it read.
+            foreach ($collector in $script:HonestyState.collectors) {
+                $collector.limitation |
+                    Should -Not -Match '(?i)nothing (in this estate )?(has (ever )?been|is) deployed' -Because `
+                        "collector '$($collector.name)' states the estate's deployment status, which no collector here observes"
+            }
+        }
+
         It 'states that manual evidence is an authored transcription' {
             $manual = $script:HonestyState.collectors | Where-Object name -EQ 'manual'
             $manual.limitation | Should -Match '(?i)authored'
