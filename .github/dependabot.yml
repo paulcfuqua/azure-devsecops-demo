@@ -66,192 +66,42 @@ updates:
       prefix-development: 'chore'
       include: scope
 
-  # --- npm: per app --------------------------------------------------------
-  - package-ecosystem: npm
-    directory: /apps/launch-ops
-    schedule:
-      interval: weekly
-      day: monday
-      time: '06:00'
-    open-pull-requests-limit: 5
-    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
-    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
-    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
-    # build) in the same batch that five action majors were fine to take. A group
-    # containing one unmergeable major blocks every safe bump beside it.
-    #
-    # This governs VERSION updates only. Dependabot SECURITY updates are not
-    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
-    # and self-heal.yml's dependabot lane still has one PR each to adopt.
-    groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-      - npm
-      - launch-ops
-
-  - package-ecosystem: npm
-    directory: /apps/control-tower
-    schedule:
-      interval: weekly
-      day: monday
-      time: '06:00'
-    open-pull-requests-limit: 5
-    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
-    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
-    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
-    # build) in the same batch that five action majors were fine to take. A group
-    # containing one unmergeable major blocks every safe bump beside it.
-    #
-    # This governs VERSION updates only. Dependabot SECURITY updates are not
-    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
-    # and self-heal.yml's dependabot lane still has one PR each to adopt.
-    groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-      - npm
-      - control-tower
-
-  # apps/copilot-svc was deleted by the 2026-08-24 Copilot Studio amendment and
-  # its ecosystem entry removed with it: Dependabot errors on a directory that
-  # holds no manifest. Its successor is apps/mcp-tools, below, joined by the
-  # services that did not exist when this file was written.
-  - package-ecosystem: npm
-    directory: /apps/mcp-tools
-    schedule:
-      interval: weekly
-      day: monday
-      time: '06:00'
-    open-pull-requests-limit: 5
-    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
-    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
-    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
-    # build) in the same batch that five action majors were fine to take. A group
-    # containing one unmergeable major blocks every safe bump beside it.
-    #
-    # This governs VERSION updates only. Dependabot SECURITY updates are not
-    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
-    # and self-heal.yml's dependabot lane still has one PR each to adopt.
-    groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-      - npm
-      - mcp-tools
-
-  - package-ecosystem: npm
-    directory: /apps/data-api
-    schedule:
-      interval: weekly
-      day: monday
-      time: '06:00'
-    open-pull-requests-limit: 5
-    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
-    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
-    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
-    # build) in the same batch that five action majors were fine to take. A group
-    # containing one unmergeable major blocks every safe bump beside it.
-    #
-    # This governs VERSION updates only. Dependabot SECURITY updates are not
-    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
-    # and self-heal.yml's dependabot lane still has one PR each to adopt.
-    groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-      - npm
-      - data-api
-
-  - package-ecosystem: npm
-    directory: /apps/directline-token
-    schedule:
-      interval: weekly
-      day: monday
-      time: '06:00'
-    open-pull-requests-limit: 5
-    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
-    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
-    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
-    # build) in the same batch that five action majors were fine to take. A group
-    # containing one unmergeable major blocks every safe bump beside it.
-    #
-    # This governs VERSION updates only. Dependabot SECURITY updates are not
-    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
-    # and self-heal.yml's dependabot lane still has one PR each to adopt.
-    groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-      - npm
-      - directline-token
-
-  - package-ecosystem: npm
-    directory: /apps/cost-ingest
-    schedule:
-      interval: weekly
-      day: monday
-      time: '06:00'
-    open-pull-requests-limit: 5
-    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
-    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
-    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
-    # build) in the same batch that five action majors were fine to take. A group
-    # containing one unmergeable major blocks every safe bump beside it.
-    #
-    # This governs VERSION updates only. Dependabot SECURITY updates are not
-    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
-    # and self-heal.yml's dependabot lane still has one PR each to adopt.
-    groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-      - npm
-      - cost-ingest
-
-  - package-ecosystem: npm
-    directory: /apps/shared/spec-renderer
-    schedule:
-      interval: weekly
-      day: monday
-      time: '06:00'
-    open-pull-requests-limit: 5
-    # One PR per ecosystem for minor and patch bumps, instead of one PR each.
-    # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
-    # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
-    # build) in the same batch that five action majors were fine to take. A group
-    # containing one unmergeable major blocks every safe bump beside it.
-    #
-    # This governs VERSION updates only. Dependabot SECURITY updates are not
-    # subject to `groups`, so the three seeded CVEs still arrive as separate PRs
-    # and self-heal.yml's dependabot lane still has one PR each to adopt.
-    groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-    labels:
-      - dependencies
-      - npm
-      - spec-renderer
+  # --- npm: per app (F201) --------------------------------------------------
+  #
+  # THERE USED TO BE SIX MORE ENTRIES HERE, one per workspace member
+  # (launch-ops, control-tower, mcp-tools, data-api, directline-token,
+  # cost-ingest, shared/spec-renderer). They were removed 2026-09-16 (F201):
+  # every directory the root `workspaces` array claims has NO independent
+  # lockfile — the root `package-lock.json` governs it — so a per-directory
+  # npm entry bumps that member's `package.json` and never touches the root
+  # lockfile. Root `npm ci` then refuses to install
+  # ("Missing: X from lock file") and every PR from those entries was
+  # unmergeable by construction. PR #264 (root entry, same bump: green) vs
+  # PR #261 (the old per-app data-api entry, same bump: six failures) is the
+  # side-by-side proof.
+  #
+  # The root entry below has native npm workspace support and already covers
+  # every member's manifest AND the lockfile in one PR. A per-app npm entry
+  # for a workspace member is not narrower, it is broken.
+  #
+  # apps/mcp-tools rejoined this list 2026-09-16 too. It looked like the odd
+  # one out — its Dockerfile builds standalone and kept its own
+  # package-lock.json for that reason (see PR #273 / the "single lockfile"
+  # note in apps/mcp-tools/Dockerfile) — but a second lockfile fixes nothing:
+  # the ROOT entry still owns `apps/mcp-tools/package.json` because it is a
+  # workspace member, so nothing was ever reading a per-app npm entry for it
+  # either. The real fix was collapsing to the one lockfile npm already
+  # wanted it to have; verification/tests/lockfile-sync.Tests.ps1 documents
+  # that at length.
+  #
+  # apps/vuln-lab is the one npm directory entry that MUST stay per-app: see
+  # below. It is deliberately outside `workspaces`, so the root entry cannot
+  # see its manifest at all.
+  #
+  # verification/tests/failure-classes.Tests.ps1 ("no per-app npm entry
+  # targets a workspace member") now fails CI if this recurs — derived from
+  # the root package.json's `workspaces` array, not a hardcoded list, so it
+  # catches the next one too.
 
   # --- npm: the deliberately vulnerable lab --------------------------------
   # apps/vuln-lab pins three known-vulnerable versions (json5 2.2.0,
