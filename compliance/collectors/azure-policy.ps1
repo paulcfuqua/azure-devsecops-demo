@@ -49,8 +49,8 @@
       { assignment: { enforcementMode: 'Default' | 'DoNotEnforce' },
         policyStates: [ { resourceId, policyAssignmentId, policyDefinitionGroupNames: [...],
                            complianceState: 'Compliant' | 'NonCompliant' }, ... ] }
-    $null when the source (a live tenant) was not queried or is unreachable - the normal
-    state today, since nothing in this estate has been deployed yet.
+    $null when the source (a live tenant) was not queried or is unreachable. That is a
+    statement about this collector's input, never about what the tenant contains.
 
 .OUTPUTS
     Zero or more validated EvidenceRecord objects (compliance/collectors/

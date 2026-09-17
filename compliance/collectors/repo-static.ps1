@@ -86,8 +86,8 @@ function Format-MlsRepoStaticObserved {
         identically rather than depending on each check remembering to write it.
     #>
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Finding)
-    return "$Finding This describes what the repository declares, not what is deployed " +
-        '- nothing in this estate has been deployed, so it is not evidence anything runs.'
+    return "$Finding This describes what the repository declares, not what is deployed, " +
+        'so it is not evidence that anything runs.'
 }
 
 function Get-MlsRepoStaticArtifact {

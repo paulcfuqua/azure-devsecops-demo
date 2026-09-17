@@ -171,8 +171,8 @@ Describe 'repo-static collector' {
                 # always pairs it with an explicit negation nearby. Strip that clause out
                 # and confirm nothing claiming deployment survives.
                 $withoutHonestyClause = $row.observed -replace [regex]::Escape(
-                    'This describes what the repository declares, not what is deployed ' +
-                    '- nothing in this estate has been deployed, so it is not evidence anything runs.'
+                    'This describes what the repository declares, not what is deployed, ' +
+                    'so it is not evidence that anything runs.'
                 ), ''
                 $withoutHonestyClause | Should -Not -Match 'deploy' -Because 'a repo-static finding must never claim deployment outside the fixed honesty clause'
             }

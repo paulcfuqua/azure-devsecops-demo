@@ -8,10 +8,10 @@ name: compliance
 # Design: docs/superpowers/specs/2026-08-26-compliance-platform-design.md §3.3.
 # Runner:  compliance/Invoke-MlsCompliance.ps1.
 #
-# NO TENANT DEPENDENCY. Nothing in this estate has been deployed. The runner is
-# read-only, needs no credential, and produces a complete artifact today from the
-# catalog, the assessment register and the working tree alone — every other
-# collector returns empty, which is the normal case rather than an error path.
+# NO TENANT DEPENDENCY, whether or not the estate is up. The runner is read-only,
+# needs no credential, and produces a complete artifact from the catalog, the
+# assessment register and the working tree alone — a collector with no input
+# returns empty, which is the normal case rather than an error path.
 # There is therefore no pre-G0 guard on this workflow: it is green from the first
 # push, and the pre-deployment board is what makes the post-deployment board mean
 # something.
