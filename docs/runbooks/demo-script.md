@@ -1,37 +1,47 @@
 # Demo Script — Meridian Launch Systems
 
-> ## ⚠ THIS SCRIPT CANNOT BE PERFORMED TODAY (2026-09-01)
+> ## THIS SCRIPT CAN BE PERFORMED — as **Variant B**, on the live estate (2026-09-17)
 >
-> It describes the demo as designed, not as it currently runs. Attempting it live would
-> fail in front of an audience, at these points:
+> The box that stood here was written **2026-09-01** and said the demo could not be run at
+> all. Three of its five rows were false by 2026-09-03 and it was never revised, so the
+> warning outlived the condition and became the thing to distrust. Kept honest instead:
 >
-> | Segment | What happens today |
+> | Showpiece | State, and when it was last measured |
 > |---|---|
-> | Cold-start rebuild | **Fixed 2026-09-01 (F107).** The teardown now purges the Log Analytics workspace, so a rebuild creates a new one instead of recovering a soft-deleted one. The full cycle has not been re-run since |
-> | Any dashboard showing data | **Fixed 2026-09-01.** Sign-in works (F110), the SQL grant applies (F109/F112) and the renderer validates under the CSP (F111). Dashboards fetch and render real rows |
-> | Showpiece #1, the Ask tab | **Dark.** The agent is built and exported but never published; no Direct Line channel, no Key Vault secret; its two auth registrations are undeclared (F106) |
-> | Purview labels segment | **Nothing to show.** The taxonomy has never been applied - no certificate (P-12) |
-> | Showpiece #3, self-healing | **Never run.** Both tracks are armed but L10 has not executed |
+> | **#1 Copilot / Ask tab** | ✅ The eval grades **9/10** (bar 9, `unobservable: 0`) over Direct Line, `layer-08-copilot-studio` run `35166952968`, 2026-09-17 00:37Z. It now answers from **two clouds and says which is which** |
+> | **#2 Control tower** | ✅ **V7.1–V7.7 all PASS**, run `35160458879`, 2026-09-17 00:38Z — including V7.6, *the data API answers with rows, not a status code* |
+> | **#3 Self-healing** | ✅ **V10.1–V10.4 all PASS**, run `35172433866`, 2026-09-17 01:56Z. It failed an hour earlier on F203 and is green again; see § *If showpiece #3 is red on the morning* |
+> | **#4 Compliance board** | ✅ Platform green — **V12.1/2/4/6 PASS**, run `35168252498`. The *content* is thin (0 machine-verified of 110) and that is the segment's argument, not its defect |
+> | **#5 Cross-cloud lakehouse** | ✅ New 2026-09-16, and not in the original script at all. **V8.6 + V8.7 PASS.** See § *Segment 5b* |
 >
-> **What CAN be shown today**, and is genuinely strong: the layered deploy with independent
-> Verifier sign-off at each step; L7 at 5/5; a real teardown with the four resource groups
-> verifiably gone and tenant objects intact; and the failure-class test suite - an estate
-> that catches its own false claims, which is a better story than most demos have.
+> **The one thing this script can no longer do unrehearsed is Variant A.** The estate is
+> **up** — 30 resources across four RGs since the 2026-09-03 rebuild — so the cold open in
+> Segment 1 and the live rebuild in Segment 2 would need a teardown first, and the
+> cross-cloud link has **never survived a teardown**. Run **Variant B** and keep the kill
+> demo at the end, where it already is.
 >
-> See [docs/DEMO-READINESS.md](../DEMO-READINESS.md). Delete this box when the rows above
-> are false; do not delete it because it is unflattering.
+> See [docs/DEMO-READINESS.md](../DEMO-READINESS.md), refreshed 2026-09-17 01:30Z. Revise
+> this box when a row changes; do not delete it because it is flattering, either.
 
 
 The stage flow a presenter follows, end to end: cold open on an empty subscription,
-rebuild kickoff, the four showpieces in order, and the kill demo with the idle-cost
+rebuild kickoff, the showpieces in order, and the kill demo with the idle-cost
 view. Audience: launch-industry engineering/security/ops leaders — the narrative is
 "the repo is the product; the environment is a build artifact."
 
-Total stage time: **~115 minutes** for the full cold-start proof (Variant A) — 105 plus
-the ten-minute compliance segment added with showpiece #4 on 2026-08-26. A
-**~60-minute** condensed variant (B) is noted at the end for slots that cannot absorb
-a live rebuild. All timings are [derived] estimates — the master plan pins only the
-<60-minute rebuild; segment budgets follow from it.
+Total stage time: **~120 minutes** for the full cold-start proof (Variant A) — 105, plus
+the ten-minute compliance segment added with showpiece #4 on 2026-08-26, plus the
+five-minute cross-cloud segment added 2026-09-17. A **~65-minute** condensed variant (B) is
+at the end for slots that cannot absorb a live rebuild, **and it is the one being run on
+2026-09-17** — it now carries a running order rather than a paragraph of substitutions. All
+timings are [derived] estimates — the master plan pins only the <60-minute rebuild; segment
+budgets follow from it.
+
+> **On "the four showpieces".** `docs/BRIEF.md` commits to four. There are now **five**
+> things worth showing: the fifth is the **cross-cloud lakehouse link** (Segment 5b), which
+> the brief never described because it did not exist. It is not a replacement for any of the
+> four and it is not in the brief's scorecard — say so if asked rather than quietly counting
+> to five.
 
 > **Changed 2026-08-24 (Copilot Studio amendment).** Two segments move. Showpiece #1 is
 > no longer a separate copilot UI: it is the **Ask** tab *inside* the control tower,
@@ -52,7 +62,42 @@ a live rebuild. All timings are [derived] estimates — the master plan pins onl
 
 ---
 
-## Pre-demo checklist (T-60 → T-0, off stage)
+## Pre-demo checklist — **VARIANT B, live estate** (T-45 → T-0, off stage)
+
+**This is the one to run on 2026-09-17.** The Variant A checklist below it opens on a torn
+down subscription and does not apply. Times are measured, not estimated.
+
+| # | Check | How | Pass state |
+|---|---|---|---|
+| 1 | **The estate is up and is the estate you think it is** | `az containerapp list -o table` | **6/6 `Running`**: compliance, control-tower, data-api, launch-ops, mcp, vuln-lab. `vuln-lab` has **no ingress and runs the helloworld image** — that is correct, it is L10's witness, not a broken app |
+| 2 | **Every app is on a `sha-` tag, not `:latest`** | `az containerapp list --query "[].{n:name,i:properties.template.containers[0].image}" -o tsv` | Every image ends `:sha-<7>`. A `:latest` anywhere means an L7 deploy has erased the commit provenance V10.2 reads — **that is F203, and it turns showpiece #3 red about four hours later.** Do not run `layer-07-apps.yml` on demo morning |
+| 3 | **Warm the two browser apps** — this is not optional | `curl -so /dev/null -w '%{time_total}\n' https://<control-tower-fqdn>/` twice | First call **~23 s**, second **~0.15 s** (measured 2026-09-17 01:55Z). A **401 is the correct answer** to curl — Easy Auth challenges a client that sends no `Accept` header. You are warming the container, not testing auth |
+| 4 | **Warm the agent** — the single biggest stage risk | Ask tab, one throwaway question | The eval's **p95 is 34.18 s against V8.5's 20 s budget**, driven entirely by an un-warmed first question. Spend it off the record |
+| 5 | **Confirm the 7th MCP tool is ON, by arithmetic** | Ask: *"how many rows are in the launches table?"* | The answer must contain **both 1,200 and 286,473**. **1,200 alone means the AWS tool is switched off in Copilot Studio** — that is **F202**, and neither the tool count nor the orchestration setting distinguishes it from a working one. Only the numbers do. Fix: Copilot Studio → toggle every tool on → **publish** |
+| 6 | **MCP server itself is healthy** | `curl -s https://<mcp-fqdn>/healthz` | `"tools":7`, `"auth":{"enforced":true}`, and `AthenaLakehouseSqlBackend` among the adapters. **Ignore the container's own startup log, which says `5 tools`** — that is F215, a diagnostic that lies in exactly the place you would look |
+| 7 | **Alert surface is readable** | `gh api repos/:owner/:repo/dependabot/alerts` | Four open: `esbuild` (low, root) and three in `apps/vuln-lab` excluded by policy. **An empty backlog is a PASS for the demo, not a gap** — the story is the operations cycle |
+| 8 | **Compliance board serves the current snapshot** | Open the board, read its *Collected `<date>` from commit `<short>`* line; compare `git log -1 --format=%h -- compliance/state/` | The two match. If they differ, the image predates the collection — re-run `app-compliance-ci.yml` |
+| 9 | **Browser prepped** | Tabs: Azure portal (Resource groups + Cost analysis), GitHub Actions, GitHub Security (Code scanning **and** Dependabot), control tower (Ask + Dev/Sec/Ops), Copilot Studio, compliance board | Logged in, MFA done — never authenticate on stage, with **one deliberate exception: do not pre-authenticate the compliance board.** Its Easy Auth redirect is a beat in Segment 8 |
+| 10 | **Fallback pack** | Screenshots of every showpiece + the last `rebuild-proof.md` | On local disk. The rebuild figures are from **2026-09-03** and are history, not current state — say so if you cite them |
+
+**What is deliberately NOT on this list:** re-seeding `apps/vuln-lab` (retired by PR #237;
+re-arming it is F190), and resuming a Fabric capacity (none exists, so nothing is on the
+paid path and no G2 is pending).
+
+### If showpiece #3 is red on the morning
+
+Check it rather than assume it: `gh run list --workflow=self-heal.yml --limit 1`, then read
+the **criterion table** in the `verify L10` job, not the job's status. If V10.2 reports
+*"could not establish whether the running image carries this heal"*, the cause is item 2
+above — an app is on `:latest`. The heal chain is not broken; the estate changed underneath
+the criterion. `self-heal` runs at **01:13, 07:13, 13:13 and 19:13 UTC**, so a morning slot
+has already had two chances; `gh workflow run self-heal.yml` forces another in ~3 minutes.
+
+---
+
+## Pre-demo checklist — **VARIANT A, cold open** (T-60 → T-0, off stage)
+
+*For the full cold-start proof only. Not the 2026-09-17 run.*
 
 Run through in order; every box must be checked before the audience sits down.
 
@@ -158,11 +203,12 @@ the rebuild's actual pace. Talk track, in order:
 
 - Show the run summary: all layers green, wall-clock < 60 min (cite the
   `rebuild-proof.md` from L11 for the formally measured proof).
-- **Arm showpiece #3 now** so it completes while you present the other two: the
-  vuln-lab alerts from pre-demo step 5 are open; show `self-heal.yml` already running
-  (or trigger the chain's next step if it has been idle-held): "Three known-vulnerable
-  dependencies and one genuinely unsafe code path are live in this estate. The pipeline
-  noticed. We'll come back to what it did about them."
+- **Showpiece #3 needs no arming — that model was retired (PR #237).** There is nothing to
+  plant and nothing to trigger: `self-heal.yml` runs on a schedule (01:13 / 07:13 / 13:13 /
+  19:13 UTC) over whatever the repository's **real** backlog holds. Show the most recent run
+  and say: "That is not a fixture. It is the actual finding backlog for this repository,
+  judged against SLOs declared in a file in the repo. We'll come back to what it did." If
+  you want a run mid-gauntlet on stage, `gh workflow run self-heal.yml` at this point.
 - Say the timing honestly if asked: Copilot Autofix generation is asynchronous with no
   published SLA, which is exactly why it is armed here and closed out in Segment 7
   rather than run live in front of the audience.
@@ -186,10 +232,11 @@ platform agent, and it lives in this repo as a Power Platform solution."
   - *Fabric data agent path:* "Fabric turned that English into SQL against the lakehouse
     itself — native NL2SQL over OneLake, read-only by design. That integration is in
     preview, and I'll say so rather than pretend."
-  - *Tools-only path:* "That went through our MCP server — the same five tools, running
-    SQL this repo owns, against the lakehouse SQL analytics endpoint. The Fabric data
-    agent needs a paid F2 capacity; we're on the trial, so we're on the fallback the
-    playbook documents. The answers are identical either way — the eval suite proves it."
+  - *Tools-only path (**this is the live path today** — `mcp-tools-only`, run
+    `35166952968`):* "That went through our MCP server — **seven tools**, running SQL this
+    repo owns, against the lakehouse SQL analytics endpoint. The Fabric data agent needs a
+    paid F2 capacity; we're on the trial, so we're on the fallback the playbook documents.
+    The answers are identical either way — the eval suite proves it."
 - **Cross-domain follow-ups (pick 2–3, all from the golden eval suite so answers
   are pinned):**
   - "Which day of the year has the most scrubs?" (golden answer per the eval
@@ -202,11 +249,57 @@ platform agent, and it lives in this repo as a Power Platform solution."
   the agent, then flip to `infra/copilot-studio/` in the repo. "Same agent. The pipeline
   exported it, we review it in pull requests, the pipeline imports it. If someone edits
   it in the browser, the auditor fails the layer."
-- Close: five tools, allowlisted, audited — "the Verifier re-derives every one of those
-  numbers from the lakehouse itself, independently, and compares. Nine of ten golden
-  questions minimum, p95 under 20 seconds." Cost line if asked: "one cent per credit,
-  pay-as-you-go on the same Azure subscription, and nothing at all while nobody's
+- Close: **seven** tools, allowlisted, audited — "the Verifier re-derives those numbers
+  from the lakehouse itself, independently, and compares. Nine of ten golden questions
+  minimum, p95 under 20 seconds." **Two honest caveats if pressed:** the last graded run
+  scored **9/10** and the one it missed it missed by *declining to answer*, not by being
+  wrong; and its **p95 was 34 s**, because the first question of a run pays the cold
+  start — which is exactly why you warmed it at T-45. Cost line if asked: "one cent per
+  credit, pay-as-you-go on the same Azure subscription, and nothing at all while nobody's
   asking."
+
+## Segment 5b — The cross-cloud lakehouse (5 min, and it is the best five minutes)
+
+**Stage picture:** same Ask tab. No app switch, no setup. Shipped 2026-09-16 and not in
+this script before 2026-09-17.
+
+Ask, verbatim:
+
+> "How many rows are in the launches table?"
+
+The agent answers **both**, unprompted, and says why:
+
+> *"There are two different `launches` tables … Meridian's operations lakehouse
+> (synthetic): **1,200** rows. AWS launch-intelligence lakehouse (real launch-industry
+> data): **286,473** rows. I queried both because the question is ambiguous."*
+
+Then land the three beats, in this order — the last is the one the room will remember:
+
+1. **It is a second cloud, not a second database.** "That second number came from
+   **Amazon Athena**, querying a Glue catalog in an AWS account we do not own. Nothing was
+   copied. The query runs *there*; only the result rows cross."
+2. **There is no AWS credential anywhere in this system.** "It authenticates by OIDC
+   federation — `AssumeRoleWithWebIdentity`, an Entra-minted token traded for short-lived
+   AWS credentials. The same trust model the Azure side already uses, extended across a
+   cloud boundary. A repo-wide test asserts no AWS credential is stored, anywhere."
+3. **The disambiguation is the product, not a flourish.** "Nobody told it the question was
+   ambiguous. Both lakehouses have a `launches` table and plausible vehicle names — so the
+   *only* thing that distinguishes them is the numbers. It noticed that and refused to pick
+   one for you."
+
+**What to say if asked "is this verified, or is it a demo?"** — "Two criteria. **V8.6** asserts
+the AWS lakehouse returns rows rather than a status code. **V8.7** refuses to call a denial an
+empty dataset, which is the specific way this estate has been lied to before. Both pass. And
+the honest limit: they have passed **once**, on an estate that has not been torn down since
+they existed — so today that is an observation, not yet a property."
+
+**Do not claim** the control tower's 7/7 covers this. **No L7 criterion touches AWS.** The
+green board and the 286,473 rows are two independent facts that look like one, and merging
+them on stage is the exact error this repository spends its verification budget preventing.
+
+**Cost line if asked, and say it unprompted if the room is technical:** "Athena bills per
+terabyte scanned, that spend is on the sponsor's AWS account, and **nothing in this estate
+observes it.** I am not going to tell you this link is free."
 
 ## Segment 6 — Showpiece #2: control tower (10 min)
 
@@ -214,9 +307,11 @@ platform agent, and it lives in this repo as a Power Platform solution."
 Well-Architected pillars. No app switch and no cold start: you are already here, which is
 itself the point worth making — "the copilot isn't a separate product, it's a tab."
 
-- **Dev tab (3 min):** open vulns (the vuln-lab alerts feature here — plant the
-  callback), dependency status, SBOM presence, PR/pipeline status. "Everything on
-  this tab is the GitHub Security API, live."
+- **Dev tab (3 min):** open vulns, dependency status, SBOM presence, PR/pipeline status.
+  "Everything on this tab is the GitHub Security API, live." **Plant the callback to
+  Segment 7 here** — the `apps/vuln-lab` alerts are visible on this tab and *excluded from
+  the heal backlog by policy*, so if anyone asks why they are not being healed, the answer
+  is on the Sec tab's own terms: excluded by declaration, with a reason, not ignored.
 - **Sec tab (4 min):** Defender secure score, findings by severity, NIST 800-53
   posture from Azure Policy (audit mode — honest about it), Entra sign-in risk
   (E5 trial feature — say so; enterprise-real includes licensing-real).
@@ -228,11 +323,44 @@ itself the point worth making — "the copilot isn't a separate product, it's a 
 
 **Stage picture:** GitHub — Security tab + the heal PRs.
 
-Walk the trails armed in Segment 4. There are **two**, because GitHub heals the two
-finding kinds two different ways, and showing both is the honest version.
+> **REWRITTEN 2026-09-17. The showpiece this segment described no longer exists.** PR #237
+> (sponsor-approved, 2026-09-05) retired the seeded-CVE plant: `apps/vuln-lab` is a manual
+> demonstration generator, excluded from the backlog by policy, and **re-arming it is F190.**
+> The criteria below are also renumbered — the old script called Autofix "V10.1" and
+> Dependabot "V10.2", and both labels are now wrong.
+>
+> **What replaced it is a better demo, and the reason is worth saying on stage:** a planted
+> CVE only ever demonstrates the plant. What is shown now is the **operations cycle over the
+> real backlog**, governed by `.github/self-heal-policy.json` and judged by four criteria:
+>
+> | | |
+> |---|---|
+> | **V10.1** | the backlog drains — no healable finding sits past its declared SLO, per lane and per severity |
+> | **V10.2** | every closure is traceable — each finding closed in the window carries a complete heal trail, or an explicit record of being closed another way |
+> | **V10.3** | the chain could actually **read** the alert surface — a denial is never recorded as "no alerts to heal" |
+> | **V10.4** | `pending-solution` is not a dumping ground — nothing is parked there that an upstream fix exists for |
+>
+> **All four PASS** as of run `35172433866`, 2026-09-17 01:56Z.
 
-**Track A — the code fix, by Copilot Autofix (V10.1, ~6 min).** Lead with this one; it is
-the newer and better story.
+Open on the **policy file**, not the Security tab — it is the thing that makes this a cycle
+rather than an anecdote:
+
+- Every exclusion carries a **reason**, and where it is a deferral, an **expiry**. "An
+  exclusion that cannot expire is a dumping ground, so ours cannot not-expire. V10.4 is the
+  criterion that enforces that, one level up."
+- Name the live one: the `container-image` lane's deferral **expires 2026-10-07**, because
+  ACR Tasks is not permitted on this subscription. "That date is in a file. When it passes,
+  the criterion goes red by itself and somebody has to decide again."
+- And the honest one: the single real Dependabot alert, `esbuild`, **reaches its 30-day SLO
+  on 2026-09-27**. It is transitive with no direct pin. "This is what V10.1 is standing on,
+  today, and I would rather show you the clock than a green box."
+
+Then walk whichever trail is live. **If the backlog is empty, that is a PASS, not a gap** —
+show the trail of the last closure instead and say so: *"no findings; one arrives; it is
+healed; back to no findings"* is the cycle, and an empty backlog is the cycle working.
+
+**Track A — the code fix, by Copilot Autofix (~5 min).** Lead with this one if a code
+scanning finding is in flight; it is the better story.
 
 1. The **code scanning** alert — a real unsafe code path CodeQL found in
    `apps/vuln-lab`.
@@ -246,13 +374,15 @@ the newer and better story.
 6. The new container revision deployed.
 7. The alert: state **fixed**, closed by the deploy.
 
-**Track B — the dependency fixes, by Dependabot (V10.2, ~3 min).** Faster, familiar,
-and it makes the coverage point.
+**Track B — the dependency fixes, by Dependabot (~3 min).** Faster, familiar, and it makes
+the coverage point.
 
-- Three known-CVE pins → three Dependabot patch PRs, raised unassisted → same gauntlet →
-  auto-merged → alerts closed on merge. "Autofix handles code findings; Dependabot
-  handles dependency findings. We wired both into one gauntlet rather than pretending one
-  tool does everything."
+- A real Dependabot PR, raised unassisted → same gauntlet → auto-merged → alert closed on
+  merge. "Autofix handles code findings; Dependabot handles dependency findings. We wired
+  both into one gauntlet rather than pretending one tool does everything."
+- **Do not describe these as planted.** They are whatever the repository actually has that
+  morning. If nothing is in flight, `gh pr list --author app/dependabot` and walk a merged
+  one from the log.
 
 - Closing beat (~1 min): "No approval prompt anywhere in either trail — inside this demo
   environment, that's deliberate. The PR trail *is* the human oversight. And note what we
@@ -287,15 +417,24 @@ Then land the four numbers, in this order:
 - **110 requirements** — NIST SP 800-171 Rev 2, every one of them present. "Nothing is
   omitted. A requirement nobody has said anything about is on this board as
   `NOT_ASSESSED`, not missing from it."
-- **95 of the 110 are `NOT_ASSESSED`.** Say why plainly: the register covers only the
+- **94 of the 110 are `NOT_ASSESSED`.** Say why plainly: the register covers only the
   controls a real pre-publication security review raised findings against.
-- **Zero are `COMPLIANT`.** This is the beat. "Not one. And that is not because this
-  estate is badly built — it's because *nothing here has been deployed*. There is no
-  tenant behind this board today. Watch what it says about itself."
-- Point at the collector panel and read the `verification-suite` line **out loud**:
-  *"Nothing in this estate has been deployed, so there are no reports to read."*
-  "The tool told you the most damaging thing about its own data, on its own front page,
-  without being asked."
+- **Zero are `COMPLIANT`.** This is the beat, and **since 2026-09-03 it is a much stronger
+  one than this script used to claim.** The old line was *"that's because nothing here has
+  been deployed"*. That is no longer true and it was the weaker argument anyway. Say this
+  instead:
+
+  > "Not one control is compliant. And this is not an empty estate — everything you have
+  >  watched for the last hour is deployed, running, and independently audited by a
+  >  read-only identity that is not the thing that deployed it. Thirty resources. Seven of
+  >  seven on the control tower. Four of four on self-healing. **Still zero.** Because
+  >  `COMPLIANT` on this board is reachable from a machine-checked criterion and nowhere
+  >  else, and nobody has wired one to a control yet. The board will not round up for us."
+
+- Point at the collector panel and **read what is on the screen out loud** — do not recite
+  it from here, because the emitter derives that line and this script would drift from it.
+  Each collector states what it could and could not observe. "The tool told you the most
+  damaging thing about its own data, on its own front page, without being asked."
 
 Then the line that makes the whole segment land:
 
@@ -304,8 +443,9 @@ Then the line that makes the whole segment land:
 >  green boxes, because most of them will render a green box for a control nobody ever
 >  checked. This one structurally cannot."
 
-**2. The provenance cross-tab (2 min).** Show *By provenance and status*. Fifteen
-controls carry a status; all fifteen are `asserted`, none `machine-verified`.
+**2. The provenance cross-tab (2 min).** Show *By provenance and status*. **Sixteen**
+controls carry a status — 15 `PARTIAL` and 1 `GAP` — all sixteen `asserted`, **none**
+`machine-verified`.
 
 - "`asserted` means a human wrote it down and this platform checked nothing. That is a
   weaker claim, so it gets a different word, in a different column."
@@ -321,8 +461,35 @@ controls carry a status; all fifteen are `asserted`, none `machine-verified`.
   would be wrong. Counts by status, counts by provenance, and the cross-tab of the two.
   That's it."**
 
-**3. Drill into a gap (3 min).** Click a `GAP` row — **`3.1.5` (least privilege)** is the
-best one on stage.
+**3. Drill into a gap (3 min).** Click the `GAP` row — **`3.5.3`, multifactor
+authentication**. There is exactly **one** GAP row on the board, and it is this.
+
+> **Corrected 2026-09-17.** This script said to click **`3.1.5` (least privilege)** and
+> called it "the best one on stage". **`3.1.5` is `PARTIAL`, not `GAP`** — F19 moved 3.1.1,
+> 3.1.2 and 3.1.5 from GAP to PARTIAL when the seventh workload RBAC grant closed, and the
+> enforced-MFA work added `3.5.3` as the assessed GAP. A presenter following the old text
+> would hunt for a GAP row that is not there, in front of an audience.
+
+**`3.5.3` is the better beat anyway, and here is why — get this right, it is checkable.**
+The estate declares **three** Conditional Access policies. Exactly **one is `enabled`** —
+`mls-ca-require-mfa-dashboards`, which really does enforce MFA, and V3.3 confirms it. The
+**two that would close 3.5.3** — `mls-ca-require-mfa-admins` and `mls-ca-block-legacy-auth`
+— are **deliberately `enabledForReportingButNotEnforced`**.
+
+That is the whole segment on one row:
+
+- "We enforce MFA on the dashboards. We have **not** enforced it on privileged accounts, and
+  the board says so, in red, on an estate we built ourselves."
+- "It is report-only **on purpose**. The apply script *refuses* to enable a policy without a
+  validated break-glass account — because a locked-out tenant is a worse outcome than a
+  report-only policy, and because an enforced admin-MFA policy on a recovery path that
+  cannot recover anything is a control that is right until the day it matters."
+- "So closing this is a one-word manifest edit **and a decision that belongs to whoever owns
+  the tenant** — which is why it is left open rather than defaulted on."
+- The authored recommendation on screen also names what *nothing here checks*: "no criterion
+  asserts MFA was actually **satisfied at a sign-in**." Read that out. "That is the
+  difference between a policy being configured and a second factor having been presented,
+  and our own record is the thing that told you."
 
 - The detail panel shows the derived status, the provenance, the working the derivation
   returned (`statusBasis`), the authored recommendation *verbatim*, and the evidence
@@ -348,20 +515,33 @@ best one on stage.
 
 **5. The trend — and what it honestly shows today (1 min).** Open the **Trend** tab.
 
-- **Say what is actually on the screen.** On a fresh estate it reads: *"One collection so
-  far… A trend needs at least two dated collections to compare against each other — this
-  is one collection, no trend yet, not an empty chart and not an error."* Read it out.
-  "Same discipline as the rest of the board: it would rather tell you it has one data
-  point than draw you a line."
+- **UPDATED 2026-09-17: the trend now draws.** This script used to say the tab would report
+  *"one collection so far… not an empty chart and not an error"*, because there was one.
+  There are now **fifteen dated collections**, `2026-08-28 → 2026-09-17`, all committed to
+  `main`. Say what is actually on the screen — but the line to land is the **gap in it**:
+
+  > "You can see a hole in that series — it runs 28 and 29 August, then nothing until
+  >  5 September. **Six collections missing.** That is real. The nightly job was pushing its
+  >  artifact to a branch and opening a pull request that could never merge, because a
+  >  `GITHUB_TOKEN` push triggers no workflow runs, so no required check ever reported. The
+  >  job stayed green the whole time. We found it, we fixed it, and **we left the hole in
+  >  the chart**, because the chart is the record and a record you tidy up is not one."
+
+  *Six, counted from `compliance/state/` on 2026-09-17. `DEMO-READINESS.md` calls this gap
+  "nine days"; the dates missing from the series are 30 Aug – 4 Sep, which is six. Quote the
+  six — it is the number on the screen.*
 - Then show where the trend *comes from*, which is the part that survives scrutiny:
   `git log compliance/state/` in the terminal. "Every collection is a committed JSON
   artifact in this repository. So 'when did we become compliant, and when did we
   regress' has a `git log` answer, which is not something most GRC tooling can say. Once
   the nightly job has run twice this tab draws it — and every transition it draws is a
   commit you can `git show`."
-- Closing beat: "And when this estate *is* deployed, the numbers here move for exactly
-  one reason: the Verifier's audit reports start landing in the repo and the collectors
-  read them. Deploying doesn't make the board greener. Being auditable does."
+- Closing beat — **this estate IS deployed, so say the stronger version:** "These numbers
+  have not moved while everything you watched today was built, torn down, rebuilt and
+  audited. They move for exactly one reason: when the Verifier's audit reports land in the
+  repo where the collectors read them and a control gets wired to a machine-checked
+  criterion. **Deploying doesn't make the board greener. Being auditable does** — and we
+  haven't finished making it auditable, which is why it isn't."
 
 **If a segment has to be cut for time, this is not the one to cut.** It is the only one
 whose subject is the audience's own compliance obligation, and the only one that gets
@@ -428,9 +608,11 @@ Likely questions and where the receipts live:
   is the written contract for that distinction.
 - *"Where did the gaps come from — are they made up?"* → a real pre-publication security
   review of this repository: 24 findings with severity, confidence, `file:line`, attack
-  path and fix, in `compliance/findings/2026-08-26-prepublication-review.md`. Sixteen of
-  the nineteen register records now assert `CLOSED`; three are still open, and they are
-  the three `GAP` rows on the board.
+  path and fix, in `compliance/findings/2026-08-26-prepublication-review.md`. **Nineteen of
+  the twenty register records now assert `CLOSED`; one is still open — `3.5.3` — and it is
+  the single `GAP` row on the board.** (Counted 2026-09-17. This answer read "sixteen of
+  nineteen … three GAP rows" until then, and was wrong in all three numbers: findings kept
+  closing and the script did not.)
 - *"Could I run this against my own estate?"* → the collectors are pluggable and the
   catalog is reference data, so yes in shape — but read `L12.md` first: it states which
   leg of its deploy/teardown/audit triplet is missing (there is no
@@ -438,17 +620,49 @@ Likely questions and where the receipts live:
 
 ---
 
-## Variant B — condensed (~60 min, no live rebuild)
+## Variant B — condensed (~65 min, no live rebuild) — **THE 2026-09-17 RUNNING ORDER**
 
-For short slots: run `up.ps1` before the audience arrives (T-90), verify audits
-green, and replace Segments 2–4 with a 7-minute walkthrough of the committed
-`verification/reports/rebuild-proof.md` — the wall-clock evidence stands in for the
-live wait. Cold open still works: show the *proof report's* down-state audit
-instead of a live empty subscription, or open on the built environment and lead
-with the kill demo, rebuilding after the audience leaves. Segment budget: cold
-open/proof 7, copilot 10, control tower 10, self-heal 10, compliance 10, kill + idle
-cost 8, Q&A 5. The full-proof Variant A is the stronger show whenever the slot allows —
-the rebuild wait, narrated well, is the credibility.
+The estate is already up, so nothing is built on stage. Run this order:
+
+| # | Segment | Min | Note |
+|---|---|---|---|
+| 1 | **Cold open, from the proof** | 7 | You cannot show an empty subscription — show the committed `rebuild-proof.md` and its **down-state audit** instead. Be explicit that the figures are **2026-09-03**: teardown ~14 min, rebuild 87 min, 30 → 0 → 30 resources. *History, not a live claim* |
+| 2 | **Repo tour** | 8 | Compressed Segment 3: working agreements + the five gates, the agent team, `verification/reports/`, the DevSecOps chain as code. Land *"RG-scoped teardown is gate-free by design"* — it sets up segment 8 |
+| 3 | **Showpiece #1 — the copilot** | 10 | Segment 5, warm |
+| 4 | **Showpiece #5 — cross-cloud** | 5 | **Segment 5b. Do not cut this one.** Same tab, no setup, and it is the newest thing here |
+| 5 | **Showpiece #2 — control tower** | 8 | Segment 6, trimmed. No app switch |
+| 6 | **Showpiece #3 — self-healing** | 8 | Segment 7, the policy-first version |
+| 7 | **Showpiece #4 — compliance** | 10 | Segment 8. **Protect this one if the slot shrinks** — no rebuild, no warm-up, no async chain |
+| 8 | **Kill demo + idle cost** | 8 | Segment 9, live. This is where the credibility Variant A gets from the rebuild comes from instead |
+| 9 | **Q&A** | 5 | Segment 10 |
+
+**The kill demo carries this variant.** In Variant A the rebuild wait is the credibility;
+here it is the teardown — so run it live, narrate it, and make the persistence point
+properly: users, groups, CA policies and labels survive; the four resource groups do not.
+
+> **Read this before running `down.ps1` on 2026-09-17.** The estate is scheduled for
+> shutdown around **2026-09-27**, and a rebuild is wanted before then to convert several
+> things that have passed exactly **once** into properties — V8.6/V8.7 and the whole
+> cross-cloud link have never survived a teardown. So **plan the rebuild after the audience
+> leaves, and treat it as instrumented evidence rather than cleanup** — V11.3, V11.4 and
+> V11.5 have *never reported at all*, and this is one of the last chances they will get.
+>
+> Two things to do **before** that teardown, in this order, or the rebuild loses ground:
+> 1. **Fix F203 first** (`layer-07-apps.yml` defaults `image_tag` to `latest`), *then* run
+>    L7 — otherwise the L7 run needed for item 2 re-breaks showpiece #3.
+> 2. **Let that L7 run deploy the Key Vault grant** in
+>    `infra/bicep/apps/modules/key-vault-secret-role.bicep`. It has **never been deployed**;
+>    today's V8.6/V8.7 passes rest on a hand-applied role assignment, and a teardown returns
+>    both criteria to `SKIP` **without anything going red**.
+
+Two notes carried from the amendment: (a) warm the agent during setup, not on stage — the
+Ask tab's first question is the slowest of the day; (b) the self-heal chain is
+policy-driven now, so there is nothing to "arm" — check it is green at T-45 and show
+whatever is actually in flight.
+
+**Variant A is the stronger show whenever the slot allows** — the rebuild wait, narrated
+well, is the credibility. It needs a torn-down estate at T-0, so it is a *decision made the
+night before*, not a choice made on the morning.
 
 Two Variant-B-specific notes since the amendment: (a) warm the agent during the T-90
 setup, not on stage — the Ask tab's first question after a rebuild is the slowest of the
