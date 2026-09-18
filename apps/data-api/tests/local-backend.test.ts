@@ -11,7 +11,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { LocalFeedsBackend, LocalTablesBackend } from "../src/backends/local.js";
 import {
   FEED_FIXTURE,
