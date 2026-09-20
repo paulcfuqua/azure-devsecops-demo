@@ -287,4 +287,37 @@ Describe 'layer-11-audit' {
                 Should -Be 'FAIL'
         }
     }
+
+    Context 'the two SurvivingResourceGroup defaults must agree' {
+        # The value lives twice: once on the script param block (what CI passes through)
+        # and once on Invoke-Main (what the harness and any direct caller get). If they
+        # drift, one path reports the designed survivor as a stranded resource group and
+        # the other does not - and which one you hit depends on how the audit was invoked.
+        It 'declares the same survivors in the param block and in Invoke-Main' {
+            $path = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-11-audit.ps1'
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
+
+            $scriptParam = $ast.ParamBlock.Parameters |
+                Where-Object { $_.Name.VariablePath.UserPath -eq 'SurvivingResourceGroup' }
+            $invokeMain = $ast.FindAll({
+                    param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-Main'
+                }, $true)[0]
+            $functionParam = $invokeMain.Body.ParamBlock.Parameters |
+                Where-Object { $_.Name.VariablePath.UserPath -eq 'SurvivingResourceGroup' }
+
+            $scriptParam | Should -Not -BeNullOrEmpty
+            $functionParam | Should -Not -BeNullOrEmpty
+
+            $extract = {
+                param($p)
+                @($p.DefaultValue.FindAll({
+                            param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst]
+                        }, $true) | ForEach-Object { $_.Value })
+            }
+            $scriptDefault = & $extract $scriptParam
+            $functionDefault = & $extract $functionParam
+            $functionDefault | Should -Be $scriptDefault
+            $scriptDefault | Should -Contain 'mls-rg-identity'
+        }
+    }
 }

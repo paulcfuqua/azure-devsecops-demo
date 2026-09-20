@@ -303,6 +303,10 @@ function Invoke-Main {
         [string]$Phase = 'Up',
         [string]$SubscriptionId,
         [string]$ResourceGroupPrefix = 'mls-rg-',
+        # MUST match the script-level default. A caller that omits it - the Pester harness
+        # does - has to get the documented behaviour, not an empty list that reports the
+        # designed survivor as a stranded group. A test asserts the two agree.
+        [string[]]$SurvivingResourceGroup = @('mls-rg-identity'),
         [string]$UpStartUtc,
         [string]$UpCompletedUtc,
         [double]$WallClockBudgetMinutes = 60,
@@ -436,6 +440,7 @@ function Invoke-Main {
 if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -Phase $Phase -SubscriptionId $SubscriptionId -ResourceGroupPrefix $ResourceGroupPrefix `
+            -SurvivingResourceGroup $SurvivingResourceGroup `
             -UpStartUtc $UpStartUtc -UpCompletedUtc $UpCompletedUtc -WallClockBudgetMinutes $WallClockBudgetMinutes `
             -Repository $Repository -FabricCapacityId $FabricCapacityId -SqlDatabaseId $SqlDatabaseId `
             -IdleDailyCostBudget $IdleDailyCostBudget -ChildAuditLayer $ChildAuditLayer `
