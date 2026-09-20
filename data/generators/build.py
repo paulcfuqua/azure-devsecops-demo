@@ -407,6 +407,51 @@ def gen_findings():
 # Assembly
 # ---------------------------------------------------------------------------
 
+def gen_hr_roster():
+    """Fictional employee roster: mixed sensitivity WITHIN ONE ROW.
+
+    `start_date`, `department` and `tenure_years` are ordinary business data.
+    `salary_usd`, `bonus_target_pct` and `performance_band` are restricted by
+    column-level security at L4. The mix is the whole point - a table whose
+    sensitive columns lived elsewhere would give CLS nothing to discriminate
+    within, and the demo would be a join rather than a denial.
+
+    Synthetic and fictional throughout (CLAUDE.md hard rule 4).
+    """
+    rng = _rng("hr_roster")
+    rows = []
+    for i in range(C.N_HR_ROSTER):
+        first = C.HR_FIRST_NAMES[rng.randrange(len(C.HR_FIRST_NAMES))]
+        last = C.HR_LAST_NAMES[rng.randrange(len(C.HR_LAST_NAMES))]
+        start = _rand_date(rng, C.HR_START, C.HR_END)
+        family = C.HR_JOB_FAMILIES[rng.randrange(len(C.HR_JOB_FAMILIES))]
+        rows.append(
+            {
+                "employee_id": f"EMP-{1000 + i}",
+                "display_name": f"{first} {last}",
+                "department": C.HR_DEPARTMENTS[rng.randrange(len(C.HR_DEPARTMENTS))],
+                "job_family": family,
+                "location": C.HR_LOCATIONS[rng.randrange(len(C.HR_LOCATIONS))],
+                "start_date": start.isoformat(),
+                "tenure_years": round((C.HR_END - start).days / 365.25, 1),
+                "manager_id": None,
+                "employment_type": _weighted(rng, C.HR_EMPLOYMENT_TYPES),
+                "salary_usd": C.HR_SALARY_BASE[family]
+                + rng.randrange(-18000, 92000, 500),
+                "bonus_target_pct": rng.randrange(0, 26),
+                "performance_band": _weighted(rng, C.HR_PERFORMANCE_BANDS),
+            }
+        )
+
+    # Managers are assigned after the fact so manager_id always resolves to a
+    # real employee_id - asserted by the tests, and a dangling reference would
+    # make the roster join in the demo fail in front of an audience.
+    manager_ids = [r["employee_id"] for r in rows[: C.HR_MANAGER_COUNT]]
+    for r in rows[C.HR_MANAGER_COUNT :]:
+        r["manager_id"] = manager_ids[rng.randrange(len(manager_ids))]
+    return rows
+
+
 def build_tables():
     """Build all ten tables. Pure function of config.SEED."""
     vehicles = gen_vehicles()
