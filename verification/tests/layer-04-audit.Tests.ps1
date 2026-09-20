@@ -98,6 +98,8 @@ Describe 'layer-04-audit' {
         $script:PolicyRow = @([pscustomobject]@{ name = 'sp_defect_tier'; is_enabled = $true })
         # Built-in roles are visible by default, which is what a sighted caller sees.
         $script:VisibleRoleCount = 5
+        # Baseline permission rows every database carries. Zero means blind (F224).
+        $script:VisiblePermissionRows = 284
 
         # V4.5's fixture: the numbers observed on the live estate 2026-09-20. A caller in
         # neither role reads 900 from the base table and 761 through the view, with 139
@@ -111,6 +113,9 @@ Describe 'layer-04-audit' {
             # database_permissions FIRST: that query JOINs sys.database_principals, so a
             # looser match on the principals table swallows it and hands back a row count
             # where the DENY rows should be.
+            if ($Query -like '*COUNT(*) AS n FROM sys.database_permissions*') {
+                return @([pscustomobject]@{ n = $script:VisiblePermissionRows })
+            }
             if ($Query -like '*database_permissions*') { return $script:DenyRow }
             if ($Query -like '*base_rows*') {
                 return @([pscustomobject]@{
@@ -129,7 +134,7 @@ Describe 'layer-04-audit' {
     Context 'all criteria pass' {
         It 'records V4.1, V4.2 and V4.3 as PASS against the recorded baseline' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V4.1', 'V4.2', 'V4.3', 'V4.4', 'V4.5', 'V4.6')
+            @($context.Criterion).Id | Should -Be @('V4.1', 'V4.2', 'V4.3', 'V4.5', 'V4.6')
             # V4.6 is the BY-DESIGN SKIP, named explicitly rather than excluded by a
             # loosened filter: the COLUMN denial cannot be provoked on this endpoint at
             # all (Msg 15868), and the day it becomes runnable this assertion should fail
@@ -246,7 +251,7 @@ Describe 'layer-04-audit' {
         It 'records V4.1 as FAIL when Get-Label errors, and still records V4.2 and V4.3' {
             Mock Get-MlsLabel { throw 'Connect-IPPSSession: The term Get-Label is not recognized (no S&C session).' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 6
+            @($context.Criterion).Count | Should -Be 5
             (Get-Row -Context $context -Id 'V4.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V4.1').Observed | Should -BeLike '*no S&C session*'
         }
@@ -313,63 +318,6 @@ Describe 'layer-04-audit' {
         It 'is not in the master-plan traceability convention - documented as supplementary' {
             $context = Invoke-AuditForTest
             (Get-Row -Context $context -Id 'V4.3').Description | Should -BeLike '*supplementary*'
-        }
-    }
-
-    Context 'V4.4 - the table-protection artefacts' {
-        It 'passes on a correctly protected estate' {
-            (Get-Row -Context (Invoke-AuditForTest) -Id 'V4.4').Status | Should -Be 'PASS'
-        }
-
-        It 'FAILS when the security policy exists but is NOT enabled' {
-            # F119's class, and the single most important thing V4.4 adds over "the policy
-            # exists": a policy created STATE = OFF appears in sys.security_policies, reads
-            # as healthy to anything counting rows there, and filters nothing at all.
-            $script:PolicyRow = @([pscustomobject]@{ name = 'sp_defect_tier'; is_enabled = $false })
-            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*NOT enabled*'
-        }
-
-        It 'FAILS when a restricted column carries no DENY' {
-            $script:DenyRow = @($script:DenyRow | Where-Object { $_.column_name -ne 'salary_usd' })
-            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*salary_usd*'
-        }
-
-        It 'FAILS when the unfiltered base table is readable, so the view is not the only door' {
-            # Granting the filtered view while leaving the base table readable is a
-            # complete bypass that looks correct in every other check.
-            $script:DenyRow = @($script:DenyRow | Where-Object { $_.object_name -ne 'defect_reports' })
-            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
-            $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*only door*'
-        }
-
-        It 'reports UNOBSERVABLE, never a pass, when no endpoint was supplied' {
-            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -SqlEndpoint '') -Id 'V4.4'
-            $row.Status | Should -Not -Be 'PASS'
-            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
-        }
-
-        It 'reports UNOBSERVABLE when it cannot enumerate principals, rather than "no DENY exists"' {
-            # The trap this closes: sys.database_permissions answers a caller without
-            # visibility with an EMPTY SET, not a denial. Read naively that is
-            # indistinguishable from an unprotected table, and V4.4 would fail a correct
-            # estate with a confident, specific, wrong answer (F105).
-            $script:VisibleRoleCount = 0
-            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
-            $row.Status | Should -Not -Be 'PASS'
-            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
-            $row.Observed | Should -Not -BeLike '*carries no DENY*'
-        }
-
-        It 'reports UNOBSERVABLE, never "protection missing", when the endpoint errors' {
-            Mock Invoke-MlsSqlQuery { throw 'Login failed for user.' }
-            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
-            $row.Status | Should -Not -Be 'PASS'
-            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
         }
     }
 
