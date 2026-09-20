@@ -501,7 +501,10 @@ function Invoke-Main {
     # V4.1 already asserts the taxonomy is EXACTLY the six names, so a third check of the
     # same fact would be two ways to learn one thing.
     if ([string]::IsNullOrWhiteSpace($ProtectionPrefix)) { $ProtectionPrefix = Get-CompanyPrefix }
-    $restrictedColumn = @('salary_usd', 'bonus_target_pct', 'performance_band')
+    # The restricted COLUMN list went with V4.4: it was that criterion's input, and per
+    # F218 those DENYs bind nobody on this endpoint anyway. V4.6 names the columns in its
+    # own text for the human reading a SKIP.
+    #
     # The value the RLS predicate filters on. Mirrors
     # infra/fabric/protect-tables.ps1's $script:RestrictedClassification.
     $restrictedClassification = 'THIRD_PARTY_PROPRIETARY'
