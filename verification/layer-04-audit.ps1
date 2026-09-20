@@ -10,14 +10,24 @@
       V4.1  Get-Label returns the 6 labels with expected GUIDs recorded to
             verification/reports/.
       V4.2  Labels survive a kill/rebuild cycle (checked again at L11).
-      V4.4  Table protection ARTEFACTS - the column DENYs exist and the row-level
-            security policy is ENABLED.
+      V4.4  RETIRED 2026-09-20. It asserted that the column DENYs exist and the RLS
+            policy is enabled - both ARTEFACTS. V4.5 proves the policy actually FILTERS,
+            which strictly implies it exists and is enabled, so nothing was lost by
+            removing it. Two things made keeping it worse than useless: the column DENYs
+            target a role that can never have members on this endpoint (F218), so they
+            enforce nothing; and mls-verifier cannot read sys.database_permissions at
+            all (F224), so the criterion could never reach a verdict. A check that can
+            neither see its subject nor find a working control if it could is noise
+            wearing the costume of diligence. Restore it if the sensitive tables ever
+            move to a Fabric Warehouse, where database principals exist and the DENYs
+            would bind.
       V4.5  Row-level security ENFORCES - a non-privileged caller sees exactly the
             unrestricted rows. A REAL VERDICT: the predicate keys on the PRIVILEGED role,
             so it filters every caller outside it, this auditor included.
       V4.6  Column-level denial ENFORCES - not observable read-only, and reports SKIP
             saying why. A DENY binds only members of the role it targets, and EXECUTE AS
-            is unsupported here (Msg 15868). V4.4 stands in for neither.
+            is unsupported here (Msg 15868), and per F218 no principal can exist to be
+            denied in the first place.
 
     V4.2 is a checkpoint comparison, not a second query: L04 owns the criterion, L11 owns
     the re-execution schedule, so layer-11-audit.ps1 runs this same script with
@@ -77,9 +87,9 @@ param(
     # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
     [string[]]$OnlyCriterion = @(),
 
-    # V4.4 reads the lakehouse SQL analytics endpoint for the table-protection artefacts.
+    # V4.5 reads the lakehouse SQL analytics endpoint to prove the row filter filters.
     # RESOLVED by the caller from the Fabric API, never stored: it regenerates on every
-    # rebuild (F129's class). Absent means V4.4 reports UNOBSERVABLE, never a pass.
+    # rebuild (F129's class). Absent means V4.5 reports UNOBSERVABLE, never a pass.
     [string]$SqlEndpoint,
     [string]$SqlAccessToken,
     [string]$LakehouseName = 'mls_operations',
@@ -256,116 +266,6 @@ function Test-LabelPolicyScope {
     return New-MlsCheckResult -Passed $true -Observed $describe
 }
 
-function Test-TableProtectionArtefact {
-    <#
-    .SYNOPSIS
-        V4.4 - the CLS and RLS objects exist, and the policy is ENABLED.
-    .DESCRIPTION
-        This is the ARTEFACT half and it says so. It proves the objects are there; it does
-        not prove anyone is actually refused. V4.5 proves the ROW filter really filters,
-        which is observable; V4.6 records that the COLUMN denial is not observable from a
-        read-only audit. This criterion stands in for neither.
-
-        `is_enabled` is the part that earns its place. A security policy created with
-        STATE = OFF exists, appears in sys.security_policies, reads as healthy to anything
-        counting rows in that view, and filters nothing at all - F119's class, a thing
-        present but not switched on.
-    #>
-    param(
-        [AllowEmptyString()][string]$SqlEndpoint,
-        [AllowEmptyString()][AllowNull()][string]$SqlAccessToken,
-        [Parameter(Mandatory)][string]$LakehouseName,
-        [Parameter(Mandatory)][string]$Prefix,
-        [Parameter(Mandatory)][string[]]$RestrictedColumn
-    )
-    if ([string]::IsNullOrWhiteSpace($SqlEndpoint)) {
-        return New-MlsCheckResult -Passed $false `
-            -Observed 'UNOBSERVABLE: no SQL analytics endpoint was supplied' `
-            -Detail 'Pass -SqlEndpoint (resolved from the Fabric API, never stored). Without it this criterion cannot look, and it reports that rather than reporting the protection absent (F105).' -Final
-    }
-
-    $standard = "${Prefix}_data_standard"
-    try {
-        # ESTABLISH THAT WE CAN SEE BEFORE READING ANYTHING INTO WHAT WE SAW.
-        # sys.database_permissions and sys.security_policies return EMPTY SETS, not
-        # errors, to a caller without catalog-metadata visibility. Empty then reads as
-        # "no DENY exists" and this criterion FAILS a correctly protected estate with a
-        # confident, specific, wrong answer. F105's shape.
-        #
-        # PROBE THE EXACT VIEWS THIS CRITERION READS. The first version of this guard
-        # counted visible database ROLES, reasoning that a caller who can see principals
-        # can see permissions. mls-verifier can see roles - built-in roles are visible to
-        # everyone - and cannot see permission rows, so the guard passed and V4.4 then
-        # announced that the security policy "does not exist" on an estate where it had
-        # just been confirmed enabled (F224, 2026-09-20).
-        #
-        # That was the artefact substituted for the capability, inside the guard written
-        # to prevent exactly that substitution. Asserting a NEIGHBOURING view is not
-        # asserting the one you are about to draw a conclusion from.
-        #
-        # Every database carries baseline permission rows - public's CONNECT and SELECT
-        # grants at minimum - so zero rows in the whole view means blind, never empty.
-        $visible = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `
-                -AccessToken $SqlAccessToken `
-                -Query 'SELECT COUNT(*) AS n FROM sys.database_permissions')
-        $visibleRows = 0
-        if ($visible.Count -gt 0) { $visibleRows = [int](Get-MlsProperty -InputObject $visible[0] -Name 'n') }
-        if ($visibleRows -le 0) {
-            return New-MlsCheckResult -Passed $false `
-                -Observed 'UNOBSERVABLE: this identity sees zero rows in sys.database_permissions, so an empty result cannot be distinguished from an unprotected table' `
-                -Detail 'Every database carries baseline permission rows (public CONNECT/SELECT), so seeing none means this identity lacks catalog-metadata visibility - not that the protection is absent. Run V4.4 as an identity that can read the catalog, or grant VIEW DEFINITION. It reports that it could not look (F105, F224).' -Final
-        }
-
-        $permissions = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `
-                -AccessToken $SqlAccessToken -Query @"
-SELECT dp.name AS principal, pm.permission_name AS permission, pm.state_desc AS state,
-       OBJECT_NAME(pm.major_id) AS object_name, c.name AS column_name
-FROM sys.database_permissions pm
-JOIN sys.database_principals dp ON dp.principal_id = pm.grantee_principal_id
-LEFT JOIN sys.columns c ON c.object_id = pm.major_id AND c.column_id = pm.minor_id
-WHERE dp.name = '$standard' AND pm.state_desc = 'DENY'
-"@)
-        $policies = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `
-                -AccessToken $SqlAccessToken `
-                -Query "SELECT name, is_enabled FROM sys.security_policies WHERE name = 'sp_defect_tier'")
-    } catch {
-        return New-MlsCheckResult -Passed $false `
-            -Observed "UNOBSERVABLE: the SQL analytics endpoint could not be read - $($_.Exception.Message)" `
-            -Detail 'The endpoint refused or failed, so this criterion cannot distinguish "the protection is missing" from "could not look". It reports that it could not look (F105).' -Final
-    }
-
-    $deniedColumn = @($permissions |
-            Where-Object { "$(Get-MlsProperty -InputObject $_ -Name 'object_name')" -eq 'hr_roster' } |
-            ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'column_name')" })
-    $deniedObject = @($permissions |
-            Where-Object { [string]::IsNullOrEmpty("$(Get-MlsProperty -InputObject $_ -Name 'column_name')") } |
-            ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'object_name')" })
-
-    $problems = [System.Collections.Generic.List[string]]::new()
-    foreach ($column in $RestrictedColumn) {
-        if ($column -notin $deniedColumn) { $problems.Add("hr_roster.$column carries no DENY for $standard") }
-    }
-    if ('defect_reports' -notin $deniedObject) {
-        $problems.Add("the unfiltered base table defect_reports carries no DENY for $standard, so the filtered view is not the only door")
-    }
-    if ($policies.Count -eq 0) {
-        $problems.Add('the security policy sp_defect_tier does not exist')
-    }
-    else {
-        $enabled = Get-MlsProperty -InputObject $policies[0] -Name 'is_enabled'
-        if (-not [bool]$enabled) {
-            $problems.Add('the security policy sp_defect_tier exists but is NOT enabled, so it filters nothing')
-        }
-    }
-
-    $describe = "DENY columns on hr_roster: [$($deniedColumn -join ', ')]; DENY objects: [$($deniedObject -join ', ')]; sp_defect_tier: $(if ($policies.Count) { "enabled=$(Get-MlsProperty -InputObject $policies[0] -Name 'is_enabled')" } else { 'absent' })"
-    if ($problems.Count -gt 0) {
-        return New-MlsCheckResult -Passed $false -Observed "$($problems -join '; ') -- $describe" `
-            -Detail 'Re-run layer-04-purview.yml''s protect job, which applies infra/fabric/protect-tables.ps1. Every statement is guarded and safe to replay.' -Final
-    }
-    return New-MlsCheckResult -Passed $true -Observed $describe
-}
-
 function Test-RowFilterEnforcement {
     <#
     .SYNOPSIS
@@ -393,6 +293,11 @@ function Test-RowFilterEnforcement {
         make the comparison meaningless, so that reports SKIP rather than failing a correct
         estate. And a table with no restricted rows would make a filter that removed nothing
         look identical to one that worked, so zero restricted rows is a FAIL pointing at V5.5.
+
+        THIS CRITERION SUBSUMES THE RETIRED V4.4. A policy that filters necessarily exists
+        and is necessarily enabled - a disabled policy returns every row and fails here. So
+        the artefact check added nothing this does not already prove, and unlike it, this
+        one is observable by the verifier.
     #>
     param(
         [AllowEmptyString()][string]$SqlEndpoint,
@@ -438,7 +343,7 @@ SELECT
     if ($isPrivileged -eq -1) {
         return New-MlsCheckResult -Passed $false `
             -Observed "UNOBSERVABLE: role '$privileged' does not exist, so nothing follows about filtering -- $describe" `
-            -Detail 'The protection has not been applied; V4.4 is the criterion that reports that. This one cannot distinguish "no filter" from "no role to filter against".' -Final
+            -Detail 'The protection has not been applied. Re-run layer-04-purview.yml, whose protect job applies infra/fabric/protect-tables.ps1; every statement is guarded and safe to replay. This criterion cannot distinguish "no filter" from "no role to filter against", so it reports neither.' -Final
     }
     if ($isPrivileged -eq 1) {
         return New-MlsCheckResult -Status 'SKIP' `
@@ -453,7 +358,7 @@ SELECT
     if (($base - $view) -ne $restricted) {
         return New-MlsCheckResult -Passed $false `
             -Observed "the filter removed $($base - $view) row(s) but $restricted are classified restricted -- $describe" `
-            -Detail 'A non-privileged caller must see exactly the unrestricted rows through v_defect_reports. Equal counts mean the policy is not filtering: check sys.security_policies.is_enabled (V4.4) and that the predicate is bound to the view.' -Final
+            -Detail 'A non-privileged caller must see exactly the unrestricted rows through v_defect_reports. Equal counts mean the policy is not filtering: check that sp_defect_tier exists with is_enabled = 1 in sys.security_policies and that its predicate is bound to v_defect_reports.' -Final
     }
     return New-MlsCheckResult -Passed $true `
         -Observed "a non-privileged caller sees $view of $base rows; exactly the $restricted restricted row(s) were filtered out, silently -- $describe"
@@ -486,13 +391,13 @@ function Test-ColumnDenialEnforcement {
 
         So: SKIP, naming the blocker, and naming where the capability IS observable - the
         two-tier agent path, where the standard tier's own identity asks for salary through
-        the tool chain and is refused by the database. V4.4 covers the artefact and does not
-        stand in for this.
+        the tool chain and is refused by the database. The retired V4.4 covered the artefact
+        and never stood in for this.
     #>
     param([Parameter(Mandatory)][string]$Prefix)
     return New-MlsCheckResult -Status 'SKIP' `
         -Observed 'UNOBSERVABLE from a read-only audit: a DENY binds only members of the role it targets, and EXECUTE AS is not supported on this endpoint (Msg 15868, verified 2026-09-20)' `
-        -Detail "This auditor is not in ${Prefix}_data_standard, so its own ability to read salary_usd says nothing about the standard tier. The refusal cannot be provoked from here for ANY caller - Msg 15868 is a feature-level refusal - and the endpoint exposes no impersonable user. Joining the auditor to ${Prefix}_data_standard would break V5.3, which needs it to read all 900 defect_reports rows. The capability is observable end to end on the two-tier agent path; that criterion belongs with the agent tiering. V4.4 covers the ARTEFACT - that the DENY rows exist - and does NOT stand in for this: a permission recorded in sys.database_permissions is not the same claim as a caller being refused. Contrast V4.5, which IS a real verdict because the row predicate keys on the PRIVILEGED role and so filters every caller outside it."
+        -Detail "This auditor is not in ${Prefix}_data_standard, so its own ability to read salary_usd says nothing about the standard tier. The refusal cannot be provoked from here for ANY caller - Msg 15868 is a feature-level refusal - and the endpoint exposes no impersonable user. Joining the auditor to ${Prefix}_data_standard would break V5.3, which needs it to read all 900 defect_reports rows. The capability is observable end to end on the two-tier agent path; that criterion belongs with the agent tiering. V4.4 used to cover the artefact and was retired (F218, F224): the DENY rows it checked can never bind anyone on this endpoint, and the verifier cannot see them anyway. Contrast V4.5, which IS a real verdict because the row predicate keys on the PRIVILEGED role and so filters every caller outside it."
 }
 
 function Invoke-Main {
@@ -590,7 +495,7 @@ function Invoke-Main {
         -RetryWindowMinutes 10 `
         -Test { Test-LabelPolicyScope -PolicyName $ExpectedLabelPolicy -ExpectedLabel $ExpectedLabel -ExpectedScope $ExpectedLabelPolicyScope } | Out-Null
 
-    # V4.4 / V4.5 - the data-layer protection. NOT the labels: a sensitivity label
+    # V4.5 / V4.6 - the data-layer protection. NOT the labels: a sensitivity label
     # classifies and does not gate a read, and no criterion here may assert otherwise
     # (F18). There is deliberately no separate "the two new labels exist" criterion -
     # V4.1 already asserts the taxonomy is EXACTLY the six names, so a third check of the
@@ -600,16 +505,6 @@ function Invoke-Main {
     # The value the RLS predicate filters on. Mirrors
     # infra/fabric/protect-tables.ps1's $script:RestrictedClassification.
     $restrictedClassification = 'THIRD_PARTY_PROPRIETARY'
-
-    Invoke-MlsCriterion -Context $context -Id 'V4.4' -Control @('3.1.1', '3.1.5') `
-        -Description 'Table protection ARTEFACTS: the column DENYs exist and the row-level security policy is ENABLED' `
-        -Command "SELECT dp.name, pm.permission_name, pm.state_desc, OBJECT_NAME(pm.major_id), c.name FROM sys.database_permissions pm ... WHERE dp.name = '${ProtectionPrefix}_data_standard' AND pm.state_desc = 'DENY'`nSELECT name, is_enabled FROM sys.security_policies WHERE name = 'sp_defect_tier'" `
-        -Expected "DENY on hr_roster($($restrictedColumn -join ', ')) and on defect_reports for ${ProtectionPrefix}_data_standard; sp_defect_tier present with is_enabled = 1" `
-        -RetryWindowMinutes 5 `
-        -Test {
-        Test-TableProtectionArtefact -SqlEndpoint $SqlEndpoint -SqlAccessToken $SqlAccessToken `
-            -LakehouseName $LakehouseName -Prefix $ProtectionPrefix -RestrictedColumn $restrictedColumn
-    } | Out-Null
 
     # V4.5 IS A REAL VERDICT, not a SKIP. The row predicate keys on the PRIVILEGED role,
     # so it filters every caller outside it - this auditor included. Reading the base table

@@ -260,3 +260,12 @@ control if it could. V4.5 already proves the thing that matters, by measurement,
 V4.4 should be narrowed or retired rather than left to emit UNOBSERVABLE forever. A criterion
 that can never reach a verdict is not a safeguard; it is noise that looks like diligence.
 
+**RESOLVED the same day: V4.4 is retired.** V4.5 proves the policy *filters*, which strictly
+implies it exists and is enabled — a disabled policy returns every row and fails V4.5. So the
+artefact check asserted nothing V4.5 does not already prove, and unlike it, V4.5 is
+observable by the verifier. Restore V4.4 if the sensitive tables ever move to a Fabric
+Warehouse, where database principals exist and the column DENYs would actually bind.
+
+L4 now reads: V4.1 labels, V4.2 (deferred to L11), V4.3 label policy, **V4.5 the row filter
+enforces**, V4.6 the column denial is unobservable and says so.
+
