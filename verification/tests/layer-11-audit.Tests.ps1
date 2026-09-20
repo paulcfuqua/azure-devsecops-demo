@@ -51,7 +51,10 @@ Describe 'layer-11-audit' {
         Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
         Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
 
-        $script:ResourceGroup = @()
+        # mls-rg-identity SURVIVES the teardown by design - it holds the managed identity
+        # the AWS trust policy pins its sub to, and infra-down.yml deletes four groups by
+        # name and cannot reach it. An empty list is not the correct down-state.
+        $script:ResourceGroup = @('mls-rg-identity')
         $script:FailingChildLayer = @()
         $script:CapacityState = 'Paused'
         $script:SqlStatus = 'Paused'
@@ -188,8 +191,8 @@ Describe 'layer-11-audit' {
                 $joined = $Argument -join ' '
                 if ($joined -like 'group list*') {
                     $script:Calls++
-                    if ($script:Calls -lt 2) { return @('mls-rg-platform') }
-                    return @()
+                    if ($script:Calls -lt 2) { return @('mls-rg-platform', 'mls-rg-identity') }
+                    return @('mls-rg-identity')
                 }
                 if ($joined -like 'consumption usage list*') { return $script:Usage }
                 if ($joined -like 'resource show*') { return 'Paused' }
@@ -239,6 +242,49 @@ Describe 'layer-11-audit' {
             (Get-Row -Context $context -Id 'V11.2').Status | Should -Be 'SKIP'
             (Get-Row -Context $context -Id 'V11.3').Status | Should -Be 'SKIP'
             Should -Invoke Invoke-MlsChildAudit -Exactly -Times 0
+        }
+    }
+
+    Context 'V11.1 - the resource group that must SURVIVE the teardown' {
+        # mls-rg-identity holds mls-aws-demo-id, the managed identity the AWS trust
+        # policy's `sub` condition is pinned to. infra-down.yml deletes four groups BY
+        # NAME and cannot reach it.
+        #
+        # V11.1 used to assert that NO mls-rg-* survives, so a CORRECT teardown would have
+        # failed it - reporting that the teardown had not worked when it had worked exactly
+        # as designed. The group was created 2026-09-16 and nothing has torn down since, so
+        # the contradiction had never been exercised.
+
+        It 'PASSES when the four are gone and the survivor remains' {
+            $script:ResourceGroup = @('mls-rg-identity')
+            (Get-Row -Context (Invoke-AuditForTest -Phase 'Down') -Id 'V11.1').Status |
+                Should -Be 'PASS'
+        }
+
+        It 'FAILS when a teardown-scoped group is still present' {
+            $script:ResourceGroup = @('mls-rg-identity', 'mls-rg-apps')
+            $row = Get-Row -Context (Invoke-AuditForTest -Phase 'Down' -NoRetry) -Id 'V11.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*mls-rg-apps*'
+        }
+
+        It 'FAILS when the survivor itself is gone, and says that is the worse outcome' {
+            # The direction nothing checked before. Nothing in the Azure deploy path can
+            # recreate this group: the AWS trust policy pins a sub that would no longer
+            # exist, so the cross-cloud link would be permanently broken.
+            $script:ResourceGroup = @()
+            $row = Get-Row -Context (Invoke-AuditForTest -Phase 'Down' -NoRetry) -Id 'V11.1'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*must SURVIVE*'
+            $row.Detail | Should -BeLike '*cross-cloud*'
+        }
+
+        It 'does not treat the survivor as licence for any stray group' {
+            # The exclusion is a NAMED list, not a pattern. An exclusion broad enough to be
+            # convenient is broad enough to hide a stranded, billable resource group.
+            $script:ResourceGroup = @('mls-rg-identity', 'mls-rg-something-unexpected')
+            (Get-Row -Context (Invoke-AuditForTest -Phase 'Down' -NoRetry) -Id 'V11.1').Status |
+                Should -Be 'FAIL'
         }
     }
 }
