@@ -287,24 +287,33 @@ function Test-TableProtectionArtefact {
     $standard = "${Prefix}_data_standard"
     try {
         # ESTABLISH THAT WE CAN SEE BEFORE READING ANYTHING INTO WHAT WE SAW.
-        # sys.database_permissions returns an EMPTY SET, not an error, to a caller that
-        # may not read other principals' permissions - and mls-verifier holds workspace
-        # Viewer, which is exactly the kind of identity that might not. Empty would then
-        # mean "no DENY exists" and this criterion would FAIL a correctly protected
-        # estate with a confident, specific, wrong answer. That is F105's shape.
+        # sys.database_permissions and sys.security_policies return EMPTY SETS, not
+        # errors, to a caller without catalog-metadata visibility. Empty then reads as
+        # "no DENY exists" and this criterion FAILS a correctly protected estate with a
+        # confident, specific, wrong answer. F105's shape.
         #
-        # Every database has built-in roles (public, db_owner, ...), so a caller that can
-        # see principals at all sees several. Zero means we are blind, not that the estate
-        # is unprotected.
-        $visibleRole = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `
+        # PROBE THE EXACT VIEWS THIS CRITERION READS. The first version of this guard
+        # counted visible database ROLES, reasoning that a caller who can see principals
+        # can see permissions. mls-verifier can see roles - built-in roles are visible to
+        # everyone - and cannot see permission rows, so the guard passed and V4.4 then
+        # announced that the security policy "does not exist" on an estate where it had
+        # just been confirmed enabled (F224, 2026-09-20).
+        #
+        # That was the artefact substituted for the capability, inside the guard written
+        # to prevent exactly that substitution. Asserting a NEIGHBOURING view is not
+        # asserting the one you are about to draw a conclusion from.
+        #
+        # Every database carries baseline permission rows - public's CONNECT and SELECT
+        # grants at minimum - so zero rows in the whole view means blind, never empty.
+        $visible = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `
                 -AccessToken $SqlAccessToken `
-                -Query "SELECT COUNT(*) AS n FROM sys.database_principals WHERE type = 'R'")
-        $roleCount = 0
-        if ($visibleRole.Count -gt 0) { $roleCount = [int](Get-MlsProperty -InputObject $visibleRole[0] -Name 'n') }
-        if ($roleCount -le 0) {
+                -Query 'SELECT COUNT(*) AS n FROM sys.database_permissions')
+        $visibleRows = 0
+        if ($visible.Count -gt 0) { $visibleRows = [int](Get-MlsProperty -InputObject $visible[0] -Name 'n') }
+        if ($visibleRows -le 0) {
             return New-MlsCheckResult -Passed $false `
-                -Observed 'UNOBSERVABLE: this identity cannot enumerate database principals, so an empty permission set cannot be distinguished from an unprotected table' `
-                -Detail 'sys.database_permissions answers a caller without visibility with an empty set rather than a denial (F105''s shape). Every database has built-in roles, so seeing none means this identity is blind here - grant it visibility, or run V4.4 as the deployer. It reports that it could not look, never that the protection is missing.' -Final
+                -Observed 'UNOBSERVABLE: this identity sees zero rows in sys.database_permissions, so an empty result cannot be distinguished from an unprotected table' `
+                -Detail 'Every database carries baseline permission rows (public CONNECT/SELECT), so seeing none means this identity lacks catalog-metadata visibility - not that the protection is absent. Run V4.4 as an identity that can read the catalog, or grant VIEW DEFINITION. It reports that it could not look (F105, F224).' -Final
         }
 
         $permissions = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `

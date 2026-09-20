@@ -197,3 +197,60 @@ re-measure rather than double it.
 
 **This is also why V5.2 reads the table list over a route it has established it can see.**
 One route's silence is not the other route's answer.
+
+---
+
+## F224 — the guard against reporting a control absent reported a control absent
+
+**Status:** CLOSED — guard fixed. The criterion it guards is still under review (see F218).
+
+V4.4 announced, on the live estate:
+
+> `hr_roster.salary_usd carries no DENY for mls_data_standard; ... the security policy
+> sp_defect_tier does not exist`
+
+Every one of those objects had been confirmed present and enabled, by hand, minutes earlier.
+
+### The guard that should have caught it
+
+V4.4 was written with an explicit observability probe, precisely because
+`sys.database_permissions` answers a caller without catalog visibility with an **empty set**
+rather than an error. The probe counted visible database **roles**:
+
+> *Every database has built-in roles, so a caller that can see principals at all sees
+> several. Zero means we are blind, not that the estate is unprotected.*
+
+`mls-verifier` **can** see roles — built-in roles are visible to everyone — and **cannot**
+see permission rows. The guard passed; the criterion then read an empty permission set and
+reported the protection missing.
+
+Measured as `admin@` on the same database: **284** rows in `sys.database_permissions`, **1**
+security policy, **12** roles. The verifier saw enough of the third to satisfy the guard and
+none of the first two.
+
+### What the mistake actually was
+
+The probe asserted a **neighbouring** view and concluded about the **target** view. Seeing
+principals was taken as evidence of seeing permissions. That is the artefact substituted for
+the capability — committed *inside the guard written to prevent that substitution*, which is
+what makes it worth recording rather than merely fixing.
+
+Break-glass readiness meant "an account is in the group" and passed on one holding no role.
+V3.3 meant "an enabled CA policy exists" and failed on a tenant whose MFA came from Security
+Defaults. This is the same error one level further in: the guard protecting against the error
+made the error.
+
+**Fix:** probe the exact view the criterion reads. `SELECT COUNT(*) FROM
+sys.database_permissions` — every database carries baseline rows (public's CONNECT and
+SELECT), so zero in the whole view means blind, never empty.
+
+### The larger question this leaves open
+
+With a correct guard, V4.4 will report UNOBSERVABLE **every time** it runs as `mls-verifier`.
+Combined with **F218** — the column DENYs target a role that can never have members, so they
+are inert — V4.4 is a criterion that can neither see its subject nor would find a working
+control if it could. V4.5 already proves the thing that matters, by measurement, and passes.
+
+V4.4 should be narrowed or retired rather than left to emit UNOBSERVABLE forever. A criterion
+that can never reach a verdict is not a safeguard; it is noise that looks like diligence.
+
