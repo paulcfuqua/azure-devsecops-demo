@@ -1,0 +1,199 @@
+# Finding register — 2026-09-20
+
+The tiered-data-access day: two mixed-sensitivity lakehouse tables, column- and row-level
+controls over them, and the criteria that judge both. Everything here was found by
+**deploying it**, not by reasoning about it. Nothing has been removed.
+
+Continues [2026-09-16](2026-09-16-finding-register.md) (F201–F217).
+
+Four of the six are the same shape, and it is worth naming up front: **a Fabric lakehouse
+SQL analytics endpoint is not a SQL database, and its unsupported surface is discovered
+rather than documented.** Three separate T-SQL features that every SQL Server reference
+describes as ordinary turned out to be refused here, each with a distinct message number,
+and each was found only by running it.
+
+---
+
+## F218 — a lakehouse SQL endpoint cannot have database users, so role-based tiering is impossible on it
+
+**Status:** OPEN. The deployed controls work; one of the two is narrower than its design.
+
+### Expected
+
+`infra/fabric/protect-tables.ps1` creates `<prefix>_data_standard` and
+`<prefix>_data_privileged`, denies three `hr_roster` columns and the `defect_reports` base
+table to the standard role, and filters 3PPI rows from anyone outside the privileged role.
+The two-agent demo then places each agent's identity in one role, and the same question
+returns different data to different callers.
+
+### Observed
+
+```
+CREATE USER [x] FROM EXTERNAL PROVIDER  ->  Msg 22424: CREATE USER is not a supported statement type
+CREATE USER [x] WITHOUT LOGIN           ->  Msg 22424: same
+```
+
+The endpoint's only database principals are `dbo`, `guest`, `sys` and `INFORMATION_SCHEMA`.
+No principal can be created, so **no principal can ever join either role**:
+
+| Control | Deployed | Binds anyone? |
+|---|---|---|
+| RLS filter on `v_defect_reports` | yes, `is_enabled = 1` | **YES** — the predicate requires privileged membership, nobody has it, so every caller is filtered |
+| `DENY SELECT (salary_usd, …) ON hr_roster` | yes, recorded per column | **NO** — targets a role that can never have members |
+| `DENY SELECT ON defect_reports` | yes | **NO** — same |
+
+Measured live: a caller in neither role reads **900** rows from `defect_reports` and **761**
+from `v_defect_reports`, with **139** classified restricted. 900 − 139 = 761. The filter is
+real. The denials are inert.
+
+### Why the spike missed it
+
+The spike proved `CREATE ROLE`, `GRANT`, `DENY SELECT (cols)`, `CREATE VIEW … WITH
+SCHEMABINDING` and `CREATE SECURITY POLICY … STATE = ON`. Every one of those creates an
+**object**. Nothing asked whether a **principal** could be created to put into them — the
+single question the tiering depends on.
+
+The artefact was verified and the capability assumed, which is this repository's most
+frequently recorded defect family. A `DENY` row in `sys.database_permissions` looks identical
+whether or not any principal can ever be subject to it.
+
+### Consequences for the criteria
+
+- **V4.5 is sound but narrower than its name.** It proves the row filter filters. It cannot
+  prove tiering, because both tiers are empty.
+- **V4.4 checks column DENYs that can never bite.** It is explicit about being an artefact
+  check, but on this endpoint that artefact is permanently disconnected from any capability —
+  a criterion that will pass forever while enforcing nothing.
+- **V4.6 was already right** to call the column denial unobservable, for a weaker reason than
+  the true one: not merely "EXECUTE AS is unsupported" but "no principal can exist to deny".
+
+### Options
+
+1. **A Fabric Warehouse item** for the sensitive tables — Warehouses support `CREATE USER`,
+   database roles, CLS and RLS. The SQL already written is nearly unchanged.
+2. **Separate lakehouses or workspaces per tier**, enforced by Fabric workspace roles, which
+   *do* apply to service principals. Coarser, and the mechanism Fabric intends.
+3. **Drop the tiering claim** and keep what is real: 3PPI is hidden from every automated
+   caller, including the agent.
+
+What must **not** happen is pointing one agent at `v_defect_reports` and another at
+`defect_reports` and calling it enforcement. Both are readable by every caller; that is
+presentation, not a control.
+
+---
+
+## F219 — `DATABASE_PRINCIPAL_ID` is unsupported, and nineteen unit tests passed anyway
+
+**Status:** CLOSED — fixed, and swept for.
+
+`protect-tables.ps1` first guarded `CREATE ROLE` with
+`IF DATABASE_PRINCIPAL_ID('x') IS NULL`. Against the live endpoint:
+
+```
+Msg 15871: FUNCTION 'DATABASE_PRINCIPAL_ID' is not supported.
+```
+
+The guard threw, the role was never created, and every `GRANT` and `DENY` after it failed
+with *"Principal could not be found"*. **All nineteen unit tests passed throughout**, because
+they inspect the generated SQL text and cannot inspect what the endpoint does with it.
+
+`sys.database_principals` works, and `CREATE ROLE` is content inside an `IF` — only
+VIEW/FUNCTION/POLICY must begin a batch. A test now asserts the string appears nowhere in the
+emitted SQL.
+
+---
+
+## F220 — `EXECUTE AS` is unsupported, so a read-only audit cannot provoke a refusal
+
+**Status:** CLOSED as a documented limit (V4.6).
+
+The intended V4.5 was: impersonate a member of the standard role, read `salary_usd`, require
+a permission error.
+
+```
+Msg 15868: EXECUTE AS is not supported.
+```
+
+A **feature-level** refusal, not a permission one, so no credential makes it work. Combined
+with F218 there is also nothing to impersonate.
+
+**The half that IS observable was nearly missed.** The row predicate keys on the
+*privileged* role, so it filters every caller *outside* it — including the auditor. V4.5 was
+originally a blanket SKIP; half of what it called unobservable was observable all along.
+Under-claiming a control is still a wrong answer.
+
+---
+
+## F221 — the L4 verify job could not read SQL, and said so correctly
+
+**Status:** CLOSED — fixed, and swept for per job.
+
+V4.4 and V4.5 read the SQL endpoint. The verify job had no SqlServer module, so both
+reported:
+
+> `UNOBSERVABLE: the SQL analytics endpoint could not be read - 'Invoke-Sqlcmd' is not available on this machine`
+
+— against an estate whose protection had just been confirmed correct by hand.
+
+**The criteria behaved perfectly.** They said they could not look rather than claiming the
+protection was missing, which is the entire point of the UNOBSERVABLE rule, validated
+against a cause nobody anticipated. But a *permanently* blind criterion verifies nothing
+while looking like diligence.
+
+`layer-05-fabric.yml` has carried the same install step since the identical problem was found
+for V5.3; its comment calls it *"a runner gap reported as an estate defect"*. Adding
+SQL-reading criteria to another layer without bringing the step was that lesson going
+unlearned one layer over.
+
+**The first sweep written for this was useless.** It asked whether the workflow *file*
+mentioned `Install-Module SqlServer`. `layer-04-purview.yml` already did — in the `protect`
+job — while `verify` had none, so it would have passed on the exact defect it was written
+for. Proven by breaking the workflow and watching it stay green. It now resolves the **job**
+that runs the audit and checks that job's own steps.
+
+---
+
+## F222 — a comment between backtick-continued lines silently unbinds a parameter
+
+**Status:** CLOSED — fixed, and swept for.
+
+V5.5's retry-window justification was placed here:
+
+```powershell
+-RetryWindowMinutes 10 `
+# ten minutes because ...
+-Test { ... }
+```
+
+A backtick continues onto the next line; when that line is a comment the continuation is
+consumed and everything after starts a fresh statement. `-Test` stopped binding. CI:
+*"Cannot process command because of one or more missing mandatory parameters: Test."*
+
+**The file parses clean.** `ParseFile` was run after the edit, said yes, and that was taken
+as verification. A syntax check structurally cannot see this; running the tests catches it in
+seconds.
+
+The sweep for it also needed two passes: the first reported **23 defects, all false
+positives**, because this repository's prose is full of `` `inline code` `` spans and a
+backtick ending a *comment* continues nothing. It now ignores comment lines and carries three
+self-tests proving it still catches the real shape.
+
+---
+
+## F223 — a newly loaded Delta table is invisible to the SQL endpoint for about a minute
+
+**Status:** CLOSED — measured, and the measurement is now the justification.
+
+After the L5 seed, Fabric's `/tables` route reported all **12** tables while the SQL analytics
+catalog still reported **10**. Reading only the SQL endpoint would have concluded the seed
+had failed on a run that succeeded.
+
+Measured: the two new tables appeared in the SQL catalog after **63 seconds**.
+
+V5.5's retry window was already 10 minutes, but nobody had measured anything — it was a
+number somebody picked. CLAUDE.md asks a check to declare how long it is willing to wait
+*and why*; it now cites the observation and the propagation it waits on, and says to
+re-measure rather than double it.
+
+**This is also why V5.2 reads the table list over a route it has established it can see.**
+One route's silence is not the other route's answer.
