@@ -28,10 +28,22 @@
 Adding a table touches every one of these. `data/seed/tests/schema-parity.Tests.ps1` is the guard that catches a miss:
 
 1. `data/generators/config.py` → `TABLE_ORDER`
-2. `data/generators/tests/expected_counts.json`
-3. `data/seed/schema-manifest.json` → `load_order` + `tables`
-4. `data/seed/sql/*.sql` → **not applicable here** (lakehouse-only, as `findings_history`)
-5. Prose saying "ten tables" in `data/generators/build.py`, `data/seed/seed.ps1`, `data/seed/README.md`, `data/seed/sql/sql-seed.psm1`, `data/seed/tests/schema-parity.Tests.ps1`, `verification/tests/layer-05-audit.Tests.ps1`
+2. `data/generators/config.py` → **`EXPECTED_COUNTS`** — a separate dict in the same file, iterated by `test_fixture_agrees_with_the_declared_constants`
+3. `data/generators/tests/expected_counts.json` — order must equal `TABLE_ORDER`
+4. `data/seed/schema-manifest.json` → `load_order` + `tables`
+5. `data/seed/sql/*.sql` → **not applicable here** (lakehouse-only, as `findings_history`)
+6. Real assertions saying ten — `test_row_counts.py::test_all_ten_tables_present` asserts `len(C.TABLE_ORDER) == 10`; `test_expected_counts_fixture.py::test_fixture_covers_exactly_the_ten_tables_in_order`. These are assertions, not prose, and they FAIL until updated
+7. Prose saying "ten tables" in `data/generators/build.py`, `data/seed/seed.ps1`, `data/seed/README.md`, `data/seed/sql/sql-seed.psm1`
+
+### What widening the fixture does to V5.3 — found during plan review
+
+`expected_counts.json` is **not documentation**: `verification/layer-05-audit.ps1` reads it for
+**V5.3** and walks every property, casting each with `[int]`. Adding two entries therefore
+**extends V5.3 to cover both new tables automatically**, with exact row counts, for free.
+
+That is the good version of F145's hazard — but it means the originally planned **V5.5 (row
+counts for the two tables) would be redundant with V5.3**. L5 gets **one** new criterion
+instead of two. See Task 8.
 
 ---
 
@@ -727,7 +739,12 @@ git commit -m "infra(L4): apply table protection in the deploy path, so a rebuil
 
 ---
 
-### Task 8: V5.5 and V5.6 — the tables exist and carry both sensitivity classes
+### Task 8: V5.5 — both sensitivity classes are present
+
+> **Revised during plan review.** The original Task 8 added V5.5 (row counts) and V5.6
+> (classes present). V5.3 already asserts exact row counts for every table in
+> `expected_counts.json`, so Task 3 extends it to both new tables for free and a separate
+> row-count criterion would assert the same thing twice. **L5 gets one new criterion: V5.5.**
 
 **Files:**
 - Modify: `verification/layer-05-audit.ps1`
@@ -735,7 +752,7 @@ git commit -m "infra(L4): apply table protection in the deploy path, so a rebuil
 
 **Interfaces:**
 - Consumes: `Invoke-MlsSqlQuery` from `verification/MlsAudit.psm1`
-- Produces: criteria `V5.5`, `V5.6`
+- Produces: criterion `V5.5`
 
 L5 currently ends at V5.4 (confirmed 2026-09-20).
 
@@ -744,19 +761,18 @@ L5 currently ends at V5.4 (confirmed 2026-09-20).
 Add to `verification/tests/layer-05-audit.Tests.ps1`:
 
 ```powershell
-Describe 'V5.5 / V5.6 registration' {
-    It 'registers both new criteria' {
+Describe 'V5.5 registration' {
+    It 'registers the sensitivity-class criterion' {
         $ids = Get-MlsCriterionId -Layer 5
         $ids | Should -Contain 'V5.5'
-        $ids | Should -Contain 'V5.6'
     }
 
-    It 'V5.5 asserts row counts rather than a status code' {
-        # The V7.6 lesson: a layer that verifies plumbing without verifying
-        # water is how an empty estate signed off 5/5 for two days.
+    It 'V5.5 asserts both classes, not merely that the table is readable' {
+        # A defect_reports that is entirely INTERNAL would let every RLS check
+        # downstream pass while proving nothing had been filtered.
         $text = Get-Content "$PSScriptRoot/../layer-05-audit.ps1" -Raw
-        $text | Should -Match 'hr_roster'
-        $text | Should -Match 'defect_reports'
+        $text | Should -Match 'THIRD_PARTY_PROPRIETARY'
+        $text | Should -Match 'INTERNAL'
     }
 }
 ```
@@ -768,12 +784,13 @@ Adjust `Get-MlsCriterionId` to whatever the existing tests use to enumerate crit
 Run: `pwsh -NoProfile -Command "Invoke-Pester verification/tests/layer-05-audit.Tests.ps1 -Output Detailed"`
 Expected: FAIL — V5.5 not registered
 
-- [ ] **Step 3: Implement the criteria**
+- [ ] **Step 3: Implement the criterion**
 
 In `verification/layer-05-audit.ps1`, following the existing criterion shape:
 
-- **V5.5** — `SELECT COUNT(*) FROM dbo.hr_roster` and `FROM dbo.defect_reports`. PASS requires 240 and 900 exactly. A zero row count is FAIL, not PASS.
-- **V5.6** — `SELECT classification, COUNT(*) FROM dbo.defect_reports GROUP BY classification`. PASS requires **both** `INTERNAL` and `THIRD_PARTY_PROPRIETARY` present with non-zero counts.
+- **V5.5** — `SELECT classification, COUNT(*) AS n FROM dbo.defect_reports GROUP BY classification`. PASS requires **both** `INTERNAL` and `THIRD_PARTY_PROPRIETARY` present with non-zero counts, and that `hr_roster.salary_usd` has non-null values. These are the preconditions the whole enforcement demo rests on: an all-INTERNAL table makes every RLS check vacuously green.
+
+Row counts are **not** re-asserted here — V5.3 already covers both tables exactly, via the fixture Task 3 widened.
 
 If the query cannot run at all, report **UNOBSERVABLE**, never "the table is empty". Fabric answers a caller without OneLake read using an empty result rather than a denial (F105), so absence here is unprovable without establishing that you could observe.
 
@@ -788,7 +805,7 @@ Expected: PASS
 
 ```bash
 git add verification/layer-05-audit.ps1 verification/tests/layer-05-audit.Tests.ps1
-git commit -m "verify(L5): V5.5 rows exist, V5.6 both sensitivity classes present"
+git commit -m "verify(L5): V5.5 both sensitivity classes present"
 ```
 
 ---
@@ -877,7 +894,7 @@ git commit -m "verify(L4): V4.4 objects, V4.5 the standard role is genuinely ref
 | § 5.1 database objects | Task 5 |
 | § 5.4 naming | Task 5 test "prefixes every role" |
 | § 8 classification labels | Task 4 |
-| § 11 V5.5, V5.6 | Task 8 |
+| § 11 V5.5 (V5.6 folded into V5.3 — see plan review) | Task 8 |
 | § 11 V4.4, V4.5, V4.6 | Task 9 |
 | Triplet: deploy / teardown / audit | Tasks 7 / 6 / 8–9 |
 
