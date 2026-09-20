@@ -380,19 +380,40 @@ continue existing numbering — L4 ends at V4.3, L5 ends at V5.4, both confirmed
 | **V5.5** | L5 | `hr_roster` and `defect_reports` exist and are populated — **row counts, not a status code** (the V7.6 lesson) |
 | **V5.6** | L5 | 3PPI and non-3PPI rows both exist; a table with no restricted rows demonstrates nothing |
 | **V4.4** | L4 | The security policy exists and `is_enabled = 1` in `sys.security_policies`; the column DENYs exist in `sys.database_permissions` |
-| **V4.5** | L4 | **Enforcement, not configuration** — the standard role genuinely cannot read `salary_usd`, and genuinely sees fewer rows than the privileged role. Assert the capability, never the artefact |
-| **V4.6** | L4 | Both labels exist in the taxonomy with the expected display names |
+| **V4.5** | L4 | **Enforcement, not configuration.** ⚠️ **Revised during implementation — see below.** Reports SKIP: the refusal cannot be provoked from this endpoint at all |
+| ~~V4.6~~ | — | **Dropped.** V4.1 already asserts the taxonomy is *exactly* the six names, so a labels-exist criterion is two ways to learn one fact — the same redundancy V5.6 turned out to be against V5.3 |
 | **V4.7** | L4 | The data-layer audit is readable and attributes a known query to a known principal — or reports **UNOBSERVABLE** with the reason. Never "no access occurred" |
 
 The Entra sign-in leg (§ 7.1) is a **precondition, not a criterion**: it is a one-time G0 human
 step, so a criterion asserting it would fail the estate for a thing the estate cannot do. The
 audit tool reports its absence as UNOBSERVABLE instead.
 
-**V4.5 is the criterion that matters.** Every other one checks that an object exists.
-Break-glass readiness once meant "an account is in the group" and passed on an account holding
-no role; V3.3 meant "an enabled CA policy exists" and failed on a tenant whose MFA came from
-Security Defaults. *Ask what makes the control real, and assert that.* Here that means
-executing a query as the standard principal and requiring it to fail.
+**V4.5 is the criterion that matters, and it cannot be run here.** Established
+2026-09-20, after the spec was written:
+
+- **`EXECUTE AS` is not supported on a Fabric lakehouse SQL analytics endpoint** — Msg 15868.
+  It is a *feature-level* refusal, not a permission error, so no credential makes it work.
+- **There is nothing to impersonate anyway.** The endpoint's only database users are `dbo`,
+  `guest`, `sys` and `INFORMATION_SCHEMA`. A database ROLE is not a user.
+- **`mls-verifier` cannot join the standard role to test it**, because V5.3 requires it to see
+  all 900 `defect_reports` rows and a member of the standard tier sees the filtered subset.
+
+So V4.5 reports **SKIP**, names the blocker, and names where the capability *is* observable:
+the two-tier agent path, where the standard tier's own identity is refused by the database.
+That criterion belongs with the agent tiering, not here.
+
+**V4.4 does not stand in for it, and says so.** The rule stands even though this instance
+cannot satisfy it — break-glass readiness once meant "an account is in the group" and passed
+on an account holding no role; V3.3 meant "an enabled CA policy exists" and failed on a tenant
+whose MFA came from Security Defaults. An artefact check that quietly inherits the
+capability's name is how that happens. **A criterion that cannot look must never report the
+control present.**
+
+**What V4.4 did gain from this:** it establishes that it *can see* before reading anything
+into what it saw. `sys.database_permissions` answers a caller without visibility with an empty
+set rather than a denial, and `mls-verifier` holds workspace Viewer — so empty would have
+meant "no DENY exists" and V4.4 would have failed a *correct* estate. It now counts visible
+built-in roles first: zero means blind, and it reports UNOBSERVABLE.
 
 ---
 
