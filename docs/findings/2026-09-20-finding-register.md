@@ -6,11 +6,17 @@ controls over them, and the criteria that judge both. Everything here was found 
 
 Continues [2026-09-16](2026-09-16-finding-register.md) (F201–F217).
 
-Four of the six are the same shape, and it is worth naming up front: **a Fabric lakehouse
-SQL analytics endpoint is not a SQL database, and its unsupported surface is discovered
-rather than documented.** Three separate T-SQL features that every SQL Server reference
-describes as ordinary turned out to be refused here, each with a distinct message number,
-and each was found only by running it.
+**Seven findings.** Three share one shape worth naming up front: **a Fabric lakehouse SQL
+analytics endpoint is not a SQL database, and its unsupported surface is discovered rather
+than documented.** `CREATE USER`, `DATABASE_PRINCIPAL_ID` and `EXECUTE AS` — all ordinary in
+any SQL Server reference — are each refused here, each with a distinct message number, and
+each was found only by running it.
+
+Three more (F221, F222, F224) share a different shape, and it is the more uncomfortable one:
+**the checks written to catch a defect class contained that class.** A sweep that would have
+passed on the defect it was written for; a syntax check trusted in place of a test; and an
+observability guard that proved a neighbouring view and concluded about the target one. Each
+was caught, but only by deliberately trying to break it.
 
 ---
 
