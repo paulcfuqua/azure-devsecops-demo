@@ -207,7 +207,7 @@ jobs:
           python -m generators build
           python -m generators summary | tee ../generator-summary.txt
 
-      - name: Load the 10 Delta tables
+      - name: Load the 12 Delta tables
         if: ${{ !inputs.dry_run }}
         shell: pwsh
         run: |
