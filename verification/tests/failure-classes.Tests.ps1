@@ -3526,3 +3526,78 @@ updates:
             'member and its lockfile in one PR; delete the per-app entry rather than adding one.')
     }
 }
+
+Describe 'a comment never interrupts a backtick line continuation' {
+    # PAID FOR ON 2026-09-20. V5.5's retry window was given a justification comment placed
+    # between two backtick-continued lines of an Invoke-MlsCriterion call. A backtick
+    # continues the line onto the NEXT one; when that next line is a comment, the
+    # continuation is consumed and everything after starts a fresh statement - so -Test
+    # silently stopped binding. CI reported "Cannot process command because of one or more
+    # missing mandatory parameters: Test."
+    #
+    # THE FILE PARSES CLEAN. A syntax check says yes; only running the code says no.
+    #
+    # The detector must ignore a backtick that merely ENDS A COMMENT - this repository's
+    # prose is full of `inline code` spans, and the first version of this sweep reported
+    # 23 of them as defects. A comment line cannot continue anything.
+
+    BeforeAll {
+        function Test-ContinuationComment {
+            <# Lines (1-based) where a real continuation is followed by a comment. #>
+            # AllowEmpty*: a zero-length or single-blank-line .ps1 makes ReadAllLines
+            # hand back an empty element, which a bare Mandatory parameter rejects - and
+            # a sweep that throws on one file has stopped sweeping the rest.
+            param(
+                [Parameter(Mandatory)]
+                [AllowEmptyCollection()]
+                [AllowEmptyString()]
+                [string[]]$Line
+            )
+            $hits = [System.Collections.Generic.List[int]]::new()
+            for ($i = 0; $i -lt $Line.Count - 1; $i++) {
+                if ($Line[$i] -match '^\s*#') { continue }          # a comment continues nothing
+                if ($Line[$i] -notmatch '`\s*$') { continue }        # not a continuation
+                if ($Line[$i + 1] -match '^\s*#') { $hits.Add($i + 2) }
+            }
+            return $hits
+        }
+    }
+
+    It 'detects the defect it exists for' {
+        # Non-vacuity, asserted rather than assumed: the exact shape that broke V5.5.
+        $bad = @('Invoke-Thing -A 1 `', '    # why one', '    -Test { }')
+        @(Test-ContinuationComment -Line $bad) | Should -Be @(2)
+    }
+
+    It 'does not flag a comment that merely ends in a backtick' {
+        # The false-positive class: prose containing an `inline code` span.
+        $fine = @('    # see `some-command` `', '    # continued prose', '$x = 1')
+        @(Test-ContinuationComment -Line $fine) | Should -BeNullOrEmpty
+    }
+
+    It 'does not flag an ordinary continuation followed by code' {
+        $fine = @('Invoke-Thing -A 1 `', '    -B 2')
+        @(Test-ContinuationComment -Line $fine) | Should -BeNullOrEmpty
+    }
+
+    It 'has no comment line immediately following a line-continuation backtick' {
+        $files = @(
+            Get-ChildItem -Path $script:RepoRoot -Recurse -Include '*.ps1', '*.psm1' -File |
+                Where-Object { $_.FullName -notmatch '[\/](node_modules|\.git)[\/]' }
+        )
+        $files.Count | Should -BeGreaterThan 20 -Because 'a sweep matching nothing is vacuous'
+
+        $offenders = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in $files) {
+            foreach ($lineNumber in (Test-ContinuationComment -Line ([IO.File]::ReadAllLines($file.FullName)))) {
+                $relative = $file.FullName.Substring($script:RepoRoot.Length).TrimStart('\', '/')
+                $offenders.Add("${relative}:${lineNumber}")
+            }
+        }
+        $offenders -join '; ' | Should -BeNullOrEmpty -Because @'
+a comment on the line after a backtick continuation consumes the continuation. The file
+still parses, so nothing complains until a parameter fails to bind at run time. Move the
+comment ABOVE the statement.
+'@
+    }
+}
