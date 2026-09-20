@@ -57,6 +57,8 @@
 [CmdletBinding(SupportsShouldProcess)]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'AccessToken',
     Justification = 'An Entra access token arrives from az account get-access-token or a workflow step as a plain string and is handed to Invoke-Sqlcmd -AccessToken, which takes a plain string. SecureString would not protect it: on .NET for Linux - and CI is ubuntu-latest - SecureString is not encrypted, and the value would return to plain text at the call anyway. It is never logged.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+    Justification = 'SqlEndpoint, AccessToken, Database and TimeoutSec are read by Get-EndpointColumn and Invoke-ProtectionSql through PowerShell dynamic scoping rather than being passed down explicitly, which the analyser cannot follow. They are the connection, so a genuinely unused one would fail on the first query. The parameters that were REALLY unused - StandardPrincipal and PrivilegedPrincipal - were removed rather than suppressed: see Invoke-TableProtection.')]
 param(
     # The lakehouse SQL analytics endpoint FQDN. RESOLVED from the Fabric API by the
     # caller, never stored: the endpoint name does not survive a rebuild (F129's class).
@@ -68,11 +70,6 @@ param(
 
     # Empty resolves from MLS_COMPANY_PREFIX, then infra/bicep/naming.bicep.
     [string]$Prefix = '',
-
-    # Principals added to the two roles. Optional: the roles and their grants are the
-    # durable part, and membership is meaningful only once the second identity exists.
-    [string]$StandardPrincipal = '',
-    [string]$PrivilegedPrincipal = '',
 
     [int]$TimeoutSec = 120
 )
@@ -279,6 +276,7 @@ function Invoke-ProtectionSql {
         [Parameter(Mandatory)][string]$Key,
         [Parameter(Mandatory)][string]$Sql
     )
+    Write-Verbose "Applying protection statement '$Key'."
     Invoke-Sqlcmd -ServerInstance $SqlEndpoint -Database $Database -AccessToken $AccessToken `
         -ConnectionTimeout $TimeoutSec -Query $Sql -ErrorAction Stop | Out-Null
 }
@@ -296,11 +294,7 @@ function Invoke-TableProtection {
         protection set to a table whose shape is unrecognised is worse than applying none.
     #>
     [CmdletBinding(SupportsShouldProcess)]
-    param(
-        [string]$Prefix = '',
-        [string]$StandardPrincipal = '',
-        [string]$PrivilegedPrincipal = ''
-    )
+    param([string]$Prefix = '')
 
     if ([string]::IsNullOrWhiteSpace($Prefix)) { $Prefix = Get-CompanyPrefix }
 
@@ -333,5 +327,5 @@ function Invoke-TableProtection {
 }
 
 if (-not $env:MLS_SKIP_MAIN) {
-    Invoke-TableProtection -Prefix $Prefix -StandardPrincipal $StandardPrincipal -PrivilegedPrincipal $PrivilegedPrincipal
+    Invoke-TableProtection -Prefix $Prefix
 }

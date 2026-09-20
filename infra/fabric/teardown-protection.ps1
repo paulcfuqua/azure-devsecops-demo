@@ -48,6 +48,8 @@
 [CmdletBinding(SupportsShouldProcess)]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'AccessToken',
     Justification = 'An Entra access token arrives as a plain string and Invoke-Sqlcmd -AccessToken takes a plain string. SecureString is not encrypted on .NET for Linux, and CI is ubuntu-latest. The value is never logged.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+    Justification = 'SqlEndpoint, AccessToken, Database and TimeoutSec are read by Invoke-TeardownSql through PowerShell dynamic scoping rather than being passed down explicitly, which the analyser cannot follow. They are the connection, so a genuinely unused one would fail on the first statement.')]
 param(
     [Parameter(Mandatory)][string]$SqlEndpoint,
     [Parameter(Mandatory)][string]$AccessToken,
@@ -169,6 +171,7 @@ function Invoke-TeardownSql {
         [Parameter(Mandatory)][string]$Key,
         [Parameter(Mandatory)][string]$Sql
     )
+    Write-Verbose "Applying teardown statement '$Key'."
     Invoke-Sqlcmd -ServerInstance $SqlEndpoint -Database $Database -AccessToken $AccessToken `
         -ConnectionTimeout $TimeoutSec -Query $Sql -ErrorAction Stop | Out-Null
 }
