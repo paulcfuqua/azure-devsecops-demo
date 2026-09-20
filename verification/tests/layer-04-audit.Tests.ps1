@@ -98,11 +98,28 @@ Describe 'layer-04-audit' {
         $script:PolicyRow = @([pscustomobject]@{ name = 'sp_defect_tier'; is_enabled = $true })
         # Built-in roles are visible by default, which is what a sighted caller sees.
         $script:VisibleRoleCount = 5
+
+        # V4.5's fixture: the numbers observed on the live estate 2026-09-20. A caller in
+        # neither role reads 900 from the base table and 761 through the view, with 139
+        # rows restricted. 900 - 139 = 761.
+        $script:BaseRows = 900
+        $script:ViewRows = 761
+        $script:RestrictedRows = 139
+        $script:IsPrivileged = 0
+
         Mock Invoke-MlsSqlQuery {
             # database_permissions FIRST: that query JOINs sys.database_principals, so a
             # looser match on the principals table swallows it and hands back a row count
             # where the DENY rows should be.
             if ($Query -like '*database_permissions*') { return $script:DenyRow }
+            if ($Query -like '*base_rows*') {
+                return @([pscustomobject]@{
+                        base_rows       = $script:BaseRows
+                        view_rows       = $script:ViewRows
+                        restricted_rows = $script:RestrictedRows
+                        is_privileged   = $script:IsPrivileged
+                    })
+            }
             if ($Query -like '*security_policies*') { return $script:PolicyRow }
             if ($Query -like '*database_principals*') { return @([pscustomobject]@{ n = $script:VisibleRoleCount }) }
             return @()
@@ -112,14 +129,16 @@ Describe 'layer-04-audit' {
     Context 'all criteria pass' {
         It 'records V4.1, V4.2 and V4.3 as PASS against the recorded baseline' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V4.1', 'V4.2', 'V4.3', 'V4.4', 'V4.5')
-            # V4.5 is a BY-DESIGN SKIP and is named explicitly rather than excluded by a
-            # loosened filter: the enforcement check cannot run on this endpoint at all
-            # (Msg 15868), and the day it becomes runnable this assertion should fail and
-            # make somebody look. Everything else must be a genuine PASS.
-            @($context.Criterion | Where-Object { $_.Id -ne 'V4.5' -and $_.Status -ne 'PASS' }) |
+            @($context.Criterion).Id | Should -Be @('V4.1', 'V4.2', 'V4.3', 'V4.4', 'V4.5', 'V4.6')
+            # V4.6 is the BY-DESIGN SKIP, named explicitly rather than excluded by a
+            # loosened filter: the COLUMN denial cannot be provoked on this endpoint at
+            # all (Msg 15868), and the day it becomes runnable this assertion should fail
+            # and make somebody look. V4.5 is NOT in that category - the row filter is
+            # observable and must be a genuine PASS like everything else.
+            @($context.Criterion | Where-Object { $_.Id -ne 'V4.6' -and $_.Status -ne 'PASS' }) |
                 Should -BeNullOrEmpty
-            (Get-Row -Context $context -Id 'V4.5').Status | Should -Be 'SKIP'
+            (Get-Row -Context $context -Id 'V4.5').Status | Should -Be 'PASS'
+            (Get-Row -Context $context -Id 'V4.6').Status | Should -Be 'SKIP'
             # A by-design SKIP does not fail the run - but it is never a sign-off either.
             Get-MlsExitCode -Context $context | Should -Be 0
             Should -Invoke Connect-MlsCompliance -Exactly -Times 1
@@ -227,7 +246,7 @@ Describe 'layer-04-audit' {
         It 'records V4.1 as FAIL when Get-Label errors, and still records V4.2 and V4.3' {
             Mock Get-MlsLabel { throw 'Connect-IPPSSession: The term Get-Label is not recognized (no S&C session).' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 5
+            @($context.Criterion).Count | Should -Be 6
             (Get-Row -Context $context -Id 'V4.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V4.1').Observed | Should -BeLike '*no S&C session*'
         }
@@ -354,27 +373,84 @@ Describe 'layer-04-audit' {
         }
     }
 
-    Context 'V4.5 - enforcement, which this endpoint cannot demonstrate' {
+    Context 'V4.5 - the row filter actually filters' {
+        It 'passes when a non-privileged caller sees exactly the unrestricted rows' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*761 of 900*'
+        }
+
+        It 'FAILS when the view returns as many rows as the base table' {
+            # The defect this criterion exists for: a policy that is present, enabled, and
+            # filtering NOTHING. V4.4 would still pass - the objects are all there.
+            $script:ViewRows = 900
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*removed 0 row*'
+        }
+
+        It 'FAILS when the shortfall does not equal the restricted count' {
+            $script:ViewRows = 800
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.5'
+            $row.Status | Should -Be 'FAIL'
+        }
+
+        It 'SKIPS rather than failing when the auditor is itself privileged' {
+            # A privileged caller bypasses the filter by design, so equal counts would
+            # prove nothing. Failing here would fail a CORRECT estate.
+            $script:IsPrivileged = 1
+            $script:ViewRows = 900
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.5'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*bypasses the filter*'
+        }
+
+        It 'FAILS when no rows are restricted, because then filtering cannot be shown' {
+            # Equal counts would be CORRECT here, and indistinguishable from a broken
+            # filter. The criterion refuses to call that a pass.
+            $script:RestrictedRows = 0
+            $script:ViewRows = 900
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*would look identical*'
+        }
+
+        It 'reports UNOBSERVABLE when the privileged role does not exist at all' {
+            $script:IsPrivileged = -1
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.5'
+            $row.Status | Should -Not -Be 'PASS'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+
+        It 'reports UNOBSERVABLE, never "the filter is broken", when the endpoint errors' {
+            Mock Invoke-MlsSqlQuery { throw 'Login failed for user.' }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.5'
+            $row.Status | Should -Not -Be 'PASS'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+    }
+
+    Context 'V4.6 - the column denial, which this endpoint cannot demonstrate' {
         It 'reports SKIP and never PASS' {
             # The criterion that would matter most is the one that cannot be run here.
             # It must not quietly become a second artefact check, and it must not pass.
-            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.6'
             $row.Status | Should -Be 'SKIP'
         }
 
         It 'names the blocker precisely rather than shrugging' {
-            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.6'
             $row.Observed | Should -BeLike '*EXECUTE AS is not supported*'
             $row.Observed | Should -BeLike '*15868*'
         }
 
         It 'names where the capability IS observable' {
-            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.6'
             $row.Detail | Should -BeLike '*agent*'
         }
 
         It 'states that V4.4 does not stand in for it' {
-            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.6'
             $row.Detail | Should -BeLike '*V4.4*'
         }
     }

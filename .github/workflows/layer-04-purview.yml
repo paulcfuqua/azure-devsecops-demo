@@ -363,6 +363,26 @@ jobs:
       # Fail-soft on purpose - if the endpoint cannot be resolved the audit still runs and
       # V4.4 reports UNOBSERVABLE, which is the honest outcome. It must never report the
       # protection absent because a lookup failed (F105).
+      # WITHOUT THIS, V4.4 AND V4.5 REPORT UNOBSERVABLE ON A CORRECTLY PROTECTED ESTATE.
+      # Observed on the first real L4 run, 2026-09-20: "'Invoke-Sqlcmd' is not available
+      # on this machine". The criteria behaved correctly - they said they could not look
+      # rather than claiming the protection was missing - but a permanently blind
+      # criterion verifies nothing while looking like diligence.
+      #
+      # layer-05-fabric.yml has carried this identical step for V5.3 since the same problem
+      # was found there, and its comment names the failure mode exactly: "a runner gap
+      # reported as an estate defect". Adding SQL-reading criteria to L4 without bringing
+      # the step was that lesson going unlearned one layer over.
+      #
+      # 22+ is the minimum that supports -AccessToken (Entra-only auth, no SQL password).
+      - name: Install SqlServer (V4.4/V4.5 query the SQL analytics endpoint)
+        if: ${{ steps.verifier.outputs.configured == 'true' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module SqlServer -Force -Scope CurrentUser -MinimumVersion 22.0.0 -AllowClobber
+
       - name: Resolve the lakehouse SQL analytics endpoint
         id: endpoint
         continue-on-error: true
