@@ -115,7 +115,7 @@ Describe 'labels' {
     }
 
     Context 'taxonomy definition' {
-        It 'defines exactly the four labels, lowest to highest sensitivity' {
+        It 'defines exactly the six labels, lowest to highest sensitivity' {
             $taxonomy = Get-LabelTaxonomy -Prefix $script:Prefix
             @($taxonomy).Name | Should -Be $script:ExpectedNames
             foreach ($label in $taxonomy) {
@@ -133,7 +133,7 @@ Describe 'labels' {
         # tooltip with demo text, in CI, under -Confirm:$false.
         It 'prefixes every label name and every display name, and uses no bare generic word' {
             $taxonomy = Get-LabelTaxonomy -Prefix $script:Prefix
-            @($taxonomy).Count | Should -Be 4
+            @($taxonomy).Count | Should -Be 6
             foreach ($label in $taxonomy) {
                 $label.Name | Should -BeLike "$($script:Prefix)-*"
                 $label.DisplayName | Should -BeLike "$($script:Prefix)-*"
@@ -182,9 +182,9 @@ Describe 'labels' {
             Mock Get-Label { throw "The Label $Identity doesn't exist" }
         }
 
-        It 'creates all four labels' {
+        It 'creates all six labels' {
             $result = Invoke-Main -Confirm:$false
-            Should -Invoke New-Label -Exactly -Times 4
+            Should -Invoke New-Label -Exactly -Times 6
             foreach ($expected in $script:ExpectedNames) {
                 Should -Invoke New-Label -Exactly -Times 1 -ParameterFilter { $Name -eq $expected }
                 $result.$expected | Should -Be 'Created'
@@ -251,7 +251,7 @@ Describe 'labels' {
 
         It 'creates only the missing ones' {
             $result = Invoke-Main -Confirm:$false
-            Should -Invoke New-Label -Exactly -Times 2
+            Should -Invoke New-Label -Exactly -Times 4
             Should -Invoke New-Label -Exactly -Times 1 -ParameterFilter { $Name -eq "$($script:Prefix)-confidential" }
             Should -Invoke New-Label -Exactly -Times 1 -ParameterFilter { $Name -eq "$($script:Prefix)-export-controlled" }
             $result."$($script:Prefix)-public" | Should -Be 'Unchanged'
@@ -301,7 +301,7 @@ Describe 'labels' {
             Mock Get-LabelPolicy { throw "The label policy $Identity doesn't exist" }
         }
 
-        It 'publishes one policy, naming all four labels, scoped to All' {
+        It 'publishes one policy, naming all six labels, scoped to All' {
             $result = Invoke-Main -Confirm:$false
             Should -Invoke New-LabelPolicy -Exactly -Times 1 -ParameterFilter {
                 $Name -eq $script:ExpectedPolicyName -and
@@ -389,7 +389,7 @@ Describe 'labels' {
             Mock Get-LabelPolicy {
                 return [pscustomobject]@{
                     Identity         = $Identity
-                    Labels           = @($script:ExpectedNames | Select-Object -First 3)
+                    Labels           = @($script:ExpectedNames | Where-Object { $_ -ne "$($script:Prefix)-export-controlled" })
                     ExchangeLocation = $script:ExpectedGroups
                 }
             }
@@ -433,6 +433,64 @@ Describe 'labels' {
         It 'calls New-LabelPolicy or Set-LabelPolicy somewhere in the script' {
             $script = Get-Content -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'labels.ps1') -Raw
             $script | Should -Match 'New-LabelPolicy|Set-LabelPolicy'
+        }
+    }
+}
+
+Describe 'the tiered-access labels' {
+    # DELIBERATELY INDEPENDENT of Get-LabelTaxonomy. $script:ExpectedNames is built
+    # BY calling that function, so every assertion against it compares the taxonomy
+    # to itself - a mirror, not a test (CLAUDE.md: "no test that supplies the answer
+    # it is checking"). These names are written out literally so that deleting a
+    # label from the taxonomy fails something.
+    BeforeAll {
+        $script:LiteralExpected = @(
+            "$($script:Prefix)-public"
+            "$($script:Prefix)-internal"
+            "$($script:Prefix)-confidential"
+            "$($script:Prefix)-export-controlled"
+            "$($script:Prefix)-hr-sensitive"
+            "$($script:Prefix)-3ppi"
+        )
+    }
+
+    It 'defines exactly these six labels, by name, in this order' {
+        @(Get-LabelTaxonomy -Prefix $script:Prefix).Name | Should -Be $script:LiteralExpected
+    }
+
+    It 'defines a label for the column-restricted HR attributes' {
+        $hr = Get-LabelTaxonomy -Prefix $script:Prefix |
+            Where-Object { $_.Name -eq "$($script:Prefix)-hr-sensitive" }
+        $hr | Should -Not -BeNullOrEmpty
+        $hr.DisplayName | Should -BeExactly $hr.Name
+    }
+
+    It 'defines a label for third-party proprietary information' {
+        $tp = Get-LabelTaxonomy -Prefix $script:Prefix |
+            Where-Object { $_.Name -eq "$($script:Prefix)-3ppi" }
+        $tp | Should -Not -BeNullOrEmpty
+        $tp.DisplayName | Should -BeExactly $tp.Name
+    }
+
+    It 'states in both new tooltips that the label does NOT enforce access' {
+        # F18: L04.md once claimed labels were applied to the lakehouse and checked
+        # at runtime. A sensitivity label classifies; CLS and RLS at the data layer
+        # enforce. The tooltip is where a human reads that, so it is asserted.
+        foreach ($name in "$($script:Prefix)-hr-sensitive", "$($script:Prefix)-3ppi") {
+            $label = Get-LabelTaxonomy -Prefix $script:Prefix | Where-Object { $_.Name -eq $name }
+            $label.Tooltip | Should -Match 'Classification only'
+            $label.Tooltip | Should -Match 'enforced by (column|row)-level security'
+        }
+    }
+
+    It 'is removed by the teardown as well as created here' {
+        # A label created but absent from teardown.ps1's own taxonomy list survives
+        # as an orphan the next rebuild collides with. The two lists are deliberate
+        # duplicates, so nothing but a test keeps them in step.
+        $teardown = Get-Content -LiteralPath (
+            Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'teardown.ps1') -Raw
+        foreach ($suffix in 'hr-sensitive', '3ppi') {
+            $teardown | Should -Match ([regex]::Escape("`$Prefix-$suffix"))
         }
     }
 }

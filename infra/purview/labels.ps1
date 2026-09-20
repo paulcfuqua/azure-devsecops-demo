@@ -129,6 +129,22 @@ function Get-LabelTaxonomy {
             DisplayName = "$Prefix-export-controlled"
             Tooltip     = 'Fictional demo analogue of export-controlled technical data. Strictest handling.'
         }
+        # The two tiered-access labels. Both tooltips state what a label does NOT
+        # do, deliberately: a sensitivity label classifies, it does not gate a
+        # read. L04.md once claimed labels were applied to the lakehouse and
+        # checked at runtime, which was finding F18 - corrected, not implemented.
+        # Access to these two tables is enforced by column- and row-level
+        # security applied at the data layer by infra/fabric/protect-tables.ps1.
+        [pscustomobject]@{
+            Name        = "$Prefix-hr-sensitive"
+            DisplayName = "$Prefix-hr-sensitive"
+            Tooltip     = 'Workforce data with restricted attributes: compensation, bonus target, performance band. Classification only - access is enforced by column-level security at the data layer.'
+        }
+        [pscustomobject]@{
+            Name        = "$Prefix-3ppi"
+            DisplayName = "$Prefix-3ppi"
+            Tooltip     = 'Third-party proprietary information received under agreement. Classification only - access is enforced by row-level security at the data layer.'
+        }
     )
 }
 

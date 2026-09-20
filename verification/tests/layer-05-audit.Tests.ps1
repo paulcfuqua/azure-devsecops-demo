@@ -68,6 +68,11 @@ Describe 'layer-05-audit' {
         $script:CapacityState = 'Active'
         $script:WorkspaceCapacityId = $script:TrialCapacityId
 
+        # V5.5's fixture: defect_reports carries BOTH classes and hr_roster's restricted
+        # column is populated. These are the preconditions the enforcement demo rests on.
+        $script:ClassCount = [ordered]@{ INTERNAL = 747; THIRD_PARTY_PROPRIETARY = 153 }
+        $script:PopulatedSalaryCount = 240
+
         Mock Invoke-MlsRest {
             if ($Uri -like '*/workspaces') {
                 return [pscustomobject]@{ value = @([pscustomobject]@{
@@ -105,6 +110,14 @@ Describe 'layer-05-audit' {
             if ($Query -like '*INFORMATION_SCHEMA*') {
                 return @($script:SqlCatalogTable | ForEach-Object { [pscustomobject]@{ t = $_ } })
             }
+            if ($Query -like '*classification*') {
+                return @($script:ClassCount.Keys | ForEach-Object {
+                        [pscustomobject]@{ c = $_; n = $script:ClassCount[$_] }
+                    })
+            }
+            if ($Query -like '*salary_usd*') {
+                return @([pscustomobject]@{ n = $script:PopulatedSalaryCount })
+            }
             return @($script:RowCount.Keys | ForEach-Object {
                     [pscustomobject]@{ t = $_; n = $script:RowCount[$_] }
                 })
@@ -126,9 +139,11 @@ Describe 'layer-05-audit' {
     }
 
     Context 'all criteria pass' {
-        It 'records V5.1-V5.4 as PASS on the trial capacity and exits 0' {
+        It 'records V5.1-V5.5 as PASS on the trial capacity and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V5.1', 'V5.2', 'V5.3', 'V5.4')
+            # V5.5 sits BEFORE V5.4 on purpose: it reads the SQL analytics endpoint, and
+            # V5.4 asserts the capacity is PAUSED. A SQL read after the pause fails.
+            @($context.Criterion).Id | Should -Be @('V5.1', 'V5.2', 'V5.3', 'V5.5', 'V5.4')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -143,8 +158,10 @@ Describe 'layer-05-audit' {
         It 'reads the SQL endpoint out of the lakehouse metadata V5.1 fetched' {
             $context = Invoke-AuditForTest
             $context.Evidence['sqlEndpoint'] | Should -Be 'abc.datawarehouse.fabric.microsoft.com'
+            # UNION ALL, not just COUNT(*): V5.5 also counts, and a filter that matches
+            # any COUNT(*) stopped identifying V5.3's read the moment it was added.
             Should -Invoke Invoke-MlsSqlQuery -Exactly -Times 1 -ParameterFilter {
-                $ServerName -eq 'abc.datawarehouse.fabric.microsoft.com' -and $Query -like '*COUNT(*)*'
+                $ServerName -eq 'abc.datawarehouse.fabric.microsoft.com' -and $Query -like '*UNION ALL*'
             }
         }
     }
@@ -352,9 +369,12 @@ Describe 'layer-05-audit' {
         It 'records V5.3 as FAIL when the SQL endpoint errors, and still evaluates V5.4' {
             Mock Invoke-MlsSqlQuery { throw 'Login failed for user: the capacity is paused.' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 4
+            @($context.Criterion).Count | Should -Be 5
             (Get-Row -Context $context -Id 'V5.3').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V5.3').Observed | Should -BeLike '*capacity is paused*'
+            # The same failure must make V5.5 say it could not LOOK, not that the
+            # restricted rows are missing.
+            (Get-Row -Context $context -Id 'V5.5').Observed | Should -BeLike '*UNOBSERVABLE*'
             (Get-Row -Context $context -Id 'V5.4').Status | Should -Be 'PASS'
         }
     }
@@ -372,6 +392,88 @@ Describe 'layer-05-audit' {
             $row.Status | Should -Be 'SKIP'
             $row.Observed | Should -BeLike '*launches=1200 verified*'
             $row.Detail | Should -BeLike '*expected-counts fixture*'
+        }
+    }
+
+    Context 'the -ExpectedTable DEFAULT, which is what CI actually runs' {
+        # layer-05-fabric.yml passes no -ExpectedTable, so the default in the param block
+        # is the live value. Every test in this file supplies its own list, so until this
+        # one existed the default was covered by nothing at all - and a stale default
+        # fails V5.2's set equality and V5.3's fixture comparison against a CORRECTLY
+        # seeded lakehouse, which is the worst direction for a wrong answer to point.
+        BeforeAll {
+            $script:AuditPath = Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath 'layer-05-audit.ps1'
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:AuditPath, [ref]$null, [ref]$null)
+            $parameter = $ast.ParamBlock.Parameters |
+                Where-Object { $_.Name.VariablePath.UserPath -eq 'ExpectedTable' }
+            # Walk the AST rather than regexing the source: the default carries an
+            # explanatory comment, and apostrophes in prose ("V5.2's set equality") are
+            # indistinguishable from string delimiters to a regex. The first version of
+            # this test extracted "s set" as a table name.
+            $script:DefaultTable = @(
+                $parameter.DefaultValue.FindAll(
+                    { param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] },
+                    $true
+                ) | ForEach-Object { $_.Value }
+            )
+        }
+
+        It 'names every table the committed row-count fixture names, and no others' {
+            $fixture = Get-Content -LiteralPath (
+                Join-Path -Path $PSScriptRoot -ChildPath '..' -AdditionalChildPath '..', 'data', 'generators', 'tests', 'expected_counts.json'
+            ) -Raw | ConvertFrom-Json
+            $fixtureTable = @($fixture.PSObject.Properties.Name)
+            @($script:DefaultTable | Sort-Object) | Should -Be @($fixtureTable | Sort-Object) `
+                -Because 'V5.3 reads that fixture and reports every table in it that the endpoint did not return'
+        }
+
+        It 'includes both mixed-sensitivity tables' {
+            $script:DefaultTable | Should -Contain 'hr_roster'
+            $script:DefaultTable | Should -Contain 'defect_reports'
+        }
+    }
+
+    Context 'V5.5 - the sensitivity preconditions the enforcement demo rests on' {
+        It 'passes when both classifications are present and salary is populated' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.5'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*THIRD_PARTY_PROPRIETARY*'
+        }
+
+        It 'FAILS when defect_reports carries only INTERNAL rows' {
+            # This is the whole reason the criterion exists. An all-INTERNAL table lets
+            # every downstream RLS check pass while proving nothing was ever filtered -
+            # a green result over data that cannot demonstrate the control.
+            $script:ClassCount = [ordered]@{ INTERNAL = 900 }
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*THIRD_PARTY_PROPRIETARY*'
+        }
+
+        It 'FAILS when the restricted column is entirely null' {
+            # A salary column full of nulls makes the column denial indistinguishable
+            # from there being nothing to deny.
+            $script:PopulatedSalaryCount = 0
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*salary_usd*'
+        }
+
+        It 'reports UNOBSERVABLE, never "absent", when the endpoint cannot be read' {
+            # F105: Fabric answers a caller without OneLake read with an empty result
+            # rather than a denial, so absence is unprovable. An audit that cannot see a
+            # thing says so; it never reports the thing as missing.
+            Mock Invoke-MlsSqlQuery { throw 'Login failed for user: the capacity is paused.' }
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.5'
+            $row.Status | Should -Not -Be 'PASS'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+
+        It 'does not run after the capacity has been paused' {
+            # V5.4 asserts the capacity is Paused. A SQL read afterwards fails, so V5.5
+            # must be registered before it - ordering is correctness here, not tidiness.
+            $ids = @((Invoke-AuditForTest).Criterion).Id
+            $ids.IndexOf('V5.5') | Should -BeLessThan $ids.IndexOf('V5.4')
         }
     }
 }

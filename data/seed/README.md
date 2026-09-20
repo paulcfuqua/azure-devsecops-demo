@@ -1,6 +1,6 @@
 # `data/seed/` — the data-plane seeding layer (L5 + L6)
 
-One entry point, two planes, ten tables, exact row counts.
+One entry point, two planes, twelve tables, exact row counts.
 
 ```
 pwsh data/seed/seed.ps1 -Target both -WhatIf
@@ -35,8 +35,8 @@ one entry point.
    CSV + JSON). The seed, not the artifacts, is the source of truth; `data/generated/`
    is gitignored and disposable.
 2. **Azure SQL** (`-Target sql|both`) — apply `sql/*.sql` in filename order, then load
-   the ten tables and verify every count.
-3. **Lakehouse** (`-Target lakehouse|both`) — upload the ten CSVs to OneLake and load
+   the twelve tables and verify every count.
+3. **Lakehouse** (`-Target lakehouse|both`) — upload the twelve CSVs to OneLake and load
    them as Delta tables over the Fabric REST API.
 
 `data/generators/` is Track A's and is never modified from here.
@@ -60,7 +60,7 @@ Per-table plane assignments (`operational` / `reference` / `analytical-mirror`) 
 
 ## How generator-schema parity is guaranteed
 
-Three independent descriptions of the same ten tables have to agree, and nothing at
+Three independent descriptions of the same twelve tables have to agree, and nothing at
 runtime would tell us if they stopped:
 
 ```
@@ -73,7 +73,7 @@ data/seed/sql/*.sql                   ──┘
 
 `tests/schema-parity.Tests.ps1` parses all three and compares them: 67 assertions
 covering column names, **column order**, SQL types, nullability, primary keys, foreign
-keys, FK-safe file and load ordering, plane assignment, and the ten row counts against
+keys, FK-safe file and load ordering, plane assignment, and the twelve row counts against
 the Verifier's own numbers. It also asserts that its parsers extracted something — a
 parity test that silently extracts nothing would pass forever.
 
@@ -123,7 +123,7 @@ lose or duplicate a row:
 ## Failing fast
 
 Every prerequisite is checked before the first write, and each failure names the thing to
-fix — a half-seeded database or a lakehouse with four of ten tables is far more expensive
+fix — a half-seeded database or a lakehouse with four of twelve tables is far more expensive
 than a run that refuses to start:
 
 | Missing | Message names |
