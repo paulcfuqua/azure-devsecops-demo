@@ -1,6 +1,6 @@
 # `data/seed/lakehouse/` — Fabric lakehouse load (L5)
 
-Creates and loads the ten Delta tables in lakehouse `mls_operations` (workspace
+Creates and loads the twelve Delta tables in lakehouse `mls_operations` (workspace
 `mls-operations`) over the Fabric REST API, as a **service principal**, with **no portal
 step**. Driven by [`../seed.ps1`](../seed.ps1) `-Target lakehouse`.
 

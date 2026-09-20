@@ -155,6 +155,8 @@ TABLE_ORDER = [
     "work_orders",
     "cost_daily",
     "findings_history",
+    "hr_roster",
+    "defect_reports",
 ]
 
 # Exact expected row counts for the fixed-size tables (scrubs is derived from
@@ -170,6 +172,8 @@ EXPECTED_COUNTS = {
     # 5 cost centers x days in [COST_START, COST_END]
     "cost_daily": 5 * ((COST_END - COST_START).days + 1),
     "findings_history": N_FINDINGS,
+    "hr_roster": N_HR_ROSTER,
+    "defect_reports": N_DEFECT_REPORTS,
 }
 
 WEEKDAY_NAMES = [

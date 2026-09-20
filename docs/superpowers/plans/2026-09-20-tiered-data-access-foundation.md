@@ -15,7 +15,20 @@
 - **Synthetic data only.** No real person's PII; demo people are fictional (CLAUDE.md hard rule 4).
 - **Determinism.** `data/generators` must be a pure function of `config.SEED = 20260822`. No time-of-run, no env vars, no filesystem state. Changing any value in `config.py` is a schema change.
 - **No hardcoded `mls`.** Role and label names use `<prefix>` / `<env>` resolved from `MLS_COMPANY_PREFIX` / `MLS_ENV_SEGMENT`. (F90)
-- **Scope: lakehouse only.** These two tables are NOT seeded to Azure SQL. `findings_history` is the existing precedent — it has no file in `data/seed/sql/`.
+- **Both planes, like every other table.** ~~Lakehouse only.~~ **Corrected during execution:** the
+  original claim that `findings_history` is a lakehouse-only precedent was **wrong** — it has
+  `ddl_file: 100_findings_history.sql`, and an earlier `ls | head` truncated the listing at ten
+  entries, which I read as absence. Every one of the ten tables has a DDL file and a `plane`.
+  There is no lakehouse-only path, so these two follow the established pattern rather than
+  bending the framework around the feature.
+- **The manifest is load-bearing, not documentation.** `data/seed/lakehouse/lakehouse-seed.psm1`
+  reads `load_order` from `schema-manifest.json` to decide what to upload. **A table absent from
+  the manifest is never seeded to the lakehouse at all** — it would fail silently as a missing
+  table rather than loudly as a bad config.
+- **`schema-parity.Tests.ps1` guards manifest ↔ DDL ↔ CSV shape, NOT `TABLE_ORDER` membership.**
+  It passed at 67 tests with `TABLE_ORDER` at twelve and the manifest at ten. The plan originally
+  claimed it was the guard that catches a miss here; it is not, so the manifest update has to be
+  done deliberately rather than trusted to a red test.
 - **Every layer ships a triplet:** deploy path, teardown, `verification/` audit script.
 - **Idempotent on replay.** Protection objects are create-if-absent; a second run issues no destructive statement.
 - **File content is written with a file tool, never a shell heredoc.** (CLAUDE.md)

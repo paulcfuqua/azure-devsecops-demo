@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Fabric half of the L5 seed: create and load the ten Delta tables in the
+    Fabric half of the L5 seed: create and load the twelve Delta tables in the
     `mls_operations` lakehouse over REST, as a service principal, with no portal step.
 
 .DESCRIPTION
@@ -388,7 +388,7 @@ function Assert-LakehouseSeedPrerequisite {
 function Invoke-LakehouseSeed {
     <#
     .SYNOPSIS
-        Create and load the ten Delta tables in the `mls_operations` lakehouse.
+        Create and load the twelve Delta tables in the `mls_operations` lakehouse.
     .DESCRIPTION
         Idempotent: when every manifest table is already registered in the lakehouse the
         run uploads nothing and loads nothing. -Force re-uploads and re-loads in

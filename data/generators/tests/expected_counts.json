@@ -8,5 +8,7 @@
   "suppliers": 24,
   "work_orders": 800,
   "cost_daily": 4515,
-  "findings_history": 420
+  "findings_history": 420,
+  "hr_roster": 240,
+  "defect_reports": 900
 }

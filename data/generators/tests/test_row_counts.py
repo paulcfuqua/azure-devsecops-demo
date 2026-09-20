@@ -14,9 +14,9 @@ def test_expected_counts(tables):
         )
 
 
-def test_all_ten_tables_present(tables):
+def test_all_twelve_tables_present(tables):
     assert list(tables.keys()) == C.TABLE_ORDER
-    assert len(C.TABLE_ORDER) == 10
+    assert len(C.TABLE_ORDER) == 12
     for name in C.TABLE_ORDER:
         assert len(tables[name]) > 0, f"{name} is empty"
 
