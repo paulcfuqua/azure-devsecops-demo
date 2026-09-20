@@ -3601,3 +3601,105 @@ comment ABOVE the statement.
 '@
     }
 }
+
+
+Describe 'an audit that queries SQL runs in a JOB that can actually query SQL' {
+    # PAID FOR ON 2026-09-20, on the first real L4 run. V4.4 and V4.5 read the lakehouse
+    # SQL analytics endpoint, and the verify JOB had no SqlServer module - so both reported
+    #
+    #   UNOBSERVABLE: ... 'Invoke-Sqlcmd' is not available on this machine
+    #
+    # against an estate whose protection had just been confirmed correct by hand.
+    #
+    # THE CRITERIA BEHAVED PERFECTLY: they said they could not look rather than claiming
+    # the protection was missing. But a PERMANENTLY blind criterion verifies nothing while
+    # looking like diligence, which is its own defect.
+    #
+    # THE FIRST VERSION OF THIS SWEEP WOULD NOT HAVE CAUGHT IT. It asked whether the
+    # workflow FILE mentioned Install-Module SqlServer; layer-04-purview.yml already did,
+    # in the protect job, while the verify job had none. A file-level check cannot see a
+    # per-job gap. Proven by deliberately breaking the workflow and watching the sweep stay
+    # green - which is why the assertion below resolves the JOB that runs the audit.
+
+    BeforeAll {
+        $script:SqlAuditPairs = @(
+            @{ Audit = 'layer-04-audit.ps1'; Workflow = 'layer-04-purview.yml' }
+            @{ Audit = 'layer-05-audit.ps1'; Workflow = 'layer-05-fabric.yml' }
+            # L8 reads the lakehouse for the agent's grounding reference. ALREADY correct -
+            # listed because the first inventory omitted it and the test below caught that.
+            @{ Audit = 'layer-08-audit.ps1'; Workflow = 'layer-08-copilot-studio.yml' }
+        )
+
+        function Get-WorkflowJobBlock {
+            <#
+                Split a workflow into its top-level job blocks: name -> body text.
+                Jobs are the two-space-indented keys under `jobs:`.
+            #>
+            param([Parameter(Mandatory)][string]$Path)
+            $lines = [IO.File]::ReadAllLines($Path)
+            $blocks = [ordered]@{}
+            $current = $null
+            $buffer = [System.Collections.Generic.List[string]]::new()
+            $inJobs = $false
+            foreach ($line in $lines) {
+                if ($line -match '^jobs:\s*$') { $inJobs = $true; continue }
+                if (-not $inJobs) { continue }
+                if ($line -match '^  ([A-Za-z0-9_-]+):\s*$') {
+                    if ($current) { $blocks[$current] = ($buffer -join "`n") }
+                    $current = $Matches[1]
+                    $buffer = [System.Collections.Generic.List[string]]::new()
+                    continue
+                }
+                if ($current) { $buffer.Add($line) }
+            }
+            if ($current) { $blocks[$current] = ($buffer -join "`n") }
+            return $blocks
+        }
+    }
+
+    It 'names every audit script that reaches the SQL endpoint' {
+        $callers = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in (Get-ChildItem -Path (Join-Path $script:RepoRoot 'verification') -Filter 'layer-*-audit.ps1' -File)) {
+            if ((Get-Content -LiteralPath $file.FullName -Raw) -match 'Invoke-MlsSqlQuery') {
+                $callers.Add($file.Name)
+            }
+        }
+        $callers.Count | Should -BeGreaterThan 0 -Because 'a sweep that finds no SQL-reading audit is vacuous'
+        $declared = @($script:SqlAuditPairs | ForEach-Object { $_.Audit })
+        foreach ($caller in $callers) {
+            $declared | Should -Contain $caller -Because "$caller queries the SQL endpoint and must declare which workflow runs it"
+        }
+    }
+
+    It 'finds the audit-running job in each declared workflow' {
+        # Non-vacuity: if this resolver stopped finding the job, every assertion below
+        # would silently pass over an empty set.
+        foreach ($pair in $script:SqlAuditPairs) {
+            $workflowPath = Join-Path $script:RepoRoot '.github' 'workflows' $pair.Workflow
+            Test-Path -LiteralPath $workflowPath | Should -BeTrue
+            $blocks = Get-WorkflowJobBlock -Path $workflowPath
+            $auditJobs = @($blocks.Keys | Where-Object { $blocks[$_] -match 'actions/layer-audit' })
+            $auditJobs.Count | Should -BeGreaterThan 0 -Because "$($pair.Workflow) should contain a job that runs the layer audit"
+        }
+    }
+
+    It 'the JOB running each SQL-reading audit installs SqlServer 22+ itself' {
+        foreach ($pair in $script:SqlAuditPairs) {
+            $auditPath = Join-Path $script:RepoRoot 'verification' $pair.Audit
+            if (-not (Test-Path -LiteralPath $auditPath)) { continue }
+            if ((Get-Content -LiteralPath $auditPath -Raw) -notmatch 'Invoke-MlsSqlQuery') { continue }
+
+            $workflowPath = Join-Path $script:RepoRoot '.github' 'workflows' $pair.Workflow
+            $blocks = Get-WorkflowJobBlock -Path $workflowPath
+            foreach ($jobName in @($blocks.Keys | Where-Object { $blocks[$_] -match 'actions/layer-audit' })) {
+                $body = $blocks[$jobName]
+                # THE JOB's OWN steps, not the file's. Another job installing the module
+                # does nothing for this one - each job is a fresh runner.
+                $body | Should -Match 'Install-Module\s+SqlServer' `
+                    -Because "job '$jobName' in $($pair.Workflow) runs $($pair.Audit), which calls Invoke-MlsSqlQuery. Without the module IN THIS JOB every SQL criterion reports UNOBSERVABLE forever."
+                $body | Should -Match 'MinimumVersion\s+22' `
+                    -Because "job '$jobName' installs SqlServer, and -AccessToken is a 22+ parameter"
+            }
+        }
+    }
+}
