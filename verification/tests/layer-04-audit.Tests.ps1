@@ -45,10 +45,12 @@ BeforeAll {
     }
 
     function Invoke-AuditForTest {
-        param([switch]$NoRetry, [string]$LabelGuidPath = $script:BaselinePath, [string]$Checkpoint = 'layer')
+        param([switch]$NoRetry, [string]$LabelGuidPath = $script:BaselinePath, [string]$Checkpoint = 'layer',
+            [string]$SqlEndpoint = 'abc.datawarehouse.fabric.microsoft.com')
         Invoke-Main -Organization 'meridianlaunch.onmicrosoft.com' -VerifierAppId 'ver-app' `
             -CertificateThumbprint 'ABCD1234' -ExpectedLabel $script:ExpectedLabel `
-            -LabelGuidPath $LabelGuidPath -Checkpoint $Checkpoint -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
+            -LabelGuidPath $LabelGuidPath -Checkpoint $Checkpoint -ReportRoot $script:ReportRoot -NoRetry:$NoRetry `
+            -SqlEndpoint $SqlEndpoint -SqlAccessToken 'sql-token' -ProtectionPrefix 'mls'
     }
 }
 
@@ -82,13 +84,43 @@ Describe 'layer-04-audit' {
             ExchangeLocation = @('All')
         }
         Mock Get-MlsLabelPolicy { return $script:Policy }
+
+        # V4.4's fixture: a correctly protected estate. Shaped like the live endpoint's
+        # answer, which records a column DENY as one row PER COLUMN with column_name set,
+        # and an object-level DENY as a single row with column_name null - confirmed
+        # against the live lakehouse on 2026-09-20.
+        $script:DenyRow = @(
+            [pscustomobject]@{ principal = 'mls_data_standard'; permission = 'SELECT'; state = 'DENY'; object_name = 'hr_roster'; column_name = 'salary_usd' }
+            [pscustomobject]@{ principal = 'mls_data_standard'; permission = 'SELECT'; state = 'DENY'; object_name = 'hr_roster'; column_name = 'bonus_target_pct' }
+            [pscustomobject]@{ principal = 'mls_data_standard'; permission = 'SELECT'; state = 'DENY'; object_name = 'hr_roster'; column_name = 'performance_band' }
+            [pscustomobject]@{ principal = 'mls_data_standard'; permission = 'SELECT'; state = 'DENY'; object_name = 'defect_reports'; column_name = $null }
+        )
+        $script:PolicyRow = @([pscustomobject]@{ name = 'sp_defect_tier'; is_enabled = $true })
+        # Built-in roles are visible by default, which is what a sighted caller sees.
+        $script:VisibleRoleCount = 5
+        Mock Invoke-MlsSqlQuery {
+            # database_permissions FIRST: that query JOINs sys.database_principals, so a
+            # looser match on the principals table swallows it and hands back a row count
+            # where the DENY rows should be.
+            if ($Query -like '*database_permissions*') { return $script:DenyRow }
+            if ($Query -like '*security_policies*') { return $script:PolicyRow }
+            if ($Query -like '*database_principals*') { return @([pscustomobject]@{ n = $script:VisibleRoleCount }) }
+            return @()
+        }
     }
 
     Context 'all criteria pass' {
         It 'records V4.1, V4.2 and V4.3 as PASS against the recorded baseline' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V4.1', 'V4.2', 'V4.3')
-            @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
+            @($context.Criterion).Id | Should -Be @('V4.1', 'V4.2', 'V4.3', 'V4.4', 'V4.5')
+            # V4.5 is a BY-DESIGN SKIP and is named explicitly rather than excluded by a
+            # loosened filter: the enforcement check cannot run on this endpoint at all
+            # (Msg 15868), and the day it becomes runnable this assertion should fail and
+            # make somebody look. Everything else must be a genuine PASS.
+            @($context.Criterion | Where-Object { $_.Id -ne 'V4.5' -and $_.Status -ne 'PASS' }) |
+                Should -BeNullOrEmpty
+            (Get-Row -Context $context -Id 'V4.5').Status | Should -Be 'SKIP'
+            # A by-design SKIP does not fail the run - but it is never a sign-off either.
             Get-MlsExitCode -Context $context | Should -Be 0
             Should -Invoke Connect-MlsCompliance -Exactly -Times 1
         }
@@ -195,7 +227,7 @@ Describe 'layer-04-audit' {
         It 'records V4.1 as FAIL when Get-Label errors, and still records V4.2 and V4.3' {
             Mock Get-MlsLabel { throw 'Connect-IPPSSession: The term Get-Label is not recognized (no S&C session).' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 3
+            @($context.Criterion).Count | Should -Be 5
             (Get-Row -Context $context -Id 'V4.1').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V4.1').Observed | Should -BeLike '*no S&C session*'
         }
@@ -262,6 +294,88 @@ Describe 'layer-04-audit' {
         It 'is not in the master-plan traceability convention - documented as supplementary' {
             $context = Invoke-AuditForTest
             (Get-Row -Context $context -Id 'V4.3').Description | Should -BeLike '*supplementary*'
+        }
+    }
+
+    Context 'V4.4 - the table-protection artefacts' {
+        It 'passes on a correctly protected estate' {
+            (Get-Row -Context (Invoke-AuditForTest) -Id 'V4.4').Status | Should -Be 'PASS'
+        }
+
+        It 'FAILS when the security policy exists but is NOT enabled' {
+            # F119's class, and the single most important thing V4.4 adds over "the policy
+            # exists": a policy created STATE = OFF appears in sys.security_policies, reads
+            # as healthy to anything counting rows there, and filters nothing at all.
+            $script:PolicyRow = @([pscustomobject]@{ name = 'sp_defect_tier'; is_enabled = $false })
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*NOT enabled*'
+        }
+
+        It 'FAILS when a restricted column carries no DENY' {
+            $script:DenyRow = @($script:DenyRow | Where-Object { $_.column_name -ne 'salary_usd' })
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*salary_usd*'
+        }
+
+        It 'FAILS when the unfiltered base table is readable, so the view is not the only door' {
+            # Granting the filtered view while leaving the base table readable is a
+            # complete bypass that looks correct in every other check.
+            $script:DenyRow = @($script:DenyRow | Where-Object { $_.object_name -ne 'defect_reports' })
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*only door*'
+        }
+
+        It 'reports UNOBSERVABLE, never a pass, when no endpoint was supplied' {
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -SqlEndpoint '') -Id 'V4.4'
+            $row.Status | Should -Not -Be 'PASS'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+
+        It 'reports UNOBSERVABLE when it cannot enumerate principals, rather than "no DENY exists"' {
+            # The trap this closes: sys.database_permissions answers a caller without
+            # visibility with an EMPTY SET, not a denial. Read naively that is
+            # indistinguishable from an unprotected table, and V4.4 would fail a correct
+            # estate with a confident, specific, wrong answer (F105).
+            $script:VisibleRoleCount = 0
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
+            $row.Status | Should -Not -Be 'PASS'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+            $row.Observed | Should -Not -BeLike '*carries no DENY*'
+        }
+
+        It 'reports UNOBSERVABLE, never "protection missing", when the endpoint errors' {
+            Mock Invoke-MlsSqlQuery { throw 'Login failed for user.' }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.4'
+            $row.Status | Should -Not -Be 'PASS'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+    }
+
+    Context 'V4.5 - enforcement, which this endpoint cannot demonstrate' {
+        It 'reports SKIP and never PASS' {
+            # The criterion that would matter most is the one that cannot be run here.
+            # It must not quietly become a second artefact check, and it must not pass.
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row.Status | Should -Be 'SKIP'
+        }
+
+        It 'names the blocker precisely rather than shrugging' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row.Observed | Should -BeLike '*EXECUTE AS is not supported*'
+            $row.Observed | Should -BeLike '*15868*'
+        }
+
+        It 'names where the capability IS observable' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row.Detail | Should -BeLike '*agent*'
+        }
+
+        It 'states that V4.4 does not stand in for it' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V4.5'
+            $row.Detail | Should -BeLike '*V4.4*'
         }
     }
 }

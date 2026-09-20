@@ -352,6 +352,43 @@ jobs:
       # -Checkpoint layer: this is the layer's own run. L11 re-runs the same script
       # with -Checkpoint post-down / post-up, which is how V4.2 proves the labels
       # and their GUIDs survived a kill/rebuild cycle.
+      # V4.4 reads the lakehouse SQL analytics endpoint for the protection artefacts.
+      # Resolved here, never stored: the FQDN regenerates on every rebuild (F129's class).
+      # Fail-soft on purpose - if the endpoint cannot be resolved the audit still runs and
+      # V4.4 reports UNOBSERVABLE, which is the honest outcome. It must never report the
+      # protection absent because a lookup failed (F105).
+      - name: Resolve the lakehouse SQL analytics endpoint
+        id: endpoint
+        continue-on-error: true
+        shell: pwsh
+        env:
+          MLS_COMPANY_PREFIX: ${{ vars.MLS_COMPANY_PREFIX }}
+          LAKEHOUSE_NAME: ${{ vars.MLS_LAKEHOUSE_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module ./infra/fabric/fabric-api.psm1 -Force
+          $prefix = if ($env:MLS_COMPANY_PREFIX) { $env:MLS_COMPANY_PREFIX } else { 'mls' }
+          $lakehouseName = if ($env:LAKEHOUSE_NAME) { $env:LAKEHOUSE_NAME } else { 'mls_operations' }
+          $fabricToken = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+          $workspace = Get-FabricWorkspace -Token $fabricToken -Name "$prefix-operations"
+          $lakehouse = Get-FabricLakehouse -Token $fabricToken -WorkspaceId $workspace.id -Name $lakehouseName
+          $endpoint = $lakehouse.properties.sqlEndpointProperties.connectionString
+          $sqlToken = az account get-access-token --resource https://database.windows.net --query accessToken -o tsv
+          "endpoint=$endpoint" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "lakehouse=$lakehouseName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "prefix=$prefix" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # The token goes through the environment, not an output: step outputs are not
+          # masked and a process argument is visible on the runner.
+          "MLS_SQL_ACCESS_TOKEN=$sqlToken" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Resolved the SQL analytics endpoint for '$lakehouseName'."
+
+      # F119: this step is allowed to fail, so something must assert the state it was
+      # meant to produce. Nothing here does that silently - V4.4 itself is that assertion,
+      # and it reports UNOBSERVABLE rather than passing when the endpoint is missing.
+      - name: Note when the endpoint could not be resolved
+        if: ${{ steps.endpoint.outcome == 'failure' }}
+        run: echo "::warning title=SQL endpoint unresolved::V4.4 will report UNOBSERVABLE - it cannot read the table-protection artefacts. This is not a pass and not a claim that the protection is missing."
+
       - name: Run verification/layer-04-audit.ps1
         id: audit
         if: ${{ steps.verifier.outputs.configured == 'true' }}
@@ -377,6 +414,12 @@ jobs:
             layer
             -LabelGuidPath
             verification/reports/label-guids.json
+            ${{ steps.endpoint.outputs.endpoint && '-SqlEndpoint' || '' }}
+            ${{ steps.endpoint.outputs.endpoint }}
+            ${{ steps.endpoint.outputs.lakehouse && '-LakehouseName' || '' }}
+            ${{ steps.endpoint.outputs.lakehouse }}
+            ${{ steps.endpoint.outputs.prefix && '-ProtectionPrefix' || '' }}
+            ${{ steps.endpoint.outputs.prefix }}
 
             ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
             ${{ inputs.only_criterion }}
