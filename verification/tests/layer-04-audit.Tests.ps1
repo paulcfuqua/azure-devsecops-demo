@@ -20,6 +20,8 @@ BeforeAll {
         "$($script:Prefix)-internal"          = '22222222-2222-2222-2222-222222222222'
         "$($script:Prefix)-confidential"      = '33333333-3333-3333-3333-333333333333'
         "$($script:Prefix)-export-controlled" = '44444444-4444-4444-4444-444444444444'
+        "$($script:Prefix)-hr-sensitive"      = '55555555-5555-5555-5555-555555555555'
+        "$($script:Prefix)-3ppi"              = '66666666-6666-6666-6666-666666666666'
     }
     Set-Content -LiteralPath $script:BaselinePath -Value ($script:Baseline | ConvertTo-Json) -Encoding utf8
 
@@ -107,9 +109,9 @@ Describe 'layer-04-audit' {
         # 'Confidential', 'Export-Controlled'. Those are an adopter's own labels;
         # matching on them would have reported a healthy demo built out of somebody
         # else's Purview taxonomy.
-        It 'resolves the four expected names from the company prefix, with no bare generic word' {
+        It 'resolves the six expected names from the company prefix, with no bare generic word' {
             $resolved = Get-ExpectedLabelName -Prefix $script:Prefix
-            @($resolved).Count | Should -Be 4
+            @($resolved).Count | Should -Be 6
             foreach ($name in $resolved) { $name | Should -BeLike "$($script:Prefix)-*" }
             foreach ($bare in @('Public', 'Internal', 'Confidential', 'Export-Controlled')) {
                 $resolved | Should -Not -Contain $bare
@@ -137,12 +139,16 @@ Describe 'layer-04-audit' {
 
     Context 'a criterion fails on a realistic wrong value' {
         It 'fails V4.1 on GUID drift and refuses to re-baseline' {
+            # Every expected label present, exactly one GUID drifted. Built from the
+            # baseline rather than by positional index so that growing the taxonomy
+            # cannot silently turn this into a "labels are missing" scenario, which
+            # takes the replication-lag retry path and never reaches the drift check.
             $script:Labels = @(
-                [pscustomobject]@{ DisplayName = $script:ExpectedLabel[0]; Guid = '55555555-5555-5555-5555-555555555555' }
-                [pscustomobject]@{ DisplayName = $script:ExpectedLabel[1]; Guid = $script:Baseline[$script:ExpectedLabel[1]] }
-                [pscustomobject]@{ DisplayName = $script:ExpectedLabel[2]; Guid = $script:Baseline[$script:ExpectedLabel[2]] }
-                [pscustomobject]@{ DisplayName = $script:ExpectedLabel[3]; Guid = $script:Baseline[$script:ExpectedLabel[3]] }
+                $script:ExpectedLabel | ForEach-Object {
+                    [pscustomobject]@{ DisplayName = $_; Guid = $script:Baseline[$_] }
+                }
             )
+            $script:Labels[0].Guid = '99999999-9999-9999-9999-999999999999'
             $context = Invoke-AuditForTest
             $row = Get-Row -Context $context -Id 'V4.1'
             $row.Status | Should -Be 'FAIL'

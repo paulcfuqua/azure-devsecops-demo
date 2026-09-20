@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     L4 Purview layer - G3 full-tenant teardown (F23). Removes the published label
-    policy first, then the four sensitivity labels THIS ESTATE CREATED.
+    policy first, then the six sensitivity labels THIS ESTATE CREATED.
 
     TWO INDEPENDENT OWNERSHIP CONTROLS (F32). The label names are prefixed with the
     company prefix read from infra/bicep/naming.bicep, and every delete additionally
@@ -48,7 +48,7 @@
 
 .EXAMPLE
     ./teardown.ps1 -Confirm:$false
-    # G3 approval already on record: removes the label policy, then the four labels.
+    # G3 approval already on record: removes the label policy, then the six labels.
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
@@ -135,11 +135,22 @@ function Get-CompanyPrefix {
 }
 
 function Get-LabelTaxonomy {
-    <# The four-label demo taxonomy, lowest to highest sensitivity - the same prefixed
+    <# The six-label demo taxonomy, lowest to highest sensitivity - the same prefixed
        names labels.ps1 creates, so this teardown removes exactly what that script
-       creates and nothing else. #>
+       creates and nothing else.
+
+       This list is deliberately a duplicate of labels.ps1's rather than an import,
+       for the same reason layer-04-audit.ps1 keeps its own: a teardown that imports
+       the apply script couples the destructive path to the creating one. The cost
+       is that BOTH must be updated together - and a label created here but missing
+       from this list is never deleted, so it survives as an orphan the next rebuild
+       collides with. That is exactly what happened when hr-sensitive and 3ppi were
+       added to labels.ps1: the teardown still named four. #>
     param([Parameter(Mandatory)][string]$Prefix)
-    return @("$Prefix-public", "$Prefix-internal", "$Prefix-confidential", "$Prefix-export-controlled")
+    return @(
+        "$Prefix-public", "$Prefix-internal", "$Prefix-confidential", "$Prefix-export-controlled",
+        "$Prefix-hr-sensitive", "$Prefix-3ppi"
+    )
 }
 
 function Get-LabelPolicyName {
@@ -348,7 +359,7 @@ function Invoke-Main {
         Write-Status "Deleted label policy '$policyName'." -Color Green
     }
 
-    # ---- then the four labels -----------------------------------------------------------
+    # ---- then the six labels  -----------------------------------------------------------
     # Refused is checked BEFORE $WhatIfPreference: a refusal is a fact about the
     # tenant ("that label is not ours"), not an artefact of a dry run, and reporting
     # it as WhatIf would hide from a -WhatIf operator the one thing they most need to
