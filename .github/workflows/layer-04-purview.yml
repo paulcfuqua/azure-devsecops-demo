@@ -272,7 +272,13 @@ jobs:
 
   verify:
     name: verify L4 (mls-verifier)
-    needs: [preflight, apply]
+    # `protect` IS IN needs FOR ORDERING, not for its result. Without it the verify job
+    # runs in PARALLEL with the protection it is meant to audit, and V4.4 reads
+    # sys.database_permissions before the DENYs exist - failing an estate that is
+    # mid-deploy, with a verdict that would have been correct thirty seconds later.
+    # always() keeps it running even when protect fails, because "the protection is
+    # missing" is exactly the state V4.4 should then report.
+    needs: [preflight, apply, protect]
     if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.apply.result != 'failure' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: verify
