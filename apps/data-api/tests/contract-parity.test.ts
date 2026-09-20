@@ -152,8 +152,8 @@ describe("route parity — every path either ApiProvider fetches is served", () 
   it("builds request URLs the way both providers do (`${baseUrl}/…`)", () => {
     // The providers concatenate baseUrl with the path; a leading slash or a
     // changed segment here would break every call, so assert the templates.
-    expect(launchOpsApi).toContain("`${this.baseUrl}/tables/${table}`");
-    expect(controlTowerApi).toContain("`${this.baseUrl}/${path}`");
+    expect(launchOpsApi).toContain("`\\${this.baseUrl}/tables/\\${table}`");
+    expect(controlTowerApi).toContain("`\\${this.baseUrl}/\\${path}`");
   });
 
   it("answers 200 on every launch-ops path", async () => {
