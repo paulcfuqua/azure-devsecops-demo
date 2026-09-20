@@ -659,6 +659,14 @@ function Invoke-Main {
         -Command "SELECT classification AS c, COUNT(*) AS n FROM defect_reports GROUP BY classification`nSELECT COUNT(*) AS n FROM hr_roster WHERE salary_usd IS NOT NULL   -- as mls-verifier" `
         -Expected 'defect_reports holds both INTERNAL and THIRD_PARTY_PROPRIETARY rows; hr_roster.salary_usd is populated' `
         -RetryWindowMinutes 10 `
+        # 10 minutes because a newly loaded Delta table is NOT immediately visible to the
+        # SQL analytics endpoint, and this criterion reads that endpoint. MEASURED on the
+        # 2026-09-20 seed: Fabric's /tables route reported all 12 tables while the SQL
+        # catalog still reported 10, and the two new tables appeared there after 63
+        # seconds. Ten minutes is ~10x that observation, which is the margin - not a
+        # number anyone guessed. Waiting on: lakehouse -> SQL analytics endpoint metadata
+        # sync after a Load Table. If this ever needs raising, re-measure rather than
+        # doubling it.
         -Test {
         Test-SensitivityClass -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName
     } | Out-Null
