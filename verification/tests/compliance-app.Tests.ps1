@@ -262,7 +262,19 @@ Describe 'Task 15: npm ci stays out of any job holding id-token or packages writ
 
 Describe 'Task 15: layer-07-apps.yml deploy wiring picks up the compliance app' {
     It 'resolves a GHCR image reference for compliance, same as the other four apps' {
-        $script:L7DeployJob | Should -Match 'COMPLIANCE_IMAGE=\$\{registry\}/compliance:\$\{IMAGE_TAG\}'
+        # WAS: pinned to the literal `COMPLIANCE_IMAGE=${registry}/compliance:${IMAGE_TAG}`,
+        # which is the same mistake the COMPLIANCE_PORT test below already records having
+        # made once - assert the property, not the mechanism carrying it. F203 replaced five
+        # enumerated echo lines with one loop that resolves each app's floating tag to the
+        # immutable sha- tag V10.2 reads, and this went red on a correct fix.
+        #
+        # The property is that compliance is wired exactly like the other four: named in the
+        # same loop, written to GITHUB_ENV under the same *_IMAGE convention, from the same
+        # registry. That is what this asserts now.
+        $script:L7DeployJob | Should -Match 'for entry in [a-z-]+:[A-Z_]+(\s+[a-z-]+:[A-Z_]+)*\s+compliance:COMPLIANCE' `
+            -Because 'compliance must be one of the apps the image-reference loop iterates, not a special case beside it'
+        $script:L7DeployJob | Should -Match '\$\{var\}_IMAGE=\$\{registry\}/\$\{app\}:' `
+            -Because 'every app in that loop gets its GHCR reference written to GITHUB_ENV under <APP>_IMAGE, which is the name demo.bicepparam reads'
     }
 
     It 'resolves an image digest for compliance via the shared resolve() helper' {

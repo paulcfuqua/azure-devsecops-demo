@@ -581,6 +581,330 @@ Describe 'a deploy default never stands up a placeholder image' {
 }
 
 
+Describe 'a deploy path preserves the commit provenance another layer audits' {
+    # F203. Two showpieces share one set of container apps, and exercising one erased the
+    # other's evidence. L10's V10.2 traces a heal to a deployment by reading the running
+    # image's tag: app CI pushes `sha-<first 7 of the merge commit>`, so "the running image
+    # names its own commit" (F197). layer-07-apps.yml deployed the SAME BYTES under
+    # `latest`, which names nothing - and V10.2 correctly reported `could not establish`
+    # and went red after twelve green runs.
+    #
+    # THE DEPLOY DEGRADED TRACEABILITY, NOT FUNCTION, which is why nothing caught it. All
+    # seven V7 criteria passed on the very same revision, because not one of them asks what
+    # commit an image came from. The damage was visible only from another layer's audit,
+    # four hours later, on a schedule.
+    #
+    # So the class is not "a bad default". It is a WRITER and a READER of the same field
+    # living in different layers with nothing holding them together - F145's shape, pointed
+    # at evidence instead of at data. These tests hold the two ends together:
+    #   * the reader's pattern is read out of verification/layer-10-audit.ps1
+    #   * the writer's pattern is read out of .github/workflows/layer-07-apps.yml
+    #   * neither is retyped here, and they must agree on every sample tag
+    # Deleting the resolver, renaming the reader, or loosening either pattern turns this
+    # red, which is the coupling made visible rather than merely removed.
+
+    BeforeAll {
+        $script:F203Root = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:F203AuditPath = Join-Path $script:F203Root 'verification/layer-10-audit.ps1'
+        $script:F203DeployPath = Join-Path $script:F203Root '.github/workflows/layer-07-apps.yml'
+        $script:F203Audit = Get-Content -LiteralPath $script:F203AuditPath -Raw
+        $script:F203Deploy = Get-Content -LiteralPath $script:F203DeployPath -Raw
+
+        # THE READER. Test-ImageCarriesCommit parses the commit off a running image
+        # reference; everything V10.2 can say about a heal's deployment hangs off it.
+        $script:F203ReaderPattern = $null
+        if ($script:F203Audit -match '(?m)^\s*if \("\$Image" -notmatch ''(?<pattern>[^'']+)''\) \{') {
+            $script:F203ReaderPattern = $Matches['pattern']
+        }
+
+        # THE WRITER. layer-07-apps.yml resolves a floating tag to an immutable tag of
+        # this shape before anything is deployed.
+        $script:F203WriterPattern = $null
+        if ($script:F203Deploy -match '(?m)^\s*provenance_tag_pattern=''(?<pattern>[^'']+)''\s*$') {
+            $script:F203WriterPattern = $Matches['pattern']
+        }
+
+        # Samples chosen so a one-sided loosening shows up: case, both length bounds, a
+        # short sha, a non-hex body, and the two floating names that caused F203.
+        $script:F203SampleTags = @(
+            'sha-473452b'
+            'sha-473452B'
+            'sha-473452bdeadbeefdeadbeefdeadbeefdeadbeef'
+            'sha-4734'
+            'sha-zzzzzzz'
+            'latest'
+            'v1.2.3'
+        )
+    }
+
+    It 'V10.2 still reads the commit off the running image, so this Describe is not vacuous' {
+        $script:F203ReaderPattern | Should -Not -BeNullOrEmpty `
+            -Because 'V10.2 traces a heal to a deployment through Test-ImageCarriesCommit''s image-reference pattern; if that has been renamed or removed, the deploy side is now pinning a tag for a reader that no longer exists'
+        'ghcr.io/owner/repo/mcp-tools:sha-473452b' | Should -Match $script:F203ReaderPattern
+        'ghcr.io/owner/repo/mcp-tools:latest' | Should -Not -Match $script:F203ReaderPattern
+    }
+
+    It 'the L7 deploy path declares the tag shape it must produce' {
+        $script:F203WriterPattern | Should -Not -BeNullOrEmpty `
+            -Because 'layer-07-apps.yml must declare the provenance tag shape it resolves to, so this test can compare it against the one V10.2 parses'
+    }
+
+    It 'the writer and the reader agree about every sample tag' {
+        # The contract, asserted rather than assumed. A tag the deploy path is willing to
+        # ship must be one the audit can read, and the reverse - a reader widened without
+        # the writer is how a criterion starts passing on evidence nobody produces.
+        $disagree = [System.Collections.Generic.List[string]]::new()
+        foreach ($tag in $script:F203SampleTags) {
+            $writerAccepts = [bool]($tag -match $script:F203WriterPattern)
+            $readerAccepts = [bool]("ghcr.io/owner/repo/mcp-tools:$tag" -match $script:F203ReaderPattern)
+            if ($writerAccepts -ne $readerAccepts) {
+                $disagree.Add("$tag (deploy=$writerAccepts, V10.2=$readerAccepts)")
+            }
+        }
+        $disagree -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a tag one side treats as carrying provenance and the other does not is exactly F203: the deploy succeeds, every V7 criterion passes, and V10.2 cannot trace the heal'
+    }
+
+    It 'the L7 deploy resolves a floating tag rather than deploying it verbatim' {
+        $script:F203Deploy | Should -Match 'immutable_tag\(\)' `
+            -Because 'without the resolver, layer-07-apps.yml republishes all five apps under the requested floating tag and erases the sha- tags app CI left behind (F203)'
+        # ASSERTED POSITIVELY, AND THAT MATTERS. The first draft of this asserted the
+        # absence of `:${IMAGE_TAG}` and passed against a revert that reintroduced the
+        # defect, because the reverted line spells the app as ${app} rather than a literal
+        # name - the test was checking a shape the defect no longer has to wear. What makes
+        # the deploy safe is that the tag written to GITHUB_ENV came OUT OF the resolver;
+        # assert that, not one spelling of its opposite.
+        $script:F203Deploy | Should -Match '_IMAGE=\$\{registry\}/\$\{app\}:\$\{resolved_tag\}' `
+            -Because 'the container image written to GITHUB_ENV must carry the tag the resolver produced, not the tag the caller requested'
+        # The literal-per-app form this loop replaced, kept as a guard against a revert to it.
+        $script:F203Deploy | Should -Not -Match '_IMAGE=\$\{registry\}/[a-z-]+:\$\{IMAGE_TAG\}' `
+            -Because 'enumerating the five apps with the raw input tag is the exact code F203 was filed against'
+    }
+
+    It 'a deploy that cannot resolve an immutable tag names the criterion it degrades' {
+        # The fallback is correct - refusing to deploy over a traceability problem would be
+        # worse - but a silent fallback is F102's class: the audit goes red four hours later
+        # and nothing in the deploy log connects the two.
+        $script:F203Deploy | Should -Match 'No immutable tag for' `
+            -Because 'the fallback must be announced, not silent'
+        $script:F203Deploy | Should -Match 'V10\.2' `
+            -Because 'the warning has to name the criterion that will go red, or the operator has no way to connect an L7 deploy to an L10 failure - which is precisely how F203 survived unnoticed'
+    }
+
+    It 'every per-app CI workflow deploys the tag that names its commit' {
+        # The other producer of running images. app-<name>-ci.yml pushes both `sha-<short>`
+        # and `latest` to one digest and must roll the app onto the FORMER; rolling `latest`
+        # here would reintroduce F203 from the day-to-day deploy path instead of the
+        # declarative one.
+        $ciWorkflows = @(Get-ChildItem -Path (Join-Path $script:F203Root '.github/workflows') -Filter 'app-*-ci.yml' -File)
+        $ciWorkflows.Count | Should -BeGreaterThan 0 `
+            -Because 'if no per-app CI workflow is found, this assertion is vacuous'
+
+        $offender = [System.Collections.Generic.List[string]]::new()
+        foreach ($file in $ciWorkflows) {
+            $text = Get-Content -LiteralPath $file.FullName -Raw
+            if ($text -notmatch 'tag="sha-\$\{GITHUB_SHA:0:7\}"') {
+                $offender.Add("$($file.Name): does not compute a sha- tag from GITHUB_SHA")
+            }
+            if ($text -match '(?m)^\s*IMAGE:\s*\$\{\{\s*needs\.image\.outputs\.registry\s*\}\}:latest') {
+                $offender.Add("$($file.Name): rolls the floating latest tag onto the container app")
+            }
+        }
+        $offender -join '; ' | Should -BeNullOrEmpty `
+            -Because 'V10.2 can only trace a heal whose image names the commit it was built from (F197/F203)'
+    }
+}
+
+
+Describe 'the operator text an engineer reads first agrees with the design it cites' {
+    # The self-heal chain's "no adoptable alert" warning is the first sentence an operator
+    # reads when the chain finds nothing to heal, and it told them the opposite of what was
+    # decided: that apps/vuln-lab is retired, that re-arming is F190, and that the seeded
+    # pins were being deleted. Section 7 of the design it cites by name says the lab,
+    # reseed.ps1 and vuln-lab-witness.yml STAY in the repository and stop being
+    # load-bearing, and that F190 DISSOLVES - the loop was the verification demanding a
+    # re-seed every cycle, not the act.
+    #
+    # THE CLASS IS GUIDANCE THAT OUTLIVES THE DECISION IT CITES. It is not a broken check;
+    # it is worse, because it is confident, specific, cites chapter and verse, and is read
+    # at exactly the moment someone is deciding what to do. The same four sentences had
+    # drifted in the workflow, the L10 playbook, the lab's own README and the re-seed
+    # script's warning - four copies, one decision, no link between them.
+    #
+    # ASSERTED POSITIVELY, AND ANCHORED TO THE SPEC. Sweeping for the WRONG sentences would
+    # fail on the corrected text, which quotes them in order to say they were wrong. So each
+    # file must carry the two load-bearing facts instead - a revert to the old text carries
+    # neither - and the first assertion re-reads section 7, so a genuine change of design
+    # makes this fail loudly rather than quietly enforcing a superseded rule.
+
+    BeforeAll {
+        $script:DriftRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $specPath = Join-Path $script:DriftRoot 'docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md'
+        $specText = Get-Content -LiteralPath $specPath -Raw
+        $script:DriftSection = ''
+        if ($specText -match '(?s)##\s*7\.\s*What happens to the vuln-lab(?<body>.*?)(?=\r?\n##\s)') {
+            # Markdown emphasis is presentation; strip it so an assertion is about the words.
+            $script:DriftSection = $Matches['body'] -replace '\*', ''
+        }
+
+        # Every file that tells a human what to do about the lab. Inventory-based: a fifth
+        # copy of this guidance has to be added here, which is the only moment anyone is
+        # forced to notice there are now five.
+        $script:DriftFiles = @(
+            '.github/workflows/self-heal.yml'
+            'docs/runbooks/layers/L10.md'
+            'apps/vuln-lab/README.md'
+            'apps/vuln-lab/reseed.ps1'
+        )
+
+        $script:DriftKeeps = '(?i)(stay|stays|keep|keeps)[^.]{0,90}in the repository'
+        $script:DriftF190 = '(?i)F190 dissolve[sd]?|(?i)(is|it is) not F190'
+    }
+
+    It 'section 7 of the cited design still says what this Describe enforces' {
+        $script:DriftSection | Should -Not -BeNullOrEmpty `
+            -Because 'section 7 is the authority for every assertion below; if it has been renamed or removed, these sweeps are enforcing a rule from memory'
+        $script:DriftSection | Should -Match '(?i)stay in the repository'
+        $script:DriftSection | Should -Match '(?i)F190 dissolves'
+        $script:DriftSection | Should -Match '(?i)manual demonstration generator'
+    }
+
+    It 'every file that tells an operator about the lab says it stays, and that F190 dissolved' {
+        $wrong = [System.Collections.Generic.List[string]]::new()
+        foreach ($relative in $script:DriftFiles) {
+            $path = Join-Path $script:DriftRoot $relative
+            if (-not (Test-Path -LiteralPath $path)) { $wrong.Add("$relative is missing"); continue }
+            $text = Get-Content -LiteralPath $path -Raw
+            if ($text -notmatch $script:DriftKeeps) {
+                $wrong.Add("$relative does not say the lab stays in the repository")
+            }
+            if ($text -notmatch $script:DriftF190) {
+                $wrong.Add("$relative does not record that F190 dissolved")
+            }
+        }
+        $wrong -join '; ' | Should -BeNullOrEmpty `
+            -Because 'each of these is read at the moment someone decides whether to re-arm, and the pre-2026-09-17 text told them the plant was retired, that re-arming is F190, and that the seeds were being deleted - none of which section 7 says'
+    }
+
+    It 'no operator text claims the seeds are being removed' {
+        # The one negative worth keeping: these two phrasings have no honest reading left,
+        # and both appeared verbatim in the drifted copies.
+        $claims = @(
+            'seeded pins are being deleted'
+            '(?i)(removes|deletes) (this package|this lab|apps/vuln-lab)'
+        )
+        $found = [System.Collections.Generic.List[string]]::new()
+        foreach ($relative in $script:DriftFiles) {
+            $text = Get-Content -LiteralPath (Join-Path $script:DriftRoot $relative) -Raw
+            foreach ($claim in $claims) {
+                if ($text -match $claim) { $found.Add("$relative matches '$claim'") }
+            }
+        }
+        $found -join '; ' | Should -BeNullOrEmpty `
+            -Because 'the three seeded CVEs stay on purpose: a quiet week with no real findings would otherwise leave the chain unexercised and rotting unnoticed (spec section 7)'
+    }
+}
+
+
+Describe 'every base image an app pulls is declared where its CVE posture is recorded' {
+    # The container-image lane of .github/self-heal-policy.json is DEFERRED, which means
+    # twelve open pcre2 alerts on apps/data-api and apps/mcp-tools do not count against
+    # V10.1. A deferral is only honest if its SCOPE is legible: "container images" is not a
+    # scope, three named base images are.
+    #
+    # THE CLASS IS AN EXCLUSION THAT QUIETLY WIDENS. Nothing about changing a FROM line
+    # looks like touching a security policy, and nothing about the deferral would have
+    # changed to show for it - so the next base could arrive carrying a posture nobody had
+    # looked at, inside an exclusion somebody wrote for a different image. This is
+    # V10.4's principle - pending-solution is not a dumping ground - applied one level down
+    # to the deferral itself, and it is inventory-based for the same reason the transport
+    # sweep at the top of this file is: a new entry nobody thought about does not inherit
+    # an exemption.
+    #
+    # WHAT THIS DOES NOT CHECK, stated so nobody reads a green run as more than it is: it
+    # compares two files. It cannot tell you whether a declared image is still free of the
+    # CVE it was cleared of - that needs a registry, and it is Trivy's job in app CI. The
+    # value here is that a CHANGE cannot happen silently.
+
+    BeforeAll {
+        $script:BaseRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+        $script:BasePolicy = Get-Content -LiteralPath (Join-Path $script:BaseRoot '.github/self-heal-policy.json') -Raw |
+            ConvertFrom-Json
+
+        # Every FROM in every app Dockerfile, minus the internal stage references - a
+        # `FROM deps AS build` resolves inside the same file and pulls nothing.
+        $script:BaseObserved = [System.Collections.Generic.List[pscustomobject]]::new()
+        foreach ($dockerfile in (Get-ChildItem -Path (Join-Path $script:BaseRoot 'apps') -Filter 'Dockerfile' -File -Recurse)) {
+            $relative = $dockerfile.FullName.Substring($script:BaseRoot.Length + 1).Replace('\', '/')
+            $stages = [System.Collections.Generic.List[string]]::new()
+            foreach ($line in (Get-Content -LiteralPath $dockerfile.FullName)) {
+                if ($line -notmatch '^\s*FROM\s+(?<image>\S+)(\s+AS\s+(?<stage>\S+))?\s*$') { continue }
+                $image = $Matches['image']
+                if ($Matches['stage']) { $stages.Add($Matches['stage']) }
+                if ($stages -contains $image) { continue }
+                $script:BaseObserved.Add([pscustomobject]@{ Dockerfile = $relative; Image = $image })
+            }
+        }
+
+        $script:BaseDeclared = @($script:BasePolicy.laneDeferral.'container-image'.baseImages.declared)
+    }
+
+    It 'finds base images to check, so the comparison is not vacuous' {
+        $script:BaseObserved.Count | Should -BeGreaterThan 0 `
+            -Because 'if no FROM line is parsed out of apps/*/Dockerfile, the two assertions below both pass while comparing nothing'
+        $script:BaseDeclared.Count | Should -BeGreaterThan 0 `
+            -Because 'the container-image deferral must name the images it defers findings for'
+    }
+
+    It 'no app pulls a base image the policy does not declare' {
+        $undeclared = [System.Collections.Generic.List[string]]::new()
+        foreach ($observed in $script:BaseObserved) {
+            $entry = @($script:BaseDeclared | Where-Object { $_.image -eq $observed.Image })
+            if ($entry.Count -ne 1) {
+                $undeclared.Add("$($observed.Dockerfile) pulls '$($observed.Image)'")
+                continue
+            }
+            if ($entry[0].usedBy -notcontains $observed.Dockerfile) {
+                $undeclared.Add("$($observed.Dockerfile) pulls '$($observed.Image)' but is not in its usedBy list")
+            }
+        }
+        $undeclared -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a base image nobody declared is a base image whose CVE posture nobody resolved, sitting inside a deferral written for a different image (.github/self-heal-policy.json, laneDeferral.container-image.baseImages)'
+    }
+
+    It 'the policy declares no base image the estate has stopped using' {
+        $stale = [System.Collections.Generic.List[string]]::new()
+        foreach ($entry in $script:BaseDeclared) {
+            if (-not ($script:BaseObserved | Where-Object { $_.Image -eq $entry.image })) {
+                $stale.Add("'$($entry.image)' is declared but no app Dockerfile pulls it")
+                continue
+            }
+            foreach ($claim in @($entry.usedBy)) {
+                if (-not ($script:BaseObserved | Where-Object { $_.Dockerfile -eq $claim -and $_.Image -eq $entry.image })) {
+                    $stale.Add("'$($entry.image)' claims $claim, which does not pull it")
+                }
+            }
+        }
+        $stale -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a declaration describing an image the estate no longer pulls is a posture record about nothing, and it makes the deferral look narrower or wider than it is'
+    }
+
+    It 'each observation on the deferral carries evidence and a stated action' {
+        # An entry saying "no fix exists" with no evidence is the shape of an exclusion
+        # nobody can challenge - the reason notAutomatable demands a reason per entry.
+        $thin = [System.Collections.Generic.List[string]]::new()
+        foreach ($observation in @($script:BasePolicy.laneDeferral.'container-image'.baseImages.observations)) {
+            if ([string]::IsNullOrWhiteSpace($observation.finding)) { $thin.Add('an observation with no finding'); continue }
+            if (@($observation.evidence).Count -lt 1) { $thin.Add("$($observation.finding): no evidence") }
+            if ([string]::IsNullOrWhiteSpace($observation.action)) { $thin.Add("$($observation.finding): no stated action") }
+            if ([string]::IsNullOrWhiteSpace($observation.reviewWhen)) { $thin.Add("$($observation.finding): nothing that would make anyone look again") }
+        }
+        $thin -join '; ' | Should -BeNullOrEmpty `
+            -Because 'a held finding needs evidence for why it is held, what was decided, and what event reopens the question - otherwise the deferral ages into folklore'
+    }
+}
+
+
 Describe 'an identity the estate authenticates to actually exists' {
     # Four app registrations sat in a live tenant with no service principal. Nothing failed
     # visibly: an application object is a DEFINITION, and Entra creates the principal on
