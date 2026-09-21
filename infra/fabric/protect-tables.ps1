@@ -271,14 +271,66 @@ function Assert-ExpectedColumn {
 }
 
 function Get-EndpointColumn {
-    <# The columns the endpoint actually reports for a table. Resolved, never remembered. #>
+    <#
+        The columns the endpoint actually reports for a table. Resolved, never remembered.
+
+        ALWAYS RETURNS AN ARRAY, never $null. The first version could hand back $null when
+        the endpoint reported nothing, and the caller then failed with "Cannot bind argument
+        to parameter 'Actual' because it is null" - an error naming a PowerShell binding
+        rule and saying nothing about the sync lag that actually caused it.
+    #>
     param([Parameter(Mandatory)][string]$Table)
     $rows = @(Invoke-Sqlcmd -ServerInstance $SqlEndpoint -Database $Database -AccessToken $AccessToken `
             -ConnectionTimeout $TimeoutSec -ErrorAction Stop -Query @"
 SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = '$(ConvertTo-SqlLiteral $Table)'
 "@)
-    return @($rows | ForEach-Object { $_.COLUMN_NAME })
+    $names = @($rows | ForEach-Object { "$($_.COLUMN_NAME)" } | Where-Object { $_ })
+    return , $names
+}
+
+function Wait-EndpointTable {
+    <#
+    .SYNOPSIS
+        Wait for the SQL analytics endpoint to see tables the seed has just loaded.
+    .DESCRIPTION
+        A newly loaded Delta table is NOT immediately visible to the SQL analytics endpoint.
+        MEASURED 2026-09-20: Fabric's /tables route reported all twelve tables while the SQL
+        catalog still reported ten, and the two new ones appeared there after 63 seconds.
+
+        This step runs immediately after the load, so without a wait it queries an endpoint
+        that has not caught up and concludes the tables do not exist. V5.5 already carries a
+        retry window citing this measurement; the deploy path had none, which is how a
+        CORRECT seed produced a failed protection step.
+
+        The window is ten minutes - roughly 10x the observation - and the failure names the
+        lag rather than the symptom, because "no columns" and "not synced yet" are the same
+        observation five seconds apart.
+    #>
+    param(
+        [Parameter(Mandatory)][string[]]$Table,
+        [int]$TimeoutMinutes = 10,
+        [int]$PollSeconds = 15
+    )
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $pending = [System.Collections.Generic.List[string]]::new()
+    foreach ($t in $Table) { $pending.Add($t) }
+
+    while ($pending.Count -gt 0 -and (Get-Date) -lt $deadline) {
+        foreach ($t in @($pending)) {
+            if ((Get-EndpointColumn -Table $t).Count -gt 0) {
+                Write-Status "  visible to the SQL endpoint: $t" -Color Green
+                $pending.Remove($t) | Out-Null
+            }
+        }
+        if ($pending.Count -eq 0) { break }
+        Write-Status "  waiting for the SQL endpoint to catch up on: $($pending -join ', ')" -Color Yellow
+        Start-Sleep -Seconds $PollSeconds
+    }
+
+    if ($pending.Count -gt 0) {
+        throw "The SQL analytics endpoint still reports no columns for $($pending -join ', ') after $TimeoutMinutes minute(s). A newly loaded Delta table is invisible to this endpoint for a short period - measured at 63 seconds on 2026-09-20 - but this is well beyond that. Check that the L5 seed actually loaded the tables (Fabric's /tables route answers independently of the SQL catalog) before assuming the protection is at fault."
+    }
 }
 
 function Invoke-ProtectionSql {
@@ -309,7 +361,13 @@ function Invoke-TableProtection {
 
     if ([string]::IsNullOrWhiteSpace($Prefix)) { $Prefix = Get-CompanyPrefix }
 
-    Write-Status "Resolving the live schema for dbo.hr_roster and dbo.defect_reports..." -Color Cyan
+    # WAIT BEFORE RESOLVING. This runs immediately after the seed, and the SQL analytics
+    # endpoint lags the Delta load by roughly a minute (F223). Without this the schema
+    # resolution below reads an empty catalog and reports a correct seed as a broken one.
+    Write-Status 'Waiting for the SQL analytics endpoint to see the seeded tables...' -Color Cyan
+    Wait-EndpointTable -Table @('hr_roster', 'defect_reports')
+
+    Write-Status 'Resolving the live schema for dbo.hr_roster and dbo.defect_reports...' -Color Cyan
     Assert-ExpectedColumn -Table 'hr_roster' -Expected $script:HrRosterColumn -Actual (Get-EndpointColumn -Table 'hr_roster')
     Assert-ExpectedColumn -Table 'defect_reports' -Expected $script:DefectReportColumn -Actual (Get-EndpointColumn -Table 'defect_reports')
     Write-Status 'Schema matches; applying protection.' -Color Green
