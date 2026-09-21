@@ -56,17 +56,34 @@ Describe 'layer-11-audit' {
         # name and cannot reach it. An empty list is not the correct down-state.
         $script:ResourceGroup = @('mls-rg-identity')
         $script:FailingChildLayer = @()
+        $script:BlindChildLayer = @()
+        $script:FilteredChildLayer = @()
         $script:CapacityState = 'Paused'
+        $script:BlindChildLayer = @()
+        $script:FilteredChildLayer = @()
         $script:SqlStatus = 'Paused'
         $script:Usage = @([pscustomobject]@{ svc = 'OneLake storage'; cost = 0.02 }, [pscustomobject]@{ svc = 'LAW retention'; cost = 0.05 })
 
+        # THE AUDITS EMIT THREE DISTINCT NON-ZERO CODES AND THEY MEAN DIFFERENT THINGS:
+        # 1 a criterion genuinely FAILed, 2 the audit COULD NOT START (a required input was
+        # missing), 3 it was filtered to a diagnostic. This mock only ever produced 0 and 1,
+        # which is why nothing caught F227 - the case where every child exits 2 had no test
+        # because the fixture could not express it.
         Mock Invoke-MlsChildAudit {
             $layer = [int]([regex]::Match($ScriptPath, 'layer-(\d+)-audit').Groups[1].Value)
-            $exitCode = if ($script:FailingChildLayer -contains $layer) { 1 } else { 0 }
+            $exitCode = if ($script:FailingChildLayer -contains $layer) { 1 }
+            elseif ($script:BlindChildLayer -contains $layer) { 2 }
+            elseif ($script:FilteredChildLayer -contains $layer) { 3 }
+            else { 0 }
+            $tail = switch ($exitCode) {
+                2 { "layer-$('{0:d2}' -f $layer)-audit could not start: Required input 'SubscriptionId' was not supplied." }
+                3 { "L$layer run was FILTERED with -OnlyCriterion; no verdict." }
+                default { "L$layer audit finished with exit $exitCode" }
+            }
             return [pscustomobject]@{
                 ScriptPath = $ScriptPath
                 ExitCode   = $exitCode
-                Output     = @("L$layer audit finished with exit $exitCode")
+                Output     = @($tail)
             }
         }
 
@@ -116,6 +133,40 @@ Describe 'layer-11-audit' {
             Get-MlsExitCode -Context $context | Should -Be 1
         }
 
+        It 'records V11.2 as UNOBSERVABLE - not stop-the-line - when a child audit cannot start' {
+            # F227. On the 2026-09-21 rebuild every child exited 2 because the job carried no
+            # env: block, and V11.2 announced that the teardown had crossed the tenant-object
+            # line - a G3 violation and a G4 event - over a missing environment variable, on
+            # an estate whose L3 and L4 audits had both passed minutes earlier.
+            $script:BlindChildLayer = @(3, 4)
+            $context = Invoke-AuditForTest -Phase 'Down' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.2'
+            # FAIL, not SKIP: a SKIP would exit 0 and let the workflow print "PASS - no
+            # criterion FAILed" over a rebuild proof that proved nothing. Red and true.
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike 'UNOBSERVABLE:*'
+            $row.Observed | Should -BeLike '*exit=2*'
+            $row.Detail | Should -BeLike '*UNOBSERVABLE, not failed*'
+            $row.Detail | Should -Not -BeLike '*crossed the tenant-object line*'
+            # THE SAFETY PROPERTY, asserted directly rather than inferred from the status:
+            # a rebuild proof that could not run its child audits must not exit 0, because
+            # the workflow prints "PASS - no criterion FAILed" on 0 and nobody investigates
+            # green.
+            Get-MlsExitCode -Context $context | Should -Not -Be 0
+        }
+
+        It 'still fails V11.2 when a child genuinely regresses alongside one that is blind' {
+            # A blind sibling must never MASK a real failure. This is the direction that
+            # matters: the fix makes "could not look" stop meaning "broken", and it must not
+            # also make "broken" start meaning "could not look".
+            $script:BlindChildLayer = @(3)
+            $script:FailingChildLayer = @(4)
+            $context = Invoke-AuditForTest -Phase 'Down' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Detail | Should -BeLike '*crossed the tenant-object line*'
+        }
+
         It 'fails V11.2 - stop the line - when the L4 label audit regresses in the down state' {
             $script:FailingChildLayer = @(4)
             $context = Invoke-AuditForTest -Phase 'Down' -NoRetry
@@ -140,6 +191,30 @@ Describe 'layer-11-audit' {
             Invoke-AuditForTest -Phase 'Up' | Out-Null
             # 10 for V11.3 plus the 2 that V11.2 re-executes.
             Should -Invoke Invoke-MlsChildAudit -Exactly -Times 12
+        }
+
+        It 'records V11.3 as UNOBSERVABLE when child audits could not start, naming the layers' {
+            $script:BlindChildLayer = @(1, 2, 5)
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike 'UNOBSERVABLE:*'
+            $row.Observed | Should -BeLike '*L1=UNOBSERVABLE(2)*'
+            $row.Observed | Should -BeLike '*L2=UNOBSERVABLE(2)*'
+            $row.Observed | Should -BeLike '*L5=UNOBSERVABLE(2)*'
+            $row.Observed | Should -BeLike '*L3=PASS*'
+            $row.Detail | Should -BeLike '*env:*'
+        }
+
+        It 'treats a FILTERED child run (exit 3) as no verdict rather than a failure' {
+            # -OnlyCriterion exits 3 by design: SKIP does not fail a run, so without a code of
+            # its own a filtered run would be indistinguishable from a full green one. It is
+            # not a pass and it is not a failure.
+            $script:FilteredChildLayer = @(7)
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*L7=UNOBSERVABLE(3)*'
         }
 
         It 'fails V11.3 and names the failing layer' {

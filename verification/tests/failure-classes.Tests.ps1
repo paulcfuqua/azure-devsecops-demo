@@ -4178,3 +4178,110 @@ param(
         'Removed' -notin (Get-DeclaredParameter -Path $audit) | Should -BeTrue
     }
 }
+
+Describe 'an audit reads fields the artifact it reads actually writes' {
+    # PAID FOR ON 2026-09-21, on the rebuild. layer-08-audit.ps1 read 'card', 'answer' and
+    # 'responseText' off each question in the agent-eval artifact. agent-eval.ts writes
+    # 'cards' and 'responses' - both arrays - and has never written the other three.
+    #
+    # THE CARD HALF WAS WRONG AND LOOKED RIGHT. V8.4 always found zero cards and always
+    # returned "no Adaptive Card payload was recorded for any question". On the day it was
+    # found that verdict was FACTUALLY CORRECT - the artifact really did carry no cards -
+    # and it was correct by accident: the same branch fires over ten valid cards.
+    #
+    # THE OTHER HALF WAS WORSE. The generated-UI check (no HTML/JS/JSX in any agent
+    # response) concatenated two fields that do not exist, producing the empty string, and
+    # scanned that. A security-relevant assertion had examined nothing in the life of the
+    # project while reporting PASS whenever a card happened to be present.
+    #
+    # Two readers of one artifact and nothing compared them - F145's class ("a list that
+    # feeds two checks answers two questions"), in a different medium. The shape is cheap to
+    # detect because both sides are literal text: the field names in the TypeScript object
+    # the eval pushes, and the -Name arguments the audit passes to Get-MlsProperty.
+
+    BeforeAll {
+        function Get-ArtifactQuestionField {
+            <#
+                The keys of the object agent-eval.ts pushes into its results array. Read
+                from the `results.push({ ... })` literal - the single place the artifact's
+                per-question schema is defined.
+            #>
+            param([Parameter(Mandatory)][string]$Path)
+            $text = [IO.File]::ReadAllText($Path)
+            $start = $text.IndexOf('results.push({')
+            if ($start -lt 0) { return @() }
+            $depth = 0
+            $end = -1
+            for ($i = $text.IndexOf('{', $start); $i -lt $text.Length; $i++) {
+                if ($text[$i] -eq '{') { $depth++ }
+                elseif ($text[$i] -eq '}') { $depth--; if ($depth -eq 0) { $end = $i; break } }
+            }
+            if ($end -lt 0) { return @() }
+            $body = $text.Substring($start, $end - $start + 1)
+            # Keys at the top level of the literal, in BOTH JavaScript spellings:
+            #   name: value     explicit
+            #   name,           ES6 shorthand
+            # The shorthand form is why this sweep's first run reported 'pass' as an orphan
+            # when the eval writes it perfectly well - a parser that sees only one spelling
+            # invents defects, which is the same disease the sweep exists to catch.
+            return @([regex]::Matches($body, '(?m)^\s{6}([A-Za-z][A-Za-z0-9_]*)\s*(?::|,\s*$)') |
+                    ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        }
+
+        function Get-AuditReadField {
+            <# Every `Get-MlsProperty -InputObject $question -Name 'x'` in an audit. #>
+            param([Parameter(Mandatory)][string]$Path)
+            $text = [IO.File]::ReadAllText($Path)
+            return @([regex]::Matches($text, "InputObject\s+\`$question\s+-Name\s+'([A-Za-z][A-Za-z0-9_]*)'") |
+                    ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        }
+
+        $script:EvalPath = Join-Path $script:RepoRoot 'apps' 'mcp-tools' 'evals' 'agent-eval.ts'
+        $script:AuditPath = Join-Path $script:RepoRoot 'verification' 'layer-08-audit.ps1'
+    }
+
+    It 'finds both schemas, or the comparison proves nothing' {
+        Test-Path -LiteralPath $script:EvalPath | Should -BeTrue
+        Test-Path -LiteralPath $script:AuditPath | Should -BeTrue
+        $written = Get-ArtifactQuestionField -Path $script:EvalPath
+        $read = Get-AuditReadField -Path $script:AuditPath
+        # An empty set on either side passes every assertion about its members.
+        $written.Count | Should -BeGreaterThan 6 -Because @'
+agent-eval.ts's results.push({...}) defines the artifact's per-question schema; finding
+almost no keys means the parser no longer recognises it, and the check below is vacuous.
+'@
+        $read.Count | Should -BeGreaterThan 2 -Because 'layer-08-audit.ps1 reads several question fields'
+        $written | Should -Contain 'cards'
+        $written | Should -Contain 'responses'
+        # ES6 shorthand (`pass,` with no colon). Named because missing it made this sweep's
+        # first run report a field the eval does write.
+        $written | Should -Contain 'pass'
+    }
+
+    It 'every question field the L8 audit reads is one the eval writes' {
+        $written = Get-ArtifactQuestionField -Path $script:EvalPath
+        $read = Get-AuditReadField -Path $script:AuditPath
+
+        # referenceSql is a KNOWN, DOCUMENTED gap, not a typo: the audit asks for it, the
+        # eval cannot supply it (the golden questions compute expectations with a function
+        # rather than a stored query), and V8.2 reports UNOBSERVABLE naming exactly that.
+        # It is exempted here so this check stays about MISSPELLINGS - and the exemption is
+        # named, so closing the gap removes the line rather than quietly widening the sweep.
+        $knownGap = @('referenceSql')
+
+        $orphan = @($read | Where-Object { $_ -notin $written -and $_ -notin $knownGap })
+        $orphan -join ', ' | Should -BeNullOrEmpty -Because @'
+A field the artifact does not carry reads as $null forever. That does not fail loudly: it
+makes the criterion return a confident verdict about a value it never saw - "no card was
+recorded" whatever the agent sent, or a generated-UI scan over the empty string that passes
+everything. Compare the names, not the intent.
+'@
+    }
+
+    It 'detects a misspelling when one is introduced' {
+        # The check above is only worth its runtime if it can fail.
+        $written = Get-ArtifactQuestionField -Path $script:EvalPath
+        'card' | Should -Not -BeIn $written -Because 'the eval writes the plural "cards"; the singular is the exact bug this sweep exists for'
+        'responseText' | Should -Not -BeIn $written -Because 'the eval writes "responses"'
+    }
+}

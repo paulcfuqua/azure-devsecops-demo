@@ -73,7 +73,31 @@ function Get-ChildAuditPath {
 }
 
 function Invoke-LayerAuditSet {
-    <# Run a set of layer audits, each in its own process, and summarise their exit codes. #>
+    <#
+    .SYNOPSIS
+        Run a set of layer audits, each in its own process, and classify their exit codes.
+
+    .DESCRIPTION
+        THE EXIT CODE IS NOT A VERDICT UNTIL YOU KNOW WHICH ONE IT IS. The audits use three
+        distinct non-zero codes and they mean different things:
+
+          0  every criterion that ran reached a verdict and none FAILed
+          2  COULD NOT START - a required input was missing, or an identity was wrong.
+             Nothing was evaluated. The estate was never looked at.
+          3  DIAGNOSTIC - a filtered run (-OnlyCriterion). No verdict, by design.
+          *  at least one criterion genuinely FAILed
+
+        Collapsing these into `Passed = (ExitCode -eq 0)` is how the 2026-09-21 rebuild
+        reported a working estate as broken. infra-up's L11 job carried no env: block, so
+        all ten child audits exited 2 and V11.2/V11.3 announced the rebuild had failed -
+        while L1-L7's own audits had passed minutes earlier in the same run.
+
+        That is F102/F103/F105's rule applied to a HARNESS rather than an API: an auditor
+        that could not look must say so, and must never report the thing as absent or
+        broken. The workflow fix removes today's cause; this removes the CLASS, because the
+        next missing input will be a different one and it must not be able to masquerade as
+        a failed layer.
+    #>
     param(
         [Parameter(Mandatory)][int[]]$Layer,
         [Parameter(Mandatory)][string]$Root,
@@ -86,10 +110,30 @@ function Invoke-LayerAuditSet {
             Layer    = $number
             ExitCode = $run.ExitCode
             Passed   = ($run.ExitCode -eq 0)
+            # Could not start (2) or produced no verdict (3): not a pass, and NOT a failure.
+            Blind    = ($run.ExitCode -in @(2, 3))
             Tail     = (@($run.Output | Select-Object -Last 3) -join ' / ')
         }
     }
     return @($result)
+}
+
+function Get-BlindAuditDetail {
+    <# The shared explanation for a child audit that never reached a verdict. #>
+    param([Parameter(Mandatory)][object[]]$Blind)
+    return 'UNOBSERVABLE, not failed: ' +
+    (@($Blind | ForEach-Object { "L$($_.Layer) exit=$($_.ExitCode)" }) -join ', ') +
+    '. Exit 2 means the audit COULD NOT START (a required input was missing) and exit 3 ' +
+    'means it was filtered to a diagnostic - in neither case was the estate examined, so ' +
+    'nothing follows about the layer. The child audits inherit their inputs from the ' +
+    # SINGLE-QUOTED ON PURPOSE. In a DOUBLE-quoted PowerShell string a backtick is the escape
+    # character, so "`env:" renders as ESC + "nv:" - a literal control character in the
+    # operator-facing text. The source file looks perfectly correct in a diff, which is the
+    # whole danger of this class; the repository sweep greps files for stored control
+    # characters and cannot see one that is produced at runtime. Backticks around an
+    # identifier belong in single quotes.
+    'environment of the job that runs layer-11-audit.ps1 and nowhere else; check that ' +
+    'job''s `env:` block before suspecting the estate.'
 }
 
 function Test-ResourceGroupAbsent {
@@ -158,8 +202,28 @@ function Test-TenantObjectIntact {
             -Detail 'V11.2 is defined as "the L3/L4 audits still pass"; with the child audits suppressed there is no evidence, so this records SKIP rather than a pass.'
     }
     $result = Invoke-LayerAuditSet -Layer @(3, 4) -Root $Root -Argument $Argument
-    $failed = @($result | Where-Object { -not $_.Passed })
+    $failed = @($result | Where-Object { -not $_.Passed -and -not $_.Blind })
+    $blind = @($result | Where-Object { $_.Blind })
     $observed = (@($result | ForEach-Object { "layer-$('{0:d2}' -f $_.Layer) exit=$($_.ExitCode)" }) -join '; ') + " at checkpoint '$Checkpoint'"
+    # A blind child cannot support the claim OR refute it. Reporting it as a G3-boundary
+    # violation sends someone to stop the line over a missing environment variable.
+    # NOT ASKED vs CANNOT SEE, and this is the CANNOT SEE side.
+    #
+    # -SkipChildAudit above returns SKIP because the caller deliberately did not ask. A child
+    # that was launched and could not start is the other thing entirely, and it must not
+    # exit 0: SKIP does not fail a run, so a blind V11.2 would let the workflow print
+    # "PASS - no criterion FAILed" over a rebuild proof that proved nothing. That is the
+    # symmetric error - an auditor that cannot see a control must not be able to report it
+    # PRESENT either - and it is the more dangerous half, because nobody investigates green.
+    #
+    # So this is a FAIL whose observed text says UNOBSERVABLE and names the cause. Red, and
+    # true. What the fix changed is not the colour but the CLAIM: it no longer says the
+    # teardown crossed the tenant-object line.
+    if ($blind.Count -gt 0 -and $failed.Count -eq 0) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed ('UNOBSERVABLE: ' + $observed + ' | ' + (@($blind | ForEach-Object { "L$($_.Layer): $($_.Tail)" }) -join ' | ')) `
+            -Detail (Get-BlindAuditDetail -Blind $blind)
+    }
     if ($failed.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed $observed `
             -Detail 'The L4 run here is V4.2''s L11 re-execution: L4 owns the criterion, L11 owns the schedule.'
@@ -181,8 +245,23 @@ function Test-AllLayerAuditGreen {
             -Detail 'V11.3 is the full audit suite; suppressing it leaves no evidence, so this records SKIP rather than a pass.'
     }
     $result = Invoke-LayerAuditSet -Layer $Layer -Root $Root -Argument $Argument
-    $failed = @($result | Where-Object { -not $_.Passed })
-    $observed = @($result | ForEach-Object { "L$($_.Layer)=$(if ($_.Passed) { 'PASS' } else { "FAIL($($_.ExitCode))" })" }) -join ' '
+    $failed = @($result | Where-Object { -not $_.Passed -and -not $_.Blind })
+    $blind = @($result | Where-Object { $_.Blind })
+    $observed = @($result | ForEach-Object {
+            if ($_.Passed) { "L$($_.Layer)=PASS" }
+            elseif ($_.Blind) { "L$($_.Layer)=UNOBSERVABLE($($_.ExitCode))" }
+            else { "L$($_.Layer)=FAIL($($_.ExitCode))" }
+        }) -join ' '
+    # "Every layer audit is green" cannot be claimed over a layer that was never examined,
+    # and must not be DENIED over one either. SKIP names which, and why.
+    # CANNOT SEE, not NOT ASKED - see the note on V11.2 above. "Every layer audit is green"
+    # is the broadest claim this estate makes, and it must never be reachable by an exit
+    # code of 0 over layers that were never examined.
+    if ($blind.Count -gt 0 -and $failed.Count -eq 0) {
+        return New-MlsCheckResult -Passed $false -Final `
+            -Observed ('UNOBSERVABLE: ' + $observed + ' | ' + (@($blind | ForEach-Object { "L$($_.Layer): $($_.Tail)" }) -join ' | ')) `
+            -Detail (Get-BlindAuditDetail -Blind $blind)
+    }
     if ($failed.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed $observed `
             -Detail 'Async criteria V6.3/V6.4 re-attach on their own clocks and are recorded PENDING->PASS in the proof report.'
@@ -257,12 +336,42 @@ function Test-IdleRunRate {
         $problem.Add('consumption data has not landed')
     }
     else {
-        $total = ($usage | ForEach-Object { [double](Get-MlsProperty -InputObject $_ -Name 'cost') } | Measure-Object -Sum).Sum
-        $observed.Add("daily cost $([math]::Round($total, 4)) (budget $DailyBudget/day)")
-        if ($total -gt $DailyBudget) {
-            $top = @($usage | Sort-Object { -[double](Get-MlsProperty -InputObject $_ -Name 'cost') } | Select-Object -First 3 |
-                    ForEach-Object { "$(Get-MlsProperty -InputObject $_ -Name 'svc')=$(Get-MlsProperty -InputObject $_ -Name 'cost')" })
-            $problem.Add("daily cost exceeds the pro-rated idle envelope; top line items: $($top -join ', ')")
+        # NOT EVERY LINE ITEM CARRIES A NUMBER. Observed on the 2026-09-21 cycle: a row came
+        # back with pretaxCost of "None", and `[double]'None'` throws - which the criterion
+        # reported as `check threw: Cannot convert value "None" to type "System.Double"`, an
+        # error naming a .NET conversion rule and saying nothing about consumption data.
+        #
+        # A row with no cost is not a zero-cost row and must not be silently summed as one:
+        # counted as 0 it would drag a genuine overspend down toward the budget. It is a row
+        # this check cannot read, so it is named and excluded, and the observation says how
+        # many were dropped rather than presenting a partial total as complete.
+        $priced = [System.Collections.Generic.List[psobject]]::new()
+        $unpriced = 0
+        foreach ($item in $usage) {
+            $raw = "$(Get-MlsProperty -InputObject $item -Name 'cost')"
+            $value = 0.0
+            if ([double]::TryParse($raw, [ref]$value)) {
+                $priced.Add([pscustomobject]@{
+                        Service = "$(Get-MlsProperty -InputObject $item -Name 'svc')"
+                        Cost    = $value
+                    })
+            }
+            else { $unpriced++ }
+        }
+
+        if ($priced.Count -eq 0) {
+            $observed.Add("$($usage.Count) consumption line item(s), none carrying a readable cost")
+            $problem.Add('consumption data has landed but no line item carries a numeric cost')
+        }
+        else {
+            $total = ($priced | Measure-Object -Property Cost -Sum).Sum
+            $note = if ($unpriced -gt 0) { " ($unpriced line item(s) carried no numeric cost and are excluded)" } else { '' }
+            $observed.Add("daily cost $([math]::Round($total, 4)) over $($priced.Count) line item(s) (budget $DailyBudget/day)$note")
+            if ($total -gt $DailyBudget) {
+                $top = @($priced | Sort-Object -Property Cost -Descending | Select-Object -First 3 |
+                        ForEach-Object { "$($_.Service)=$($_.Cost)" })
+                $problem.Add("daily cost exceeds the pro-rated idle envelope; top line items: $($top -join ', ')")
+            }
         }
     }
 
