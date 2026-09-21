@@ -473,7 +473,7 @@ function Test-RowFilterEnforcement {
         estate. And a table with no restricted rows would make a filter that removed nothing
         look identical to one that worked, so zero restricted rows is a FAIL pointing at V5.5.
 
-        THIS CRITERION SUBSUMES THE RETIRED the retired V4.4. A policy that filters necessarily exists
+        THIS CRITERION SUBSUMES THE RETIRED V4.4. A policy that filters necessarily exists
         and is necessarily enabled - a disabled policy returns every row and fails here. So
         the artefact check added nothing this does not already prove, and unlike it, this
         one is observable by the verifier.
@@ -531,7 +531,7 @@ SELECT
     if ($isPrivileged -eq -1) {
         return New-MlsCheckResult -Passed $false `
             -Observed "UNOBSERVABLE: role '$privileged' does not exist, so nothing follows about filtering -- $describe" `
-            -Detail 'The protection has not been applied. Re-run layer-04-purview.yml, whose protect job applies infra/fabric/protect-tables.ps1; every statement is guarded and safe to replay. This criterion cannot distinguish "no filter" from "no role to filter against", so it reports neither.' -Final
+            -Detail 'The protection has not been applied. Re-run layer-05-fabric.yml, whose protect step applies infra/fabric/protect-tables.ps1 right after the seed (it moved there from L4 in #294, because protection cannot precede the tables); every statement is guarded and safe to replay. This criterion cannot distinguish "no filter" from "no role to filter against", so it reports neither.' -Final
     }
     if ($isPrivileged -eq 1) {
         return New-MlsCheckResult -Status 'SKIP' `

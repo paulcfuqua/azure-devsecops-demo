@@ -269,3 +269,87 @@ Warehouse, where database principals exist and the column DENYs would actually b
 L4 now reads: V4.1 labels, V4.2 (deferred to L11), V4.3 label policy, **V4.5 the row filter
 enforces**, V4.6 the column denial is unobservable and says so.
 
+
+---
+
+## F225 — a binding error is reported as a failed criterion, on a run that evaluated none
+
+*2026-09-21, rebuild attempt 3, L4.*
+
+The data-layer criteria moved from L4 to L5 (following the protect step #294 had already
+moved) and their **parameters moved with them**. `layer-04-purview.yml` kept passing
+`-SqlEndpoint`, `-LakehouseName` and `-ProtectionPrefix`. Every audit script carries
+`[CmdletBinding()]`, so PowerShell refused the call and not one criterion ran.
+
+That part is an ordinary half-finished move. What is worth recording is **the verdict the
+run announced**:
+
+> `FAIL — at least one criterion FAILed`
+
+No criterion had been evaluated. Measured rather than reasoned:
+
+```
+pwsh -NoProfile -NonInteractive -File <[CmdletBinding()] script> -Bogus y
+→ "A parameter cannot be found that matches parameter name 'Bogus'."   exit 1
+```
+
+and `1` falls through the layer-audit action's `case` to `*)`, whose verdict is that
+sentence. Exit **2** — `COULD NOT START` — is a code the audit chooses **for itself, after it
+has started**; a bind failure happens before the script's first line, so the audit never gets
+to choose anything. `action.yml` asserted the opposite in a comment ("which this action
+reports as COULD NOT START") and had done since 2026-08-24. That comment is now corrected
+against the measurement above.
+
+The cost is a misdirection, not a delay. A reader who is told a criterion failed goes to look
+at the estate. The transcript held no criterion table to contradict it, and an empty table
+reads like a truncated log rather than like a call that never happened.
+
+**This is F102/F103/F105's class in a new place.** Those were audits reporting a control
+absent when they could not observe it. This is the *harness* reporting a criterion failed
+when it could not run one. Same substitution: a non-zero exit stood in for a verdict, exactly
+as an empty API response stood in for absence.
+
+**Closed as a check, not as prose.** `verification/tests/failure-classes.Tests.ps1` now parses
+every `uses: ./.github/actions/layer-audit` step in every workflow, reads the parameter names
+in its `args:` block, and compares them against the param block of
+`verification/layer-<nn>-audit.ps1`. Run against the pre-fix tree it names all three orphans
+by name; it also asserts it discovered more than ten invocations, so it cannot pass by
+finding nothing.
+
+What it does **not** cover, so a green run is not mistaken for more: it checks that a passed
+name exists, not that a value follows a flag that needs one (the action deliberately does no
+pairing validation — a switch legitimately has no value — and that case fails loudly with
+"Missing an argument for parameter"). It sees only invocations through the composite action,
+which is all fifteen of them today.
+
+---
+
+## F226 — the estate's real tenant and subscription ids were committed, in docs, for sixteen days
+
+*2026-09-21, found by V1.3 on a routine `verify-l1` run against `main`.*
+
+`docs/findings/2026-09-05-acr-basetrigger-spike.md` (10 occurrences) and
+`docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md` (1) carried the
+live tenant and subscription GUIDs, pasted verbatim out of `az account show` and out of an
+ACR error message. CLAUDE.md rule 5 is explicit that these live in GitHub environment
+*variables*. Redacted to `<AZURE_TENANT_ID>` / `<AZURE_SUBSCRIPTION_ID>`, which loses nothing
+the documents were using them for — in both files the id is incidental to the narrative.
+
+**Why it survived sixteen days is the interesting half.** V1.3 runs two sweeps. The *generic*
+GUID sweep — any GUID not on the reviewed allowlist — carries the pathspec `:!docs`. The
+*specific* sweep, for the three real identifiers, carries no exclusion and greps everything.
+So docs are covered by exactly one of the two, and that one needs `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID` and `FABRIC_CAPACITY_ID` present in the Verifier's environment —
+absent, V1.3 returns **SKIP**, saying so honestly ("the half that greps the three real
+identifiers could not run").
+
+So the check was correct, honest about its own blindness, and reported the truth the first
+time it ran with its inputs. Nothing here needs fixing. It is recorded because it is the
+counter-example to most of this register: **an audit that said "I could not look" rather than
+"there is nothing there", and was believed, and was right.** The gap it names is real — docs
+are the one place a real identifier is most likely to be pasted and the least likely to be
+swept — but closing it by dropping `:!docs` from the generic sweep would flood V1.3 with the
+public and invented GUIDs that documentation legitimately quotes. The specific sweep is the
+right instrument; it simply has to be given its inputs.
+
+`FABRIC_CAPACITY_ID` was checked at the same time and is not committed anywhere.

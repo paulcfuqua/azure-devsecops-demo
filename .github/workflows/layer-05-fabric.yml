@@ -300,10 +300,19 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: layer-05-fabric
+          # protection-apply.txt: the protect step tees its whole transcript there and
+          # nothing collected it, so the one record of which statements were applied to
+          # which tables lived only in the runner's scrollback. V5.6 proves the filter
+          # FILTERS, which is the verdict; this is the account of how it got there, and
+          # the two answer different questions on the run where something went wrong.
+          #
+          # The list below is a LITERAL block scalar - a '#' inside it is a path pattern,
+          # not a comment.
           path: |
             fabric-plan.txt
             fabric-apply.txt
             generator-summary.txt
+            protection-apply.txt
           if-no-files-found: warn
           retention-days: 14
 
@@ -331,6 +340,17 @@ jobs:
       FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
     steps:
       - uses: actions/checkout@v7
+
+      # DERIVED, NOT STORED. V5.6/V5.7 name the two tier roles, so they need the estate
+      # prefix. `vars.MLS_COMPANY_PREFIX` is the obvious source and the wrong one twice
+      # over: it is set in no environment at all (checked 2026-09-21 - repo, demo and
+      # verify), and this job is `environment: verify`, so a value stored in `demo` would
+      # not reach it anyway (F124). A `|| 'mls'` fallback would therefore be doing all the
+      # work while looking like configuration. naming.bicep is where the prefix actually
+      # lives, and this action reads it - the same source the protect step's roles are
+      # named from, so the two cannot drift apart silently.
+      - id: names
+        uses: ./.github/actions/naming
 
       - name: Verifier identity not configured
         if: ${{ needs.preflight.outputs.verifier != 'true' }}
@@ -377,6 +397,8 @@ jobs:
             ${{ vars.FABRIC_CAPACITY_ID }}
             -ExpectedCountPath
             data/generators/tests/expected_counts.json
+            -ProtectionPrefix
+            ${{ steps.names.outputs.prefix }}
             ${{ vars.MLS_SQL_ENDPOINT && '-SqlEndpoint' || '' }}
             ${{ vars.MLS_SQL_ENDPOINT }}
 
