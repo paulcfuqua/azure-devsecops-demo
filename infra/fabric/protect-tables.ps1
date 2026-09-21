@@ -61,7 +61,18 @@
     Justification = 'SqlEndpoint, AccessToken, Database and TimeoutSec are read by Get-EndpointColumn and Invoke-ProtectionSql through PowerShell dynamic scoping rather than being passed down explicitly, which the analyser cannot follow. They are the connection, so a genuinely unused one would fail on the first query. The parameters that were REALLY unused - StandardPrincipal and PrivilegedPrincipal - were removed rather than suppressed: see Invoke-TableProtection.')]
 param(
     # The lakehouse SQL analytics endpoint FQDN. RESOLVED from the Fabric API by the
-    # caller, never stored: the endpoint name does not survive a rebuild (F129's class).
+    # caller, never stored.
+    #
+    # NOT because it changes every rebuild - MEASURED 2026-09-21, it does not. The
+    # lakehouse was deleted and recreated (id 6c8f6a71... -> f578ec8c...) and the FQDN
+    # was identical, because it is WORKSPACE-scoped and the standard teardown leaves the
+    # workspace shell standing. The earlier comment here claimed otherwise and was wrong.
+    #
+    # Resolving is still correct, for reasons that survive that correction: recreating
+    # the WORKSPACE is a G3 path that does exist, the lakehouse id demonstrably does
+    # change, and a stored endpoint is a claim somebody has to keep true. A value the
+    # template derives beats one a human stores (F129) even when the stored one would
+    # have happened to work.
     [Parameter(Mandatory)][string]$SqlEndpoint,
 
     [Parameter(Mandatory)][string]$AccessToken,
