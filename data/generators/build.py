@@ -407,8 +407,84 @@ def gen_findings():
 # Assembly
 # ---------------------------------------------------------------------------
 
+def gen_hr_roster():
+    """Fictional employee roster: mixed sensitivity WITHIN ONE ROW.
+
+    `start_date`, `department` and `tenure_years` are ordinary business data.
+    `salary_usd`, `bonus_target_pct` and `performance_band` are restricted by
+    column-level security at L4. The mix is the whole point - a table whose
+    sensitive columns lived elsewhere would give CLS nothing to discriminate
+    within, and the demo would be a join rather than a denial.
+
+    Synthetic and fictional throughout (CLAUDE.md hard rule 4).
+    """
+    rng = _rng("hr_roster")
+    rows = []
+    for i in range(C.N_HR_ROSTER):
+        first = C.HR_FIRST_NAMES[rng.randrange(len(C.HR_FIRST_NAMES))]
+        last = C.HR_LAST_NAMES[rng.randrange(len(C.HR_LAST_NAMES))]
+        start = _rand_date(rng, C.HR_START, C.HR_END)
+        family = C.HR_JOB_FAMILIES[rng.randrange(len(C.HR_JOB_FAMILIES))]
+        rows.append({
+            "employee_id": f"EMP-{1000 + i}",
+            "display_name": f"{first} {last}",
+            "department": C.HR_DEPARTMENTS[rng.randrange(len(C.HR_DEPARTMENTS))],
+            "job_family": family,
+            "location": C.HR_LOCATIONS[rng.randrange(len(C.HR_LOCATIONS))],
+            "start_date": start.isoformat(),
+            "tenure_years": round((C.HR_END - start).days / 365.25, 1),
+            "manager_id": None,
+            "employment_type": _weighted(rng, C.HR_EMPLOYMENT_TYPES),
+            "salary_usd": C.HR_SALARY_BASE[family] + rng.randrange(-18000, 92000, 500),
+            "bonus_target_pct": rng.randrange(0, 26),
+            "performance_band": _weighted(rng, C.HR_PERFORMANCE_BANDS),
+        })
+
+    # Managers are assigned after the fact so manager_id always resolves to a
+    # real employee_id - asserted by the tests, and a dangling reference would
+    # make the roster join in the demo fail in front of an audience.
+    manager_ids = [r["employee_id"] for r in rows[: C.HR_MANAGER_COUNT]]
+    for r in rows[C.HR_MANAGER_COUNT :]:
+        r["manager_id"] = manager_ids[rng.randrange(len(manager_ids))]
+    return rows
+
+
+def gen_defect_reports(vehicles, suppliers):
+    """Defect records: mixed sensitivity BY ROW.
+
+    Rows classified THIRD_PARTY_PROPRIETARY are filtered by row-level security at
+    L4, so a standard caller sees fewer rows and is told nothing about the rest -
+    no error, no count, no hint that anything was removed. That silence is the
+    correct RLS behaviour and is the deliberate contrast with hr_roster, where a
+    denied column raises a visible error.
+
+    Restricted rows always name a supplier: third-party proprietary information
+    with no third party would be incoherent.
+    """
+    rng = _rng("defect_reports")
+    vehicle_ids = [v["vehicle_id"] for v in vehicles]
+    supplier_ids = [s["supplier_id"] for s in suppliers]
+    rows = []
+    for i in range(C.N_DEFECT_REPORTS):
+        restricted = rng.random() < C.DEFECT_RESTRICTED_RATE
+        supplier = supplier_ids[rng.randrange(len(supplier_ids))]
+        rows.append({
+            "defect_id": f"DEF-{10000 + i}",
+            "vehicle_id": vehicle_ids[rng.randrange(len(vehicle_ids))],
+            "supplier_id": supplier if restricted or rng.random() < 0.6 else None,
+            "reported_date": _rand_date(rng, C.DEFECT_START, C.DEFECT_END).isoformat(),
+            "severity": _weighted(rng, C.DEFECT_SEVERITIES),
+            "subsystem": C.DEFECT_SUBSYSTEMS[rng.randrange(len(C.DEFECT_SUBSYSTEMS))],
+            "status": _weighted(rng, C.DEFECT_STATUSES),
+            "summary": C.DEFECT_SUMMARIES[rng.randrange(len(C.DEFECT_SUMMARIES))],
+            "root_cause": C.DEFECT_ROOT_CAUSES[rng.randrange(len(C.DEFECT_ROOT_CAUSES))],
+            "classification": "THIRD_PARTY_PROPRIETARY" if restricted else "INTERNAL",
+        })
+    return rows
+
+
 def build_tables():
-    """Build all ten tables. Pure function of config.SEED."""
+    """Build all twelve tables. Pure function of config.SEED."""
     vehicles = gen_vehicles()
     pads = gen_pads()
     suppliers = gen_suppliers()
@@ -419,6 +495,8 @@ def build_tables():
     work_orders = gen_work_orders(parts, vehicles, launches)
     cost_daily = gen_cost_daily(launches)
     findings = gen_findings()
+    hr_roster = gen_hr_roster()
+    defect_reports = gen_defect_reports(vehicles, suppliers)
 
     generated = {
         "launches": launches,
@@ -431,6 +509,8 @@ def build_tables():
         "work_orders": work_orders,
         "cost_daily": cost_daily,
         "findings_history": findings,
+        "hr_roster": hr_roster,
+        "defect_reports": defect_reports,
     }
     return {name: generated[name] for name in C.TABLE_ORDER}
 

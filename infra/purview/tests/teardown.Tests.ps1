@@ -117,10 +117,10 @@ Describe 'infra/purview/teardown.ps1' {
     }
 
     Context 'everything exists - full teardown' {
-        It 'deletes the label policy and all four labels' {
+        It 'deletes the label policy and all six labels' {
             $result = Invoke-TeardownForTest
             Should -Invoke Remove-LabelPolicy -Exactly -Times 1 -ParameterFilter { $Identity -eq $script:ExpectedPolicyName }
-            Should -Invoke Remove-Label -Exactly -Times 4
+            Should -Invoke Remove-Label -Exactly -Times 6
             foreach ($name in $script:ExpectedNames) {
                 Should -Invoke Remove-Label -Exactly -Times 1 -ParameterFilter { $Identity -eq $name }
                 $result.$name | Should -Be 'Deleted'
@@ -130,7 +130,7 @@ Describe 'infra/purview/teardown.ps1' {
 
         It 'removes the label POLICY before any of the labels - a label scoped by a live policy cannot be deleted' {
             Invoke-TeardownForTest | Out-Null
-            $script:DeleteOrder.Count | Should -Be 5
+            $script:DeleteOrder.Count | Should -Be 7
             $script:DeleteOrder[0] | Should -Be "policy:$script:ExpectedPolicyName"
             @($script:DeleteOrder | Select-Object -Skip 1) | ForEach-Object { $_ | Should -BeLike 'label:*' }
         }
@@ -157,10 +157,10 @@ Describe 'infra/purview/teardown.ps1' {
             Mock Get-LabelPolicy { throw "The label policy $Identity doesn't exist" }
         }
 
-        It 'still deletes the four labels, and the policy outcome is NotFound rather than an error' {
+        It 'still deletes the six labels, and the policy outcome is NotFound rather than an error' {
             $result = Invoke-TeardownForTest
             $result.LabelPolicy | Should -Be 'NotFound'
-            Should -Invoke Remove-Label -Exactly -Times 4
+            Should -Invoke Remove-Label -Exactly -Times 6
             foreach ($name in $script:ExpectedNames) { $result.$name | Should -Be 'Deleted' }
         }
     }
@@ -245,7 +245,7 @@ Describe 'infra/purview/teardown.ps1' {
             $values = @($outcomes.PSObject.Properties | ForEach-Object { $_.Value })
             $values | Should -Not -Contain 'Deleted' -Because 'a declined prompt deleted nothing'
             @($values | Where-Object { $_ -eq 'Declined' }).Count |
-                Should -Be 5 -Because 'the label policy plus all four labels were declined'
+                Should -Be 7 -Because 'the label policy plus all six labels were declined'
         }
 
         It 'still reports Deleted when the prompt is confirmed - the guard is not simply hard-coded' {
@@ -256,7 +256,7 @@ Describe 'infra/purview/teardown.ps1' {
 
             $values = @($outcomes.PSObject.Properties | ForEach-Object { $_.Value })
             $values | Should -Not -Contain 'Declined'
-            @($values | Where-Object { $_ -eq 'Deleted' }).Count | Should -Be 5
+            @($values | Where-Object { $_ -eq 'Deleted' }).Count | Should -Be 7
         }
 
         It 'the real removers derive Confirmed from ShouldProcess - not hardcoded (no mocks of the removers)' {
@@ -286,7 +286,7 @@ Describe 'infra/purview/teardown.ps1' {
 
             $values = @($outcomes.PSObject.Properties | ForEach-Object { $_.Value })
             $values | Should -Not -Contain 'Declined'
-            @($values | Where-Object { $_ -eq 'WhatIf' }).Count | Should -Be 5
+            @($values | Where-Object { $_ -eq 'WhatIf' }).Count | Should -Be 7
         }
     }
 
@@ -298,7 +298,7 @@ Describe 'infra/purview/teardown.ps1' {
         # document already labelled with it lost its classification and protection.
         It 'derives every label name from naming.bicep, and none of them is a bare generic word' {
             $taxonomy = Get-LabelTaxonomy -Prefix $script:Prefix
-            @($taxonomy).Count | Should -Be 4
+            @($taxonomy).Count | Should -Be 6
             foreach ($name in $taxonomy) {
                 $name | Should -BeLike "$($script:Prefix)-*"
             }
@@ -333,7 +333,7 @@ Describe 'infra/purview/teardown.ps1' {
 
             $result.$stranger | Should -Be 'Refused'
             Should -Invoke Remove-Label -Exactly -Times 0 -ParameterFilter { $Identity -eq $stranger }
-            Should -Invoke Remove-Label -Exactly -Times 3
+            Should -Invoke Remove-Label -Exactly -Times 5
         }
 
         It 'refuses every delete when there is no baseline file at all' {
@@ -362,7 +362,7 @@ Describe 'infra/purview/teardown.ps1' {
             '{}' | Set-Content -LiteralPath $empty -Encoding utf8
             Get-LabelGuidBaseline -Path $empty | Should -BeNullOrEmpty
             $good = Get-LabelGuidBaseline -Path $script:BaselinePath
-            $good.Count | Should -Be 4
+            $good.Count | Should -Be 6
             $good.Contains($script:LabelGuid[$script:ExpectedNames[0]]) | Should -BeTrue
         }
     }

@@ -3,7 +3,7 @@
 `expected_counts.json` is not documentation: `verification/layer-05-audit.ps1`
 reads it for V5.3 and, when it is absent, records the criterion SKIP with
 "launches = 1,200 verified; other nine tables unverified". So the file is the
-only thing standing between "ten tables asserted exactly" and "one table
+only thing standing between "twelve tables asserted exactly" and "one table
 asserted, nine taken on trust".
 
 Because it is committed, it can go stale silently the moment anyone changes a
@@ -37,7 +37,7 @@ def test_fixture_exists_and_is_a_flat_table_to_count_map():
         assert count > 0
 
 
-def test_fixture_covers_exactly_the_ten_tables_in_order():
+def test_fixture_covers_exactly_the_twelve_tables_in_order():
     fixture = load_fixture()
     assert list(fixture.keys()) == C.TABLE_ORDER
 

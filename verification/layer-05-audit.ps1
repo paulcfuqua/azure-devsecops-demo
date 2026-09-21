@@ -11,6 +11,9 @@
       V5.2  Table list matches manifest.
       V5.3  SQL analytics endpoint returns expected row counts (launches = 1,200 +/- 0).
       V5.4  Capacity state == Paused after layer completes.
+      V5.5  The mixed-sensitivity tables carry mixed sensitivity - both classifications
+            present in defect_reports, hr_roster.salary_usd populated. Runs BEFORE V5.4:
+            it reads the SQL endpoint, and V5.4 asserts the capacity is paused.
 
     Sequence matters: V5.1 -> V5.2 -> V5.3 run while the capacity is resumed (SQL-endpoint
     reads on a paused capacity fail), V5.4 after the layer's pause step completes
@@ -26,7 +29,7 @@
     UNOBSERVABLE - never "the tables are missing" - when neither answers (F105, F171).
 
     The row-count expectations come from the deterministic seed 20260822: launches = 1,200
-    is pinned by the master plan itself; the other nine tables come from Track A's
+    is pinned by the master plan itself; the other eleven tables come from Track A's
     committed expected-counts fixture. If that fixture is absent the criterion records a
     labelled SKIP rather than passing on the one value it could check.
 
@@ -41,7 +44,11 @@ param(
     [string]$LakehouseName = 'mls_operations',
     [string[]]$ExpectedTable = @(
         'launches', 'scrubs', 'vehicles', 'pads', 'telemetry_summary',
-        'parts', 'suppliers', 'work_orders', 'cost_daily', 'findings_history'
+        'parts', 'suppliers', 'work_orders', 'cost_daily', 'findings_history',
+        # The two mixed-sensitivity tables. The L5 workflow passes no -ExpectedTable, so
+        # this default is what actually runs - omitting them here fails V5.2's set
+        # equality and V5.3's fixture comparison against a correctly seeded lakehouse.
+        'hr_roster', 'defect_reports'
     ),
     [int]$ExpectedLaunchCount = 1200,
     [string]$ExpectedCountPath,
@@ -268,7 +275,7 @@ WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA = 'dbo'
 function Test-LakehouseTableList {
     <#
     .SYNOPSIS
-        V5.2 - set equality with the ten manifest tables: a missing table fails and so
+        V5.2 - set equality with the twelve manifest tables: a missing table fails and so
         does an extra one (drift). Over a route this identity has been shown to be able
         to read.
 
@@ -365,6 +372,75 @@ function Test-LakehouseTableList {
         -Detail 'Read over the SQL analytics endpoint because OneLake refused this identity. That route sees a Delta table only once the endpoint has synced it, which is the propagation the 30-minute window exists for; it is also a slightly weaker drift check than OneLake, because an unsynced EXTRA table would not appear here yet. If this stays short after the window, compare against the deploy job''s own "N reported by Fabric" line before concluding the seed failed.'
 }
 
+function Test-SensitivityClass {
+    <#
+    .SYNOPSIS
+        V5.5 - the two mixed-sensitivity tables actually carry mixed sensitivity.
+    .DESCRIPTION
+        Row counts are V5.3's job and it already covers both tables through the committed
+        fixture. This criterion asserts the thing a count cannot: that there is something
+        for the L4 controls to discriminate.
+
+        An all-INTERNAL defect_reports would let every row-level security check downstream
+        report green while proving nothing had been filtered, and an hr_roster whose
+        salary column is entirely null makes a column denial indistinguishable from there
+        being nothing to deny. Both are green-but-meaningless states, which is the defect
+        family this repository spends its verification budget on.
+
+        A read that THROWS is UNOBSERVABLE, never "absent". Fabric answers a caller
+        without the right permission with an empty result rather than a denial (F105), so
+        emptiness here is unprovable: establish that you could observe before reporting
+        what you saw.
+    #>
+    param(
+        [AllowEmptyString()][string]$SqlEndpoint,
+        [AllowEmptyString()][AllowNull()][string]$SqlAccessToken,
+        [Parameter(Mandatory)][string]$LakehouseName
+    )
+    if ([string]::IsNullOrWhiteSpace($SqlEndpoint)) {
+        return New-MlsCheckResult -Passed $false `
+            -Observed 'UNOBSERVABLE: no SQL analytics endpoint available' `
+            -Detail "V5.1's lakehouse metadata carries properties.sqlEndpointProperties.connectionString; supply it with -SqlEndpoint / `$env:MLS_SQL_ENDPOINT when the metadata omits it. Reads on a PAUSED capacity fail - this criterion runs inside the resumed window, before V5.4." -Final
+    }
+
+    try {
+        $classRows = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `
+                -AccessToken $SqlAccessToken `
+                -Query 'SELECT classification AS c, COUNT(*) AS n FROM defect_reports GROUP BY classification')
+        $salaryRows = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `
+                -AccessToken $SqlAccessToken `
+                -Query 'SELECT COUNT(*) AS n FROM hr_roster WHERE salary_usd IS NOT NULL')
+    } catch {
+        return New-MlsCheckResult -Passed $false `
+            -Observed "UNOBSERVABLE: the SQL analytics endpoint could not be read - $($_.Exception.Message)" `
+            -Detail 'The endpoint refused or failed, so this criterion cannot distinguish "no restricted rows" from "could not look". It reports that it could not look (F105). A permission state does not change by waiting.' -Final
+    }
+
+    $observed = [ordered]@{}
+    foreach ($row in $classRows) {
+        $observed["$(Get-MlsProperty -InputObject $row -Name 'c')"] = [int](Get-MlsProperty -InputObject $row -Name 'n')
+    }
+    $salaryPopulated = 0
+    if ($salaryRows.Count -gt 0) { $salaryPopulated = [int](Get-MlsProperty -InputObject $salaryRows[0] -Name 'n') }
+
+    $describe = (@($observed.Keys) | ForEach-Object { "$_=$($observed[$_])" }) -join ', '
+    $describe = "defect_reports classifications: $describe; hr_roster rows with a non-null salary_usd: $salaryPopulated"
+
+    $problems = [System.Collections.Generic.List[string]]::new()
+    foreach ($class in 'INTERNAL', 'THIRD_PARTY_PROPRIETARY') {
+        if (-not $observed.Contains($class) -or $observed[$class] -le 0) {
+            $problems.Add("$class absent or zero")
+        }
+    }
+    if ($salaryPopulated -le 0) { $problems.Add('salary_usd is null in every row') }
+
+    if ($problems.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Observed "$($problems -join '; ') -- $describe" `
+            -Detail 'The L4 controls have nothing to discriminate. Row-level security over a table with one classification filters nothing while reporting healthy, and a column denial over an all-null column refuses nothing. Reseed (L5) before reading anything into an L4 pass.' -Final
+    }
+    return New-MlsCheckResult -Passed $true -Observed $describe
+}
+
 function Test-SeededRowCount {
     <# V5.3 - deterministic seed 20260822, so the counts are exact, with no tolerance band. #>
     param(
@@ -398,7 +474,7 @@ function Test-SeededRowCount {
     }
     if ($null -eq $ExpectedCount) {
         return New-MlsCheckResult -Status 'SKIP' `
-            -Observed "launches=$ExpectedLaunchCount verified; other nine tables unverified ($describe)" `
+            -Observed "launches=$ExpectedLaunchCount verified; other eleven tables unverified ($describe)" `
             -Detail "Track A's expected-counts fixture (data/generators/tests/expected_counts.json) is absent, so only the plan-pinned launches count could be checked. Pass -ExpectedCountPath to close this criterion; recording SKIP rather than passing on one table out of ten."
     }
     $mismatch = [System.Collections.Generic.List[string]]::new()
@@ -568,11 +644,34 @@ function Invoke-Main {
     Invoke-MlsCriterion -Context $context -Id 'V5.3' -Control @() `
         -Description 'SQL analytics endpoint returns expected row counts (launches = 1,200 +/- 0)' `
         -Command "SELECT 'launches' AS t, COUNT(*) AS n FROM launches UNION ALL ... (one arm per table, all 10) -- against the lakehouse SQL analytics endpoint as mls-verifier" `
-        -Expected "launches = $ExpectedLaunchCount exactly; the other nine equal to Track A's committed fixture" `
+        -Expected "launches = $ExpectedLaunchCount exactly; the other eleven equal to Track A's committed fixture" `
         -RetryWindowMinutes 10 `
         -Test {
         Test-SeededRowCount -ExpectedTable $ExpectedTable -ExpectedLaunchCount $ExpectedLaunchCount `
             -ExpectedCount $expectedCount -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName
+    } | Out-Null
+
+    # WHY TEN MINUTES: this criterion reads the SQL analytics endpoint, and a newly
+    # loaded Delta table is not immediately visible there. MEASURED on the 2026-09-20
+    # seed - Fabric's /tables route reported all 12 tables while the SQL catalog still
+    # reported 10, and the two new tables appeared there after 63 seconds. Ten minutes is
+    # ~10x that observation. Waiting on: lakehouse -> SQL analytics endpoint metadata sync
+    # after a Load Table. If it ever needs raising, re-measure rather than doubling it.
+    #
+    # The comment lives HERE and not inside the call below: a comment between
+    # backtick-continued lines ENDS the continuation, so -Test stops binding while the
+    # file still parses clean. That is what broke this on its first CI run.
+    #
+    # V5.5 RUNS BEFORE V5.4, and the out-of-order id is deliberate. This reads the SQL
+    # analytics endpoint; V5.4 asserts the capacity is Paused, and a read on a paused
+    # capacity fails. Execution order is the constraint, not numbering.
+    Invoke-MlsCriterion -Context $context -Id 'V5.5' -Control @() `
+        -Description 'The mixed-sensitivity tables carry mixed sensitivity: both classifications present, restricted column populated' `
+        -Command "SELECT classification AS c, COUNT(*) AS n FROM defect_reports GROUP BY classification`nSELECT COUNT(*) AS n FROM hr_roster WHERE salary_usd IS NOT NULL   -- as mls-verifier" `
+        -Expected 'defect_reports holds both INTERNAL and THIRD_PARTY_PROPRIETARY rows; hr_roster.salary_usd is populated' `
+        -RetryWindowMinutes 10 `
+        -Test {
+        Test-SensitivityClass -SqlEndpoint $endpoint -SqlAccessToken $sqlToken -LakehouseName $LakehouseName
     } | Out-Null
 
     # -Control @(): idle-cost control (capacity paused when unused). Cost/FinOps, not CUI

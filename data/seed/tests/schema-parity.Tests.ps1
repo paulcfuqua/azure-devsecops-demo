@@ -1,5 +1,5 @@
 # =============================================================================
-# The drift test. Three independent descriptions of the same ten tables have to
+# The drift test. Three independent descriptions of the same twelve tables have to
 # agree, and nothing at runtime would tell us if they stopped:
 #
 #   A. data/generators/build.py + pools.py  - what the generators actually emit
@@ -33,6 +33,7 @@ BeforeAll {
         launches = 1200; scrubs = 475; vehicles = 12; pads = 11
         telemetry_summary = 1200; parts = 300; suppliers = 24
         work_orders = 800; cost_daily = 4515; findings_history = 420
+        hr_roster = 240; defect_reports = 900
     }
 
     function Get-DdlTableDefinition {
@@ -139,6 +140,8 @@ BeforeAll {
             work_orders       = 'gen_work_orders'
             cost_daily        = 'gen_cost_daily'
             findings_history  = 'gen_findings'
+            hr_roster         = 'gen_hr_roster'
+            defect_reports    = 'gen_defect_reports'
         }
         $columns = [ordered]@{}
         foreach ($entry in $functions.GetEnumerator()) {
@@ -174,8 +177,8 @@ Describe 'schema parity: the parsers themselves' {
         }
     }
 
-    It 'extracted ten tables from the generator source, none of them empty' {
-        @($script:GeneratorColumns.Keys).Count | Should -Be 10
+    It 'extracted twelve tables from the generator source, none of them empty' {
+        @($script:GeneratorColumns.Keys).Count | Should -Be 12
         foreach ($entry in $script:GeneratorColumns.GetEnumerator()) {
             @($entry.Value).Count | Should -BeGreaterThan 4 -Because "table '$($entry.Key)' should have parsed more than four columns"
         }
@@ -192,7 +195,7 @@ Describe 'schema parity: the parsers themselves' {
 }
 
 Describe 'schema parity: generators -> manifest' {
-    It 'covers exactly the ten generator tables, no more and no fewer' {
+    It 'covers exactly the twelve generator tables, no more and no fewer' {
         @($script:LoadOrder | Sort-Object) | Should -Be @(@($script:GeneratorColumns.Keys) | Sort-Object)
     }
 
@@ -216,7 +219,8 @@ Describe 'schema parity: generators -> manifest' {
         $structuralNullable = @(
             'vehicles.gto_capacity_kg', 'vehicles.last_flight_year',
             'work_orders.launch_id', 'work_orders.closed_date', 'work_orders.disposition',
-            'findings_history.cve_id', 'findings_history.closed_date'
+            'findings_history.cve_id', 'findings_history.closed_date',
+            'hr_roster.manager_id', 'defect_reports.supplier_id'
         )
         $manifestNullable = foreach ($table in $script:LoadOrder) {
             foreach ($column in @((Get-SeedTable -Manifest $script:Manifest -Name $table)['columns'])) {

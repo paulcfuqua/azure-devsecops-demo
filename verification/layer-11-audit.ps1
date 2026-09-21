@@ -33,6 +33,11 @@ param(
     [ValidateSet('Down', 'Up')][string]$Phase = 'Up',
     [string]$SubscriptionId,
     [string]$ResourceGroupPrefix = 'mls-rg-',
+    # Resource groups that legitimately survive down.ps1. mls-rg-identity holds
+    # mls-aws-demo-id, the managed identity the AWS trust policy's `sub` is pinned to;
+    # infra-down.yml deletes four groups BY NAME and cannot reach it. Declared here so
+    # V11.1 asserts both directions: the four are gone, and this one is still standing.
+    [string[]]$SurvivingResourceGroup = @('mls-rg-identity'),
     [string]$UpStartUtc,
     [string]$UpCompletedUtc,
     [double]$WallClockBudgetMinutes = 60,
@@ -88,19 +93,55 @@ function Invoke-LayerAuditSet {
 }
 
 function Test-ResourceGroupAbsent {
-    <# V11.1 - no mls-rg-* survives down.ps1. #>
+    <#
+    .SYNOPSIS
+        V11.1 - the four teardown-scoped resource groups are gone, and the one that must
+        survive did.
+    .DESCRIPTION
+        BOTH DIRECTIONS MATTER, and only the first was ever checked.
+
+        This asserted that NO `<prefix>-rg-*` group survives. `mls-rg-identity` starts with
+        that prefix and is deliberately OUTSIDE the blast radius - it holds
+        `mls-aws-demo-id`, the managed identity the AWS trust policy's `sub` condition is
+        pinned to, and `infra-down.yml` deletes four groups BY NAME and cannot reach it.
+        So a CORRECT teardown would have failed this criterion, reporting that the teardown
+        did not work when it had worked exactly as designed. The group was created
+        2026-09-16 for the cross-cloud work and nothing has torn down since, so the
+        contradiction had never once been exercised.
+
+        The inverse was not checked at all, and it is the more serious one. If that group
+        were ever deleted, NOTHING in the Azure deploy path could recreate it: the AWS trust
+        policy pins a `sub` that would no longer exist, and CLAUDE.md classes deleting the
+        AWS role or its providers as G3-equivalent for exactly this reason. Its survival is
+        a property worth asserting, not an assumption worth holding.
+    #>
     param(
         [Parameter(Mandatory)][string]$Prefix,
-        [Parameter(Mandatory)][string]$SubscriptionId
+        [Parameter(Mandatory)][string]$SubscriptionId,
+        # Groups that legitimately outlive the teardown. Named, never pattern-matched: an
+        # exclusion broad enough to be convenient is broad enough to hide a stranded group.
+        [AllowEmptyCollection()][string[]]$SurvivesTeardown = @()
     )
     $groups = @(Invoke-MlsAz -AllowFailure -Argument @(
             'group', 'list', '--subscription', $SubscriptionId,
             '--query', "[?starts_with(name,'$Prefix')].name", '--output', 'json'
         ) | Where-Object { -not [string]::IsNullOrWhiteSpace("$_") })
-    if ($groups.Count -eq 0) {
-        return New-MlsCheckResult -Passed $true -Observed "no $Prefix* resource group present"
+
+    $unexpected = @($groups | Where-Object { $_ -notin $SurvivesTeardown })
+    $missing = @($SurvivesTeardown | Where-Object { $_ -notin $groups })
+    $describe = "present: [$($groups -join ', ')]; expected to survive: [$($SurvivesTeardown -join ', ')]"
+
+    if ($missing.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false `
+            -Observed "a resource group that must SURVIVE the teardown is gone: $($missing -join ', ') -- $describe" `
+            -Detail 'This is worse than an incomplete teardown. Nothing in the Azure deploy path recreates these: mls-rg-identity holds the managed identity the AWS trust policy pins its sub condition to, so losing it breaks the cross-cloud link permanently. infra-down.yml deletes four groups by name and cannot reach it, so if it is gone something outside that workflow removed it - stop and find out what.' -Final
     }
-    return New-MlsCheckResult -Passed $false -Observed "$($groups.Count) still present: $($groups -join ', ')" `
+    if ($unexpected.Count -eq 0) {
+        return New-MlsCheckResult -Passed $true `
+            -Observed "the teardown-scoped groups are absent and $($SurvivesTeardown.Count) expected survivor(s) remain -- $describe"
+    }
+    return New-MlsCheckResult -Passed $false `
+        -Observed "$($unexpected.Count) still present: $($unexpected -join ', ') -- $describe" `
         -Detail 'RG deletion is asynchronous - polled every 5 minutes up to 30 from down.ps1''s completion signal. A stuck delete beyond that is a failure: check for locks or a nested resource in Failed state (L11 failure mode 2).'
 }
 
@@ -262,6 +303,10 @@ function Invoke-Main {
         [string]$Phase = 'Up',
         [string]$SubscriptionId,
         [string]$ResourceGroupPrefix = 'mls-rg-',
+        # MUST match the script-level default. A caller that omits it - the Pester harness
+        # does - has to get the documented behaviour, not an empty list that reports the
+        # designed survivor as a stranded group. A test asserts the two agree.
+        [string[]]$SurvivingResourceGroup = @('mls-rg-identity'),
         [string]$UpStartUtc,
         [string]$UpCompletedUtc,
         [double]$WallClockBudgetMinutes = 60,
@@ -314,9 +359,9 @@ function Invoke-Main {
         Invoke-MlsCriterion -Context $context -Id 'V11.1' -Control @('3.4.1') `
             -Description 'All RGs absent post-down' `
             -Command "az group list --query `"[?starts_with(name,'$ResourceGroupPrefix')].name`"" `
-            -Expected 'empty array - none of mls-rg-platform, mls-rg-apps, mls-rg-data, mls-rg-ops (nor any stray mls-rg-*)' `
+            -Expected 'none of mls-rg-platform, mls-rg-apps, mls-rg-data, mls-rg-ops (nor any stray mls-rg-* beyond the declared survivors), AND every declared survivor still present' `
             -RetryWindowMinutes 30 `
-            -Test { Test-ResourceGroupAbsent -Prefix $ResourceGroupPrefix -SubscriptionId $subscription } | Out-Null
+            -Test { Test-ResourceGroupAbsent -Prefix $ResourceGroupPrefix -SubscriptionId $subscription -SurvivesTeardown $SurvivingResourceGroup } | Out-Null
     }
     else {
         Invoke-MlsCriterion -Context $context -Id 'V11.1' -Control @('3.4.1') `
@@ -395,6 +440,7 @@ function Invoke-Main {
 if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -Phase $Phase -SubscriptionId $SubscriptionId -ResourceGroupPrefix $ResourceGroupPrefix `
+            -SurvivingResourceGroup $SurvivingResourceGroup `
             -UpStartUtc $UpStartUtc -UpCompletedUtc $UpCompletedUtc -WallClockBudgetMinutes $WallClockBudgetMinutes `
             -Repository $Repository -FabricCapacityId $FabricCapacityId -SqlDatabaseId $SqlDatabaseId `
             -IdleDailyCostBudget $IdleDailyCostBudget -ChildAuditLayer $ChildAuditLayer `
