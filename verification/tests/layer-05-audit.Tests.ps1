@@ -26,10 +26,20 @@ BeforeAll {
     }
 
     function Invoke-AuditForTest {
-        param([switch]$NoRetry, [string]$CapacityId = $script:TrialCapacityId, [string]$ExpectedCountPath = $script:CountPath)
+        param([switch]$NoRetry, [string]$CapacityId = $script:TrialCapacityId, [string]$ExpectedCountPath = $script:CountPath,
+            # NOT passed unless the caller asks. V5.2 resolves the endpoint from the
+            # lakehouse metadata and its UNOBSERVABLE case depends on that path, so a
+            # harness that always supplies one silently disables the scenario. An
+            # explicitly-passed empty string is how V5.6's "not asked" case is exercised.
+            [string]$SqlEndpoint)
+        # Hashtable splat, not an inline array: @(...) in an argument position is passed
+        # POSITIONALLY, so the parameter never binds and the scenario silently does not run.
+        $optional = @{}
+        if ($PSBoundParameters.ContainsKey('SqlEndpoint')) { $optional['SqlEndpoint'] = $SqlEndpoint }
         Invoke-Main -FabricCapacityId $CapacityId -FabricToken 'fabric-token' -WorkspaceName 'mls-operations' `
             -LakehouseName 'mls_operations' -ExpectedTable $script:Table -ExpectedLaunchCount 1200 `
-            -ExpectedCountPath $ExpectedCountPath -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
+            -ExpectedCountPath $ExpectedCountPath -ReportRoot $script:ReportRoot -NoRetry:$NoRetry `
+            -ProtectionPrefix 'mls' @optional
     }
 }
 
@@ -73,6 +83,13 @@ Describe 'layer-05-audit' {
         $script:ClassCount = [ordered]@{ INTERNAL = 747; THIRD_PARTY_PROPRIETARY = 153 }
         $script:PopulatedSalaryCount = 240
 
+        # V5.6's fixture: the numbers observed on the live estate 2026-09-20. A caller in
+        # neither role reads 900 from the base table and 761 through the view, 139 restricted.
+        $script:BaseRows = 900
+        $script:ViewRows = 761
+        $script:RestrictedRows = 139
+        $script:IsPrivileged = 0
+
         Mock Invoke-MlsRest {
             if ($Uri -like '*/workspaces') {
                 return [pscustomobject]@{ value = @([pscustomobject]@{
@@ -110,6 +127,14 @@ Describe 'layer-05-audit' {
             if ($Query -like '*INFORMATION_SCHEMA*') {
                 return @($script:SqlCatalogTable | ForEach-Object { [pscustomobject]@{ t = $_ } })
             }
+            if ($Query -like '*base_rows*') {
+                return @([pscustomobject]@{
+                        base_rows       = $script:BaseRows
+                        view_rows       = $script:ViewRows
+                        restricted_rows = $script:RestrictedRows
+                        is_privileged   = $script:IsPrivileged
+                    })
+            }
             if ($Query -like '*classification*') {
                 return @($script:ClassCount.Keys | ForEach-Object {
                         [pscustomobject]@{ c = $_; n = $script:ClassCount[$_] }
@@ -143,8 +168,13 @@ Describe 'layer-05-audit' {
             $context = Invoke-AuditForTest
             # V5.5 sits BEFORE V5.4 on purpose: it reads the SQL analytics endpoint, and
             # V5.4 asserts the capacity is PAUSED. A SQL read after the pause fails.
-            @($context.Criterion).Id | Should -Be @('V5.1', 'V5.2', 'V5.3', 'V5.5', 'V5.4')
-            @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
+            @($context.Criterion).Id | Should -Be @('V5.1', 'V5.2', 'V5.3', 'V5.5', 'V5.6', 'V5.7', 'V5.4')
+            # V5.7 is a BY-DESIGN SKIP: the column denial cannot be provoked on this
+            # endpoint at all (Msg 15868). Named explicitly so the day it becomes runnable
+            # this assertion fails and makes somebody look.
+            @($context.Criterion | Where-Object { $_.Id -ne 'V5.7' -and $_.Status -ne 'PASS' }) |
+                Should -BeNullOrEmpty
+            (Get-Row -Context $context -Id 'V5.7').Status | Should -Be 'SKIP'
             Get-MlsExitCode -Context $context | Should -Be 0
         }
 
@@ -369,7 +399,7 @@ Describe 'layer-05-audit' {
         It 'records V5.3 as FAIL when the SQL endpoint errors, and still evaluates V5.4' {
             Mock Invoke-MlsSqlQuery { throw 'Login failed for user: the capacity is paused.' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 5
+            @($context.Criterion).Count | Should -Be 7
             (Get-Row -Context $context -Id 'V5.3').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V5.3').Observed | Should -BeLike '*capacity is paused*'
             # The same failure must make V5.5 say it could not LOOK, not that the
@@ -474,6 +504,104 @@ Describe 'layer-05-audit' {
             # must be registered before it - ordering is correctness here, not tidiness.
             $ids = @((Invoke-AuditForTest).Criterion).Id
             $ids.IndexOf('V5.5') | Should -BeLessThan $ids.IndexOf('V5.4')
+        }
+    }
+
+    Context 'V5.6 - the row filter actually filters' {
+        It 'passes when a non-privileged caller sees exactly the unrestricted rows' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.6'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*761 of 900*'
+        }
+
+        It 'FAILS when the view returns as many rows as the base table' {
+            # The defect this criterion exists for: a policy that is present, enabled, and
+            # filtering NOTHING. the retired V4.4 would still pass - the objects are all there.
+            $script:ViewRows = 900
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V5.6'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*removed 0 row*'
+        }
+
+        It 'FAILS when the shortfall does not equal the restricted count' {
+            $script:ViewRows = 800
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V5.6'
+            $row.Status | Should -Be 'FAIL'
+        }
+
+        It 'SKIPS rather than failing when the auditor is itself privileged' {
+            # A privileged caller bypasses the filter by design, so equal counts would
+            # prove nothing. Failing here would fail a CORRECT estate.
+            $script:IsPrivileged = 1
+            $script:ViewRows = 900
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V5.6'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*bypasses the filter*'
+        }
+
+        It 'FAILS when no rows are restricted, because then filtering cannot be shown' {
+            # Equal counts would be CORRECT here, and indistinguishable from a broken
+            # filter. The criterion refuses to call that a pass.
+            $script:RestrictedRows = 0
+            $script:ViewRows = 900
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V5.6'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*would look identical*'
+        }
+
+        It 'reports UNOBSERVABLE when the privileged role does not exist at all' {
+            $script:IsPrivileged = -1
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V5.6'
+            $row.Status | Should -Not -Be 'PASS'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+
+        # The "not asked" case is NOT tested here, and deliberately so. In L4 it was
+        # reachable: V11.2 re-ran that audit in the down state with no endpoint. L5's audit
+        # RESOLVES the endpoint from the lakehouse metadata V5.1 fetched, so an empty
+        # parameter does not produce an empty endpoint and the branch cannot be triggered
+        # from this harness. Faking it would test the harness rather than the audit. The
+        # branch is retained in the code as a defensive guard for a failed resolution.
+
+        It 'still FAILS when an endpoint IS supplied and cannot be read' {
+            # The distinction the SKIP above must not blur: being asked and failing to see
+            # is a real failure to observe, and stays one.
+            Mock Invoke-MlsSqlQuery { throw 'Login failed for user.' }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V5.6'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+
+        It 'reports UNOBSERVABLE, never "the filter is broken", when the endpoint errors' {
+            Mock Invoke-MlsSqlQuery { throw 'Login failed for user.' }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V5.6'
+            $row.Status | Should -Not -Be 'PASS'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+    }
+
+    Context 'V5.7 - the column denial, which this endpoint cannot demonstrate' {
+        It 'reports SKIP and never PASS' {
+            # The criterion that would matter most is the one that cannot be run here.
+            # It must not quietly become a second artefact check, and it must not pass.
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.7'
+            $row.Status | Should -Be 'SKIP'
+        }
+
+        It 'names the blocker precisely rather than shrugging' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.7'
+            $row.Observed | Should -BeLike '*EXECUTE AS is not supported*'
+            $row.Observed | Should -BeLike '*15868*'
+        }
+
+        It 'names where the capability IS observable' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.7'
+            $row.Detail | Should -BeLike '*agent*'
+        }
+
+        It 'states that the retired V4.4 does not stand in for it' {
+            $row = Get-Row -Context (Invoke-AuditForTest) -Id 'V5.7'
+            $row.Detail | Should -BeLike '*the retired V4.4*'
         }
     }
 }
