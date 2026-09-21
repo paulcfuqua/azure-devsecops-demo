@@ -15,7 +15,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@azure/identity": "^4.13.2",
+    "@azure/identity": "^4.13.3",
     "@azure/monitor-opentelemetry-exporter": "1.0.0-beta.45",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/resources": "^2.11.0",
@@ -23,14 +23,14 @@
     "@opentelemetry/sdk-trace-node": "^2.11.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
     "express": "^5.1.0",
-    "mssql": "^12.7.0"
+    "mssql": "^12.7.2"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/mssql": "^12.3.0",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.6.1",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   }
 }
