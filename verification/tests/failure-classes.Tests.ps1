@@ -4027,3 +4027,154 @@ Describe 'an audit that queries SQL runs in a JOB that can actually query SQL' {
         }
     }
 }
+
+Describe 'a workflow never passes an audit a parameter the audit does not declare' {
+    # PAID FOR ON 2026-09-21, on the third rebuild attempt. The data-layer criteria moved
+    # from L4 to L5 and their PARAMETERS moved with them, but layer-04-purview.yml kept
+    # passing -SqlEndpoint, -LakehouseName and -ProtectionPrefix. Every audit script carries
+    # [CmdletBinding()], so PowerShell refused the whole call and not one criterion ran.
+    #
+    # WHAT MADE IT EXPENSIVE WAS THE REPORT, not the mistake. MEASURED, not reasoned:
+    #
+    #   pwsh -NoProfile -NonInteractive -File <[CmdletBinding()] script> -Bogus y
+    #   -> "A parameter cannot be found that matches parameter name 'Bogus'."   exit 1
+    #
+    # and 1 lands in the layer-audit action's `*)` branch, whose verdict is
+    # "FAIL - at least one criterion FAILed". So the workflow announced a failed criterion
+    # on a run where NONE had been evaluated, and the log held no verdict table to
+    # contradict it. A criterion that never ran cannot have failed; the exit code says
+    # otherwise because a binding error is also non-zero. That sends a reader to the estate
+    # for a defect that is entirely in the invocation.
+    #
+    # The check is cheap because both halves are declared text - the audit's param block and
+    # the `args:` block of the step that calls it - and it needs no estate, no token and no
+    # network.
+    #
+    # WHAT THIS DOES NOT COVER, stated so a green run is not mistaken for more: it checks
+    # that a passed name EXISTS, not that a value follows a flag that needs one. The action
+    # deliberately does no pairing validation (a switch legitimately has no value), and that
+    # case fails loudly at bind time with "Missing an argument for parameter". It also sees
+    # only invocations through ./.github/actions/layer-audit - which is all fifteen of them
+    # today. A future audit invoked as a bare `pwsh -File` would be invisible here, so the
+    # first test below asserts the discovery found them, rather than passing on an empty set.
+
+    BeforeAll {
+        function Get-DeclaredParameter {
+            <# The parameter names a script's own param block declares. #>
+            param([Parameter(Mandatory)][string]$Path)
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$null)
+            if (-not $ast.ParamBlock) { return @() }
+            return @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+        }
+
+        function Get-AuditInvocation {
+            <#
+                Every `uses: ./.github/actions/layer-audit` step in a workflow, with the
+                layer it names and the parameter names its `args:` block passes.
+
+                Two shapes of argument line, both real:
+                  -ExpectedCountPath                                  a bare flag
+                  ${{ vars.MLS_SQL_ENDPOINT && '-SqlEndpoint' || '' }}   a guarded flag
+                The guarded form names a parameter just as much as the bare one does, so it
+                is read out of the quotes. Its value line resolves to a bare string and is
+                not a flag, which is why only lines that are ENTIRELY a -Name token count.
+            #>
+            param([Parameter(Mandatory)][string]$Path)
+            $lines = [IO.File]::ReadAllLines($Path)
+            $found = [System.Collections.Generic.List[hashtable]]::new()
+
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -notmatch '^(\s*)uses:\s*\./\.github/actions/layer-audit\s*$') { continue }
+                $stepIndent = $Matches[1].Length
+                $layer = $null
+                $passed = [System.Collections.Generic.List[string]]::new()
+
+                for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+                    $line = $lines[$j]
+                    $lineIndent = ($line -replace '^(\s*).*', '$1').Length
+                    # The next step in the job ends this one.
+                    if ($line.Trim() -and $lineIndent -lt $stepIndent) { break }
+
+                    if ($line -match "^\s*layer:\s*['""]?(\d+)['""]?\s*$") { $layer = $Matches[1]; continue }
+                    if ($line -notmatch '^(\s*)args:\s*\|') { continue }
+
+                    $argIndent = $Matches[1].Length
+                    for ($k = $j + 1; $k -lt $lines.Count; $k++) {
+                        $arg = $lines[$k]
+                        # A blank line inside a block scalar is content, not the end of it.
+                        if (-not $arg.Trim()) { $j = $k; continue }
+                        if ((($arg -replace '^(\s*).*', '$1').Length) -le $argIndent) { break }
+                        $j = $k
+                        foreach ($m in [regex]::Matches($arg, "'(-[A-Za-z][A-Za-z0-9]*)'")) {
+                            $passed.Add($m.Groups[1].Value.TrimStart('-'))
+                        }
+                        if ($arg -notmatch '\$\{\{' -and $arg.Trim() -match '^-([A-Za-z][A-Za-z0-9]*)$') {
+                            $passed.Add($Matches[1])
+                        }
+                    }
+                }
+
+                if ($layer) {
+                    $found.Add(@{
+                            Workflow = [IO.Path]::GetFileName($Path)
+                            Layer    = $layer
+                            Passed   = @($passed | Sort-Object -Unique)
+                        })
+                }
+            }
+            return $found
+        }
+
+        $script:AuditInvocation = @(
+            Get-ChildItem -Path (Join-Path $script:RepoRoot '.github' 'workflows') -Filter '*.yml' -File |
+                ForEach-Object { Get-AuditInvocation -Path $_.FullName }
+        )
+    }
+
+    It 'discovers the audit invocations, or the comparison below is vacuous' {
+        # An empty set passes every assertion about its members. If the parser stops
+        # recognising the step shape, this is what says so.
+        $script:AuditInvocation.Count | Should -BeGreaterThan 10 -Because @'
+Every layer audit runs through ./.github/actions/layer-audit - fifteen invocations as of
+2026-09-21. Finding far fewer means the parser no longer recognises the step, and the check
+below is asserting nothing at all.
+'@
+        @($script:AuditInvocation | Where-Object { $_.Passed.Count -gt 0 }).Count |
+            Should -BeGreaterThan 8 -Because 'most invocations pass at least one argument'
+    }
+
+    It 'every parameter a workflow passes is one the audit declares' {
+        $orphan = [System.Collections.Generic.List[string]]::new()
+        foreach ($call in $script:AuditInvocation) {
+            $auditPath = Join-Path $script:RepoRoot 'verification' "layer-$($call.Layer)-audit.ps1"
+            if (-not (Test-Path -LiteralPath $auditPath)) { continue }
+            $declared = Get-DeclaredParameter -Path $auditPath
+            foreach ($name in $call.Passed) {
+                if ($name -notin $declared) {
+                    $orphan.Add("$($call.Workflow) passes -$name to layer-$($call.Layer)-audit.ps1, which does not declare it")
+                }
+            }
+        }
+        $orphan -join "`n" | Should -BeNullOrEmpty -Because @'
+The audit scripts carry [CmdletBinding()], so PowerShell refuses the whole call and NO
+criterion runs. The step still exits non-zero (1), which the layer-audit action reports as
+"FAIL - at least one criterion FAILed" - a failed criterion on a run that evaluated none.
+'@
+    }
+
+    It 'recognises an orphaned parameter when one is present' {
+        # The check above is only worth its runtime if it can fail. This proves the two
+        # halves - param block and args block - actually meet.
+        $fixture = Join-Path $TestDrive 'fixture'
+        New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+        $audit = Join-Path $fixture 'probe-audit.ps1'
+        Set-Content -LiteralPath $audit -Value @'
+[CmdletBinding()]
+param(
+    [string]$Declared = ''
+)
+'@
+        (Get-DeclaredParameter -Path $audit) | Should -Be @('Declared')
+        'Removed' -notin (Get-DeclaredParameter -Path $audit) | Should -BeTrue
+    }
+}

@@ -24,15 +24,15 @@ the probe was blocked one layer below the thing it was testing.
 $ az account show -o json
 {
   "environmentName": "AzureCloud",
-  "homeTenantId": "c3571944-a345-43e4-bcb5-fd12ac314f8f",
-  "id": "a8f2925d-d5e2-4edc-911e-c32041633a56",
+  "homeTenantId": "<AZURE_TENANT_ID>",
+  "id": "<AZURE_SUBSCRIPTION_ID>",
   "isDefault": true,
   "managedByTenants": [],
   "name": "mls-demo-subscription",
   "state": "Enabled",
   "tenantDefaultDomain": "paulcfuquahotmail.onmicrosoft.com",
   "tenantDisplayName": "Default Directory",
-  "tenantId": "c3571944-a345-43e4-bcb5-fd12ac314f8f",
+  "tenantId": "<AZURE_TENANT_ID>",
   "user": {
     "name": "admin@paulcfuquahotmail.onmicrosoft.com",
     "type": "user"
@@ -57,7 +57,7 @@ Registered
 ```
 $ az group create -n mls-rg-spike -l centralus --tags env=demo app=spike costCenter=demo owner=platform dataClassification=public managedBy=iac
 {
-  "id": "/subscriptions/a8f2925d-d5e2-4edc-911e-c32041633a56/resourceGroups/mls-rg-spike",
+  "id": "/subscriptions/<AZURE_SUBSCRIPTION_ID>/resourceGroups/mls-rg-spike",
   "location": "centralus",
   "managedBy": null,
   "name": "mls-rg-spike",
@@ -115,9 +115,9 @@ $ az acr task create --registry "$ACR" --name basetrigger-probe \
     --context /dev/null --file /tmp/Dockerfile.probe \
     --base-image-trigger-enabled true --base-image-trigger-type All \
     --commit-trigger-enabled false
-ERROR: (TasksOperationsNotAllowed) ACR Tasks requests for the registry mlsspike10534 and a8f2925d-d5e2-4edc-911e-c32041633a56 are not permitted. Please file an Azure support request at http://aka.ms/azuresupport for assistance.
+ERROR: (TasksOperationsNotAllowed) ACR Tasks requests for the registry mlsspike10534 and <AZURE_SUBSCRIPTION_ID> are not permitted. Please file an Azure support request at http://aka.ms/azuresupport for assistance.
 Code: TasksOperationsNotAllowed
-Message: ACR Tasks requests for the registry mlsspike10534 and a8f2925d-d5e2-4edc-911e-c32041633a56 are not permitted. Please file an Azure support request at http://aka.ms/azuresupport for assistance.
+Message: ACR Tasks requests for the registry mlsspike10534 and <AZURE_SUBSCRIPTION_ID> are not permitted. Please file an Azure support request at http://aka.ms/azuresupport for assistance.
 Target: request
 ```
 
@@ -130,9 +130,9 @@ $ az acr task create --registry "$ACR" --name minimal-probe \
     --image minimal-probe:{{.Run.ID}} \
     --context /dev/null --file /tmp/Dockerfile.probe \
     --commit-trigger-enabled false
-ERROR: (TasksOperationsNotAllowed) ACR Tasks requests for the registry mlsspike10534 and a8f2925d-d5e2-4edc-911e-c32041633a56 are not permitted. Please file an Azure support request at http://aka.ms/azuresupport for assistance.
+ERROR: (TasksOperationsNotAllowed) ACR Tasks requests for the registry mlsspike10534 and <AZURE_SUBSCRIPTION_ID> are not permitted. Please file an Azure support request at http://aka.ms/azuresupport for assistance.
 Code: TasksOperationsNotAllowed
-Message: ACR Tasks requests for the registry mlsspike10534 and a8f2925d-d5e2-4edc-911e-c32041633a56 are not permitted. Please file an Azure support request at http://aka.ms/azuresupport for assistance.
+Message: ACR Tasks requests for the registry mlsspike10534 and <AZURE_SUBSCRIPTION_ID> are not permitted. Please file an Azure support request at http://aka.ms/azuresupport for assistance.
 Target: request
 ```
 
@@ -211,7 +211,7 @@ INCONCLUSIVE rather than a clean NO, the recommendation is:
   unverified, and building on an unverified precondition is the exact failure mode this spike
   exists to prevent.
 - **File the Azure support request** named in the `TasksOperationsNotAllowed` error to enable
-  ACR Tasks for `a8f2925d-d5e2-4edc-911e-c32041633a56`, then re-run this exact spike (Steps
+  ACR Tasks for `<AZURE_SUBSCRIPTION_ID>`, then re-run this exact spike (Steps
   2–4) to get a real answer to P1. Until that support request resolves, this subscription
   cannot answer the question at all, by any command.
 - **Amend the spec's §2 and §8** to record that P1 is blocked on an unresolved
@@ -242,7 +242,7 @@ az acr task create --registry mlsspikeverify30954 --name verify-probe \
   --commit-trigger-enabled false
 
 ERROR: (TasksOperationsNotAllowed) ACR Tasks requests for the registry
-mlsspikeverify30954 and a8f2925d-d5e2-4edc-911e-c32041633a56 are not permitted.
+mlsspikeverify30954 and <AZURE_SUBSCRIPTION_ID> are not permitted.
 Please file an Azure support request at http://aka.ms/azuresupport for assistance.
 ```
 

@@ -377,6 +377,8 @@ jobs:
             ${{ vars.FABRIC_CAPACITY_ID }}
             -ExpectedCountPath
             data/generators/tests/expected_counts.json
+            -ProtectionPrefix
+            ${{ vars.MLS_COMPANY_PREFIX || 'mls' }}
             ${{ vars.MLS_SQL_ENDPOINT && '-SqlEndpoint' || '' }}
             ${{ vars.MLS_SQL_ENDPOINT }}
 

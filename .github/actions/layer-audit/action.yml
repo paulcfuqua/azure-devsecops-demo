@@ -146,7 +146,18 @@ runs:
         # value line that went blank because its repository variable is unset —
         # PowerShell already refuses: binding -Domain to the literal token
         # "-NamingPrefix" raises "Missing an argument for parameter 'Domain'" and
-        # exits non-zero, which this action reports as "COULD NOT START".
+        # exits non-zero.
+        #
+        # IT DOES NOT REPORT AS "COULD NOT START", which this comment claimed until
+        # 2026-09-21. MEASURED, not read: a [CmdletBinding()] script handed a parameter it
+        # does not declare exits 1, and 1 falls through to the `*)` branch below - verdict
+        # "FAIL - at least one criterion FAILed". Exit 2 is a code the AUDIT chooses for
+        # itself after it has started; a bind failure happens before the script's first
+        # line, so the audit never gets to choose anything. The distinction is the whole
+        # cost of the class: a run where no criterion was evaluated is announced as a
+        # failed criterion, and the transcript holds no verdict table to say otherwise.
+        # verification/tests/failure-classes.Tests.ps1 now sweeps every args block in every
+        # workflow against the param block of the audit it calls.
 
         mkdir -p "${AUDIT_REPORT_DIR}"
         transcript="${AUDIT_REPORT_DIR}/L${AUDIT_LAYER}-console-$(date -u +%Y%m%dT%H%M%SZ).log"
