@@ -570,6 +570,28 @@ jobs:
       # one-time setting no pipeline identity should hold standing privilege
       # for. See that runbook item for the exact command; see
       # task-13-report.md's second fix round for the full reasoning.
+      # RE-AUTHENTICATE BEFORE MINTING A SQL TOKEN. The OIDC federated assertion this job
+      # logged in with has roughly a five-minute lifetime, and the platform deployment
+      # above takes far longer than that. On the 2026-09-21 rebuild the deploy ran ~17
+      # minutes and this step then failed with
+      #
+      #   AADSTS700024: Client assertion is not within its valid time range
+      #
+      # which names Entra and a time range, and says nothing about the job having simply
+      # outlived its credential. azure/login requests a FRESH assertion from GitHub, so
+      # re-running it here costs seconds and removes the whole class.
+      #
+      # This is the same expired-assertion failure MlsAudit deliberately refuses to
+      # swallow, for the same reason: an aged-out credential must never be mistaken for a
+      # fact about the estate.
+      - name: Refresh the Azure login before the SQL seed (assertion lifetime)
+        if: ${{ !inputs.dry_run }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Apply the SQL schema and seed the operational tables
         if: ${{ !inputs.dry_run }}
         shell: pwsh
