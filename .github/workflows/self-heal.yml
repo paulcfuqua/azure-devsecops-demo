@@ -215,6 +215,128 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  unstick:
+    name: unstick armed PRs that fell behind main
+    runs-on: ubuntu-latest
+    # Bounded: a handful of API calls. An unbounded job inherits GitHub's six-hour default
+    # (F81).
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # WHY THIS JOB EXISTS AT ALL.
+      #
+      # main's ruleset sets strict_required_status_checks_policy: true, so a branch must be
+      # up to date with base before it can merge. The `compliance` workflow commits
+      # verification state to main after every merge - seven of the last twelve commits on
+      # 2026-09-21. GitHub's auto-merge does NOT update a branch that falls behind: it waits
+      # for the requirements to be met and "up to date" is never going to become true on its
+      # own.
+      #
+      # So an armed heal PR goes BEHIND the moment anything else lands, and sits there.
+      # MEASURED 2026-09-21: PR #285 was green with auto-merge enabled and BEHIND BY 28
+      # COMMITS, four days after it opened. PR #286 - the one heal that ever did merge
+      # unattended - was created 06:37:32Z, merged 06:41:39Z, and the compliance commit
+      # landed at 06:42:03Z. It won by TWENTY-FOUR SECONDS.
+      #
+      # That is the difference between a property and a race, and the product claim in
+      # CLAUDE.md - "auto-merges unattended in both modes" - was resting on the race.
+      #
+      # This job updates any open PR that has auto-merge armed and has fallen behind, which
+      # re-runs its checks and lets auto-merge fire. It does NOT merge anything itself and
+      # it does not arm anything: a PR that a human never armed is left alone, and the
+      # gauntlet still decides. It bounds the stall to one scheduled interval instead of
+      # forever.
+      #
+      # A PAT is required, not preferred. Updating a branch with GITHUB_TOKEN produces a
+      # push that triggers no workflow runs (F120), so the required checks would never
+      # report on the updated head and the PR would be stuck in a new way.
+      - name: Update armed pull requests that are behind base
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HAVE_PAT: ${{ secrets.SELF_HEAL_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+
+          if [ "${HAVE_PAT}" != "true" ]; then
+            echo "::warning title=No SELF_HEAL_TOKEN::Updating a branch with GITHUB_TOKEN pushes a commit that triggers no workflow runs (F120), so the required checks would never report on the new head. Skipping rather than creating a different kind of stuck."
+            exit 0
+          fi
+
+          # NOT mergeStateStatus. That field is computed LAZILY by GitHub, and this job runs
+          # right after main moves - the exact window where it is least likely to be settled.
+          # MEASURED 2026-09-21, seconds after a rebase landed: the same filter returned
+          # NOTHING on its first call and "291,285" on the three calls after it, because
+          # mergeability had not been recomputed and every PR read UNKNOWN. An empty result
+          # is indistinguishable from "nothing to do", so the job would have announced "no
+          # armed PR is behind base" at precisely the moment the most had just fallen behind.
+          # That is the absence-vs-unobservable class, inside the fix for it.
+          #
+          # autoMergeRequest IS reliable - it is stored state, not a computed prediction - so
+          # it selects the candidates, and the commit graph decides behind-ness.
+          armed=$(gh pr list --repo "${REPO}" --state open --limit 50 \
+                    --json number,autoMergeRequest,baseRefName,headRefName \
+                    --jq '.[] | select(.autoMergeRequest != null) | "\(.number) \(.baseRefName) \(.headRefName)"')
+
+          if [ -z "${armed}" ]; then
+            echo "No open pull request has auto-merge armed."
+            echo "### Self-heal: no armed pull requests" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          # behind_by comes straight from the commit graph: a number, immediately, every time.
+          prs=""
+          while read -r number base head; do
+            [ -n "${number}" ] || continue
+            behind=$(gh api "repos/${REPO}/compare/${base}...${head}" --jq '.behind_by' 2>/dev/null || echo "")
+            if [ -z "${behind}" ]; then
+              # COULD NOT LOOK is not IS FINE. Say so rather than silently treating it as
+              # up to date.
+              echo "::warning title=Could not compare PR #${number}::The compare API did not answer for ${base}...${head}, so whether it is behind base is UNKNOWN - this is not a report that it is up to date."
+              continue
+            fi
+            echo "PR #${number}: ${behind} commit(s) behind ${base}."
+            if [ "${behind}" -gt 0 ]; then
+              prs="${prs} ${number}"
+            fi
+          done <<< "${armed}"
+
+          if [ -z "${prs}" ]; then
+            echo "Every armed pull request is up to date with base."
+            echo "### Self-heal: every armed PR is up to date with base" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          # A RUN IS AN EXPENSIVE, RATE-LIMITED OBSERVATION: every PR is attempted and every
+          # outcome reported, rather than stopping at the first refusal.
+          updated=0
+          refused=0
+          {
+            echo "### Self-heal: armed pull requests updated"
+            echo
+            echo "| PR | outcome |"
+            echo "|---|---|"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          for pr in ${prs}; do
+            if gh api --method PUT "repos/${REPO}/pulls/${pr}/update-branch" \
+                 -H "Accept: application/vnd.github+json" >/dev/null 2>&1; then
+              echo "PR #${pr}: branch updated; its checks will re-run and auto-merge can fire."
+              echo "| #${pr} | updated |" >> "${GITHUB_STEP_SUMMARY}"
+              updated=$((updated + 1))
+            else
+              # A refusal is reported, never swallowed: an update that cannot happen is
+              # exactly the state this job exists to make visible.
+              echo "::warning title=Could not update PR #${pr}::The branch is behind base and the update was refused - most often a conflict with main, which needs a human."
+              echo "| #${pr} | refused (likely a conflict) |" >> "${GITHUB_STEP_SUMMARY}"
+              refused=$((refused + 1))
+            fi
+          done
+
+          echo "Updated ${updated} pull request(s); ${refused} refused."
+
   select:
     name: select the alert to heal
     runs-on: ubuntu-latest
