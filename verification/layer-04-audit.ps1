@@ -85,16 +85,7 @@ param(
     [string[]]$ExpectedLabelPolicyScope = @('All'),
     # Run only these criteria (e.g. -OnlyCriterion V4.2). Everything else reports SKIP
     # naming the reason, and the run exits 3 - a DIAGNOSTIC, never a sign-off (P-10).
-    [string[]]$OnlyCriterion = @(),
-
-    # V4.5 reads the lakehouse SQL analytics endpoint to prove the row filter filters.
-    # RESOLVED by the caller from the Fabric API, never stored: it regenerates on every
-    # rebuild (F129's class). Absent means V4.5 reports UNOBSERVABLE, never a pass.
-    [string]$SqlEndpoint,
-    [string]$SqlAccessToken,
-    [string]$LakehouseName = 'mls_operations',
-    # Empty resolves the same way every other reader in this estate resolves it.
-    [string]$ProtectionPrefix = ''
+    [string[]]$OnlyCriterion = @()
 )
 
 Set-StrictMode -Version Latest
@@ -266,149 +257,6 @@ function Test-LabelPolicyScope {
     return New-MlsCheckResult -Passed $true -Observed $describe
 }
 
-function Test-RowFilterEnforcement {
-    <#
-    .SYNOPSIS
-        V4.5 - the row-level security policy ACTUALLY FILTERS. The capability, not the
-        artefact, and it is observable read-only.
-    .DESCRIPTION
-        THIS WAS ORIGINALLY A BLANKET SKIP AND THAT WAS WRONG. The first design reasoned
-        that proving enforcement needed a caller inside the standard role, which is
-        impossible here - a DENY bites only members of the role it targets, and EXECUTE AS
-        is unsupported on this endpoint (Msg 15868). True for the COLUMN denial; false for
-        the row filter.
-
-        The predicate is: classification <> the restricted value, OR the caller is a member
-        of <prefix>_data_privileged. It keys on the PRIVILEGED role, so every caller
-        OUTSIDE that role is filtered - including mls-verifier. Confirmed on the live
-        estate 2026-09-20: one caller in neither role read 900 rows from defect_reports and
-        761 from v_defect_reports in the same second, with 139 rows classified restricted.
-        900 - 139 = 761.
-
-        So the check is: read both counts as myself, and require the shortfall to equal the
-        restricted count exactly. That is the control doing its job, observed - not an
-        object existing.
-
-        Vacuity is guarded in both directions. A PRIVILEGED caller sees everything and would
-        make the comparison meaningless, so that reports SKIP rather than failing a correct
-        estate. And a table with no restricted rows would make a filter that removed nothing
-        look identical to one that worked, so zero restricted rows is a FAIL pointing at V5.5.
-
-        THIS CRITERION SUBSUMES THE RETIRED V4.4. A policy that filters necessarily exists
-        and is necessarily enabled - a disabled policy returns every row and fails here. So
-        the artefact check added nothing this does not already prove, and unlike it, this
-        one is observable by the verifier.
-    #>
-    param(
-        [AllowEmptyString()][string]$SqlEndpoint,
-        [AllowEmptyString()][AllowNull()][string]$SqlAccessToken,
-        [Parameter(Mandatory)][string]$LakehouseName,
-        [Parameter(Mandatory)][string]$Prefix,
-        [Parameter(Mandatory)][string]$RestrictedClassification
-    )
-    if ([string]::IsNullOrWhiteSpace($SqlEndpoint)) {
-        # NOT ASKED is different from CANNOT SEE, and conflating them cost a false
-        # stop-the-line. V11.2 re-runs this audit verbatim in the DOWN state to prove the
-        # teardown did not touch tenant objects; it passes no -SqlEndpoint because there is
-        # no lakehouse then, by design. Returning FAIL there made L4 exit 1, which made
-        # V11.2 report that the teardown had crossed the tenant-object line - on a teardown
-        # whose labels had just been verified intact (2026-09-21).
-        #
-        # An endpoint that IS supplied and cannot be read is still a FAIL below: that is a
-        # genuine failure to observe something the caller asked about.
-        return New-MlsCheckResult -Status 'SKIP' `
-            -Observed 'not asked: no SQL analytics endpoint was supplied, so the data-layer check was not requested' `
-            -Detail 'Pass -SqlEndpoint (resolved from the Fabric API) to run this criterion. It reports SKIP rather than FAIL because a caller that supplies no endpoint - V11.2 re-running this audit in the down state, where no lakehouse exists - is not asking about the row filter at all. A supplied endpoint that cannot be read remains a failure.'
-    }
-
-    $privileged = "${Prefix}_data_privileged"
-    $query = @"
-SELECT
-    (SELECT COUNT(*) FROM dbo.defect_reports) AS base_rows,
-    (SELECT COUNT(*) FROM dbo.v_defect_reports) AS view_rows,
-    (SELECT COUNT(*) FROM dbo.defect_reports WHERE classification = '$RestrictedClassification') AS restricted_rows,
-    ISNULL(IS_ROLEMEMBER('$privileged'), -1) AS is_privileged
-"@
-    try {
-        $rows = @(Invoke-MlsSqlQuery -ServerName $SqlEndpoint -DatabaseName $LakehouseName `
-                -AccessToken $SqlAccessToken -Query $query)
-    }
-    catch {
-        return New-MlsCheckResult -Passed $false `
-            -Observed "UNOBSERVABLE: could not read both the base table and the filtered view - $($_.Exception.Message)" `
-            -Detail 'The comparison needs both reads from the same caller. It reports that it could not look, never that the filter is broken (F105).' -Final
-    }
-    if ($rows.Count -eq 0) {
-        return New-MlsCheckResult -Passed $false `
-            -Observed 'UNOBSERVABLE: the endpoint returned no row for the comparison' -Final
-    }
-
-    $base = [int](Get-MlsProperty -InputObject $rows[0] -Name 'base_rows')
-    $view = [int](Get-MlsProperty -InputObject $rows[0] -Name 'view_rows')
-    $restricted = [int](Get-MlsProperty -InputObject $rows[0] -Name 'restricted_rows')
-    $isPrivileged = [int](Get-MlsProperty -InputObject $rows[0] -Name 'is_privileged')
-    $describe = "base=$base, through the view=$view, restricted=$restricted, this caller privileged=$isPrivileged"
-
-    if ($isPrivileged -eq -1) {
-        return New-MlsCheckResult -Passed $false `
-            -Observed "UNOBSERVABLE: role '$privileged' does not exist, so nothing follows about filtering -- $describe" `
-            -Detail 'The protection has not been applied. Re-run layer-04-purview.yml, whose protect job applies infra/fabric/protect-tables.ps1; every statement is guarded and safe to replay. This criterion cannot distinguish "no filter" from "no role to filter against", so it reports neither.' -Final
-    }
-    if ($isPrivileged -eq 1) {
-        return New-MlsCheckResult -Status 'SKIP' `
-            -Observed "UNOBSERVABLE: this auditor IS a member of '$privileged', which by design bypasses the filter -- $describe" `
-            -Detail "A privileged caller sees every row, so equal counts would prove nothing either way. Run the audit as an identity outside $privileged - mls-verifier is outside it by default, and putting it inside would silently make this criterion vacuous."
-    }
-    if ($restricted -le 0) {
-        return New-MlsCheckResult -Passed $false `
-            -Observed "no rows carry the restricted classification, so a filter that removed nothing would look identical to one that worked -- $describe" `
-            -Detail 'Reseed (L5). V5.5 asserts this precondition directly; without restricted rows this criterion can demonstrate nothing.' -Final
-    }
-    if (($base - $view) -ne $restricted) {
-        return New-MlsCheckResult -Passed $false `
-            -Observed "the filter removed $($base - $view) row(s) but $restricted are classified restricted -- $describe" `
-            -Detail 'A non-privileged caller must see exactly the unrestricted rows through v_defect_reports. Equal counts mean the policy is not filtering: check that sp_defect_tier exists with is_enabled = 1 in sys.security_policies and that its predicate is bound to v_defect_reports.' -Final
-    }
-    return New-MlsCheckResult -Passed $true `
-        -Observed "a non-privileged caller sees $view of $base rows; exactly the $restricted restricted row(s) were filtered out, silently -- $describe"
-}
-
-function Test-ColumnDenialEnforcement {
-    <#
-    .SYNOPSIS
-        V4.6 - does the standard tier actually get REFUSED the restricted columns? Not
-        observable from here, and this records that rather than passing on the artefact.
-    .DESCRIPTION
-        The column half of enforcement, and the half a read-only auditor genuinely cannot
-        demonstrate on this endpoint.
-
-        Contrast with V4.5. The row predicate keys on the PRIVILEGED role, so it filters
-        every caller outside it - this auditor included, which is what makes V4.5 a real
-        verdict. A DENY is the other way round: it binds only members of the role it
-        TARGETS. mls-verifier is not in <prefix>_data_standard, so it reads salary_usd
-        perfectly well, and that proves nothing about the standard tier.
-
-        The direct check would be EXECUTE AS a member of that role. A Fabric lakehouse SQL
-        analytics endpoint DOES NOT SUPPORT EXECUTE AS - Msg 15868, verified live
-        2026-09-20 - and that is a feature-level refusal, not a permission error, so no
-        credential makes it work. The endpoint's only database users are dbo, guest, sys and
-        INFORMATION_SCHEMA; a database role is not a user.
-
-        Joining mls-verifier to the standard role to test it would break other criteria:
-        V5.3 needs it to see all 900 defect_reports rows, and a member of the standard tier
-        is DENIED that table outright.
-
-        So: SKIP, naming the blocker, and naming where the capability IS observable - the
-        two-tier agent path, where the standard tier's own identity asks for salary through
-        the tool chain and is refused by the database. The retired V4.4 covered the artefact
-        and never stood in for this.
-    #>
-    param([Parameter(Mandatory)][string]$Prefix)
-    return New-MlsCheckResult -Status 'SKIP' `
-        -Observed 'UNOBSERVABLE from a read-only audit: a DENY binds only members of the role it targets, and EXECUTE AS is not supported on this endpoint (Msg 15868, verified 2026-09-20)' `
-        -Detail "This auditor is not in ${Prefix}_data_standard, so its own ability to read salary_usd says nothing about the standard tier. The refusal cannot be provoked from here for ANY caller - Msg 15868 is a feature-level refusal - and the endpoint exposes no impersonable user. Joining the auditor to ${Prefix}_data_standard would break V5.3, which needs it to read all 900 defect_reports rows. The capability is observable end to end on the two-tier agent path; that criterion belongs with the agent tiering. V4.4 used to cover the artefact and was retired (F218, F224): the DENY rows it checked can never bind anyone on this endpoint, and the verifier cannot see them anyway. Contrast V4.5, which IS a real verdict because the row predicate keys on the PRIVILEGED role and so filters every caller outside it."
-}
-
 function Invoke-Main {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
         Justification = 'Every parameter is consumed inside the criterion scriptblocks; PSSA cannot see through scriptblock closures.')]
@@ -428,11 +276,7 @@ function Invoke-Main {
         [switch]$SkipConnect,
         [string]$ExpectedLabelPolicy = '',
         [string[]]$ExpectedLabelPolicyScope = @('All'),
-        [string[]]$OnlyCriterion = @(),
-        [string]$SqlEndpoint = '',
-        [string]$SqlAccessToken = '',
-        [string]$LakehouseName = 'mls_operations',
-        [string]$ProtectionPrefix = ''
+        [string[]]$OnlyCriterion = @()
     )
     $repoRoot = Split-Path -Path $PSScriptRoot -Parent
     # Resolved here rather than as a parameter default so naming.bicep is read once,
@@ -504,45 +348,13 @@ function Invoke-Main {
         -RetryWindowMinutes 10 `
         -Test { Test-LabelPolicyScope -PolicyName $ExpectedLabelPolicy -ExpectedLabel $ExpectedLabel -ExpectedScope $ExpectedLabelPolicyScope } | Out-Null
 
-    # V4.5 / V4.6 - the data-layer protection. NOT the labels: a sensitivity label
-    # classifies and does not gate a read, and no criterion here may assert otherwise
-    # (F18). There is deliberately no separate "the two new labels exist" criterion -
-    # V4.1 already asserts the taxonomy is EXACTLY the six names, so a third check of the
-    # same fact would be two ways to learn one thing.
-    if ([string]::IsNullOrWhiteSpace($ProtectionPrefix)) { $ProtectionPrefix = Get-CompanyPrefix }
+    # The data-layer criteria moved to L5 (V5.6/V5.7) with the step that applies them.
+    # There is deliberately no separate "the two new labels exist" criterion - V4.1
+    # already asserts the taxonomy is EXACTLY the six names.
     # The restricted COLUMN list went with V4.4: it was that criterion's input, and per
     # F218 those DENYs bind nobody on this endpoint anyway. V4.6 names the columns in its
     # own text for the human reading a SKIP.
     #
-    # The value the RLS predicate filters on. Mirrors
-    # infra/fabric/protect-tables.ps1's $script:RestrictedClassification.
-    $restrictedClassification = 'THIRD_PARTY_PROPRIETARY'
-
-    # V4.5 IS A REAL VERDICT, not a SKIP. The row predicate keys on the PRIVILEGED role,
-    # so it filters every caller outside it - this auditor included. Reading the base table
-    # and the filtered view as myself and requiring the shortfall to equal the restricted
-    # count IS the capability check. Proven on the live estate 2026-09-20: 900 base, 761
-    # through the view, 139 restricted.
-    Invoke-MlsCriterion -Context $context -Id 'V4.5' -Control @('3.1.1', '3.1.5') `
-        -Description 'Row-level security ENFORCES: a non-privileged caller sees exactly the unrestricted rows (capability, not artefact)' `
-        -Command "SELECT (SELECT COUNT(*) FROM dbo.defect_reports) AS base_rows, (SELECT COUNT(*) FROM dbo.v_defect_reports) AS view_rows, (SELECT COUNT(*) FROM dbo.defect_reports WHERE classification = '$restrictedClassification') AS restricted_rows, IS_ROLEMEMBER('${ProtectionPrefix}_data_privileged') AS is_privileged" `
-        -Expected "base_rows - view_rows == restricted_rows, read by a caller outside ${ProtectionPrefix}_data_privileged" `
-        -RetryWindowMinutes 5 `
-        -Test {
-        Test-RowFilterEnforcement -SqlEndpoint $SqlEndpoint -SqlAccessToken $SqlAccessToken `
-            -LakehouseName $LakehouseName -Prefix $ProtectionPrefix `
-            -RestrictedClassification $restrictedClassification
-    } | Out-Null
-
-    # V4.6 is the half that genuinely cannot be observed here, kept SEPARATE so V4.5's
-    # pass never implies it. A DENY binds only members of the role it targets, and
-    # EXECUTE AS is unsupported on this endpoint (Msg 15868).
-    Invoke-MlsCriterion -Context $context -Id 'V4.6' -Control @('3.1.1', '3.1.5') `
-        -Description 'Column-level denial ENFORCES: the standard tier is refused salary_usd (not observable read-only)' `
-        -Command "EXECUTE AS USER = '<member of ${ProtectionPrefix}_data_standard>'; SELECT TOP 1 salary_usd FROM dbo.hr_roster; REVERT;   -- Msg 15868: EXECUTE AS is not supported on this endpoint" `
-        -Expected 'a permission error naming salary_usd' `
-        -NoRetry `
-        -Test { Test-ColumnDenialEnforcement -Prefix $ProtectionPrefix } | Out-Null
 
     return $context
 }
@@ -554,9 +366,7 @@ if (-not $env:MLS_SKIP_MAIN) {
             -CertificatePassword $CertificatePassword -ExpectedLabel $ExpectedLabel `
             -LabelGuidPath $LabelGuidPath -Checkpoint $Checkpoint -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion `
-            -ExpectedLabelPolicy $ExpectedLabelPolicy -ExpectedLabelPolicyScope $ExpectedLabelPolicyScope `
-            -SqlEndpoint $SqlEndpoint -SqlAccessToken $SqlAccessToken `
-            -LakehouseName $LakehouseName -ProtectionPrefix $ProtectionPrefix
+            -ExpectedLabelPolicy $ExpectedLabelPolicy -ExpectedLabelPolicyScope $ExpectedLabelPolicyScope
     }
     catch {
         Write-MlsStatus -Message "layer-04-audit could not start: $($_.Exception.Message)" -Color Red
