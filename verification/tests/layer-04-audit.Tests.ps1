@@ -370,6 +370,26 @@ Describe 'layer-04-audit' {
             $row.Observed | Should -BeLike '*UNOBSERVABLE*'
         }
 
+        It 'SKIPS when no endpoint was supplied - not asked is not the same as cannot see' {
+            # THE FALSE STOP-THE-LINE OF 2026-09-21. V11.2 re-runs this audit verbatim in
+            # the DOWN state to prove the teardown left tenant objects alone, and passes no
+            # -SqlEndpoint because no lakehouse exists then, by design. Returning FAIL made
+            # L4 exit 1, which made V11.2 report that the teardown had crossed the
+            # tenant-object line - on a teardown whose labels had just been verified intact.
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -SqlEndpoint '') -Id 'V4.5'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*not asked*'
+        }
+
+        It 'still FAILS when an endpoint IS supplied and cannot be read' {
+            # The distinction the SKIP above must not blur: being asked and failing to see
+            # is a real failure to observe, and stays one.
+            Mock Invoke-MlsSqlQuery { throw 'Login failed for user.' }
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.5'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+        }
+
         It 'reports UNOBSERVABLE, never "the filter is broken", when the endpoint errors' {
             Mock Invoke-MlsSqlQuery { throw 'Login failed for user.' }
             $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V4.5'

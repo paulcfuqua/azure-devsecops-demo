@@ -167,118 +167,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  protect:
-    name: apply L4 table protection (CLS + RLS)
-    # DELIBERATELY `needs: preflight`, NOT `needs: apply`. The two halves of L4 are
-    # independent and only one of them enforces anything: labels CLASSIFY, and column-
-    # and row-level security ENFORCE. `apply` is skipped whenever the Security &
-    # Compliance app-only credentials are absent, and gating enforcement on the
-    # classification layer's credentials would mean a missing Purview certificate
-    # silently leaves the sensitive tables readable by every tier. A label has never
-    # gated a read (F18); it must not gate a deploy either.
-    needs: preflight
-    if: ${{ needs.preflight.outputs.configured == 'true' }}
-    runs-on: ubuntu-latest
-    # Bounded for the same reason every other job here is (F81).
-    timeout-minutes: 30
-    environment: demo
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Azure login (OIDC, mls-github-deployer)
-        uses: azure/login@v3
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Apply column- and row-level security to the sensitive tables
-        shell: pwsh
-        env:
-          MLS_COMPANY_PREFIX: ${{ vars.MLS_COMPANY_PREFIX }}
-          LAKEHOUSE_NAME: ${{ vars.MLS_LAKEHOUSE_NAME }}
-          DRY_RUN: ${{ inputs.dry_run }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          # SqlServer 22+ is required for Invoke-Sqlcmd -AccessToken, which is how this
-          # authenticates: the endpoint enforces Entra-only auth, so there is no password
-          # anywhere to fall back on (CLAUDE.md hard rule 5).
-          Install-Module SqlServer -Force -Scope CurrentUser -MinimumVersion 22.0.0 -AllowClobber
-
-          Import-Module ./infra/fabric/fabric-api.psm1 -Force
-
-          # The SQL endpoint FQDN is RESOLVED from the Fabric API, never stored. It is
-          # regenerated on every rebuild, so a value pinned in a variable is correct until
-          # the first teardown and wrong silently afterwards - F129's class, the same one
-          # that put a Container Apps FQDN in a GitHub variable.
-          $fabricToken = az account get-access-token `
-            --resource https://api.fabric.microsoft.com --query accessToken -o tsv
-          if (-not $fabricToken) {
-            Write-Host '::error title=Token acquisition failed::Could not mint a Fabric token; the protection step cannot resolve its endpoint.'
-            exit 1
-          }
-
-          $prefix = if ($env:MLS_COMPANY_PREFIX) { $env:MLS_COMPANY_PREFIX } else { 'mls' }
-          $workspaceName = "$prefix-operations"
-          $lakehouseName = if ($env:LAKEHOUSE_NAME) { $env:LAKEHOUSE_NAME } else { 'mls_operations' }
-
-          $workspace = Get-FabricWorkspace -Token $fabricToken -Name $workspaceName
-          if (-not $workspace) { throw "Fabric workspace '$workspaceName' not found. L5 must run before L4 can protect its tables." }
-
-          $lakehouse = Get-FabricLakehouse -Token $fabricToken -WorkspaceId $workspace.id -Name $lakehouseName
-          if (-not $lakehouse) { throw "Lakehouse '$lakehouseName' not found in workspace '$workspaceName'." }
-
-          $endpoint = $lakehouse.properties.sqlEndpointProperties.connectionString
-          if (-not $endpoint) { throw "Lakehouse '$lakehouseName' reports no SQL analytics endpoint yet. It provisions asynchronously after creation; re-run once provisioningStatus is Success." }
-          Write-Host "Resolved SQL analytics endpoint for '$lakehouseName'."
-
-          $sqlToken = az account get-access-token `
-            --resource https://database.windows.net --query accessToken -o tsv
-          if (-not $sqlToken) {
-            Write-Host '::error title=Token acquisition failed::Could not mint a SQL token for the lakehouse endpoint.'
-            exit 1
-          }
-
-          # NO continue-on-error anywhere in this step. A step allowed to fail is a step
-          # nobody is watching (F119), and this one is the difference between a restricted
-          # table and one that merely looks restricted. If it fails, L4 fails.
-          $common = @{
-            SqlEndpoint = $endpoint
-            AccessToken = $sqlToken
-            Database    = $lakehouseName
-            Prefix      = $prefix
-          }
-          if ($env:DRY_RUN -eq 'true') {
-            ./infra/fabric/protect-tables.ps1 @common -WhatIf *>&1 | Tee-Object -FilePath protection-plan.txt
-          }
-          else {
-            ./infra/fabric/protect-tables.ps1 @common -Confirm:$false *>&1 | Tee-Object -FilePath protection-apply.txt
-          }
-
-      - name: Upload the protection transcript
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: layer-04-protection
-          path: |
-            protection-plan.txt
-            protection-apply.txt
-          if-no-files-found: warn
-          retention-days: 14
-
   verify:
     name: verify L4 (mls-verifier)
-    # `protect` IS IN needs FOR ORDERING, not for its result. Without it the verify job
-    # runs in PARALLEL with the protection it is meant to audit, and V4.4 reads
-    # sys.database_permissions before the DENYs exist - failing an estate that is
-    # mid-deploy, with a verdict that would have been correct thirty seconds later.
-    # always() keeps it running even when protect fails, because "the protection is
-    # missing" is exactly the state V4.4 should then report.
-    needs: [preflight, apply, protect]
+    # The table-protection step moved to layer-05-fabric.yml, where the data it protects
+    # is created: infra-up runs L4 before L5, so a protect step here throws on every
+    # rebuild before the lakehouse exists. V4.5 still verifies it from this audit.
+    needs: [preflight, apply]
     if: ${{ always() && needs.preflight.outputs.configured == 'true' && needs.apply.result != 'failure' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: verify

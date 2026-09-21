@@ -307,9 +307,18 @@ function Test-RowFilterEnforcement {
         [Parameter(Mandatory)][string]$RestrictedClassification
     )
     if ([string]::IsNullOrWhiteSpace($SqlEndpoint)) {
-        return New-MlsCheckResult -Passed $false `
-            -Observed 'UNOBSERVABLE: no SQL analytics endpoint was supplied' `
-            -Detail 'Pass -SqlEndpoint, resolved from the Fabric API. Without it this criterion cannot look, and it says so rather than reporting the filter broken.' -Final
+        # NOT ASKED is different from CANNOT SEE, and conflating them cost a false
+        # stop-the-line. V11.2 re-runs this audit verbatim in the DOWN state to prove the
+        # teardown did not touch tenant objects; it passes no -SqlEndpoint because there is
+        # no lakehouse then, by design. Returning FAIL there made L4 exit 1, which made
+        # V11.2 report that the teardown had crossed the tenant-object line - on a teardown
+        # whose labels had just been verified intact (2026-09-21).
+        #
+        # An endpoint that IS supplied and cannot be read is still a FAIL below: that is a
+        # genuine failure to observe something the caller asked about.
+        return New-MlsCheckResult -Status 'SKIP' `
+            -Observed 'not asked: no SQL analytics endpoint was supplied, so the data-layer check was not requested' `
+            -Detail 'Pass -SqlEndpoint (resolved from the Fabric API) to run this criterion. It reports SKIP rather than FAIL because a caller that supplies no endpoint - V11.2 re-running this audit in the down state, where no lakehouse exists - is not asking about the row filter at all. A supplied endpoint that cannot be read remains a failure.'
     }
 
     $privileged = "${Prefix}_data_privileged"
