@@ -250,16 +250,78 @@ Describe 'layer-08-audit' {
             if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
             if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
             if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            # V8.8's probes. BOTH halves are modelled, because a fixture that only knows
+            # how to refuse would let a gate that refuses EVERYTHING pass as a control.
+            # $script:ObjectGateEnforced lets a test turn the gate off and watch the
+            # criterion go red, which is the only way to know it is not vacuous.
+            if ($statement -match '\bv_defect_reports\b|\bv_hr_roster\b') {
+                return [pscustomobject]@{
+                    Outcome = 'ok'; ElapsedMs = 12; ToolError = ''; Reason = ''
+                    Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(761)) }
+                }
+            }
+            if ($statement -match '\bdefect_reports\b|\bhr_roster\b') {
+                if (-not $script:ObjectGateEnforced) {
+                    return [pscustomobject]@{
+                        Outcome = 'ok'; ElapsedMs = 9; ToolError = ''; Reason = ''
+                        Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(900)) }
+                    }
+                }
+                $alternative = if ($statement -match '\bhr_roster\b') { 'dbo.v_hr_roster' } else { 'dbo.v_defect_reports' }
+                $name = if ($statement -match '\bhr_roster\b') { 'hr_roster' } else { 'defect_reports' }
+                return [pscustomobject]@{
+                    Outcome = 'tool-error'; ElapsedMs = 7; Reason = ''
+                    ToolError = "This tool cannot read `"$name`": it holds restricted data that is not exposed to the agent. Use $alternative, which returns the governed projection."
+                    Payload = $null
+                }
+            }
             throw "unexpected MCP tool call: $statement"
         }
+
+        # The deployed object gate is ON by default; a test flips it to prove V8.8 can fail.
+        $script:ObjectGateEnforced = $true
 
         Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
     }
 
+    Context 'the object gate (V8.8)' {
+        # SEGREGATION HERE IS BY OBJECT, NOT IDENTITY. Measured 2026-09-21 on the rebuilt
+        # estate as Global Admin: dbo.defect_reports returns 900 rows including all 139
+        # THIRD_PARTY_PROPRIETARY, dbo.v_defect_reports returns 761, and IS_ROLEMEMBER is 0
+        # for both tiers because CREATE USER is unsupported on this endpoint (F218). The
+        # base table is readable by anything that names it - including the agent.
+
+        It 'fails when the deployed tool ANSWERS a restricted table' {
+            # The defect this criterion exists for, and the reason the fixture can turn the
+            # gate off: a check that cannot be made to fail proves nothing.
+            $script:ObjectGateEnforced = $false
+            try {
+                $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.8'
+                $row.Status | Should -Be 'FAIL'
+                $row.Observed | Should -BeLike '*was NOT refused*'
+            }
+            finally { $script:ObjectGateEnforced = $true }
+        }
+
+        It 'passes when the restricted tables are refused and the views still answer' {
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.8'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*REFUSED*'
+            $row.Observed | Should -BeLike '*ANSWERED*'
+        }
+
+        It 'records a probe for every quoting form, not just the bare table name' {
+            # An agent writing T-SQL emits bracketed identifiers as a matter of course, and
+            # the first version of the gate was blind to them.
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.8'
+            $row.Observed | Should -BeLike '*[[]dbo[]].[[]defect_reports[]]*'
+        }
+    }
+
     Context 'all criteria pass' {
-        It 'records V8.1-V8.7 as PASS and exits 0' {
+        It 'records V8.1-V8.8 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V8.1', 'V8.2', 'V8.3', 'V8.4', 'V8.5', 'V8.6', 'V8.7')
+            @($context.Criterion).Id | Should -Be @('V8.1', 'V8.2', 'V8.3', 'V8.4', 'V8.5', 'V8.6', 'V8.7', 'V8.8')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -418,7 +480,7 @@ Describe 'layer-08-audit' {
         It 'records V8.2 as FAIL when the lakehouse re-derivation errors, and still evaluates the rest' {
             Mock Invoke-MlsSqlQuery { throw 'Login failed: the capacity is paused.' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 7
+            @($context.Criterion).Count | Should -Be 8
             (Get-Row -Context $context -Id 'V8.2').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V8.2').Observed | Should -BeLike '*capacity is paused*'
             (Get-Row -Context $context -Id 'V8.4').Status | Should -Be 'PASS'
@@ -429,7 +491,7 @@ Describe 'layer-08-audit' {
         It 'records every criterion as SKIP when nothing is deployed yet, and never as a pass' {
             $context = Invoke-AuditForTest -EnvironmentUrl '' -EvalResultPath (Join-Path -Path $script:ReportRoot -ChildPath 'absent.json') `
                 -McpServerUrl '' -SqlEndpoint '' -McpAuthToken '' -AwsGlueDatabase '' -NoRetry
-            @($context.Criterion).Count | Should -Be 7
+            @($context.Criterion).Count | Should -Be 8
             @($context.Criterion | Where-Object { $_.Status -ne 'SKIP' }) | Should -BeNullOrEmpty
             (Get-Row -Context $context -Id 'V8.1').Detail | Should -BeLike '*Power Platform environment*'
             (Get-Row -Context $context -Id 'V8.2').Detail | Should -BeLike '*copilot-eval.yml*'
@@ -498,6 +560,31 @@ Describe 'V8.6 - the AWS lakehouse answers with ROWS, not with a status code' {
             if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
             if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
             if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            # V8.8's probes. BOTH halves are modelled, because a fixture that only knows
+            # how to refuse would let a gate that refuses EVERYTHING pass as a control.
+            # $script:ObjectGateEnforced lets a test turn the gate off and watch the
+            # criterion go red, which is the only way to know it is not vacuous.
+            if ($statement -match '\bv_defect_reports\b|\bv_hr_roster\b') {
+                return [pscustomobject]@{
+                    Outcome = 'ok'; ElapsedMs = 12; ToolError = ''; Reason = ''
+                    Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(761)) }
+                }
+            }
+            if ($statement -match '\bdefect_reports\b|\bhr_roster\b') {
+                if (-not $script:ObjectGateEnforced) {
+                    return [pscustomobject]@{
+                        Outcome = 'ok'; ElapsedMs = 9; ToolError = ''; Reason = ''
+                        Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(900)) }
+                    }
+                }
+                $alternative = if ($statement -match '\bhr_roster\b') { 'dbo.v_hr_roster' } else { 'dbo.v_defect_reports' }
+                $name = if ($statement -match '\bhr_roster\b') { 'hr_roster' } else { 'defect_reports' }
+                return [pscustomobject]@{
+                    Outcome = 'tool-error'; ElapsedMs = 7; Reason = ''
+                    ToolError = "This tool cannot read `"$name`": it holds restricted data that is not exposed to the agent. Use $alternative, which returns the governed projection."
+                    Payload = $null
+                }
+            }
             throw "unexpected MCP tool call: $statement"
         }
         Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
@@ -619,6 +706,31 @@ Describe 'V8.7 - a denial is never reported as an empty dataset (F105, one cloud
             if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
             if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
             if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            # V8.8's probes. BOTH halves are modelled, because a fixture that only knows
+            # how to refuse would let a gate that refuses EVERYTHING pass as a control.
+            # $script:ObjectGateEnforced lets a test turn the gate off and watch the
+            # criterion go red, which is the only way to know it is not vacuous.
+            if ($statement -match '\bv_defect_reports\b|\bv_hr_roster\b') {
+                return [pscustomobject]@{
+                    Outcome = 'ok'; ElapsedMs = 12; ToolError = ''; Reason = ''
+                    Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(761)) }
+                }
+            }
+            if ($statement -match '\bdefect_reports\b|\bhr_roster\b') {
+                if (-not $script:ObjectGateEnforced) {
+                    return [pscustomobject]@{
+                        Outcome = 'ok'; ElapsedMs = 9; ToolError = ''; Reason = ''
+                        Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(900)) }
+                    }
+                }
+                $alternative = if ($statement -match '\bhr_roster\b') { 'dbo.v_hr_roster' } else { 'dbo.v_defect_reports' }
+                $name = if ($statement -match '\bhr_roster\b') { 'hr_roster' } else { 'defect_reports' }
+                return [pscustomobject]@{
+                    Outcome = 'tool-error'; ElapsedMs = 7; Reason = ''
+                    ToolError = "This tool cannot read `"$name`": it holds restricted data that is not exposed to the agent. Use $alternative, which returns the governed projection."
+                    Payload = $null
+                }
+            }
             throw "unexpected MCP tool call: $statement"
         }
         Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }

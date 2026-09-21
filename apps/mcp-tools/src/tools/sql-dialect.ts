@@ -154,6 +154,30 @@ const FORBIDDEN_COMMON = [
   "backup", "restore",
 ];
 
+/**
+ * Objects the agent may never read, and what it should read instead.
+ *
+ * THE MESSAGE IS PART OF THE CONTROL. The caller is an LLM that will retry, so a bare
+ * refusal makes it guess; naming the governed alternative turns a dead end into a
+ * redirect. It is also the line worth showing an audience - the data is visibly there
+ * in Fabric, and the agent is visibly sent somewhere else.
+ *
+ * Keys are matched as WHOLE identifiers, case-insensitively, against SQL that has
+ * already had its comments and string literals scrubbed. Every entry here, and every
+ * deliberately-permitted table, is cross-checked against data/seed/schema-manifest.json
+ * by this package's tests - so a new table is neither silently restricted nor silently
+ * exposed.
+ */
+export const RESTRICTED_OBJECT: Record<string, string> = {
+  // 139 of 900 rows are THIRD_PARTY_PROPRIETARY. The view carries the row-level filter.
+  defect_reports:
+    "Use dbo.v_defect_reports, which returns the same schema with third-party proprietary rows removed.",
+  // Carries salary_usd. The view omits it; the column-level DENY binds to no principal
+  // on this endpoint (F218), so the view is the control that actually holds.
+  hr_roster:
+    "Use dbo.v_hr_roster, which returns the roster without the restricted compensation columns.",
+};
+
 /** Dialect-specific extras. */
 const FORBIDDEN_BY_DIALECT: Record<SqlDialect, string[]> = {
   // SQLite: schema/file-level escapes and the extension loader.
@@ -207,7 +231,28 @@ export interface ScrubResult {
  * and the forbidden-verb scan. Scoping nesting to `dialect === "tsql"` fixes
  * that without weakening T-SQL, which really does need it.
  */
-export function scrubSql(sql: string, dialect: SqlDialect): ScrubResult {
+export function scrubSql(
+  sql: string,
+  dialect: SqlDialect,
+  /**
+   * UNWRAP quoted identifiers rather than erasing them.
+   *
+   * The default (false) replaces [brackets], "quotes" and `backticks` with a neutral
+   * placeholder, which is correct for the single-statement and forbidden-verb scans: a
+   * column legitimately named [delete] must not read as the DELETE verb.
+   *
+   * It is exactly wrong for matching OBJECT names. `SELECT * FROM [dbo].[defect_reports]`
+   * scrubs to `SELECT * FROM id . id`, so a restricted-table check running on it sees
+   * nothing - and an agent writing T-SQL emits bracketed identifiers as a matter of
+   * course, which makes that the LIKELY shape of a query, not an exotic evasion.
+   *
+   * With this set, the identifier's own text is emitted, so `\bdefect_reports\b` matches
+   * whether it arrived bare, bracketed, double-quoted or backticked. Comments and string
+   * literals are still removed either way: a name inside either is not a reference to the
+   * object.
+   */
+  keepQuotedIdentifiers = false,
+): ScrubResult {
   let out = "";
   let i = 0;
   const n = sql.length;
@@ -260,6 +305,7 @@ export function scrubSql(sql: string, dialect: SqlDialect): ScrubResult {
     if (ch === '"' || ch === "`") {
       const quote = ch;
       i += 1;
+      const start = i;
       let closed = false;
       while (i < n) {
         if (sql[i] === quote && sql[i + 1] === quote) { i += 2; continue; }
@@ -267,16 +313,18 @@ export function scrubSql(sql: string, dialect: SqlDialect): ScrubResult {
         i += 1;
       }
       if (!closed) return { text: out, terminated: false };
-      out += " id ";
+      out += keepQuotedIdentifiers ? ` ${sql.slice(start, i - 1)} ` : " id ";
       continue;
     }
     // [bracketed identifier]
     if (ch === "[") {
       i += 1;
+      const start = i;
       while (i < n && sql[i] !== "]") i += 1;
       if (i >= n) return { text: out, terminated: false };
+      const inner = sql.slice(start, i);
       i += 1; // consume ']'
-      out += " id ";
+      out += keepQuotedIdentifiers ? ` ${inner} ` : " id ";
       continue;
     }
     out += ch;
@@ -363,6 +411,56 @@ export function assertReadOnlySingleStatement(sql: unknown, dialect: SqlDialect)
       "Only read-only SELECT/WITH statements are allowed. This tool has read-only access to " +
         "the lakehouse; INSERT, UPDATE, DELETE, MERGE and every DDL statement are refused.",
     );
+  }
+
+  // (4) RESTRICTED OBJECTS. The checks above stop WRITES; this one stops a READ the
+  // agent must not be able to perform.
+  //
+  // MEASURED 2026-09-21 on the rebuilt estate, as the tenant's Global Admin:
+  //
+  //     dbo.defect_reports    900 rows   (all 139 THIRD_PARTY_PROPRIETARY included)
+  //     dbo.v_defect_reports  761 rows
+  //     IS_ROLEMEMBER('mls_data_privileged') = 0
+  //     IS_ROLEMEMBER('mls_data_standard')   = 0
+  //
+  // Nobody is in either role and nobody can be: CREATE USER is unsupported on the Fabric
+  // SQL analytics endpoint (F218), so the DENY on the base table binds to no principal
+  // and the row-level predicate's IS_ROLEMEMBER returns 0 for everyone. The filter on
+  // the VIEW works; the base table is readable by anyone who names it. Segregation is by
+  // OBJECT, not by identity - so the object is where the agent has to be stopped.
+  //
+  // WHY A DENYLIST IS SOUND HERE, where usually it is not: a statement cannot read a
+  // table without naming it, and every route to an unnamed read is already refused above
+  // - EXEC and dynamic SQL by the verb list, a second statement by the single-statement
+  // rule, OPENROWSET/OPENQUERY by the T-SQL extras. The name must appear in the text, and
+  // `scrubbed` has already had comments and string literals removed, so it cannot hide in
+  // either.
+  //
+  // WHOLE IDENTIFIERS, not substrings. \bdefect_reports\b does not match
+  // `v_defect_reports` - there is no word boundary between `_` and `d` - which is exactly
+  // the distinction being enforced: the governed view stays available while the base table
+  // is refused. It does match `dbo.defect_reports`, `[defect_reports]` and
+  // `mls_operations.dbo.defect_reports`, because `.` and `[` are non-word characters.
+  //
+  // A DENYLIST'S REAL WEAKNESS - a new sensitive table permitted by default - is closed at
+  // BUILD time rather than runtime: a test asserts every table in schema-manifest.json is
+  // explicitly classified, so adding one fails the suite until somebody decides which side
+  // it belongs on.
+  //
+  // Applied in every dialect rather than only tsql. These names do not exist in the Athena
+  // dataset, so the cost is nil and the failure mode is closed rather than open.
+  // A SEPARATE SCRUB, because `scrubbed` erases quoted identifiers and this check needs
+  // them. `SELECT * FROM [dbo].[defect_reports]` becomes `SELECT * FROM id . id` under the
+  // default scrub and passed straight through the first version of this gate - caught by
+  // the bypass tests, which is what they are for.
+  const { text: objectText } = scrubSql(sql, dialect, true);
+  for (const [name, guidance] of Object.entries(RESTRICTED_OBJECT)) {
+    if (new RegExp(`\\b${name}\\b`, "i").test(objectText)) {
+      throw new SqlRejected(
+        `This tool cannot read "${name}": it holds restricted data that is not exposed to ` +
+          `the agent. ${guidance}`,
+      );
+    }
   }
 
   return sql.trim().replace(/;\s*$/, "").trimEnd();

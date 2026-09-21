@@ -209,6 +209,30 @@ GRANT SELECT ON dbo.hr_roster TO [$standard];
 DENY SELECT ($restrictedList) ON dbo.hr_roster TO [$standard];
 "@
 
+    # THE HR HALF HAD NO VIEW, ONLY THE INERT COLUMN DENY ABOVE.
+    #
+    # cls_hr_roster denies the compensation columns to $standard, and no principal can be
+    # a member of $standard - CREATE USER is unsupported on this endpoint (F218). So the
+    # DENY binds to nobody and salary_usd was readable by every caller, including the
+    # agent's SQL tool.
+    #
+    # defect_reports got a schema-bound view and a row-level policy; hr_roster got a
+    # column DENY that cannot bind. This is the missing half: a view that simply does not
+    # project the restricted columns, which needs no role membership to be true.
+    $hrOpenColumn = @($script:HrRosterColumn | Where-Object { $_ -notin $script:HrRestrictedColumn })
+    $hrViewColumnList = ($hrOpenColumn | ForEach-Object { "[$_]" }) -join ', '
+    $hrViewBody = "CREATE VIEW dbo.v_hr_roster WITH SCHEMABINDING AS SELECT $hrViewColumnList FROM dbo.hr_roster"
+
+    Add-Statement -Key 'hr_view' -Description 'schema-bound view over hr_roster without the compensation columns' -Sql @"
+IF NOT EXISTS (SELECT 1 FROM sys.views WHERE [name] = N'v_hr_roster' AND [schema_id] = SCHEMA_ID(N'dbo'))
+    EXEC('$(ConvertTo-SqlLiteral $hrViewBody)');
+"@
+
+    Add-Statement -Key 'grant_hr_view' -Description 'both tiers may read the governed hr view' -Sql @"
+GRANT SELECT ON dbo.v_hr_roster TO [$standard];
+GRANT SELECT ON dbo.v_hr_roster TO [$privileged];
+"@
+
     Add-Statement -Key 'rls_view' -Description 'schema-bound view over defect_reports' -Sql @"
 IF NOT EXISTS (SELECT 1 FROM sys.views WHERE [name] = N'v_defect_reports' AND [schema_id] = SCHEMA_ID(N'dbo'))
     EXEC('$(ConvertTo-SqlLiteral $viewBody)');

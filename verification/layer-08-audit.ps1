@@ -697,6 +697,120 @@ function Get-AwsQueryObservation {
     }
 }
 
+$script:LakehouseToolName = 'query_lakehouse_sql'
+
+function Test-RestrictedObjectRefusal {
+    <#
+    .SYNOPSIS
+        V8.8 - the DEPLOYED tool refuses the restricted objects and still serves the
+        governed views.
+    .DESCRIPTION
+        Segregation in this estate is by OBJECT, not identity. Measured 2026-09-21 on the
+        rebuilt estate as the tenant's Global Administrator:
+
+            dbo.defect_reports    900 rows   (all 139 THIRD_PARTY_PROPRIETARY included)
+            dbo.v_defect_reports  761 rows
+            IS_ROLEMEMBER('mls_data_privileged') = 0
+            IS_ROLEMEMBER('mls_data_standard')   = 0
+
+        Nobody is in either role and nobody can be - CREATE USER is unsupported on the
+        Fabric SQL analytics endpoint (F218) - so the DENY on the base table binds to no
+        principal and the row-level predicate returns 0 for everyone. The base table is
+        readable by anything that names it, including the agent.
+
+        BOTH HALVES ARE ASSERTED, and the second is not decoration. A gate that refuses
+        everything is not a control, it is an outage: it would pass a "restricted object is
+        refused" check while every dashboard and every honest question went dark. So this
+        requires the restricted object to be REFUSED and the governed view to ANSWER, in
+        the same run, through the same deployed tool.
+
+        The refusal must also NAME the governed alternative. The caller is an LLM that
+        retries, so a bare "no" makes it guess; and it is the line an audience reads off
+        the screen while the data sits visibly in Fabric beside it.
+    #>
+    param(
+        [AllowEmptyString()][string]$McpServerUrl,
+        [AllowEmptyString()][AllowNull()][string]$McpAuthToken,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+    if ([string]::IsNullOrWhiteSpace($McpServerUrl)) {
+        return New-MlsCheckResult -Status 'SKIP' -Observed 'not asked: no deployed MCP server URL was supplied' `
+            -Detail 'Pass -McpServerUrl / $env:MLS_MCP_SERVER_URL. This criterion is about the DEPLOYED tool; the local unit tests in apps/mcp-tools cover the function, and a function passing its own tests says nothing about what is running.'
+    }
+    if ([string]::IsNullOrWhiteSpace($McpAuthToken)) {
+        return New-MlsCheckResult -Status 'SKIP' -Observed 'not asked: no MCP credential was supplied, so the deployed tool could not be called' `
+            -Detail 'mcp-auth-token lives in Key Vault. Without it this criterion cannot make the call at all - which is NOT evidence that the gate is absent, and is never recorded as such.'
+    }
+
+    $observation = [System.Collections.Generic.List[string]]::new()
+    $problem = [System.Collections.Generic.List[string]]::new()
+    $blind = [System.Collections.Generic.List[string]]::new()
+
+    # A RUN IS AN EXPENSIVE, RATE-LIMITED OBSERVATION: every probe is made and every one is
+    # reported, so one failure never hides another's answer.
+    $probe = @(
+        @{ Label = 'restricted base table dbo.defect_reports'; Sql = 'SELECT COUNT(*) AS n FROM dbo.defect_reports'; MustRefuse = $true; Names = 'v_defect_reports' },
+        @{ Label = 'restricted base table [dbo].[defect_reports]'; Sql = 'SELECT COUNT(*) AS n FROM [dbo].[defect_reports]'; MustRefuse = $true; Names = 'v_defect_reports' },
+        @{ Label = 'restricted base table dbo.hr_roster'; Sql = 'SELECT COUNT(*) AS n FROM dbo.hr_roster'; MustRefuse = $true; Names = 'v_hr_roster' },
+        @{ Label = 'governed view dbo.v_defect_reports'; Sql = 'SELECT COUNT(*) AS n FROM dbo.v_defect_reports'; MustRefuse = $false; Names = '' },
+        @{ Label = 'governed view dbo.v_hr_roster'; Sql = 'SELECT COUNT(*) AS n FROM dbo.v_hr_roster'; MustRefuse = $false; Names = '' }
+    )
+
+    foreach ($p in $probe) {
+        $call = Invoke-MlsMcpToolCall -Uri $McpServerUrl -ToolName $script:LakehouseToolName `
+            -Argument @{ sql = $p.Sql } -AuthToken $McpAuthToken -TimeoutSec $TimeoutSeconds
+
+        if ($call.Outcome -eq 'unobservable') {
+            $line = "$($p.Label) -> UNOBSERVABLE after $($call.ElapsedMs) ms: $($call.Reason)"
+            $observation.Add($line)
+            $blind.Add($line)
+            continue
+        }
+
+        if ($p.MustRefuse) {
+            if ($call.Outcome -ne 'tool-error') {
+                # THE FAILURE THIS CRITERION EXISTS FOR: the agent read the restricted table.
+                $observation.Add("$($p.Label) -> ANSWERED after $($call.ElapsedMs) ms - the restricted object was NOT refused")
+                $problem.Add("$($p.Label) was answered rather than refused; the agent can read restricted data")
+                continue
+            }
+            $observation.Add("$($p.Label) -> REFUSED after $($call.ElapsedMs) ms: $($call.ToolError)")
+            if ("$($call.ToolError)" -notmatch [regex]::Escape($p.Names)) {
+                $problem.Add("$($p.Label) was refused but the message does not name $($p.Names); a refusal that does not redirect makes the agent guess")
+            }
+            continue
+        }
+
+        if ($call.Outcome -eq 'tool-error') {
+            # A gate that refuses everything is an outage wearing a control's clothes.
+            $observation.Add("$($p.Label) -> REFUSED after $($call.ElapsedMs) ms: $($call.ToolError)")
+            $problem.Add("$($p.Label) was refused; the governed view must remain readable or the gate has taken the demo down with the data")
+            continue
+        }
+        $rows = @(Get-MlsProperty -InputObject $call.Payload -Name 'rows')
+        $rowCount = Get-MlsProperty -InputObject $call.Payload -Name 'rowCount'
+        if ($null -eq $rowCount) { $rowCount = $rows.Count }
+        $first = if ($rows.Count -gt 0) { @($rows[0])[0] } else { $null }
+        $observation.Add("$($p.Label) -> ANSWERED after $($call.ElapsedMs) ms, $([int]$rowCount) row(s)$(if ($null -ne $first) { ", count $first" })")
+        if ([int]$rowCount -lt 1) {
+            $problem.Add("$($p.Label) answered with $([int]$rowCount) row(s); a COUNT always returns one, so the tool replied in a shape this criterion cannot read")
+        }
+    }
+
+    $observed = $observation -join ' | '
+
+    # CANNOT SEE is not SAW NOTHING, and a blind probe supports neither verdict (F105).
+    if ($blind.Count -gt 0 -and $problem.Count -eq 0) {
+        return New-MlsCheckResult -Passed $false -Final -Observed "UNOBSERVABLE: $observed" `
+            -Detail 'One or more probes never reached the deployed tool, so nothing follows about the gate in either direction. This is never recorded as "the restricted object is protected".'
+    }
+    if ($problem.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Final -Observed ($observed + ' | ' + ($problem -join ' | ')) `
+            -Detail 'Segregation here is by object: the row filter lives on the view and the base table is readable by anything that names it (F218). If the base table answered, the agent can return third-party proprietary rows and compensation data.'
+    }
+    return New-MlsCheckResult -Passed $true -Observed $observed
+}
+
 function Get-AwsGlueDatabaseName {
     <#
     .SYNOPSIS
@@ -1104,6 +1218,21 @@ function Invoke-Main {
         Test-AwsCatalogObservability -McpServerUrl $serverUrl -McpAuthToken $mcpToken `
             -GlueDatabase $glueDatabase -ExpectedTable $awsExpectedTable -TimeoutSeconds $AwsQueryTimeoutSeconds
     } | Out-Null
+
+    # V8.8 - the object gate, asserted against the DEPLOYED tool rather than the source.
+    # 3.1.1/3.1.5 access enforcement, 3.1.3 flow of CUI: this is the control that stops the
+    # agent returning restricted rows, now that F218 has established no identity-based one
+    # can bind on this endpoint.
+    Invoke-MlsCriterion -Context $context -Id 'V8.8' -Control @('3.1.1', '3.1.3', '3.1.5') `
+        -Description 'The deployed tool REFUSES the restricted objects and still serves the governed views' `
+        -Command "POST <mcpServerUrl> tools/call query_lakehouse_sql {`"sql`":`"SELECT COUNT(*) FROM dbo.defect_reports`"}   # must be refused, naming v_defect_reports`nPOST ... [dbo].[defect_reports]   # every quoting form, not just the bare one`nPOST ... dbo.hr_roster   # must be refused, naming v_hr_roster`nPOST ... dbo.v_defect_reports   # must ANSWER - a gate that refuses everything is an outage`nPOST ... dbo.v_hr_roster   # must ANSWER" `
+        -Expected 'both base tables refused with a message naming the governed view; both views answer with a row' `
+        -NoRetry `
+        -Test {
+        Test-RestrictedObjectRefusal -McpServerUrl $serverUrl -McpAuthToken $McpAuthToken `
+            -TimeoutSeconds $AwsQueryTimeoutSeconds
+    } | Out-Null
+
 
     return $context
 }

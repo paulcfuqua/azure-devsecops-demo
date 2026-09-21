@@ -523,3 +523,103 @@ about being unobservable, which is the only other acceptable state.
 
 The schema sweep in `failure-classes.Tests.ps1` exempts `referenceSql` **by name**, so
 closing this gap removes an exemption rather than quietly widening a filter.
+
+---
+
+## F230 — the tiered-access demo segregated objects, not people, and the agent could name either
+
+*2026-09-21. Found by asking "how soon can we test this", and testing it.*
+
+The sponsor's ask was **"standard accounts don't see 3PPI, admin accounts do."** What the
+estate does is **"the view hides 3PPI, the base table doesn't, and everyone can query both."**
+
+Measured on the rebuilt estate, as the tenant's **Global Administrator**:
+
+```
+dbo.defect_reports    900 rows    (all 139 THIRD_PARTY_PROPRIETARY included)
+dbo.v_defect_reports  761 rows
+IS_ROLEMEMBER('mls_data_privileged') = 0
+IS_ROLEMEMBER('mls_data_standard')   = 0
+SUSER_SNAME() = admin@...onmicrosoft.com
+```
+
+**Nobody is in either role, and nobody can be.** F218: `CREATE USER` is unsupported on the
+Fabric SQL analytics endpoint, so no principal can ever join one. Therefore:
+
+| statement | intended effect | actual effect |
+|---|---|---|
+| `DENY SELECT ON dbo.defect_reports TO [standard]` | standard tier cannot read the base table | binds to **no principal** |
+| `GRANT SELECT ... TO [privileged]` | admin tier can | binds to **no principal** |
+| `IS_ROLEMEMBER('privileged')` in the RLS predicate | 1 for admins | **0 for everyone** |
+
+The row filter on the **view** therefore works — and works identically for everyone. V5.6
+passing is real and was never in doubt; what it proves is that *the filter filters*, not that
+*a user is restricted*. Those are different claims and only one of them was ever being made.
+
+### The half that made it a live problem
+
+The agent's `query_lakehouse_sql` accepts any single SELECT. Its own header states the limit
+plainly — *"That stops writes. It does not stop reads."* — and nothing restricted **which
+object** a query could name. So "show me all the defect reports" returned third-party
+proprietary rows, and "what does everyone earn" returned `salary_usd`.
+
+`hr_roster` was worse than `defect_reports`: it had **no governed view at all**. Its entire
+protection was a column-level `DENY` against the role nobody can join.
+
+### Fixed as an application control, and that is a real limitation to say out loud
+
+Identity-based enforcement needs database principals, which needs a Fabric **Warehouse**, not
+a lakehouse SQL endpoint. That is not a six-day change. So the control now lives where it can
+actually bind:
+
+- **`v_hr_roster`**, the missing counterpart to `v_defect_reports`, projecting the roster
+  without `salary_usd`, `bonus_target_pct` or `performance_band`. A view needs no role
+  membership to be true.
+- **A restricted-object gate** in the agent's SQL tool: `defect_reports` and `hr_roster` are
+  refused, `v_defect_reports` and `v_hr_roster` are served, and the refusal **names the
+  governed alternative** — the caller is an LLM that retries, and a bare "no" makes it guess.
+- **V8.8** asserts this against the **deployed** tool, both directions. A gate that refuses
+  everything is an outage wearing a control's clothes, so the criterion requires the base
+  tables refused *and* the views answering, in the same run.
+
+**The honest claim is "the agent cannot reach it", not "the data is protected".** Anyone with
+direct lakehouse access still reads the base table. Saying the stronger sentence over this
+implementation would be the exact overstatement this register exists to catch.
+
+### A denylist, deliberately, with its weakness closed somewhere else
+
+Enforcement matches restricted names as **whole identifiers** against SQL whose comments and
+string literals have been scrubbed. That is sound here in a way a denylist usually is not: a
+statement cannot read a table without naming it, and every route to an unnamed read is
+already refused — `EXEC` and dynamic SQL by the verb list, a second statement by the
+single-statement rule, `OPENROWSET`/`OPENQUERY` by the T-SQL extras.
+
+Whole-identifier matching is also what keeps `v_defect_reports` available while
+`defect_reports` is refused: there is no word boundary between `_` and `d`.
+
+A denylist's real weakness — a new sensitive table permitted by default — is closed at
+**build** time instead: a test asserts every table in `schema-manifest.json` is explicitly
+either restricted or permitted, so adding one fails the suite until somebody classifies it.
+
+### The bypass the tests found, which is the part worth remembering
+
+The first version of the gate ran against `scrubSql`'s output. That function replaces every
+quoted identifier form — `[brackets]`, `"quotes"`, `` `backticks` `` — with a neutral
+placeholder, which is **correct** for the checks it was written for (a column named
+`[delete]` must not read as the DELETE verb) and **exactly wrong** for matching object names:
+
+```
+SELECT * FROM [dbo].[defect_reports]   ->   SELECT * FROM  id  .  id
+```
+
+The gate saw nothing and allowed it. **An agent writing T-SQL emits bracketed identifiers as
+a matter of course**, so this was not an exotic evasion — it was the likely shape of an
+ordinary query, and the control would have shipped with a bypass its own author would have
+triggered on the first live demo.
+
+Caught by the bypass tests, which is what they are for, and fixed with a second scrub mode
+that unwraps identifiers rather than erasing them. Every quoting form is now a test case.
+
+The general lesson is not about SQL: **a check that reuses a transform built for a different
+question inherits that question's assumptions.** The scrub was right; it was right about
+something else.
