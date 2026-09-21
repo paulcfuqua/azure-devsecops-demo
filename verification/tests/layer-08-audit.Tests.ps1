@@ -77,20 +77,34 @@ BeforeAll {
             $latency = if ($SlowLatency -gt 0 -and $i -eq 10) { $SlowLatency } else { 2.5 }
             $answer = if ($pass) { 'Saturday has the most launches (309).' } else { 'Tuesday has the most launches (77).' }
             if ($GeneratedUi -and $i -eq 1) { $answer = '<div class="chart">Saturday</div>' }
+            # THE FIELD NAMES ARE agent-eval.ts's, NOT THE AUDIT'S OLD GUESS.
+            #
+            # This fixture used to emit 'answer' (a string), 'card' (one object) and rely on
+            # 'responseText'. The eval emits 'responses' and 'cards', both ARRAYS, and always
+            # has. Fixture and audit agreed with each other and both disagreed with the real
+            # artifact, so nineteen tests stayed green over a criterion that could not work
+            # against anything the estate actually produces - a fixture that supplies the
+            # answer it is checking is a mirror, not a test (CLAUDE.md).
+            #
+            # 'referenceSql' is deliberately KEPT even though the real eval does not emit it:
+            # V8.2's comparison logic is worth exercising, and the sweep in
+            # failure-classes.Tests.ps1 records that gap explicitly as a named exemption, so
+            # this fixture cannot be mistaken for evidence that the field exists upstream.
             $questions += [pscustomobject]@{
                 id             = "q$i"
                 question       = 'Which day of the week has the most launches?'
                 pass           = $pass
+                unobservable   = $false
                 latencySeconds = $latency
-                answer         = $answer
+                responses      = @($answer)
                 referenceSql   = 'SELECT TOP 1 weekday, launches FROM v_launch_weekday ORDER BY launches DESC'
                 toolCalls      = @([pscustomobject]@{ name = $(if ($RogueTool -and $i -eq 1) { $RogueTool } else { 'query_lakehouse_sql' }) })
-                card           = [pscustomobject]@{
-                    type    = 'AdaptiveCard'
-                    version = '1.5'
-                    body    = @([pscustomobject]@{ type = 'TextBlock'; text = 'Saturday' })
-                    actions = @([pscustomobject]@{ type = 'Action.Submit'; title = 'Details' })
-                }
+                cards          = @([pscustomobject]@{
+                        type    = 'AdaptiveCard'
+                        version = '1.5'
+                        body    = @([pscustomobject]@{ type = 'TextBlock'; text = 'Saturday' })
+                        actions = @([pscustomobject]@{ type = 'Action.Submit'; title = 'Details' })
+                    })
             }
         }
         $document = [ordered]@{
@@ -312,6 +326,56 @@ Describe 'layer-08-audit' {
             $row = Get-Row -Context $context -Id 'V8.4'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*generated UI code*'
+        }
+
+        It 'V8.4 distinguishes an artifact it could not read from an agent that sent no card' {
+            # THE WHOLE POINT OF THE FIX. Before it, both states produced the identical
+            # verdict "no Adaptive Card payload was recorded for any question" - because the
+            # audit read field names the eval has never written, so it saw nothing either
+            # way. One of these is a defect in the agent; the other is a defect in the
+            # check, and a criterion that cannot tell them apart sends a reader to the wrong
+            # system (F105).
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.cards = @(); $q.responses = @() }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+            $row.Observed | Should -Not -BeLike '*no Adaptive Card payload in any*' `
+                -Because 'nothing was read, so nothing follows about what the agent sent'
+        }
+
+        It 'V8.4 reports a real missing card when the responses WERE readable' {
+            # The estate's actual 2026-09-21 state: ten questions, one response each, zero
+            # cards. The agent answered in prose. That is a genuine finding and must read as
+            # one, naming how many responses were successfully examined so the verdict
+            # carries its own evidence of having looked.
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.cards = @() }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*no Adaptive Card payload in any of 10 question(s)*'
+            $row.Observed | Should -BeLike '*over 10 response(s) that WERE recorded*'
+            $row.Observed | Should -Not -BeLike '*UNOBSERVABLE*'
+        }
+
+        It 'V8.2 records UNOBSERVABLE when no question carries a reference query' {
+            # agent-eval.ts does not serialise referenceSql, so this is the shape of every
+            # REAL artifact. Failing the agent for the harness's missing input would be
+            # blaming the estate for something the eval never produced.
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.referenceSql = '' }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.2'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*referenceSql*'
         }
 
         It 'fails V8.5 when p95 latency breaches the 20 s budget' {

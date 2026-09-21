@@ -423,6 +423,36 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    # CONSUMED BY THE CHILD AUDITS, AND THE ONLY CHANNEL THAT REACHES THEM.
+    #
+    # layer-11-audit.ps1 launches layer-01..10-audit.ps1 in their own pwsh processes with
+    # only -ReportRoot/-NoRetry. Every input they need therefore has to arrive through the
+    # inherited ENVIRONMENT; there is no other route across a process boundary.
+    #
+    # infra-down.yml's verify job has carried exactly this block, with exactly this
+    # reasoning written above it, since F170. It never reached this job - so on the
+    # 2026-09-21 rebuild every child audit exited 2 ("could not start: Required input
+    # 'Repository'/'SubscriptionId'/'Domain'/'Organization' was not supplied") and V11.2 and
+    # V11.3 reported the rebuild as failed. The estate was fine: L1-L7's OWN audits had all
+    # passed minutes earlier in the same run, and the identical V11.2 had passed in the down
+    # phase two hours before, because that job could see these values and this one could not.
+    #
+    # That is why V11.3 "has never reported at all" - not bad luck, a structural inability
+    # to start. A fix applied to one of two callers is half a fix (F124's class: a value
+    # that exists, is spelled correctly, and cannot be SEEN by the thing that reads it).
+    #
+    # FABRIC_CAPACITY_ID is the one addition over the down block: the down phase re-runs
+    # only L3/L4, the up phase re-runs L1-L10, and L5's audit requires it.
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
+      MLS_REPOSITORY: ${{ github.repository }}
+      MLS_TENANT_DOMAIN: ${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
+      TENANT_DOMAIN: ${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
+      MLS_VERIFIER_APP_ID: ${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
+      MLS_ENTRA_MANIFEST: infra/entra/manifest.json
+      MLS_LABEL_GUID_PATH: verification/reports/label-guids.json
+      MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
     steps:
       - uses: actions/checkout@v7
       - id: names
@@ -434,6 +464,52 @@ jobs:
           client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # V11.3 re-runs L4, whose criteria need a read-only Security & Compliance session as
+      # mls-verifier. S&C PowerShell has no federated path, so the X.509 certificate is the
+      # only unattended option (CLAUDE.md rule 5). Decided HERE rather than in preflight
+      # because this job declares `environment: verify` and is the only one that can see
+      # the secret at all (F170). Absent, L4 records SKIP for the S&C criteria and still
+      # STARTS - which is the difference this whole change is about.
+      - id: tenant
+        uses: ./.github/actions/demo-env-guard
+        with:
+          client-id: ${{ vars.AZURE_VERIFIER_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          additional: |
+            MLS_TENANT_DOMAIN=${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
+            MLS_VERIFIER_APP_ID=${{ vars.MLS_VERIFIER_APP_ID || vars.AZURE_VERIFIER_CLIENT_ID }}
+            MLS_VERIFIER_CERT_BASE64=${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
+          layer: post-up tenant-object audits (V11.2/V11.3 re-run L3 + L4)
+
+      - name: Install ExchangeOnlineManagement (pinned)
+        if: ${{ steps.tenant.outputs.configured == 'true' }}
+        uses: ./.github/actions/install-exo
+
+      # A FILE, NOT THE CERTIFICATE STORE: -CertificateThumbprint is a Windows-only dynamic
+      # parameter of Connect-IPPSSession, so on ubuntu-latest an audit handed a thumbprint
+      # dies at parameter binding having never opened a connection (F170/F175/F176).
+      # -CertificateFilePath is added on every platform. The PFX stays in RUNNER_TEMP until
+      # the child audit has read it and is removed below whatever the verdict.
+      - name: Stage the mls-verifier certificate for the child L4 audit
+        id: cert
+        if: ${{ steps.tenant.outputs.configured == 'true' }}
+        shell: pwsh
+        env:
+          MLS_VERIFIER_CERT_BASE64: ${{ secrets.MLS_VERIFIER_CERT_BASE64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'mls-verifier.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:MLS_VERIFIER_CERT_BASE64))
+          "MLS_VERIFIER_CERT_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Staged the mls-verifier PFX at $pfxPath ($((Get-Item $pfxPath).Length) bytes)."
+
+      - name: Tenant-object audits unavailable
+        if: ${{ steps.tenant.outputs.configured != 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::warning title=V11.2/V11.3 will record L4 as unobservable::MLS_TENANT_DOMAIN and/or the mls-verifier Security & Compliance certificate are not configured, so L4's S&C criteria cannot run. The child audit still STARTS and records SKIP with that reason - it does not pass, and it is not reported as a failed layer."
 
       - name: Stamp the completion instant
         id: done
@@ -481,6 +557,13 @@ jobs:
             ${{ steps.children.outputs.layers }}
             ${{ inputs.only_criterion && '-OnlyCriterion' || '' }}
             ${{ inputs.only_criterion }}
+
+      - name: Remove the staged certificate
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'mls-verifier.pfx'
+          if (Test-Path -LiteralPath $pfxPath) { Remove-Item -LiteralPath $pfxPath -Force }
 
       - name: Upload audit report
         if: ${{ always() && steps.audit.outputs.ran == 'true' }}

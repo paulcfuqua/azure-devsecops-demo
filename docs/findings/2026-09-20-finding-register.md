@@ -353,3 +353,173 @@ public and invented GUIDs that documentation legitimately quotes. The specific s
 right instrument; it simply has to be given its inputs.
 
 `FABRIC_CAPACITY_ID` was checked at the same time and is not committed anywhere.
+
+---
+
+## F227 — the rebuild proof reported a working estate as broken, because its child audits could not start
+
+*2026-09-21, the first full teardown/rebuild cycle since 09-03.*
+
+V11.2 and V11.3 both FAILed the up phase. The evidence they carried:
+
+```
+L1=FAIL(2) L2=FAIL(2) L3=FAIL(2) L4=FAIL(2) L5=FAIL(2)
+L6=FAIL(2) L7=FAIL(2) L8=PASS L9=FAIL(2) L10=FAIL(2)
+  L1: layer-01-audit could not start: Required input 'Repository' was not supplied.
+  L2: layer-02-audit could not start: Required input 'SubscriptionId' was not supplied.
+  L3: layer-03-audit could not start: Required input 'Domain' was not supplied.
+  L4: layer-04-audit could not start: Required input 'Organization' was not supplied.
+```
+
+**Exit 2 is `COULD NOT START`.** Nothing was evaluated. The estate was never looked at. And
+the estate was *fine*: L2, L3, L4, L5, L6 and L7's own audits had all passed, green, minutes
+earlier in the same workflow run — L7 at 7 of 7.
+
+### Two defects, stacked
+
+**First, the inputs could not reach the child audits.** `layer-11-audit.ps1` launches
+`layer-01..10-audit.ps1` in their own `pwsh` processes with only `-ReportRoot`/`-NoRetry`.
+Every other input has to arrive through the inherited **environment** — there is no other
+channel across a process boundary. `infra-up.yml`'s `layer-11-up` job declared no `env:`
+block at all.
+
+`infra-down.yml`'s verify job has carried exactly the needed block since F170, with exactly
+this reasoning written in a comment above it:
+
+> *Consumed by the CHILD L3/L4 audits, which layer-11-audit.ps1 launches in their own pwsh
+> processes with only -ReportRoot/-NoRetry. They inherit this environment, and every input
+> they need has an environment-variable fallback — which is the only channel available
+> across that boundary.*
+
+Somebody worked this out precisely, for one of the two callers, and it never reached the
+other. **A fix applied to one of two call sites is half a fix** — the same shape as F145,
+and F124's class in the medium of process environment: a value that exists, is spelled
+correctly, and cannot be SEEN by the thing that reads it.
+
+The proof is in the same cycle: the *identical* V11.2 **PASSED** in the down phase two hours
+earlier, from the job that has the block.
+
+**Second, and worse: a could-not-start was reported as a failed layer.**
+`Invoke-LayerAuditSet` computed `Passed = ($run.ExitCode -eq 0)` and everything else was a
+failure. But the audits emit three distinct non-zero codes — `2` could not start, `3`
+filtered diagnostic, anything else a genuine criterion failure — and the layer-audit action's
+own `case` statement already distinguishes them. Collapsing them made "I was never given the
+tenant domain" indistinguishable from "the teardown deleted your Entra objects".
+
+V11.2's detail text on failure reads: *"Any regression here means down.ps1 crossed the
+tenant-object line: stop, do not run up.ps1, escalate."* A missing environment variable was
+therefore dressed as a G3-boundary violation and a G4 event.
+
+### This is F102/F103/F105 with the harness in the API's chair
+
+Those three were audits reporting a control **absent** when they could not observe it. This
+is the rebuild proof reporting a layer **broken** when it could not run one. Identical
+substitution — a non-zero exit stood in for a verdict, exactly as an empty API response stood
+in for absence — and it had been sitting inside the criterion whose entire job is to be the
+last word on whether a rebuild worked.
+
+It also explains the long-standing register note that **V11.3 "has never reported at all"**.
+Not bad luck: a structural inability to start, on every run it has ever had.
+
+### Fixed, in both halves
+
+- `layer-11-up` now carries the env block (plus `FABRIC_CAPACITY_ID`, which the down phase
+  does not need because it re-runs only L3/L4 while the up phase re-runs L1–L10), the S&C
+  certificate staging, and the cleanup step.
+- `Invoke-LayerAuditSet` now returns `Blind` for exit 2 and 3, and V11.2/V11.3 report
+  **UNOBSERVABLE, naming the layers and codes**. The env fix removes today's cause; this
+  removes the class, because the next missing input will be a different one and it must not
+  be able to masquerade as a broken layer.
+
+**It stays RED, and that is deliberate.** The first version of this fix recorded the blind
+case as SKIP. That was wrong in the other direction: SKIP does not fail a run, so the
+workflow would have printed *"PASS — no criterion FAILed"* over a rebuild proof that proved
+nothing — the symmetric error CLAUDE.md names, *"an auditor that cannot see a control must
+not be able to report it as PRESENT either"*, and the more dangerous half, because nobody
+investigates green. The blind case is therefore a FAIL whose observed text begins
+`UNOBSERVABLE:` and names the cause.
+
+What changed is not the colour but the **claim**. Before, a missing environment variable
+read as *"down.ps1 crossed the tenant-object line: stop, do not run up.ps1, escalate."* Now
+it reads as *"these layers could not be examined; check the job's `env:` block before
+suspecting the estate."* Same red, opposite instruction. `-SkipChildAudit` remains a SKIP,
+because a caller that deliberately did not ask is the genuine *not asked* case — the same
+distinction V5.6 draws between "no endpoint was supplied" and "an endpoint was supplied and
+could not be read".
+
+---
+
+## F228 — a criterion that had never read a single response, and was right by accident
+
+*2026-09-21, found while investigating V8.4's failure on the rebuild.*
+
+`layer-08-audit.ps1` read three fields off each question in the agent-eval artifact:
+`card`, `answer`, `responseText`. `apps/mcp-tools/evals/agent-eval.ts` writes `cards` and
+`responses` — **both arrays** — and has never written any of the three.
+
+**The card half was wrong and looked right.** `$card` was always `$null`, `$cardCount` always
+`0`, and V8.4 always returned *"no Adaptive Card payload was recorded for any question"*. On
+the day it was found that verdict was **factually correct** — the artifact really did carry
+zero cards across all ten questions — and it was correct **by accident**. The identical
+branch fires over ten valid cards.
+
+**The other half is the serious one.** V8.4's second assertion is that no HTML, JS or JSX
+comes back from the agent. It built its input as
+`"$(...-Name 'answer')$(...-Name 'responseText')"` — two fields that do not exist,
+concatenating to the empty string — and ran `Test-MlsGeneratedUi` over that. A
+security-relevant check had examined **nothing, on every run, for the life of the project**,
+while reporting PASS whenever a card happened to be present.
+
+V8.2 read the same non-existent fields, and additionally requires a `referenceSql` per
+question that the eval has never emitted at all (see F229).
+
+**The fixture agreed with the audit, which is why nothing caught it.**
+`verification/tests/layer-08-audit.Tests.ps1` built its questions with `answer`, `card` and
+`referenceSql` — the schema the audit *believed in*, not the one the eval produces. Fixture
+and audit agreed with each other and both disagreed with reality, so nineteen tests stayed
+green over a criterion that could not work against anything the estate actually emits. That
+is precisely the mirror CLAUDE.md forbids: *a fixture that re-wraps a return value is not a
+test.*
+
+**Closed as a check.** `failure-classes.Tests.ps1` now parses the keys of the
+`results.push({ ... })` literal in `agent-eval.ts` — in both JavaScript spellings, since
+`pass,` is ES6 shorthand and a parser that saw only `name:` invented a defect on its first
+run — and compares them against every `Get-MlsProperty -InputObject $question -Name 'x'` in
+the L8 audit. Run against the pre-fix tree it names all three orphans: `answer, card,
+responseText`. The fixture now emits the real schema, and three new tests pin the
+distinction the fix exists for: an artifact that could not be READ reports UNOBSERVABLE, an
+artifact whose responses were readable and carried no card reports the missing card and says
+how many responses it examined.
+
+---
+
+## F229 — V8.2 asks for evidence the eval cannot produce, and must not fake it
+
+*2026-09-21.*
+
+V8.2's premise is independence: the Verifier re-runs each question's reference query against
+the lakehouse **itself** and compares, because *"accepting the artifact's own score would be
+trusting the claim the criterion exists to check."* It reads `referenceSql` off each question
+to do it.
+
+No artifact has ever carried `referenceSql`. The golden questions in
+`apps/mcp-tools/evals/questions.ts` define their expectations as
+`expected: () => Promise<ExpectedFact[]>` — a **function** that queries the lakehouse inside
+the eval process. There is no query string to hand on. The artifact carries the *computed*
+`expectedFacts` and `missingFacts` instead.
+
+**The tempting fix is the wrong one.** Reading `expectedFacts` would make V8.2 compare the
+eval's answer against the eval's answer — a mirror, and the exact thing the criterion was
+written to avoid. It would also look like a fix and report green.
+
+So V8.2 now records **SKIP/UNOBSERVABLE** naming the missing input, rather than failing the
+agent for the harness's gap or passing on the eval's own score.
+
+**The real remedy is a decision, not a patch:** have the eval serialise each question's
+reference SQL into the artifact so the Verifier can re-run it independently. That changes the
+eval's question schema and changes what the demo claims about independent verification, so it
+is recorded here for the sponsor rather than decided unilaterally. Until then V8.2 is honest
+about being unobservable, which is the only other acceptable state.
+
+The schema sweep in `failure-classes.Tests.ps1` exempts `referenceSql` **by name**, so
+closing this gap removes an exemption rather than quietly widening a filter.

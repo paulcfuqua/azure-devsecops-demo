@@ -363,14 +363,46 @@ function Test-EvalSuite {
     if ($questions.Count -eq 0) {
         return New-MlsCheckResult -Passed $false -Observed 'the eval artifact carries no questions' -Final
     }
+    # NO ARTIFACT CARRIES referenceSql, AND NONE EVER HAS. agent-eval.ts writes id,
+    # question, pass, unobservable, latencySeconds, factScope, expectedFacts, missingFacts,
+    # toolCalls, cards, responses, error - and nothing else. The golden questions compute
+    # their expectations with an `expected: () => Promise<ExpectedFact[]>` FUNCTION that
+    # queries the lakehouse inside the eval process; there is no SQL string to hand on.
+    #
+    # So this criterion's premise - that the Verifier re-runs the reference query ITSELF and
+    # compares - has never had an input. Every question hit the branch below and V8.2 could
+    # only ever have reported failure once it got as far as looking.
+    #
+    # IT IS NOT FIXED BY READING expectedFacts INSTEAD. Those are the eval's own computed
+    # answers; checking the eval's answer against the eval's answer is a mirror, not a test
+    # (CLAUDE.md: "no test that supplies the answer it is checking"). V8.2 exists precisely
+    # because "accepting the artifact's own score would be trusting the claim the criterion
+    # exists to check".
+    #
+    # The real remedy is for the eval to serialise each question's reference SQL into the
+    # artifact so the Verifier can re-run it against the lakehouse independently. That is a
+    # change to the eval's question schema and to what the demo claims, so it is recorded as
+    # a finding rather than decided here. Until then this reports UNOBSERVABLE - naming the
+    # missing input - instead of failing the agent for the harness's gap.
+    $withReference = @($questions | Where-Object {
+            -not [string]::IsNullOrWhiteSpace("$(Get-MlsProperty -InputObject $_ -Name 'referenceSql')")
+        })
+    if ($withReference.Count -eq 0) {
+        return New-MlsCheckResult -Status 'SKIP' `
+            -Observed "UNOBSERVABLE: none of $($questions.Count) question(s) carries a referenceSql for the Verifier to re-derive from" `
+            -Detail 'agent-eval.ts does not serialise the reference query; the golden questions compute expectations with a function that runs inside the eval process. Re-deriving from the artifact''s own expectedFacts would check the eval against itself, so this records SKIP rather than passing on the eval''s score or failing the agent for a harness gap.'
+    }
+
     $passing = 0
     $problem = [System.Collections.Generic.List[string]]::new()
     foreach ($question in $questions) {
         $id = "$(Get-MlsProperty -InputObject $question -Name 'id')"
         $claimed = [bool](Get-MlsProperty -InputObject $question -Name 'pass')
-        $answer = "$(Get-MlsProperty -InputObject $question -Name 'answer')$(Get-MlsProperty -InputObject $question -Name 'responseText')"
-        $card = Get-MlsProperty -InputObject $question -Name 'card'
-        if ($card) { $answer += ($card | ConvertTo-Json -Depth 12 -Compress) }
+        # The fields the eval actually writes: 'responses' and 'cards', both arrays.
+        $answer = (@(Get-MlsProperty -InputObject $question -Name 'responses') | ForEach-Object { "$_" }) -join ' '
+        foreach ($card in @(Get-MlsProperty -InputObject $question -Name 'cards')) {
+            if ($null -ne $card) { $answer += ($card | ConvertTo-Json -Depth 12 -Compress) }
+        }
         $referenceSql = "$(Get-MlsProperty -InputObject $question -Name 'referenceSql')"
         if ([string]::IsNullOrWhiteSpace($referenceSql)) {
             $problem.Add("$id has no referenceSql for the Verifier to re-derive from")
@@ -500,26 +532,57 @@ function Test-AdaptiveCardAnswer {
         return New-MlsCheckResult -Status 'SKIP' -Observed 'no eval artifact' `
             -Detail 'Card payloads are recorded by the eval run against the deployed agent; none exists yet. The card BUILDERS are already unit-tested against the pinned 1.5 schema in apps/mcp-tools (L08.md Deferred validation).'
     }
+    # THE FIELD NAMES ARE THE ONES THE EVAL ACTUALLY WRITES. This read 'card' (singular)
+    # and 'answer'/'responseText'; agent-eval.ts emits 'cards' (an ARRAY) and 'responses'
+    # (an array). Neither name existed in the artifact, so:
+    #
+    #   * $card was ALWAYS $null, $cardCount was always 0, and V8.4 always returned
+    #     "no Adaptive Card payload was recorded for any question" - whatever the agent had
+    #     actually replied. On 2026-09-21 that verdict was factually right (the artifact
+    #     really did carry zero cards) and it was right BY ACCIDENT: the check would have
+    #     said exactly the same thing over ten valid cards.
+    #   * $response was ALWAYS the empty string, so Test-MlsGeneratedUi - the half of this
+    #     criterion that asserts no HTML/JS/JSX comes back from the agent - had never
+    #     examined a single response in the life of the project. A security-relevant check
+    #     scanning an empty string passes everything.
+    #
+    # Two readers of one artifact and nothing compared them (F145's class). The sweep in
+    # verification/tests/failure-classes.Tests.ps1 now does.
     $questions = @(Get-MlsProperty -InputObject $Artifact -Name 'questions')
     $cardCount = 0
+    $responseCount = 0
     $problem = [System.Collections.Generic.List[string]]::new()
     foreach ($question in $questions) {
         $id = "$(Get-MlsProperty -InputObject $question -Name 'id')"
-        $card = Get-MlsProperty -InputObject $question -Name 'card'
-        if ($null -ne $card) {
+        foreach ($card in @(Get-MlsProperty -InputObject $question -Name 'cards')) {
+            if ($null -eq $card) { continue }
             $cardCount++
             $validation = Test-MlsAdaptiveCard -Card $card -Version $Version
             if (-not $validation.Valid) { $problem.Add("$id card: $($validation.Problem -join '; ')") }
         }
-        $response = "$(Get-MlsProperty -InputObject $question -Name 'answer')$(Get-MlsProperty -InputObject $question -Name 'responseText')"
-        if (Test-MlsGeneratedUi -Text $response) { $problem.Add("$id response contains generated UI code") }
+        foreach ($response in @(Get-MlsProperty -InputObject $question -Name 'responses')) {
+            $text = "$response"
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            $responseCount++
+            if (Test-MlsGeneratedUi -Text $text) { $problem.Add("$id response contains generated UI code") }
+        }
+    }
+
+    # CANNOT SEE vs SAW NOTHING. An artifact carrying no responses either means the eval
+    # never reached the agent or means its schema moved again; in both cases this criterion
+    # examined nothing and must not return a verdict on the agent (F105).
+    if ($questions.Count -gt 0 -and $responseCount -eq 0 -and $cardCount -eq 0) {
+        return New-MlsCheckResult -Passed $false `
+            -Observed "UNOBSERVABLE: $($questions.Count) question(s) in the artifact, none carrying a 'cards' or 'responses' field with content" -Final `
+            -Detail 'This criterion reads the fields agent-eval.ts writes: "cards" and "responses". An artifact with neither is one this check could not read - not evidence about the agent. Compare the artifact schema against what this function reads before concluding anything about the deployment.'
     }
     if ($questions.Count -gt 0 -and $cardCount -eq 0) {
-        return New-MlsCheckResult -Passed $false -Observed 'no Adaptive Card payload was recorded for any question' -Final `
-            -Detail 'Every visual answer must be a card; an eval artifact with none means the surface was not exercised or cards were not captured.'
+        return New-MlsCheckResult -Passed $false `
+            -Observed "no Adaptive Card payload in any of $($questions.Count) question(s), over $responseCount response(s) that WERE recorded" -Final `
+            -Detail 'The responses were readable and carried no card, so the surface was exercised and the agent answered in prose. Every visual answer must be a card: check whether the deployed agent is on the tools-only path, which returns text, rather than the card-building path.'
     }
     if ($problem.Count -eq 0) {
-        return New-MlsCheckResult -Passed $true -Observed "$cardCount card(s) valid against the pinned $Version profile; no HTML/JS/JSX in any response"
+        return New-MlsCheckResult -Passed $true -Observed "$cardCount card(s) valid against the pinned $Version profile; no HTML/JS/JSX across $responseCount response(s)"
     }
     return New-MlsCheckResult -Passed $false -Observed ($problem -join ' | ') -Final `
         -Detail 'The repo pins schema 1.5 and Action.Submit so one payload renders identically in the Web Chat embed and in Teams (L08.md V8.4).'
