@@ -179,7 +179,7 @@ function Invoke-Main {
     }
     else {
         $lakehouse = New-FabricLakehouse -Token $Token -WorkspaceId $workspace.id -Name $LakehouseName `
-            -Description 'MLS operations lakehouse - 10 Delta tables seeded by data/generators' -WhatIf:$WhatIfPreference
+            -Description 'MLS operations lakehouse - 12 Delta tables seeded by data/generators' -WhatIf:$WhatIfPreference
         if ($lakehouse) {
             Write-Status "Created lakehouse '$LakehouseName'." -Color Green
         }
