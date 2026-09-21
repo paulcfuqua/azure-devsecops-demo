@@ -1,6 +1,6 @@
 # Access-control evidence — Meridian lakehouse
 
-**Collected:** 2026-09-20T18:20:02Z  
+**Collected:** 2026-09-21T01:49:13Z  
 **Database:** `mls_operations` on the Fabric lakehouse SQL analytics endpoint  
 **Read by:** `admin@paulcfuquahotmail.onmicrosoft.com` — privileged role: 0, standard role: 0
 
