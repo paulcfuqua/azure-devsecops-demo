@@ -52,6 +52,24 @@ export interface GoldenQuestion {
    *                 *containing* the winner, which proves nothing about rank.
    */
   factScope: "payload" | "first-row";
+  /**
+   * T-SQL the VERIFIER re-runs against the Fabric lakehouse, independently of this
+   * process, to re-derive the answer and compare (L08 V8.2, F229).
+   *
+   * NOT the same thing as `call.arguments.sql`, and not the same thing as `expected`.
+   * `expected` queries a LOCAL SQLite snapshot in SQLite dialect, in this process. The
+   * agent answers from FABRIC in T-SQL. V8.2's whole premise is that accepting the
+   * artifact's own score would be trusting the claim the criterion exists to check, so
+   * the reference query has to be written for the store the Verifier actually queries.
+   *
+   * Every one of these was EXECUTED against the live Fabric SQL analytics endpoint before
+   * being committed. That is not ceremony: `ROUND(..., 1)` alone returned
+   * `93.600000000000`, and V8.2 looks for the value as a substring of an answer that says
+   * "93.6" - so a query that was arithmetically right would have failed a correct agent.
+   *
+   * Row 0 of the result is what V8.2 compares, every non-empty column of it.
+   */
+  referenceSql: string;
 }
 
 async function scalar(sql: string): Promise<string | number> {
@@ -73,6 +91,8 @@ const WEEKDAY_SQL = `SELECT CASE strftime('%w', actual_date)
 export const goldenQuestions: GoldenQuestion[] = [
   {
     id: "day-of-week",
+    referenceSql:
+      "SELECT TOP 1 DATENAME(weekday, actual_date) AS weekday, COUNT(*) AS launches FROM dbo.launches GROUP BY DATENAME(weekday, actual_date) ORDER BY COUNT(*) DESC",
     factScope: "first-row",
     question: "Which day of the week has the most launches?",
     call: { tool: "query_lakehouse_sql", arguments: { sql: WEEKDAY_SQL } },
@@ -94,6 +114,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "total-launches",
+    referenceSql:
+      "SELECT COUNT(launch_id) AS total_launches FROM dbo.launches",
     factScope: "payload",
     question: "How many launches are in the lakehouse?",
     call: {
@@ -104,6 +126,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "success-rate",
+    referenceSql:
+      "SELECT CAST(ROUND(100.0 * SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) / COUNT(*), 1) AS DECIMAL(5,1)) AS success_rate_pct FROM dbo.launches",
     factScope: "payload",
     question: "What is the overall launch success rate?",
     call: {
@@ -125,6 +149,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "busiest-vehicle",
+    referenceSql:
+      "SELECT TOP 1 v.name FROM dbo.launches l JOIN dbo.vehicles v ON v.vehicle_id = l.vehicle_id GROUP BY v.name ORDER BY COUNT(*) DESC, v.name ASC",
     factScope: "first-row",
     question: "Which vehicle has flown the most launches?",
     call: {
@@ -145,6 +171,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "busiest-pad",
+    referenceSql:
+      "SELECT TOP 1 p.name FROM dbo.launches l JOIN dbo.pads p ON p.pad_id = l.pad_id GROUP BY p.name ORDER BY COUNT(*) DESC, p.name ASC",
     factScope: "first-row",
     question: "Which pad hosted the most launches?",
     call: {
@@ -165,6 +193,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "scrub-category",
+    referenceSql:
+      "SELECT TOP 1 category FROM dbo.scrubs GROUP BY category ORDER BY COUNT(scrub_id) DESC, category ASC",
     factScope: "first-row",
     question: "What is the most common scrub category?",
     call: {
@@ -185,6 +215,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "scrubbed-launches",
+    referenceSql:
+      "SELECT COUNT(DISTINCT launch_id) AS scrubbed_launches FROM dbo.scrubs",
     factScope: "payload",
     question: "How many launches were scrubbed at least once?",
     call: {
@@ -199,6 +231,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "top-cost-center",
+    referenceSql:
+      "SELECT TOP 1 cost_center FROM dbo.cost_daily GROUP BY cost_center ORDER BY SUM(amount_usd) DESC, cost_center ASC",
     factScope: "first-row",
     question: "Which cost center has the highest total spend?",
     call: {
@@ -219,6 +253,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "open-findings",
+    referenceSql:
+      "SELECT COUNT(*) AS open_findings FROM dbo.findings_history WHERE status = 'open'",
     factScope: "payload",
     question: "How many security findings are currently open?",
     call: {
@@ -234,6 +270,8 @@ export const goldenQuestions: GoldenQuestion[] = [
   },
   {
     id: "worst-supplier",
+    referenceSql:
+      "SELECT TOP 1 name FROM dbo.suppliers WHERE on_time_pct = (SELECT MIN(on_time_pct) FROM dbo.suppliers) ORDER BY name ASC",
     factScope: "first-row",
     question: "Which supplier has the lowest on-time delivery percentage?",
     call: {

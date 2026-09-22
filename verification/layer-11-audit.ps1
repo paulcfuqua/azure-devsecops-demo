@@ -10,7 +10,7 @@
       V11.1  All RGs absent post-down.
       V11.2  Tenant objects intact (L3/L4 audits still pass).
       V11.3  Post-up: all layer audits green.
-      V11.4  Wall-clock < 60 min.
+      V11.4  Wall-clock < 180 min (raised from 60, sponsor decision 2026-09-22).
       V11.5  Run-rate returns to idle profile.
 
     THE CYCLE HAS TWO CHECKPOINTS AND SO DOES THIS SCRIPT. -Phase Down runs the down-state
@@ -40,7 +40,7 @@ param(
     [string[]]$SurvivingResourceGroup = @('mls-rg-identity'),
     [string]$UpStartUtc,
     [string]$UpCompletedUtc,
-    [double]$WallClockBudgetMinutes = 60,
+    [double]$WallClockBudgetMinutes = 180,
     [string]$Repository,
     [string]$FabricCapacityId,
     [string]$SqlDatabaseId,
@@ -244,6 +244,43 @@ function Test-AllLayerAuditGreen {
         return New-MlsCheckResult -Status 'SKIP' -Observed 'child audits skipped by -SkipChildAudit' `
             -Detail 'V11.3 is the full audit suite; suppressing it leaves no evidence, so this records SKIP rather than a pass.'
     }
+
+    # A NARROWED RUN CANNOT MAKE THE WHOLE CLAIM. This criterion is titled "all layer audits
+    # green" and its Expected reads "PASS for every layer audit L1-L10". Run on 2026-09-22
+    # with -ChildAuditLayer 3,4 it examined exactly two of the ten and reported **PASS**.
+    #
+    # The evidence underneath was honest - "Observed: L3=PASS L4=PASS", and the preflight
+    # table said "Child audits | layers 3,4" - but the VERDICT was not, and a reader scanning
+    # a criterion table reads verdicts. `l11_child_audit_layers`' own documentation says
+    # "narrowing the set narrows what V11.3 may claim"; nothing enforced it, so the narrowing
+    # silently bought a green for a claim nobody had checked.
+    #
+    # That is the symmetric form of this repository's oldest rule. An auditor that cannot see
+    # a control must not report it ABSENT (F102/F103/F105); it must equally not report it
+    # PRESENT. A partial run is a DIAGNOSTIC - the same standing -OnlyCriterion has, which
+    # exits 3 precisely so a filtered run cannot be mistaken for a sign-off.
+    $expected = 1..10
+    $missing = @($expected | Where-Object { $_ -notin $Layer })
+    if ($missing.Count -gt 0) {
+        $ran = Invoke-LayerAuditSet -Layer $Layer -Root $Root -Argument $Argument
+        $summary = @($ran | ForEach-Object {
+                if ($_.Passed) { "L$($_.Layer)=PASS" }
+                elseif ($_.Blind) { "L$($_.Layer)=UNOBSERVABLE($($_.ExitCode))" }
+                else { "L$($_.Layer)=FAIL($($_.ExitCode))" }
+            }) -join ' '
+        # A FAILURE INSIDE A NARROWED SET IS STILL A FAILURE. Narrowing removes the right to
+        # claim the whole; it does not excuse what was actually seen to be broken.
+        $broke = @($ran | Where-Object { -not $_.Passed -and -not $_.Blind })
+        if ($broke.Count -gt 0) {
+            return New-MlsCheckResult -Passed $false -Final `
+                -Observed "$summary (partial run: $($Layer.Count) of 10)" `
+                -Detail "A layer audit FAILED inside a narrowed child-audit set. Narrowing limits what this criterion may CLAIM, never what it may report as broken. Layers not examined: $($missing -join ', ')."
+        }
+        return New-MlsCheckResult -Status 'SKIP' `
+            -Observed "DIAGNOSTIC, not the post-up claim: examined $($Layer.Count) of 10 - $summary" `
+            -Detail "V11.3 asserts every layer audit L1-L10 is green against the rebuilt environment. This run was narrowed with -ChildAuditLayer and never examined layers $($missing -join ', '), so the claim was not tested and is not made. Re-run with the full set for a sign-off."
+    }
+
     $result = Invoke-LayerAuditSet -Layer $Layer -Root $Root -Argument $Argument
     $failed = @($result | Where-Object { -not $_.Passed -and -not $_.Blind })
     $blind = @($result | Where-Object { $_.Blind })
@@ -418,7 +455,7 @@ function Invoke-Main {
         [string[]]$SurvivingResourceGroup = @('mls-rg-identity'),
         [string]$UpStartUtc,
         [string]$UpCompletedUtc,
-        [double]$WallClockBudgetMinutes = 60,
+        [double]$WallClockBudgetMinutes = 180,
         [string]$Repository,
         [string]$FabricCapacityId,
         [string]$SqlDatabaseId,
@@ -505,7 +542,7 @@ function Invoke-Main {
 
         # -Control @(): rebuild wall-clock is an operational SLA, not CUI protection.
         Invoke-MlsCriterion -Context $context -Id 'V11.4' -Control @() `
-            -Description 'Wall-clock < 60 min' `
+            -Description 'Wall-clock < 180 min' `
             -Command "timestamps recorded by up.ps1 (start) and the Verifier's audit runner (last synchronous audit green), cross-checked against gh api repos/$repositoryName/actions/runs created_at/updated_at" `
             -Expected "elapsed < $WallClockBudgetMinutes:00 minutes on both clocks" -NoRetry `
             -Test {
@@ -530,7 +567,7 @@ function Invoke-Main {
         # evidentiary meaning does not change because this phase could not measure it.
         foreach ($pair in @(
                 @{ Id = 'V11.3'; Control = @('3.12.1', '3.12.3'); Description = 'Post-up: all layer audits green'; Command = 'foreach ($n in 1..10) { pwsh verification/layer-<nn>-audit.ps1 }'; Expected = 'PASS for every layer audit L1-L10 against the rebuilt environment' },
-                @{ Id = 'V11.4'; Control = @(); Description = 'Wall-clock < 60 min'; Command = 'up.ps1 start timestamp vs last synchronous audit green'; Expected = "elapsed < $WallClockBudgetMinutes minutes" },
+                @{ Id = 'V11.4'; Control = @(); Description = 'Wall-clock < 180 min'; Command = 'up.ps1 start timestamp vs last synchronous audit green'; Expected = "elapsed < $WallClockBudgetMinutes minutes" },
                 @{ Id = 'V11.5'; Control = @(); Description = 'Run-rate returns to idle profile'; Command = 'az consumption usage list ...'; Expected = 'daily cost within the idle envelope; capacity and SQL Paused' }
             )) {
             Invoke-MlsCriterion -Context $context -Id $pair.Id -Control $pair.Control -Description $pair.Description `

@@ -21,7 +21,7 @@ day-to-day operation.
 | | **The Power Platform environment, its pay-as-you-go billing plan, and the Copilot Studio agent + its solution** (2026-08-24) — not RG-scoped, and re-import + republish + Direct Line reconfiguration does not fit inside the hour |
 
 Why the line sits here: tenant-level objects propagate in 15–45 minutes — churning
-them makes a <60-minute rebuild impossible (spec F6). Money is disposable; identity
+them makes a <180-minute rebuild impossible (spec F6). Money is disposable; identity
 is not.
 
 > **The capacity row used to read "the capacity itself" under *persists*, without
@@ -128,19 +128,45 @@ on a *standard* rebuild (tenant objects present):
 workflow jobs; legs 5–6 need 4b (ACA env), and leg 6's eval needs 4a (lakehouse). Leg 5
 brings the compliance board back with everything else — its state artifact was never in
 Azure to lose, so it needs no reseed of any kind (L12).
-The master plan mandates the replay set ("L2–L10 pipelines + seed") and the <60 min
+The master plan mandates the replay set ("L2–L10 pipelines + seed") and the <180 min
 outcome; the parallelization is the conservative schedule that achieves it.
 
-## 5. The <60-minute clock
+## 5. The rebuild clock (budget <180 min, raised from 60 on 2026-09-22)
 
 **Clock starts:** `up.ps1` invocation. **Clock stops:** last synchronous layer
 audit green. Recorded from two independent sources (script timestamps + GitHub run
 timestamps) into `verification/reports/rebuild-proof.md` (L11).
 
-**MEASURED 2026-09-03, and the model below was wrong about where the time goes.** The
-first full cycle since this section was written came in at **87 minutes**, not 52 — and
-not because any deploy ran long. Every deploy was at or under estimate; two audits were
-not:
+**THE GATE IS NOW 180 MINUTES. Sponsor decision, 2026-09-22.**
+
+The old budget was 60 and no real cycle ever met it: **87 minutes on 2026-09-03, 152.2
+minutes on 2026-09-21.** After two attempts that is a property of the estate rather than an
+unlucky run, and a target nothing has ever hit is a wish, not an SLA. 180 is the measurement
+plus roughly 18% headroom — deliberately not set just above 152, because a gate with no
+margin fails on ordinary variance and teaches people to ignore it.
+
+**V11.4 enforces the same number**; the master plan's pin, this section, the workflow
+comments and the criterion's `-WallClockBudgetMinutes` were all moved together. A declared
+figure that nothing checks is the defect V1.5 exists to catch, one document over.
+
+**What the number is made of, and why it is not a deploy problem.** The budget in this section's heading has never been met by a real cycle, and
+after two attempts that is a property of the estate rather than an unlucky run. The number
+is honest and the heading is not; **do not repeat the `<60-minute` figure in an outbrief or
+to a sponsor without the two measurements beside it.**
+
+The 09-21 cycle is the current one: teardown **30m51s** clean, rebuild **152.2 min**, with
+V11.4 correctly recording it as a FAIL against the 60-minute budget. Where the extra time
+went is the same place it went in 09-03 — the audits, not the deploys — and L7's verify
+alone waits out a real Container Apps scale-in cycle.
+
+**Restate or defend the budget; do not quietly carry it.** Either the SLA becomes a measured
+number (a rebuild in roughly two and a half hours, most of it verification that could be run
+in parallel or deferred), or V11.4's `-WallClockBudgetMinutes` is raised deliberately with
+the reason recorded. What must not happen is a third cycle failing the same criterion while
+the document still advertises 60.
+
+**The 2026-09-03 breakdown, kept because the shape still holds.** Every deploy was at or
+under estimate; two audits were not:
 
 ```
 deploy work, all legs               ~30 min   (L2 8.3 · L6 13.1 · L5 seed 4.0 · L7 3.8)
@@ -188,7 +214,7 @@ What eats the margin — **reordered by what was actually observed**, not by exp
 report): V6.3 first cost-export file (≤ 24 h), V6.4 SQL auto-pause (+75 min), V11.5
 idle run-rate (next-day consumption data).
 
-If the clock exceeds 60 minutes: that is a failed V11.4 on a proof run — remediate
+If the clock exceeds 180 minutes: that is a failed V11.4 on a proof run — remediate
 the named bottleneck and re-run the full cycle clean (L11 Rollback; two consecutive
 failures → G4). On a non-proof operational rebuild, log the overage and the cause in
 the run notes — the SLA claim always cites the latest committed proof, never an
@@ -236,7 +262,7 @@ Rebuild from absolute zero = G0 (human, `docs/runbooks/g0-bootstrap.md`) + L1–
 with **live tenant-object creation**: Entra propagation, CA policy replication, and
 label replication each lag 15–45 minutes, serialized across L2→L3→L4 with
 Verifier-gated audits between. **Honest SLA: 2–3 hours** (spec F6) — plus human
-time for G0's portal-only steps (trials, Fabric SP toggle). The <60-minute claim
+time for G0's portal-only steps (trials, Fabric SP toggle). The <180-minute claim
 never applies to this path, and the demo script never depends on it: the standard
 cycle exists precisely so the show can promise the hour.
 

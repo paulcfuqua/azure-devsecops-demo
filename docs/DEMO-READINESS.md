@@ -9,7 +9,9 @@ common defect this project has recorded.
 A layer is done when the independent auditor says so, not when a deploy exits zero. Read
 the criterion tables, not the job status.
 
-**Refreshed 2026-09-17, ~01:30 UTC.** The previous refresh was the morning of 2026-09-16 and
+**Refreshed 2026-09-22.** (The previous refresh was 2026-09-17 ~01:30 UTC. The dated block that follows this header supersedes it and names what drifted; where the two disagree, the newer one wins.)
+
+**Superseded text, kept for provenance — 2026-09-17, ~01:30 UTC.** The previous refresh was the morning of 2026-09-16 and
 was overtaken within hours: the estate reached a **second cloud** that day. Everything below
 was re-measured for this pass or is explicitly marked as not re-measured — there is a
 **freshness** column and it is the most important one on the page. What was checked, and
@@ -38,6 +40,115 @@ that turned out to be wrong — is a dated archive:
 **[2026-09-04](findings/2026-09-04-finding-register.md)** (F190–F200) and
 **[2026-09-16 / 09-17](findings/2026-09-16-finding-register.md)** (F201–F217, the
 cross-cloud day). Nothing was removed from any of them.
+
+---
+
+---
+
+# REFRESHED 2026-09-22 — the cycle ran, and it is this section that is current
+
+**Everything below this block was written on 2026-09-17 and parts of it are now wrong.**
+Where the two disagree, this block wins. The stale statements are named here rather than
+edited in place, because *what* drifted and *how long it took to notice* is itself the
+evidence this file exists to carry.
+
+The estate was **torn down and rebuilt on 2026-09-21**, the cycle the 09-17 refresh called
+"the one rebuild left". It has now been spent. What follows is measured, with run ids.
+
+## The cycle
+
+| | |
+|---|---|
+| Teardown | **clean, 30m51s** — run `35627559843`. Four demo RGs deleted; `mls-rg-identity` left standing, as designed |
+| Rebuild | **152.2 minutes** — run `35630904559`, green through L7 |
+| Resources after | **29 in the blast radius + 1 outside** (apps 9, ops 9, platform 8, data 3, identity 1) |
+| Container apps | **5 / 5 `Running`**, all on `sha-` tags |
+
+### Two baselines in the old text are wrong, and neither is a rebuild defect
+
+The 09-17 text says **6 container apps including `vuln-lab`**, and **30 resources** in the
+blast radius. Both were true of a six-app estate. `vuln-lab` was retired when L10 replaced
+the seeded-CVE model with real advisories; #284 already says "all **five** apps". So the
+correct current baseline is **five apps and 29 blast-radius resources**, and the rebuild
+reproduced it exactly.
+
+This is worth stating precisely because the reproducibility claim depends on it: the estate
+did *not* come back one resource short — the number it is compared against had moved and
+nothing updated it. A stale baseline makes a correct rebuild look broken, which is the
+mirror image of the defect this file usually guards against.
+
+## What the cycle converted from observation into property
+
+These passed on an estate that had never been torn down since they existed. They have now
+survived one.
+
+| | |
+|---|---|
+| **V5.6** | Row-level security **enforces** on an estate built from nothing — the tiered-access control, measured rather than inferred |
+| **V6.2** | The 09-17 text says *"V6.2's fix has never once executed"*. It executed, and **passed** |
+| **V6.7 / V6.8** | F119's and F122's fixes — Function Apps actually contain functions; Key Vault references actually resolve. Both were written against a live estate and had never survived a rebuild |
+| **V7.6** | The data API answers with **rows**, not a status code |
+| **V8.6 / V8.7** | **The AWS cross-cloud link.** The 09-17 text predicted a teardown would return these to SKIP "with nothing going red" because the Key Vault grant had been applied by hand. They **passed** — the Bicep grant deployed on its own |
+| **V11.2 (down phase)** | **First evidence on any teardown ever run.** Tenant objects intact, verified rather than assumed |
+
+Layer sign-off on the rebuilt estate: **L2 3/3 · L3 4/4 · L4 2+SKIP · L5 6+SKIP · L6 5/5 ·
+L7 7/7.**
+
+## What the cycle found — seven findings, and five were checks that were wrong
+
+The register continues at [F226–F232](findings/2026-09-20-finding-register.md). The
+distribution is the point:
+
+| | |
+|---|---|
+| **F227** | The rebuild proof **could not start its own child audits**. `infra-up`'s L11 job carried no `env:` block, so all ten exited 2 = COULD NOT START, and V11.2/V11.3 reported the rebuild as failed while L1–L7's own audits had passed minutes earlier. `infra-down` has carried the right block since F170 — a fix applied to one of two callers |
+| **F228** | V8.4 had **never read a single agent response**. It read `card`/`answer`/`responseText`; the eval writes `cards`/`responses`. The no-HTML/JS check was scanning the empty string, and the fixture agreed with the audit so nothing caught it |
+| **F230** | The tiered-access demo segregated **objects, not people** — and the agent could name either. Now fixed as an application control |
+| **F231** | Heal PRs stall **behind** base, because the estate's own compliance commits invalidate them and auto-merge does not update a branch |
+| **F232** | Heal PRs are **also** blocked by the scanner's own review comment, under `required_review_thread_resolution` |
+| **F226** | The live tenant and subscription GUIDs were committed in two docs for sixteen days. V1.3 caught it the first time it ran with its inputs — an audit that said "I could not look" rather than "there is nothing there", and was right |
+| **F229** | V8.2 asks for evidence the eval cannot produce. Left **UNOBSERVABLE** rather than made into a mirror. **Open decision for the sponsor** |
+
+**Five of the seven were checks that were confidently wrong rather than infrastructure that
+was broken.** Two were introduced during the session's own fixes and caught by tests within
+minutes. That is the strongest material this estate has for an audit-facing audience, and it
+is now evidence rather than a claim.
+
+## Showpiece #3 — the self-healing claim was false, for two independent reasons
+
+`CLAUDE.md` states it as a product claim: *"a security patch … auto-merges unattended in both
+modes."* **It did not.** It armed, and stalled.
+
+1. **F231 — behind base.** `main` requires branches to be up to date; the `compliance`
+   workflow commits state to `main` after every merge; auto-merge does not update a branch.
+2. **F232 — unresolved review thread.** `required_review_thread_resolution: true`, and the
+   `github-advanced-security` bot posts a review comment describing the alert being fixed.
+
+**PR #286, the one heal that ever merged unattended, merged because it happened to carry zero
+review threads** — and it beat the compliance commit by **24 seconds**. PR #285 sat green,
+`MERGEABLE`, auto-merge `ARMED` and `BLOCKED` for four days with all twelve required checks
+passing.
+
+Both fixes are in `self-heal.yml`. **The claim is not proven until a heal PR merges with
+nobody touching it**; until then this section says the claim is unproven, not fixed.
+
+## Still open
+
+| | |
+|---|---|
+| **L11 up-phase verdict** | Run `35661641603` was still executing when this was written — V11.2/V11.3's first run with their inputs present. **No verdict is recorded here because none exists yet** |
+| **V11.4** | **152.2 min against a 60-minute budget.** A measurement, not a defect. The budget in `kill-rebuild.md` § 5 has now been missed twice (87 min on 09-03) and should be restated or defended, not quietly carried |
+| **V11.5** | PENDING by design — consumption data lags 24–48 h; closes on its own ~09-22/23 |
+| **V8.4** | **CORRECTED 2026-09-22 — this row was wrong, and said the opposite of the truth.** It claimed the agent "returned zero Adaptive Cards" and "answers in prose". The agent emits cards; they arrive **embedded in the message text**, not as Direct Line attachments, which is why the control tower's Ask tab renders them and the eval recorded none (**F233**). V8.4 had been reading the wrong transport — and the probe written to check it counted attachments too, so it agreed. The eval now extracts text-borne cards, and the schema pin moved 1.5 → 1.6 to match what the agent actually emits |
+| **V8.5** | p95 **20.04 s** against a 20 s budget, cold. Warming before a demo is already mandatory |
+| **F229** | Sponsor decision: change the eval's question schema so the Verifier can independently re-derive, or accept UNOBSERVABLE |
+
+## One access change made by hand
+
+`mcp-auth-token` was `ForbiddenByRbac` for `admin@`, so **Key Vault Secrets User** was
+granted to the signed-in user on `mls-sec-demo-kv` on 2026-09-22, to verify the object gate
+against the deployed agent rather than against its source. No spend, nothing deleted — but it
+is an access-control change and it is recorded here rather than left to be discovered.
 
 ---
 

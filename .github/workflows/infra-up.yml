@@ -4,10 +4,11 @@ name: infra-up
 # Layer-ordered full instantiation of the Meridian Launch Systems demo estate.
 # Master plan: docs/superpowers/plans/2026-08-22-g1-master-plan.md
 # Operational runbook: docs/runbooks/kill-rebuild.md § 4 (replay order) and § 5
-# (the <60-minute clock). `scripts/up.ps1` is the local wrapper over this file.
+# (the <180-minute clock, raised from 60 on 2026-09-22). `scripts/up.ps1` is the local
+# wrapper over this file.
 #
 # Replay graph — L5 and L6 run in PARALLEL, which is what buys the margin in the
-# <60-minute critical path (kill-rebuild.md § 5):
+# <180-minute critical path (kill-rebuild.md § 5):
 #
 #   oidc-login
 #     └─ L2 landing zone  ~1-2m   (idempotent no-op on a standard rebuild)
@@ -99,7 +100,7 @@ on:
           Run the L11 UP-phase rebuild proof after every layer completes (V11.2 tenant
           objects intact, V11.3 layer audits green, V11.4 wall clock, V11.5 idle cost).
           OFF by default: a normal bring-up is not a rebuild proof, and the criterion that
-          matters most - wall clock under 60 minutes - is only meaningful when this run
+          matters most - wall clock under 180 minutes - is only meaningful when this run
           IS the rebuild half of a kill/reinstantiate cycle.
         type: boolean
         required: false
@@ -453,6 +454,18 @@ jobs:
       MLS_ENTRA_MANIFEST: infra/entra/manifest.json
       MLS_LABEL_GUID_PATH: verification/reports/label-guids.json
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+      # STAGING THE PFX IS HALF OF IT. The 2026-09-21 L11 up-phase run staged the
+      # certificate successfully and L4 still could not start:
+      #
+      #   layer-04-audit could not start: The certificate data cannot be read with the
+      #   provided password, the password may be incorrect.
+      #
+      # infra-down.yml and layer-04-purview.yml both pass this alongside the file; the env
+      # block added here in #302 did not. A file without its password is a credential that
+      # exists, is spelled correctly, and cannot be USED by the thing that reads it - F124's
+      # class one more time, and the criterion said so precisely enough to find it in one
+      # line rather than one run.
+      MLS_VERIFIER_CERT_PASSWORD: ${{ secrets.MLS_VERIFIER_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
       - id: names

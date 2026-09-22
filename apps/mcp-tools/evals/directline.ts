@@ -68,6 +68,105 @@ export interface AgentReply {
   timedOut: boolean;
 }
 
+/**
+ * THE CARDS ARRIVE IN `text`, NOT IN `attachments`, AND THAT IS WHY V8.4 READ ZERO.
+ *
+ * Captured from the deployed agent 2026-09-22, asking "Show me launches by vehicle":
+ *
+ *     attachments on the wire : 0
+ *     text                    : 1007 chars, beginning
+ *         Meridian's operations lakehouse shows Falcon 9 Block 5 leading with 486
+ *         launches.\n\n{\n  "type": "AdaptiveCard", ...
+ *
+ * So the agent DOES produce Adaptive Cards - prose, then the card JSON, both in the
+ * message text. `apps/control-tower/src/agent/transcript.ts` has always known this and
+ * parses them out, which is why the Ask tab renders cards while this eval recorded none
+ * and V8.4 reported the capability missing.
+ *
+ * V8.4 has therefore been wrong twice about the same thing, in two different ways: first
+ * it read a field name the eval never wrote (`card`), then it read the right field name on
+ * the wrong transport (`cards`, the attachments array, which is empty). Fixing a name while
+ * keeping the wrong channel looks like progress and measures nothing.
+ *
+ * ATTACHMENTS REMAIN THE REAL TRANSPORT. If Copilot Studio ever starts sending cards
+ * properly, those win and this must not add a second copy of the same card beside them -
+ * the same rule the control tower states.
+ */
+function endOfJsonObject(text: string, open: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
+/** An Adaptive Card announces itself; anything else embedded in the prose is left alone. */
+function isCardLike(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "AdaptiveCard"
+  );
+}
+
+/**
+ * Pull Adaptive Cards out of an agent message's text, returning the remaining prose.
+ *
+ * Mirrors `extractCardsFromText` in apps/control-tower/src/agent/transcript.ts. The two are
+ * separate because a Node eval harness should not import a React application; the test
+ * beside this one pins the behaviour against a REAL captured agent reply rather than
+ * against the other implementation, which is stronger evidence than parity with a second
+ * copy of the same assumption.
+ */
+export function extractCardsFromText(text: string): { text: string; cards: unknown[] } {
+  const cards: unknown[] = [];
+  let kept = "";
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const open = text.indexOf("{", cursor);
+    if (open === -1) break;
+    const end = endOfJsonObject(text, open);
+    if (end === -1) break;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text.slice(open, end));
+    } catch {
+      // Not JSON at all - keep the brace and carry on past it.
+      kept += text.slice(cursor, open + 1);
+      cursor = open + 1;
+      continue;
+    }
+
+    if (isCardLike(parsed)) {
+      cards.push(parsed);
+      kept += text.slice(cursor, open);
+    } else {
+      kept += text.slice(cursor, end);
+    }
+    cursor = end;
+  }
+
+  kept += text.slice(cursor);
+  if (cards.length === 0) return { text, cards };
+  return { text: kept.replace(/\n{3,}/g, "\n\n").trim(), cards };
+}
+
 export interface DirectLineClientOptions {
   secret: string;
   fetchImpl?: FetchLike;
@@ -252,15 +351,29 @@ export class DirectLineClient {
         if (activity.type === "typing") continue;
 
         let carriedContent = false;
-        if (typeof activity.text === "string" && activity.text.trim().length > 0) {
-          text.push(activity.text);
-          carriedContent = true;
-        }
+        // ATTACHMENTS FIRST: they are the real transport if Copilot Studio ever uses
+        // them, and a text-borne copy must not be added beside a proper one.
+        let attachmentCards = 0;
         for (const attachment of activity.attachments ?? []) {
           if (attachment.contentType === ADAPTIVE_CARD_CONTENT_TYPE) {
             cards.push(attachment.content);
+            attachmentCards += 1;
             carriedContent = true;
           }
+        }
+        if (typeof activity.text === "string" && activity.text.trim().length > 0) {
+          // The cards this agent actually sends are embedded in the TEXT. Measured
+          // 2026-09-22 against the deployed agent: 0 attachments, 1007 characters of
+          // text, prose followed by {"type":"AdaptiveCard", ...}. V8.4 read the
+          // attachments array and therefore reported the capability missing while the
+          // control tower's Ask tab was rendering those very cards.
+          const extracted = extractCardsFromText(activity.text);
+          if (attachmentCards === 0 && extracted.cards.length > 0) {
+            cards.push(...extracted.cards);
+          }
+          const prose = extracted.cards.length > 0 ? extracted.text : activity.text;
+          if (prose.trim().length > 0) text.push(prose);
+          carriedContent = true;
         }
         if (carriedContent) {
           firstReplyAt ??= this.now();

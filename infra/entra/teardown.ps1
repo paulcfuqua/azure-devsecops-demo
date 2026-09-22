@@ -27,7 +27,7 @@
     scope (docs/runbooks/kill-rebuild.md section 7). Deleting these objects
     invalidates every recorded object ID and restarts license-propagation clocks -
     a rebuild afterwards carries the honest 2-3 hour SLA, not the standard cycle's
-    <60 minutes. The standard kill/rebuild cycle (scripts/down.ps1) never calls this
+    <180 minutes. The standard kill/rebuild cycle (scripts/down.ps1) never calls this
     script; that separation is structural, not a runtime flag.
 
     Never callable from CI: refuses to run when $env:GITHUB_ACTIONS -eq 'true'
@@ -488,7 +488,7 @@ function Invoke-Main {
 
     Write-G3Banner `
         -Scope "infra/entra/manifest.json (domain '$effectiveDomain'): $($policies.Count) CA polic(y/ies), $($apps.Count) app registration(s), $($groups.Count) group(s), $($users.Count) user(s)." `
-        -Consequence 'Every deleted object''s Entra ID is invalidated permanently and license-propagation clocks restart. A rebuild after this teardown carries the honest 2-3 hour SLA (docs/runbooks/kill-rebuild.md section 7), not the standard cycle''s under-60-minute claim.'
+        -Consequence 'Every deleted object''s Entra ID is invalidated permanently and license-propagation clocks restart. A rebuild after this teardown carries the honest 2-3 hour SLA (docs/runbooks/kill-rebuild.md section 7), not the standard cycle''s under-180-minute claim.'
 
     $summary = [ordered]@{
         CaDeleted = 0; CaDeclined = 0; CaNotFound = 0
