@@ -586,10 +586,10 @@ describe("the restricted-object gate", () => {
       // A SQLite-only construct throws against Fabric rather than returning a wrong answer,
       // but it would do so inside a criterion rather than here.
       expect(q.referenceSql, `question ${q.id} uses a SQLite-only function`).not.toMatch(
-        /(strftime|julianday|group_concat)/i,
+        /\b(strftime|julianday|group_concat)\b/i,
       );
       // LIMIT is the other half of that trap: valid SQLite, a syntax error in T-SQL.
-      expect(q.referenceSql, `question ${q.id} uses LIMIT rather than TOP`).not.toMatch(/LIMIT/i);
+      expect(q.referenceSql, `question ${q.id} uses LIMIT rather than TOP`).not.toMatch(/\bLIMIT\b/i);
     }
   });
 

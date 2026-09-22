@@ -453,6 +453,18 @@ jobs:
       MLS_ENTRA_MANIFEST: infra/entra/manifest.json
       MLS_LABEL_GUID_PATH: verification/reports/label-guids.json
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+      # STAGING THE PFX IS HALF OF IT. The 2026-09-21 L11 up-phase run staged the
+      # certificate successfully and L4 still could not start:
+      #
+      #   layer-04-audit could not start: The certificate data cannot be read with the
+      #   provided password, the password may be incorrect.
+      #
+      # infra-down.yml and layer-04-purview.yml both pass this alongside the file; the env
+      # block added here in #302 did not. A file without its password is a credential that
+      # exists, is spelled correctly, and cannot be USED by the thing that reads it - F124's
+      # class one more time, and the criterion said so precisely enough to find it in one
+      # line rather than one run.
+      MLS_VERIFIER_CERT_PASSWORD: ${{ secrets.MLS_VERIFIER_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
       - id: names
