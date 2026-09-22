@@ -4285,3 +4285,66 @@ everything. Compare the names, not the intent.
         'responseText' | Should -Not -BeIn $written -Because 'the eval writes "responses"'
     }
 }
+
+Describe 'the committed agent topic enables every tool the audit expects' {
+    # PAID FOR 2026-09-22, and it cost the cross-cloud showpiece.
+    #
+    # query_aws_lakehouse_sql was added on 2026-09-16. The Copilot Studio topic that decides
+    # which MCP tools the AGENT may call was last edited on 2026-09-01 and listed six tools.
+    # So for six days the agent could not reach the AWS lakehouse at all, and asking it
+    # "using the AWS launch-intel lakehouse, how many launches are in it?" produced Copilot
+    # Studio's Escalate topic rather than an answer.
+    #
+    # NOTHING WENT RED. V8.6 and V8.7 passed throughout, because the Verifier calls the MCP
+    # SERVER directly - which proves the AWS link works and says nothing about whether the
+    # agent can use it. V8.1 compares component NAMES, not the tool list inside a topic.
+    # V8.3 reads the server's declared tools and the solution's components, also not that
+    # list. Three criteria touching the area and none of them read the one field that
+    # decides whether a demo question can be answered.
+    #
+    # The sponsor found it by asking the agent a question and getting an escalation, then
+    # toggling the tool on by hand in the maker portal - which is a fix that exists only in
+    # the estate, and F159's rule is that a change is finished when a REBUILD reproduces it.
+    # This check is what makes the committed solution the source of truth again.
+
+    BeforeAll {
+        $script:TopicData = Join-Path $script:RepoRoot 'infra' 'copilot-studio' 'solution' `
+            'MeridianLaunchCopilot' 'botcomponents' `
+            'mls_MeridianLaunchCopilot.topic.MeridianOpsTools' 'data'
+
+        # The allowlist layer-08-audit.ps1 declares. Read from the script rather than copied,
+        # so the two cannot drift apart - which is the entire defect being checked.
+        $auditPath = Join-Path $script:RepoRoot 'verification' 'layer-08-audit.ps1'
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($auditPath, [ref]$null, [ref]$null)
+        $param = $ast.ParamBlock.Parameters |
+            Where-Object { $_.Name.VariablePath.UserPath -eq 'AllowedTool' }
+        $script:AuditAllowlist = @([regex]::Matches("$($param.DefaultValue.Extent.Text)", "'([a-z_]+)'") |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    }
+
+    It 'finds both lists, or the comparison is vacuous' {
+        Test-Path -LiteralPath $script:TopicData | Should -BeTrue -Because 'the committed topic defines which tools the agent may call'
+        $script:AuditAllowlist.Count | Should -BeGreaterThan 5 -Because 'layer-08-audit.ps1 declares the expected tool set'
+    }
+
+    It 'the topic enables exactly the tools the audit expects' {
+        $text = [IO.File]::ReadAllText($script:TopicData)
+        $enabled = @([regex]::Matches($text, '(?m)^\s*-\s+([a-z_]+)\s*$') |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+
+        $missing = @($script:AuditAllowlist | Where-Object { $_ -notin $enabled })
+        $extra = @($enabled | Where-Object { $_ -notin $script:AuditAllowlist })
+
+        $missing -join ', ' | Should -BeNullOrEmpty -Because @'
+A tool the audit expects but the topic does not enable is one the AGENT CANNOT CALL. The
+Verifier reaches the MCP server directly, so every criterion that exercises the tool keeps
+passing while the demo question it exists for returns an escalation. That is how
+query_aws_lakehouse_sql was unreachable for six days with nothing red.
+'@
+        $extra -join ', ' | Should -BeNullOrEmpty -Because @'
+A tool the topic enables but the audit does not expect is outside the declared allowlist -
+V8.3 asserts the agent declares exactly the allowlisted set, so this is surface nobody
+signed off on.
+'@
+    }
+}

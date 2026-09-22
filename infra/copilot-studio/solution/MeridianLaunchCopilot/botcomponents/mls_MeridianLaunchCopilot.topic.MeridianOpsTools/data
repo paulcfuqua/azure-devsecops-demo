@@ -19,3 +19,4 @@ action:
         - get_defender_posture
         - get_cost_series
         - query_compliance
+        - query_aws_lakehouse_sql
