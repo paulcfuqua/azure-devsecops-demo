@@ -169,8 +169,18 @@ $script:SqlResourceUrl = 'https://database.windows.net'
 # Where Invoke-MlsSqlQuery looks for a caller-supplied token before minting one.
 $script:SqlAccessTokenVariable = @('MLS_SQL_ACCESS_TOKEN', 'MLS_VERIFIER_SQL_TOKEN')
 
-# Adaptive Cards profile this repo pins (L08.md V8.4): schema 1.5 and Action.Submit only,
-# so one payload renders identically in the Direct Line Web Chat embed and in Teams.
+# Adaptive Cards profile this repo pins (L08.md V8.4): schema 1.6 and Action.Submit only.
+#
+# 1.6 SINCE 2026-09-22, MATCHING WHAT THE DEPLOYED AGENT ACTUALLY EMITS. Captured live:
+# version 1.6, elements TextBlock and FactSet - both Adaptive Cards 1.0, so the version
+# string gates hosts rather than describing what the card needs. The pin was 1.5 on the
+# [derived] reasoning that Teams is limited to 1.5; Teams is not a surface this demo uses,
+# and there are no card builders here to change - Copilot Studio composes the card and picks
+# the version, so pinning 1.5 would mean asking an LLM to comply and hoping it keeps doing so.
+#
+# THE ELEMENT SET BELOW IS NOT WIDENED. Accepting a 1.6 declaration is not accepting every
+# 1.6 element: an element outside this list still fails, which is what keeps a payload
+# renderable rather than merely well-labelled.
 $script:AdaptiveCardElementType = @(
     'TextBlock', 'Image', 'Media', 'RichTextBlock', 'ActionSet', 'Container',
     'ColumnSet', 'Column', 'FactSet', 'Fact', 'ImageSet', 'Table', 'TableRow',
@@ -2193,7 +2203,7 @@ function Test-MlsAdaptiveCard {
     .SYNOPSIS
         Validate one Adaptive Card payload against the profile L8 pins (V8.4).
     .DESCRIPTION
-        The repo pins schema 1.5 with Action.Submit only so a single payload renders in
+        The repo pins schema 1.6 with Action.Submit only so a single payload renders in
         both the Direct Line Web Chat embed and in Teams (L08.md V8.4). This validator
         checks that profile offline - type, version, element and action types, and the
         absence of Action.Execute - because the Verifier must not depend on fetching a
@@ -2201,7 +2211,7 @@ function Test-MlsAdaptiveCard {
     #>
     param(
         [Parameter(Mandatory)]$Card,
-        [string]$Version = '1.5'
+        [string]$Version = '1.6'
     )
     $problem = [System.Collections.Generic.List[string]]::new()
     $type = Get-MlsProperty -InputObject $Card -Name 'type'
@@ -2228,7 +2238,7 @@ function Test-MlsAdaptiveCard {
         }
         elseif ($nodeType -and "$nodeType" -ne 'AdaptiveCard') {
             if ("$nodeType" -notin $script:AdaptiveCardElementType) {
-                $problem.Add("$Path uses element '$nodeType', which is not in the pinned 1.5 element set")
+                $problem.Add("$Path uses element '$nodeType', which is not in the pinned element set")
             }
         }
         foreach ($childName in @('body', 'actions', 'items', 'columns', 'facts', 'rows', 'cells', 'card', 'inlines', 'selectAction')) {
