@@ -26,13 +26,16 @@ BeforeAll {
             [switch]$SkipChildAudit,
             [string]$UpStartUtc = '',
             [string]$UpCompletedUtc = '',
-            [string]$SubscriptionId = $script:Subscription
+            [string]$SubscriptionId = $script:Subscription,
+            # Defaults to the full set, so every existing test keeps asserting the whole
+            # claim. A test that narrows it is testing the narrowing.
+            [string[]]$ChildAuditLayer = @('1', '2', '3', '4', '5', '6', '7', '8', '9', '10')
         )
         if ([string]::IsNullOrWhiteSpace($UpStartUtc)) { $UpStartUtc = [datetime]::UtcNow.AddMinutes(-42).ToString('o') }
         Invoke-Main -Phase $Phase -SubscriptionId $SubscriptionId -ResourceGroupPrefix 'mls-rg-' `
             -UpStartUtc $UpStartUtc -UpCompletedUtc $UpCompletedUtc -WallClockBudgetMinutes 180 `
             -Repository 'paulcfuqua/azure-devsecops-demo' -FabricCapacityId '99999999-9999-9999-9999-999999999999' `
-            -SqlDatabaseId '/subscriptions/s/rg/db' -IdleDailyCostBudget 0.17 -ChildAuditLayer @(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) `
+            -SqlDatabaseId '/subscriptions/s/rg/db' -IdleDailyCostBudget 0.17 -ChildAuditLayer $ChildAuditLayer `
             -SkipChildAudit:$SkipChildAudit -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
 }
@@ -215,6 +218,30 @@ Describe 'layer-11-audit' {
             $row = Get-Row -Context $context -Id 'V11.3'
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*L7=UNOBSERVABLE(3)*'
+        }
+
+        It 'records V11.3 as a DIAGNOSTIC when the child-audit set was narrowed' {
+            # PAID FOR 2026-09-22. Run with -ChildAuditLayer 3,4 the criterion examined two
+            # of ten layers and reported PASS under the title "all layer audits green". The
+            # evidence line was honest; the verdict was not, and a reader scanning a
+            # criterion table reads verdicts.
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry -ChildAuditLayer @('3', '4')
+            $row = Get-Row -Context $context -Id 'V11.3'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*DIAGNOSTIC*'
+            $row.Observed | Should -BeLike '*examined 2 of 10*'
+            $row.Detail | Should -BeLike '*never examined layers*'
+        }
+
+        It 'still FAILS V11.3 when a layer inside a narrowed set is broken' {
+            # Narrowing removes the right to claim the whole; it does not excuse what was
+            # actually seen to be broken. Without this, narrowing would launder a failure
+            # into a SKIP - a worse bug than the one being fixed.
+            $script:FailingChildLayer = @(4)
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry -ChildAuditLayer @('3', '4')
+            $row = Get-Row -Context $context -Id 'V11.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*L4=FAIL*'
         }
 
         It 'fails V11.3 and names the failing layer' {
