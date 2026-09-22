@@ -1,0 +1,32 @@
+Meridian's operations lakehouse shows Falcon 9 Block 5 leading with 486 launches. 
+
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.6",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "Meridian Launches by Vehicle",
+      "weight": "Bolder",
+      "size": "Medium"
+    },
+    {
+      "type": "FactSet",
+      "facts": [
+        {"title": "Falcon 9 Block 5", "value": "486"},
+        {"title": "Electron", "value": "258"},
+        {"title": "Atlas V 541", "value": "72"},
+        {"title": "Firefly Alpha", "value": "71"},
+        {"title": "H3-24", "value": "71"},
+        {"title": "Falcon Heavy", "value": "61"},
+        {"title": "Minotaur IV", "value": "58"},
+        {"title": "Ariane 62", "value": "41"},
+        {"title": "Vulcan Centaur VC4", "value": "39"},
+        {"title": "Delta IV Heavy", "value": "16"},
+        {"title": "New Glenn", "value": "16"},
+        {"title": "Antares 330", "value": "11"}
+      ]
+    }
+  ]
+}
