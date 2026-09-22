@@ -131,16 +131,31 @@ Azure to lose, so it needs no reseed of any kind (L12).
 The master plan mandates the replay set ("L2–L10 pipelines + seed") and the <60 min
 outcome; the parallelization is the conservative schedule that achieves it.
 
-## 5. The <60-minute clock
+## 5. The rebuild clock (budget <60 min — missed twice; see below)
 
 **Clock starts:** `up.ps1` invocation. **Clock stops:** last synchronous layer
 audit green. Recorded from two independent sources (script timestamps + GitHub run
 timestamps) into `verification/reports/rebuild-proof.md` (L11).
 
-**MEASURED 2026-09-03, and the model below was wrong about where the time goes.** The
-first full cycle since this section was written came in at **87 minutes**, not 52 — and
-not because any deploy ran long. Every deploy was at or under estimate; two audits were
-not:
+**MEASURED TWICE NOW, AND MISSED TWICE. 87 minutes on 2026-09-03, 152.2 minutes on
+2026-09-21.** The budget in this section's heading has never been met by a real cycle, and
+after two attempts that is a property of the estate rather than an unlucky run. The number
+is honest and the heading is not; **do not repeat the `<60-minute` figure in an outbrief or
+to a sponsor without the two measurements beside it.**
+
+The 09-21 cycle is the current one: teardown **30m51s** clean, rebuild **152.2 min**, with
+V11.4 correctly recording it as a FAIL against the 60-minute budget. Where the extra time
+went is the same place it went in 09-03 — the audits, not the deploys — and L7's verify
+alone waits out a real Container Apps scale-in cycle.
+
+**Restate or defend the budget; do not quietly carry it.** Either the SLA becomes a measured
+number (a rebuild in roughly two and a half hours, most of it verification that could be run
+in parallel or deferred), or V11.4's `-WallClockBudgetMinutes` is raised deliberately with
+the reason recorded. What must not happen is a third cycle failing the same criterion while
+the document still advertises 60.
+
+**The 2026-09-03 breakdown, kept because the shape still holds.** Every deploy was at or
+under estimate; two audits were not:
 
 ```
 deploy work, all legs               ~30 min   (L2 8.3 · L6 13.1 · L5 seed 4.0 · L7 3.8)
