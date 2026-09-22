@@ -62,12 +62,14 @@ name: self-heal
 #       resolve every open Dependabot alert that has an available patch."
 #       https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-security-updates
 #     * This matters for the demo because all three seeded apps/vuln-lab CVEs
-#       (json5 2.2.0, minimist 1.2.5, semver 7.5.1) are DEPENDENCY findings.
-#       Autofix will never touch them, and until the lab also seeds a
-#       CodeQL-detectable code flaw the `autofix` job below has nothing to act
-#       on. So the `dependency` job does the only honest thing available: it
-#       finds Dependabot's own security PR and puts it through the same gauntlet
-#       with the same auto-merge-on-green.
+#       (json5 2.2.0, minimist 1.2.5, semver 7.5.1) are DEPENDENCY findings, so
+#       Autofix will never touch them. The lab DOES also carry two
+#       CodeQL-detectable code seeds under apps/vuln-lab/seeds/, and those are
+#       what the `autofix` job acts on - the two tracks are seeded separately
+#       because GitHub heals the two finding types with two different
+#       mechanisms. So the `dependency` job does the only honest thing available
+#       for its half: it finds Dependabot's own security PR and puts it through
+#       the same gauntlet with the same auto-merge-on-green.
 #       (`open-pull-requests-limit: 0` in dependabot.yml does not block this —
 #       that setting caps *version* updates; security updates are exempt.)
 #     * The newer "assign a Dependabot alert to an AI coding agent" path (GA
@@ -213,6 +215,128 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  unstick:
+    name: unstick armed PRs that fell behind main
+    runs-on: ubuntu-latest
+    # Bounded: a handful of API calls. An unbounded job inherits GitHub's six-hour default
+    # (F81).
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # WHY THIS JOB EXISTS AT ALL.
+      #
+      # main's ruleset sets strict_required_status_checks_policy: true, so a branch must be
+      # up to date with base before it can merge. The `compliance` workflow commits
+      # verification state to main after every merge - seven of the last twelve commits on
+      # 2026-09-21. GitHub's auto-merge does NOT update a branch that falls behind: it waits
+      # for the requirements to be met and "up to date" is never going to become true on its
+      # own.
+      #
+      # So an armed heal PR goes BEHIND the moment anything else lands, and sits there.
+      # MEASURED 2026-09-21: PR #285 was green with auto-merge enabled and BEHIND BY 28
+      # COMMITS, four days after it opened. PR #286 - the one heal that ever did merge
+      # unattended - was created 06:37:32Z, merged 06:41:39Z, and the compliance commit
+      # landed at 06:42:03Z. It won by TWENTY-FOUR SECONDS.
+      #
+      # That is the difference between a property and a race, and the product claim in
+      # CLAUDE.md - "auto-merges unattended in both modes" - was resting on the race.
+      #
+      # This job updates any open PR that has auto-merge armed and has fallen behind, which
+      # re-runs its checks and lets auto-merge fire. It does NOT merge anything itself and
+      # it does not arm anything: a PR that a human never armed is left alone, and the
+      # gauntlet still decides. It bounds the stall to one scheduled interval instead of
+      # forever.
+      #
+      # A PAT is required, not preferred. Updating a branch with GITHUB_TOKEN produces a
+      # push that triggers no workflow runs (F120), so the required checks would never
+      # report on the updated head and the PR would be stuck in a new way.
+      - name: Update armed pull requests that are behind base
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HAVE_PAT: ${{ secrets.SELF_HEAL_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+
+          if [ "${HAVE_PAT}" != "true" ]; then
+            echo "::warning title=No SELF_HEAL_TOKEN::Updating a branch with GITHUB_TOKEN pushes a commit that triggers no workflow runs (F120), so the required checks would never report on the new head. Skipping rather than creating a different kind of stuck."
+            exit 0
+          fi
+
+          # NOT mergeStateStatus. That field is computed LAZILY by GitHub, and this job runs
+          # right after main moves - the exact window where it is least likely to be settled.
+          # MEASURED 2026-09-21, seconds after a rebase landed: the same filter returned
+          # NOTHING on its first call and "291,285" on the three calls after it, because
+          # mergeability had not been recomputed and every PR read UNKNOWN. An empty result
+          # is indistinguishable from "nothing to do", so the job would have announced "no
+          # armed PR is behind base" at precisely the moment the most had just fallen behind.
+          # That is the absence-vs-unobservable class, inside the fix for it.
+          #
+          # autoMergeRequest IS reliable - it is stored state, not a computed prediction - so
+          # it selects the candidates, and the commit graph decides behind-ness.
+          armed=$(gh pr list --repo "${REPO}" --state open --limit 50 \
+                    --json number,autoMergeRequest,baseRefName,headRefName \
+                    --jq '.[] | select(.autoMergeRequest != null) | "\(.number) \(.baseRefName) \(.headRefName)"')
+
+          if [ -z "${armed}" ]; then
+            echo "No open pull request has auto-merge armed."
+            echo "### Self-heal: no armed pull requests" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          # behind_by comes straight from the commit graph: a number, immediately, every time.
+          prs=""
+          while read -r number base head; do
+            [ -n "${number}" ] || continue
+            behind=$(gh api "repos/${REPO}/compare/${base}...${head}" --jq '.behind_by' 2>/dev/null || echo "")
+            if [ -z "${behind}" ]; then
+              # COULD NOT LOOK is not IS FINE. Say so rather than silently treating it as
+              # up to date.
+              echo "::warning title=Could not compare PR #${number}::The compare API did not answer for ${base}...${head}, so whether it is behind base is UNKNOWN - this is not a report that it is up to date."
+              continue
+            fi
+            echo "PR #${number}: ${behind} commit(s) behind ${base}."
+            if [ "${behind}" -gt 0 ]; then
+              prs="${prs} ${number}"
+            fi
+          done <<< "${armed}"
+
+          if [ -z "${prs}" ]; then
+            echo "Every armed pull request is up to date with base."
+            echo "### Self-heal: every armed PR is up to date with base" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          # A RUN IS AN EXPENSIVE, RATE-LIMITED OBSERVATION: every PR is attempted and every
+          # outcome reported, rather than stopping at the first refusal.
+          updated=0
+          refused=0
+          {
+            echo "### Self-heal: armed pull requests updated"
+            echo
+            echo "| PR | outcome |"
+            echo "|---|---|"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          for pr in ${prs}; do
+            if gh api --method PUT "repos/${REPO}/pulls/${pr}/update-branch" \
+                 -H "Accept: application/vnd.github+json" >/dev/null 2>&1; then
+              echo "PR #${pr}: branch updated; its checks will re-run and auto-merge can fire."
+              echo "| #${pr} | updated |" >> "${GITHUB_STEP_SUMMARY}"
+              updated=$((updated + 1))
+            else
+              # A refusal is reported, never swallowed: an update that cannot happen is
+              # exactly the state this job exists to make visible.
+              echo "::warning title=Could not update PR #${pr}::The branch is behind base and the update was refused - most often a conflict with main, which needs a human."
+              echo "| #${pr} | refused (likely a conflict) |" >> "${GITHUB_STEP_SUMMARY}"
+              refused=$((refused + 1))
+            fi
+          done
+
+          echo "Updated ${updated} pull request(s); ${refused} refused."
+
   select:
     name: select the alert to heal
     runs-on: ubuntu-latest
@@ -400,7 +524,7 @@ jobs:
             # trade one silent state for another.
             number="$(pick_from any)"
             if [ -n "${number}" ] && [ "${kind}" = "dependabot" ]; then
-              echo "::warning title=No adoptable alert::No open Dependabot alert has a security-update PR this lane could merge, so the chain selected one it cannot heal. That is usually F126 (a previous PR was closed unmerged and Dependabot does not reopen it) or a TRANSITIVE dependency with no direct pin to bump, such as esbuild. Do NOT re-arm apps/vuln-lab to manufacture an adoptable alert: that plant is retired (PR #237) and re-arming is F190. An alert this lane cannot adopt is a real state to report, not one to paper over."
+              echo "::warning title=No adoptable alert::No open Dependabot alert has a security-update PR this lane could merge, so the chain selected one it cannot heal. That is usually F126 (a previous PR was closed unmerged and Dependabot does not reopen it) or a TRANSITIVE dependency with no direct pin to bump, such as esbuild. An alert this lane cannot adopt is a real state to report, not one to paper over - so do not go looking for something the chain CAN heal in order to make this run look busier. In particular, do not re-arm apps/vuln-lab from here: its seeded pins are excluded from the backlog by policy and exist to exercise the chain deliberately, not to feed an automated run. Re-arming is NOT forbidden and it is NOT F190. The 2026-09-05 design (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md section 7, PR #237) KEEPS apps/vuln-lab, reseed.ps1 and vuln-lab-witness.yml in the repository and makes them a manual demonstration generator that no criterion depends on - armed by a human, on purpose, with --admin and a stated reason, when the queue is empty or the chain needs exercising in front of an audience. F190 dissolves with that change: re-arming stopped being something the verification demands every cycle, which is what made it a loop."
             fi
           fi
 
@@ -784,7 +908,7 @@ jobs:
             # WRONG remedy is worse than no remedy: it sends the reader to change a
             # setting that is already correct and stops them looking further. The actual
             # cause that day was the third one below.
-            echo "::notice title=No Dependabot PR to gauntlet::No open Dependabot pull request mentions '${PACKAGE}'. Copilot Autofix does not cover dependency alerts and no API can request a security-update PR on demand, so this lane can only ADOPT a PR Dependabot has already opened. Check three things, in this order, rather than assuming the first: (1) is 'Dependabot security updates' ON? (gh api repos/OWNER/REPO/automated-security-fixes) - if it is already on, this is NOT your cause; (2) is there an ignore condition on the package? (comment '@dependabot show ${PACKAGE} ignore conditions' on any Dependabot PR); (3) was a previous security PR for this advisory CLOSED unmerged? Dependabot does not reopen one, and no ignore condition is recorded when it happens - the alert stays open forever with no PR. For (3) the alert can only be re-raised by changing the manifest that declares the dependency, so Dependabot opens a fresh security PR. Do NOT do this by re-arming apps/vuln-lab: that plant is retired (PR #237), re-arming is F190, and its seeded pins are being deleted rather than raised again. If the package is a real dependency of a real app, bump or re-pin it in that app's manifest; if nothing upstream can fix it, record it as pending-solution rather than leaving it to look like an unworked finding."
+            echo "::notice title=No Dependabot PR to gauntlet::No open Dependabot pull request mentions '${PACKAGE}'. Copilot Autofix does not cover dependency alerts and no API can request a security-update PR on demand, so this lane can only ADOPT a PR Dependabot has already opened. Check three things, in this order, rather than assuming the first: (1) is 'Dependabot security updates' ON? (gh api repos/OWNER/REPO/automated-security-fixes) - if it is already on, this is NOT your cause; (2) is there an ignore condition on the package? (comment '@dependabot show ${PACKAGE} ignore conditions' on any Dependabot PR); (3) was a previous security PR for this advisory CLOSED unmerged? Dependabot does not reopen one, and no ignore condition is recorded when it happens - the alert stays open forever with no PR. For (3) the alert can only be re-raised by changing the manifest that declares the dependency, so Dependabot opens a fresh security PR. Do NOT do this by re-arming apps/vuln-lab: its three seeded pins STAY in the repository and are excluded from this backlog by policy, so raising them again would neither re-raise THIS advisory nor give this lane anything legitimate to adopt. (Re-arming the lab is itself a supported manual operation under the 2026-09-05 design, PR #237 - a human, --admin, a stated reason - it is simply not the answer to this message, and it is not F190.) If the package is a real dependency of a real app, bump or re-pin it in that app's manifest; if nothing upstream can fix it, record it as pending-solution rather than leaving it to look like an unworked finding."
           else
             echo "Found ${url}"
           fi
@@ -869,10 +993,15 @@ jobs:
   # MLS_L10_RESEED_MERGED_AT IS LEGACY. DO NOT SET IT, AND DO NOT RE-SEED TO
   # PRODUCE ONE. It dated the window from a re-seed of apps/vuln-lab, and the
   # sponsor-approved design of 2026-09-05
-  # (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md,
-  # PR #237) retires the plant altogether: re-arming is the F190 loop that design
-  # exists to break, and the whole apparatus — seeded CVEs, reseed.ps1, the
-  # --admin override — existed to feed one hard-coded path filter.
+  # (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md
+  # section 7, PR #237) stops that plant being LOAD-BEARING: apps/vuln-lab,
+  # reseed.ps1 and vuln-lab-witness.yml all stay in the repository, and no
+  # criterion depends on them any more. What that ends is a verification that
+  # required a re-seed every cycle to have anything to measure - which is what
+  # F190 was, and F190 dissolves with it. Arming the lab remains a legitimate
+  # manual operation: a human, --admin, a stated reason, when the queue is empty
+  # or the chain needs exercising in front of an audience. It is simply no
+  # longer where this window comes from.
   #
   # F192 already removed the dependency: when no timestamp is supplied the window
   # derives from the heal pull request's own autoMergeRequest.enabledAt, which
@@ -970,7 +1099,7 @@ jobs:
         if: ${{ vars.MLS_L10_RESEED_MERGED_AT == '' }}
         run: |
           set -euo pipefail
-          echo "::warning title=No re-seed merge timestamp::MLS_L10_RESEED_MERGED_AT is not set. This is EXPECTED and needs no action: the variable dated the chain window from a re-seed of apps/vuln-lab, and the sponsor-approved design of 2026-09-05 (PR #237) retires that plant. Do not re-seed to satisfy it. F192 derives the window from the heal PR auto-merge arming time instead, so a trail is recorded PENDING rather than FAIL whenever a heal PR exists"
+          echo "::warning title=No re-seed merge timestamp::MLS_L10_RESEED_MERGED_AT is not set. This is EXPECTED and needs no action: the variable dated the chain window from a re-seed of apps/vuln-lab, and the sponsor-approved design of 2026-09-05 (section 7, PR #237) stops that plant being load-bearing - it stays in the repository, but no criterion dates anything from a re-seed any more. Do not re-seed to satisfy this variable; arming the lab is now a deliberate manual demonstration, not an input to verification. F192 derives the window from the heal PR auto-merge arming time instead, so a trail is recorded PENDING rather than FAIL whenever a heal PR exists"
 
       - name: Run verification/layer-10-audit.ps1
         id: audit

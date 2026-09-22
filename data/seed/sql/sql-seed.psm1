@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Azure SQL half of the L5/L6 data-plane seed: apply the DDL in data/seed/sql/, then
-    load the ten generated tables.
+    load the twelve generated tables.
 
 .DESCRIPTION
     Every database call goes through ONE choke point, Invoke-SeedSqlCommand, which is
@@ -643,7 +643,7 @@ function Import-SeedTable {
 function Invoke-SqlSeed {
     <#
     .SYNOPSIS
-        Apply the DDL and load the ten tables into the Azure SQL operational database.
+        Apply the DDL and load the twelve tables into the Azure SQL operational database.
     .DESCRIPTION
         Idempotent. When every table already holds exactly its expected row count the
         load is skipped entirely and the run reports SkippedAlreadySeeded - that is the

@@ -10,9 +10,9 @@
       1. GENERATE  `python -m generators build` from data/, seed 20260822 - but only when
                    data/generated/ is missing or incomplete. The seed, not the artifacts,
                    is the source of truth; data/generated/ is gitignored and disposable.
-      2. SQL       apply data/seed/sql/*.sql in filename order, then load the ten tables
+      2. SQL       apply data/seed/sql/*.sql in filename order, then load the twelve tables
                    into the Azure SQL serverless operational database.
-      3. LAKEHOUSE upload the ten CSVs into OneLake and load them as Delta tables in
+      3. LAKEHOUSE upload the twelve CSVs into OneLake and load them as Delta tables in
                    `mls_operations` over the Fabric REST API.
 
     -Target picks which of 2 and 3 run. Step 1 runs for either.
@@ -213,7 +213,7 @@ function Invoke-GeneratorBuild {
         throw "``$PythonExecutable -m generators build`` failed with exit code $exitCode. Nothing was seeded."
     }
     if (-not (Test-GeneratedDataComplete -Manifest $Manifest -DataPath $DataPath)) {
-        throw "The generator reported success but '$DataPath' is still missing files for one or more of the ten tables. Refusing to seed from an incomplete dataset."
+        throw "The generator reported success but '$DataPath' is still missing files for one or more of the twelve tables. Refusing to seed from an incomplete dataset."
     }
     Write-Status 'Dataset generated.' -Color Green
     return $true

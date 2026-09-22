@@ -207,7 +207,7 @@ jobs:
           python -m generators build
           python -m generators summary | tee ../generator-summary.txt
 
-      - name: Load the 10 Delta tables
+      - name: Load the 12 Delta tables
         if: ${{ !inputs.dry_run }}
         shell: pwsh
         run: |
@@ -233,6 +233,53 @@ jobs:
             -OneLakeToken $oneLakeToken `
             -Confirm:$false
 
+
+      # TABLE PROTECTION LIVES HERE, NOT IN L4, AND THE ORDERING IS THE REASON.
+      # infra-up runs layer-04 BEFORE layer-05 (layer-05 needs layer-04), and this step
+      # resolves the lakehouse and refuses when it is absent. Sited in L4 it would throw on
+      # every rebuild, before L5 had created anything - and because layer-05 needs
+      # layer-04, that failure would stop the entire rebuild at the second layer.
+      #
+      # It belongs here on the merits too: protection is a property of the DATA. It cannot
+      # be applied before the tables exist, and this is the job that creates them. L4 keeps
+      # the label taxonomy, which is tenant-scoped and independent of the lakehouse.
+      #
+      # No continue-on-error. A step allowed to fail is a step nobody is watching (F119),
+      # and this is the difference between a restricted table and one that looks restricted.
+      - name: Apply column- and row-level security to the sensitive tables
+        if: ${{ !inputs.dry_run }}
+        shell: pwsh
+        env:
+          MLS_COMPANY_PREFIX: ${{ vars.MLS_COMPANY_PREFIX }}
+          LAKEHOUSE_NAME: ${{ vars.MLS_LAKEHOUSE_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # SqlServer 22+ is required for Invoke-Sqlcmd -AccessToken: the endpoint enforces
+          # Entra-only auth, so there is no password to fall back on (hard rule 5).
+          Install-Module SqlServer -Force -Scope CurrentUser -MinimumVersion 22.0.0 -AllowClobber
+          Import-Module ./infra/fabric/fabric-api.psm1 -Force
+
+          $prefix = if ($env:MLS_COMPANY_PREFIX) { $env:MLS_COMPANY_PREFIX } else { 'mls' }
+          $lakehouseName = if ($env:LAKEHOUSE_NAME) { $env:LAKEHOUSE_NAME } else { 'mls_operations' }
+
+          # Resolved, never stored. Not because the FQDN changes every rebuild - measured
+          # 2026-09-21, it does not - but because recreating the workspace is a real G3
+          # path, the lakehouse id DOES change, and a derived value beats a stored one (F129).
+          $fabricToken = az account get-access-token --resource https://api.fabric.microsoft.com --query accessToken -o tsv
+          $workspace = Get-FabricWorkspace -Token $fabricToken -Name "$prefix-operations"
+          if (-not $workspace) { throw "Fabric workspace '$prefix-operations' not found." }
+          $lakehouse = Get-FabricLakehouse -Token $fabricToken -WorkspaceId $workspace.id -Name $lakehouseName
+          if (-not $lakehouse) { throw "Lakehouse '$lakehouseName' not found - the seed above should have created it." }
+
+          $endpoint = $lakehouse.properties.sqlEndpointProperties.connectionString
+          if (-not $endpoint) { throw "Lakehouse '$lakehouseName' reports no SQL analytics endpoint yet; it provisions asynchronously after creation." }
+
+          $sqlToken = az account get-access-token --resource https://database.windows.net --query accessToken -o tsv
+          ./infra/fabric/protect-tables.ps1 -SqlEndpoint $endpoint -AccessToken $sqlToken `
+            -Database $lakehouseName -Prefix $prefix -Confirm:$false *>&1 |
+            Tee-Object -FilePath protection-apply.txt
+
       - name: Pause the Fabric capacity
         if: ${{ always() }}
         run: |
@@ -253,10 +300,19 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: layer-05-fabric
+          # protection-apply.txt: the protect step tees its whole transcript there and
+          # nothing collected it, so the one record of which statements were applied to
+          # which tables lived only in the runner's scrollback. V5.6 proves the filter
+          # FILTERS, which is the verdict; this is the account of how it got there, and
+          # the two answer different questions on the run where something went wrong.
+          #
+          # The list below is a LITERAL block scalar - a '#' inside it is a path pattern,
+          # not a comment.
           path: |
             fabric-plan.txt
             fabric-apply.txt
             generator-summary.txt
+            protection-apply.txt
           if-no-files-found: warn
           retention-days: 14
 
@@ -284,6 +340,17 @@ jobs:
       FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
     steps:
       - uses: actions/checkout@v7
+
+      # DERIVED, NOT STORED. V5.6/V5.7 name the two tier roles, so they need the estate
+      # prefix. `vars.MLS_COMPANY_PREFIX` is the obvious source and the wrong one twice
+      # over: it is set in no environment at all (checked 2026-09-21 - repo, demo and
+      # verify), and this job is `environment: verify`, so a value stored in `demo` would
+      # not reach it anyway (F124). A `|| 'mls'` fallback would therefore be doing all the
+      # work while looking like configuration. naming.bicep is where the prefix actually
+      # lives, and this action reads it - the same source the protect step's roles are
+      # named from, so the two cannot drift apart silently.
+      - id: names
+        uses: ./.github/actions/naming
 
       - name: Verifier identity not configured
         if: ${{ needs.preflight.outputs.verifier != 'true' }}
@@ -330,6 +397,8 @@ jobs:
             ${{ vars.FABRIC_CAPACITY_ID }}
             -ExpectedCountPath
             data/generators/tests/expected_counts.json
+            -ProtectionPrefix
+            ${{ steps.names.outputs.prefix }}
             ${{ vars.MLS_SQL_ENDPOINT && '-SqlEndpoint' || '' }}
             ${{ vars.MLS_SQL_ENDPOINT }}
 

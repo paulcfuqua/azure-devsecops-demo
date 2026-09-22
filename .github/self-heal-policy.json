@@ -76,9 +76,60 @@
       "A deadline, not an amnesty. The findings are real, and they stay visible."
     ],
     "container-image": {
-      "reason": "Lane 3 has no automated path on this subscription: ACR Tasks returns TasksOperationsNotAllowed (spec section 8, P1 - reproduced twice, on two registries in two resource groups), and the documented scheduled-rebuild fallback is not built yet. Counting base-image findings against a heal SLO states something true and unactionable.",
+      "reason": "Lane 3 has no automated path on this subscription: ACR Tasks returns TasksOperationsNotAllowed (spec section 8, P1 - reproduced twice, on two registries in two resource groups), and the documented scheduled-rebuild fallback is not built yet. Counting base-image findings against a heal SLO states something true and unactionable. SECOND, INDEPENDENT BLOCKER as of 2026-09-17: for the findings actually open in this lane, no patched base image exists to rebuild ONTO - see baseImages.observations. The deferral was about automation; a manual rebuild today would produce the same twelve alerts.",
       "expires": "2026-10-07",
-      "unblockedBy": "the scheduled rebuild in spec sections 8 and 11, or an Azure support request granting ACR Tasks"
+      "unblockedBy": "the scheduled rebuild in spec sections 8 and 11, or an Azure support request granting ACR Tasks",
+      "baseImages": {
+        "$comment": [
+          "THE INVENTORY THIS LANE IS DEFERRED FOR, and the posture of each entry as last",
+          "resolved against the upstream registry rather than remembered.",
+          "",
+          "It exists because a deferral whose SCOPE nobody can read is the dumping ground V10.4",
+          "exists to prevent, one level up. 'Container images' is not a scope; these five",
+          "Dockerfiles and these three external bases are. A base changed without a line here is",
+          "a base whose CVE posture nobody re-checked, and",
+          "verification/tests/failure-classes.Tests.ps1 fails until the inventory and the",
+          "Dockerfiles agree again.",
+          "",
+          "'declared' lists every EXTERNAL image an app Dockerfile pulls. Internal stage",
+          "references (FROM deps AS build) are not listed: they resolve inside the same file and",
+          "reach no registry."
+        ],
+        "observedAt": "2026-09-17",
+        "declared": [
+          {
+            "image": "node:24-alpine",
+            "usedBy": ["apps/compliance/Dockerfile", "apps/control-tower/Dockerfile", "apps/launch-ops/Dockerfile"],
+            "role": "build stage only - its filesystem does not reach any published image"
+          },
+          {
+            "image": "nginx:1.31-alpine",
+            "usedBy": ["apps/compliance/Dockerfile", "apps/control-tower/Dockerfile", "apps/launch-ops/Dockerfile"],
+            "role": "runtime for the three static frontends"
+          },
+          {
+            "image": "node:24-bookworm-slim",
+            "usedBy": ["apps/data-api/Dockerfile", "apps/mcp-tools/Dockerfile"],
+            "role": "build and runtime for the two Node services"
+          }
+        ],
+        "observations": [
+          {
+            "finding": "CVE-2026-86145, -89156, -89157, -89158, -89160, -89161 (pcre2 before 10.48)",
+            "affects": "libpcre2-8-0 10.42-1 in node:24-bookworm-slim, reported by Trivy against apps/data-api and apps/mcp-tools - twelve code-scanning alerts, six CVEs across two images",
+            "state": "no patched base image is published anywhere upstream",
+            "evidence": [
+              "Trivy names the fix as libpcre2-8-0 10.42-1+deb12u1, matching Debian's tracker: bookworm 10.42-1 vulnerable, bookworm-security 10.42-1+deb12u1 fixed under DLA-4772-1.",
+              "node:24-bookworm-slim as published (image created 2026-09-09) still carries 10.42-1. Read out of the image's own /var/lib/dpkg/status over the registry API, not inferred from a tag date.",
+              "node:24-trixie-slim (also 2026-09-09) carries 10.46-1~deb13u1, and Debian's fixed trixie version is 10.46-1~deb13u2 - so a bookworm-to-trixie swap trades the six known CVEs for the SAME six, plus an untested distro major bump. That is a bump that fixes nothing, and it is worse than the honest state.",
+              "debian:bookworm-slim and debian:trixie-slim (2026-08-24) are older still, so there is no fresher upstream to move to.",
+              "The three Alpine apps are NOT affected and need no change: nginx:1.31-alpine carries pcre2 10.48-r0, the upstream release that fixes all six. Alpine 3.23 and 3.24 have shipped 10.48-r0 since 2026-09-02 - ahead of the 2026-09-11 CVE publication - and node:24-alpine contains no pcre2 at all."
+            ],
+            "action": "none, deliberately. The Dockerfiles pull FLOATING base tags, so the next app CI build after Docker republishes node:24-bookworm-slim picks the fix up with no PR and no lag. Pinning a digest here would convert that into a Dependabot round trip for the one CVE set we are waiting on, which is the wrong direction while the fix is the thing in flight.",
+            "reviewWhen": "Docker Hub republishes node:24-bookworm-slim after Debian's bookworm-security pcre2 upload. Check with: docker run --rm node:24-bookworm-slim dpkg -s libpcre2-8-0"
+          }
+        ]
+      }
     }
   },
 

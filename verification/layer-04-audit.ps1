@@ -7,9 +7,27 @@
     Implements the two master-plan Verify criteria owned by
     docs/runbooks/layers/L04.md section Validation cycle, and nothing else:
 
-      V4.1  Get-Label returns the 4 labels with expected GUIDs recorded to
+      V4.1  Get-Label returns the 6 labels with expected GUIDs recorded to
             verification/reports/.
       V4.2  Labels survive a kill/rebuild cycle (checked again at L11).
+      V4.4  RETIRED 2026-09-20. It asserted that the column DENYs exist and the RLS
+            policy is enabled - both ARTEFACTS. V4.5 proves the policy actually FILTERS,
+            which strictly implies it exists and is enabled, so nothing was lost by
+            removing it. Two things made keeping it worse than useless: the column DENYs
+            target a role that can never have members on this endpoint (F218), so they
+            enforce nothing; and mls-verifier cannot read sys.database_permissions at
+            all (F224), so the criterion could never reach a verdict. A check that can
+            neither see its subject nor find a working control if it could is noise
+            wearing the costume of diligence. Restore it if the sensitive tables ever
+            move to a Fabric Warehouse, where database principals exist and the DENYs
+            would bind.
+      V4.5  Row-level security ENFORCES - a non-privileged caller sees exactly the
+            unrestricted rows. A REAL VERDICT: the predicate keys on the PRIVILEGED role,
+            so it filters every caller outside it, this auditor included.
+      V4.6  Column-level denial ENFORCES - not observable read-only, and reports SKIP
+            saying why. A DENY binds only members of the role it targets, and EXECUTE AS
+            is unsupported here (Msg 15868), and per F218 no principal can exist to be
+            denied in the first place.
 
     V4.2 is a checkpoint comparison, not a second query: L04 owns the criterion, L11 owns
     the re-execution schedule, so layer-11-audit.ps1 runs this same script with
@@ -110,16 +128,22 @@ function Get-CompanyPrefix {
 }
 
 function Get-ExpectedLabelName {
-    <# The prefixed four-label taxonomy infra/purview/labels.ps1 creates, in the same
+    <# The prefixed six-label taxonomy infra/purview/labels.ps1 creates, in the same
        lowest-to-highest order. Kept as a literal list here, mirroring that script's
        own Get-LabelTaxonomy, for the reason it gives: a read-only audit importing
-       another layer's apply script is a bigger coupling than one four-item list. #>
+       another layer's apply script is a bigger coupling than one six-item list. #>
     param([Parameter(Mandatory)][string]$Prefix)
-    return @("$Prefix-public", "$Prefix-internal", "$Prefix-confidential", "$Prefix-export-controlled")
+    return @(
+        "$Prefix-public", "$Prefix-internal", "$Prefix-confidential", "$Prefix-export-controlled",
+        # The two tiered-access labels. They CLASSIFY the mixed-sensitivity tables;
+        # they do not gate access to them - that is CLS/RLS at the data layer, and
+        # no criterion here may assert otherwise (F18).
+        "$Prefix-hr-sensitive", "$Prefix-3ppi"
+    )
 }
 
 function Get-LabelSnapshot {
-    <# One read of the four labels, normalised to name -> guid. #>
+    <# One read of the six labels, normalised to name -> guid. #>
     param([Parameter(Mandatory)][string[]]$ExpectedLabel)
     $labels = @(Get-MlsLabel)
     $relevant = @($labels | Where-Object { (Get-MlsProperty -InputObject $_ -Name 'DisplayName') -in $ExpectedLabel })
@@ -141,7 +165,7 @@ function Get-RecordedLabelGuid {
 }
 
 function Test-LabelTaxonomy {
-    <# V4.1 - exactly the four labels; GUIDs equal to the recorded baseline when one exists. #>
+    <# V4.1 - exactly the six labels; GUIDs equal to the recorded baseline when one exists. #>
     param(
         [Parameter(Mandatory)][string[]]$ExpectedLabel,
         [AllowNull()]$Baseline,
@@ -190,7 +214,7 @@ function Test-LabelPersistence {
     $drift = @($snapshot.Keys | Where-Object { $Baseline.Contains($_) -and $Baseline[$_] -ne $snapshot[$_] })
     if ($comparison.Equal -and $drift.Count -eq 0) {
         return New-MlsCheckResult -Passed $true `
-            -Observed "checkpoint '$Checkpoint': same 4 labels, same GUIDs as the recorded baseline" `
+            -Observed "checkpoint '$Checkpoint': same 6 labels, same GUIDs as the recorded baseline" `
             -Detail 'L11 re-executes this criterion immediately after down.ps1 and again after up.ps1 (V11.2 invokes it by reference).'
     }
     return New-MlsCheckResult -Passed $false `
@@ -218,7 +242,7 @@ function Test-LabelPolicyScope {
     if ($null -eq $policy) {
         return New-MlsCheckResult -Passed $false `
             -Observed "label policy '$PolicyName' not found" `
-            -Detail 'A published policy is what actually lets anyone apply a label - without it the four labels are directory objects with no protection action (L04.md Deploy procedure step 1; F18).'
+            -Detail 'A published policy is what actually lets anyone apply a label - without it the six labels are directory objects with no protection action (L04.md Deploy procedure step 1; F18).'
     }
     $actualLabel = @(Get-MlsProperty -InputObject $policy -Name 'Labels')
     $actualScope = @(Get-MlsProperty -InputObject $policy -Name 'ExchangeLocation')
@@ -304,16 +328,16 @@ function Invoke-Main {
 
     # L04: label replication across S&C endpoints can lag
     Invoke-MlsCriterion -Context $context -Id 'V4.1' -Control @('3.8.4') `
-        -Description 'Get-Label returns the 4 labels with expected GUIDs recorded to verification/reports/' `
+        -Description 'Get-Label returns the 6 labels with expected GUIDs recorded to verification/reports/' `
         -Command "Connect-IPPSSession -AppId <mls-verifier> -Organization $organizationName -CertificateThumbprint <thumbprint>`nGet-Label | Select-Object DisplayName, Guid | Where-Object DisplayName -in '$($ExpectedLabel -join "','")'" `
-        -Expected "exactly 4 labels ($($ExpectedLabel -join ', ')); GUIDs equal to the recorded baseline when one exists" `
+        -Expected "exactly 6 labels ($($ExpectedLabel -join ', ')); GUIDs equal to the recorded baseline when one exists" `
         -RetryWindowMinutes 30 `
         -Test { Test-LabelTaxonomy -ExpectedLabel $ExpectedLabel -Baseline $baseline -Context $context } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V4.2' -Control @('3.8.4') `
         -Description 'Labels survive a kill/rebuild cycle (checked again at L11)' `
         -Command "Get-Label  # re-read at checkpoint '$Checkpoint', compared against $baselinePath" `
-        -Expected 'same 4 labels, same GUIDs as label-guids.json, at every checkpoint' -NoRetry `
+        -Expected 'same 6 labels, same GUIDs as label-guids.json, at every checkpoint' -NoRetry `
         -Test { Test-LabelPersistence -ExpectedLabel $ExpectedLabel -Baseline $baseline -Checkpoint $Checkpoint } | Out-Null
 
     # L04: reads the replication V4.1 has already waited out
@@ -323,6 +347,14 @@ function Invoke-Main {
         -Expected "policy '$ExpectedLabelPolicy' exists; Labels == [$($ExpectedLabel -join ', ')]; ExchangeLocation == [$($ExpectedLabelPolicyScope -join ', ')]" `
         -RetryWindowMinutes 10 `
         -Test { Test-LabelPolicyScope -PolicyName $ExpectedLabelPolicy -ExpectedLabel $ExpectedLabel -ExpectedScope $ExpectedLabelPolicyScope } | Out-Null
+
+    # The data-layer criteria moved to L5 (V5.6/V5.7) with the step that applies them.
+    # There is deliberately no separate "the two new labels exist" criterion - V4.1
+    # already asserts the taxonomy is EXACTLY the six names.
+    # The restricted COLUMN list went with V4.4: it was that criterion's input, and per
+    # F218 those DENYs bind nobody on this endpoint anyway. V4.6 names the columns in its
+    # own text for the human reading a SKIP.
+    #
 
     return $context
 }

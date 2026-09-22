@@ -12,13 +12,18 @@
  * description is generated from it; these tests assert that the generated text
  * and the accepted grammar stay in step.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 import {
   assertReadOnlySingleStatement,
   DIALECTS,
+  RESTRICTED_OBJECT,
   MAX_RESULT_ROWS,
   scrubSql,
   SqlRejected,
+  type SqlDialect,
   SQLITE_SATURDAY_WEEKDAY,
   TSQL_SATURDAY_WEEKDAY,
   TSQL_SESSION_PROLOGUE,
@@ -433,5 +438,160 @@ describe("trino dialect", () => {
     const crafted = "SELECT 1 /* a /* b */ ; DROP TABLE launches";
     expect(scrubSql(crafted, "trino").terminated).toBe(true);
     expect(() => assertReadOnlySingleStatement(crafted, "trino")).toThrow(SqlRejected);
+  });
+});
+
+/**
+ * THE RESTRICTED-OBJECT GATE.
+ *
+ * Segregation in this estate is by OBJECT, not by identity. Measured 2026-09-21 on the
+ * rebuilt estate, as the tenant's Global Administrator:
+ *
+ *     dbo.defect_reports    900 rows   (all 139 THIRD_PARTY_PROPRIETARY included)
+ *     dbo.v_defect_reports  761 rows
+ *     IS_ROLEMEMBER('mls_data_privileged') = 0
+ *     IS_ROLEMEMBER('mls_data_standard')   = 0
+ *
+ * Nobody is in either role and nobody can be (F218: CREATE USER is unsupported on the
+ * Fabric SQL analytics endpoint), so the DENY on the base table binds to no principal.
+ * The read-only gate stops writes and says so explicitly — "That stops writes. It does
+ * not stop reads." These tests are the reads.
+ *
+ * A gate is only worth its runtime if it survives the obvious ways around it, so the
+ * bypasses are the bulk of what follows.
+ */
+describe("the restricted-object gate", () => {
+  const RESTRICTED_QUERIES = [
+    ["bare", "SELECT * FROM defect_reports"],
+    ["schema-qualified", "SELECT * FROM dbo.defect_reports"],
+    ["bracketed", "SELECT * FROM [dbo].[defect_reports]"],
+    ["three-part", "SELECT * FROM mls_operations.dbo.defect_reports"],
+    ["upper case", "SELECT * FROM DBO.DEFECT_REPORTS"],
+    ["mixed case", "SeLeCt * FrOm Dbo.Defect_Reports"],
+    ["inside a CTE", "WITH t AS (SELECT * FROM dbo.defect_reports) SELECT * FROM t"],
+    ["inside a subquery", "SELECT COUNT(*) FROM (SELECT id FROM dbo.defect_reports) x"],
+    ["joined to a permitted table", "SELECT * FROM suppliers s JOIN dbo.defect_reports d ON d.supplier_id = s.id"],
+    ["aliased", "SELECT d.* FROM dbo.defect_reports AS d"],
+    ["unioned behind a permitted table", "SELECT id FROM launches UNION ALL SELECT id FROM defect_reports"],
+    ["extra whitespace and newlines", "SELECT *\n  FROM\n    dbo.defect_reports"],
+    ["hr base table", "SELECT salary_usd FROM dbo.hr_roster"],
+    ["hr bracketed", "SELECT * FROM [hr_roster]"],
+    // EVERY QUOTING FORM. The first version of this gate ran on the default scrub, which
+    // replaces all three with a placeholder, so each of these sailed through. An agent
+    // writing T-SQL emits brackets by default, so this was the likely shape, not an
+    // exotic evasion.
+    ["double-quoted", 'SELECT * FROM "defect_reports"'],
+    ["backticked", "SELECT * FROM `defect_reports`"],
+    ["bracketed with spaces", "SELECT * FROM [ dbo ].[ defect_reports ]"],
+  ] as const;
+
+  for (const [label, sql] of RESTRICTED_QUERIES) {
+    it(`refuses the restricted table (${label})`, () => {
+      expect(() => assertReadOnlySingleStatement(sql, "tsql")).toThrow(SqlRejected);
+    });
+  }
+
+  // THE DISTINCTION THE WHOLE CONTROL RESTS ON. \bdefect_reports\b must not match
+  // v_defect_reports: there is no word boundary between `_` and `d`. If this ever starts
+  // failing, the demo has no governed path left and every dashboard goes empty.
+  const PERMITTED_QUERIES = [
+    ["the governed defect view", "SELECT * FROM dbo.v_defect_reports"],
+    ["the governed defect view, bracketed", "SELECT * FROM [dbo].[v_defect_reports]"],
+    ["the governed defect view, upper case", "SELECT * FROM DBO.V_DEFECT_REPORTS"],
+    ["the governed hr view", "SELECT display_name, start_date FROM dbo.v_hr_roster"],
+    ["an ordinary table", "SELECT COUNT(*) FROM launches"],
+    ["a join between permitted objects", "SELECT * FROM v_defect_reports d JOIN suppliers s ON d.supplier_id = s.id"],
+  ] as const;
+
+  for (const [label, sql] of PERMITTED_QUERIES) {
+    it(`allows ${label}`, () => {
+      expect(() => assertReadOnlySingleStatement(sql, "tsql")).not.toThrow();
+    });
+  }
+
+  // A column whose NAME contains a restricted table name is not a reference to it.
+  // Over-blocking is a real cost: it makes the agent look broken on innocent questions.
+  it("does not refuse an identifier that merely contains the restricted name", () => {
+    expect(() => assertReadOnlySingleStatement(
+      "SELECT defect_reports_total FROM findings_history", "tsql",
+    )).not.toThrow();
+  });
+
+  // The scrub runs first, so a name inside a string literal is not a reference either.
+  it("does not refuse the name inside a string literal", () => {
+    expect(() => assertReadOnlySingleStatement(
+      "SELECT 'defect_reports' AS label FROM launches", "tsql",
+    )).not.toThrow();
+  });
+
+  // ...but it must not be possible to HIDE a real reference in a comment either, because
+  // the comment is scrubbed away and the real reference is what remains.
+  it("still refuses when a comment is used as cover", () => {
+    expect(() => assertReadOnlySingleStatement(
+      "SELECT * /* nothing to see */ FROM dbo.defect_reports", "tsql",
+    )).toThrow(SqlRejected);
+  });
+
+  // THE MESSAGE IS PART OF THE CONTROL: the caller is an LLM that will retry, and this is
+  // also the line an audience reads off the screen.
+  it("names the governed alternative rather than only refusing", () => {
+    let message = "";
+    try {
+      assertReadOnlySingleStatement("SELECT * FROM dbo.defect_reports", "tsql");
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("defect_reports");
+    expect(message).toContain("v_defect_reports");
+    expect(message).toMatch(/restricted/i);
+  });
+
+  it("names the hr alternative too", () => {
+    let message = "";
+    try {
+      assertReadOnlySingleStatement("SELECT salary_usd FROM hr_roster", "tsql");
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("v_hr_roster");
+  });
+
+  // Applied in every dialect. These names do not exist in the Athena dataset, so the cost
+  // is nil and the failure mode is closed rather than open.
+  it("applies in every dialect, not only tsql", () => {
+    for (const dialect of Object.keys(DIALECTS) as SqlDialect[]) {
+      expect(() => assertReadOnlySingleStatement(
+        "SELECT * FROM defect_reports", dialect,
+      )).toThrow(SqlRejected);
+    }
+  });
+
+  // A DENYLIST'S WEAKNESS CLOSED AT BUILD TIME. Adding a table to the manifest must not
+  // silently expose it: every seeded table is either restricted here or deliberately
+  // permitted, and a new one belongs to neither list until somebody decides.
+  it("classifies every table in the schema manifest", () => {
+    const manifestPath = resolve(__dirname, "../../../data/seed/schema-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      tables: Record<string, unknown>;
+    };
+    const seeded = Object.keys(manifest.tables).sort();
+    expect(seeded.length).toBeGreaterThan(8);
+
+    // The tables the agent is deliberately allowed to read. Kept here rather than derived,
+    // because "everything not restricted" is precisely the default that lets a new
+    // sensitive table through.
+    const PERMITTED = [
+      "cost_daily", "findings_history", "launches", "pads", "parts",
+      "scrubs", "suppliers", "telemetry_summary", "vehicles", "work_orders",
+    ];
+    const restricted = Object.keys(RESTRICTED_OBJECT);
+
+    const unclassified = seeded.filter(
+      (t) => !restricted.includes(t) && !PERMITTED.includes(t),
+    );
+    expect(unclassified, `unclassified seeded table(s): ${unclassified.join(", ")}`).toEqual([]);
+
+    // And nothing is on both lists, which would be a silent contradiction.
+    expect(restricted.filter((t) => PERMITTED.includes(t))).toEqual([]);
   });
 });

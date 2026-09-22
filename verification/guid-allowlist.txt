@@ -114,3 +114,14 @@ aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee  # apps/directline-token/tests - fake Easy 
 c1c1c1c1-0000-4000-8000-00000000c1d1  # data/seed/tests - synthetic data-api clientId
 b0b0b0b0-0000-4000-8000-00000000b0b0  # data/seed/tests - synthetic data-api principalId
 dead0000-0000-4000-8000-00000000dead  # data/seed/tests - clientId of a dead identity of the same name
+
+# Synthetic label GUIDs for the tiered-access taxonomy tests (L4). The four original
+# repeating-digit ids were already here; these extend the same fixture to the two labels
+# added for the mixed-sensitivity tables, plus one value that is deliberately NOT in the
+# baseline so the GUID-drift criterion has something to catch. A real label GUID is minted
+# by the tenant at first L4 run and recorded to verification/reports/label-guids.json, so
+# committing live values here would both go stale and defeat the drift check.
+# Reviewed 2026-09-20.
+55555555-5555-5555-5555-555555555555  # verification/tests - synthetic <prefix>-hr-sensitive label GUID
+66666666-6666-6666-6666-666666666666  # verification/tests - synthetic <prefix>-3ppi label GUID
+99999999-9999-9999-9999-999999999999  # verification/tests - drifted GUID, absent from the baseline by design

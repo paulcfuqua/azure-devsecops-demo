@@ -19,6 +19,8 @@ N_SUPPLIERS = 24
 N_PARTS = 300
 N_WORK_ORDERS = 800
 N_FINDINGS = 420
+N_HR_ROSTER = 240
+N_DEFECT_REPORTS = 900
 
 # ---------------------------------------------------------------------------
 # Fixed calendar windows (no time-of-run anywhere)
@@ -37,6 +39,73 @@ WO_END = date(2026, 6, 1)
 
 FINDINGS_START = date(2025, 1, 1)
 FINDINGS_END = date(2026, 6, 1)
+
+HR_START = date(2015, 1, 5)
+HR_END = date(2026, 5, 29)
+
+DEFECT_START = date(2024, 1, 2)
+DEFECT_END = date(2026, 6, 1)
+
+# ---------------------------------------------------------------------------
+# hr_roster / defect_reports pools — the two mixed-sensitivity tables
+# ---------------------------------------------------------------------------
+# Fictional names, composed rather than sampled from any real roster. CLAUDE.md
+# hard rule 4: no real person's PII, demo users are fictional.
+HR_FIRST_NAMES = [
+    "Aurelia", "Bertram", "Caspian", "Delphine", "Emeric", "Fenella", "Gideon",
+    "Halcyon", "Isolde", "Jarrah", "Kestrel", "Lisandra", "Montague", "Nerissa",
+    "Oberon", "Persephone", "Quillon", "Rosalind", "Silas", "Thessaly",
+]
+HR_LAST_NAMES = [
+    "Ashgrove", "Blackwood", "Castellan", "Drummond", "Everhart", "Fairweather",
+    "Glasspool", "Hartigan", "Ironside", "Jessamy", "Kingsleigh", "Lockhart",
+    "Marchetti", "Northcott", "Ollivander", "Pemberton", "Quarrington",
+    "Ravensworth", "Stronghold", "Thorncastle",
+]
+HR_DEPARTMENTS = [
+    "Propulsion", "Avionics", "Structures", "Launch Operations",
+    "Mission Assurance", "Supply Chain", "Finance", "People",
+]
+HR_JOB_FAMILIES = ["Engineering", "Operations", "Corporate", "Technician"]
+HR_LOCATIONS = ["Canaveral", "Vandenberg", "Wallops", "Remote"]
+HR_EMPLOYMENT_TYPES = [("Full-time", 82), ("Contract", 13), ("Intern", 5)]
+HR_PERFORMANCE_BANDS = [("Exceeds", 22), ("Meets", 62), ("Developing", 16)]
+# Base salary by job family, before the per-row spread applied in build.py.
+HR_SALARY_BASE = {
+    "Engineering": 118000,
+    "Operations": 92000,
+    "Corporate": 104000,
+    "Technician": 71000,
+}
+# The first N rows are managers; everyone else reports to one of them.
+HR_MANAGER_COUNT = 24
+
+DEFECT_SEVERITIES = [("Critical", 6), ("Major", 24), ("Minor", 70)]
+DEFECT_SUBSYSTEMS = [
+    "Propulsion", "Avionics", "Structures", "Thermal", "Guidance",
+    "Ground Support", "Payload Fairing",
+]
+DEFECT_STATUSES = [("Closed", 63), ("In Analysis", 22), ("Open", 15)]
+# Fraction of defect rows classified THIRD_PARTY_PROPRIETARY. Row-level security
+# filters exactly these for a standard caller, so the value must stay well away
+# from 0 and 1: an all-INTERNAL table makes every RLS check vacuously green.
+DEFECT_RESTRICTED_RATE = 0.17
+DEFECT_SUMMARIES = [
+    "Anomalous vibration signature during static fire",
+    "Telemetry dropout on stage separation",
+    "Out-of-spec weld porosity on interstage",
+    "Valve actuation latency above tolerance",
+    "Thermal blanket delamination observed post-flight",
+    "Guidance IMU drift beyond allowance",
+    "Fairing separation shock above predicted",
+]
+DEFECT_ROOT_CAUSES = [
+    "Supplier process deviation",
+    "Design margin insufficient",
+    "Assembly workmanship",
+    "Environmental exposure",
+    "Undetermined - monitoring",
+]
 
 # ---------------------------------------------------------------------------
 # Messiness knobs (all reproducible; bounds are asserted in tests)
@@ -86,6 +155,8 @@ TABLE_ORDER = [
     "work_orders",
     "cost_daily",
     "findings_history",
+    "hr_roster",
+    "defect_reports",
 ]
 
 # Exact expected row counts for the fixed-size tables (scrubs is derived from
@@ -101,6 +172,8 @@ EXPECTED_COUNTS = {
     # 5 cost centers x days in [COST_START, COST_END]
     "cost_daily": 5 * ((COST_END - COST_START).days + 1),
     "findings_history": N_FINDINGS,
+    "hr_roster": N_HR_ROSTER,
+    "defect_reports": N_DEFECT_REPORTS,
 }
 
 WEEKDAY_NAMES = [

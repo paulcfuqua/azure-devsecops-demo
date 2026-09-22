@@ -1,16 +1,30 @@
 # @mls/vuln-lab
 
-> ## ⛔ RETIRED — do not re-arm this lab.
+> ## ⚠️ This lab is no longer LOAD-BEARING. It is not being removed, and re-arming is allowed.
 >
-> `reseed.ps1` and everything below about re-arming are kept for reference only. The
-> sponsor-approved design of 2026-09-05 —
-> `docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md` (PR #237) —
-> removes this package. **Re-arming is F190**: a pull request that reintroduces a
-> critical alert cannot merge past code scanning protection without an administrator
-> override, so the lab can be healed but never re-seeded without a human bypass.
+> *This replaces a banner that said the package was being removed and that re-arming is
+> F190. Both were wrong.* The sponsor-approved design of 2026-09-05 —
+> `docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md` **section 7**,
+> merged as PR #237 — says this package, `reseed.ps1` and
+> `.github/workflows/vuln-lab-witness.yml` **stay in the repository** and stop being
+> load-bearing. **No criterion depends on them**, and **F190 dissolves**: re-arming was a
+> loop because the verification *required* it every cycle, not because the act itself is
+> wrong.
 >
-> The self-healing chain now runs on real findings in real, deployed applications. If
-> this lab's seed weakens, let it weaken.
+> What it is now: a **manual demonstration generator**. Arming it is a rare, deliberate act
+> a human authorises with `--admin` and a stated reason — the right posture for
+> reintroducing a critical vulnerability — when the queue is empty, when showing the chain
+> to an audience, or when testing a change to the pipeline itself. The administrator
+> override is the safety property, not the obstacle: a pull request reintroducing a critical
+> alert cannot merge past code scanning protection unless a human chooses to bypass it.
+>
+> **The three seeded pins stay, deliberately.** The chain otherwise runs on real findings in
+> real deployed applications, and a quiet week with no real findings would leave it
+> unexercised and rotting unnoticed. This is what a quiet week is exercised with.
+>
+> The one thing arming is never for: manufacturing a subject so a criterion has something to
+> pass on. If a validation fails, fix the stage and let the chain re-run against the next
+> real finding.
 
 > ## ⚠️ This package is deliberately vulnerable. It is NEVER imported by any deployed app.
 >
