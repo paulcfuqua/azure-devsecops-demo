@@ -83,7 +83,7 @@ param(
         'query_lakehouse_sql', 'query_aws_lakehouse_sql', 'query_log_analytics',
         'get_github_security', 'get_defender_posture', 'get_cost_series', 'query_compliance'
     ),
-    [string]$AdaptiveCardVersion = '1.5',
+    [string]$AdaptiveCardVersion = '1.6',
     [double]$LatencyBudgetSeconds = 20,
     [int]$EvalPassBar = 9,
     [string]$SqlEndpoint,
@@ -535,7 +535,7 @@ function Test-AdaptiveCardAnswer {
     )
     if ($null -eq $Artifact) {
         return New-MlsCheckResult -Status 'SKIP' -Observed 'no eval artifact' `
-            -Detail 'Card payloads are recorded by the eval run against the deployed agent; none exists yet. The card BUILDERS are already unit-tested against the pinned 1.5 schema in apps/mcp-tools (L08.md Deferred validation).'
+            -Detail 'Card payloads are recorded by the eval run against the deployed agent; none exists yet. NOTE: there are no card builders in this repository - `grep AdaptiveCard apps/mcp-tools/src` returns nothing. The MCP tools return rows and Copilot Studio composes the card, so nothing here can be unit-tested into producing one; only a run against the deployed agent can.'
     }
     # THE FIELD NAMES ARE THE ONES THE EVAL ACTUALLY WRITES. This read 'card' (singular)
     # and 'answer'/'responseText'; agent-eval.ts emits 'cards' (an ARRAY) and 'responses'
@@ -1054,7 +1054,7 @@ function Invoke-Main {
         [string]$EvalResultPath,
         [string]$McpServerUrl,
         [string[]]$AllowedTool = @(),
-        [string]$AdaptiveCardVersion = '1.5',
+        [string]$AdaptiveCardVersion = '1.6',
         [double]$LatencyBudgetSeconds = 20,
         [int]$EvalPassBar = 9,
         [string]$SqlEndpoint,

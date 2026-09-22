@@ -679,10 +679,10 @@ Describe 'domain helpers' {
         Get-MlsPercentile -Value @() | Should -BeNullOrEmpty
     }
 
-    It 'Test-MlsAdaptiveCard accepts a pinned 1.5 card and rejects Action.Execute and a wrong version' {
+    It 'Test-MlsAdaptiveCard accepts a pinned 1.6 card and rejects Action.Execute and a wrong version' {
         $good = [pscustomobject]@{
             type    = 'AdaptiveCard'
-            version = '1.5'
+            version = '1.6'
             body    = @([pscustomobject]@{ type = 'TextBlock'; text = 'Saturday' })
             actions = @([pscustomobject]@{ type = 'Action.Submit'; title = 'Details' })
         }
@@ -690,7 +690,7 @@ Describe 'domain helpers' {
 
         $execute = [pscustomobject]@{
             type    = 'AdaptiveCard'
-            version = '1.5'
+            version = '1.6'
             body    = @()
             actions = @([pscustomobject]@{ type = 'Action.Execute'; title = 'Run' })
         }
@@ -698,8 +698,13 @@ Describe 'domain helpers' {
         $result.Valid | Should -BeFalse
         $result.Problem -join ' ' | Should -BeLike '*Action.Execute*'
 
-        $wrongVersion = [pscustomobject]@{ type = 'AdaptiveCard'; version = '1.6'; body = @() }
+        # The wrong-version fixture has to MOVE WITH THE PIN or it stops testing anything.
+        # It was 1.6 while the pin was 1.5; the pin is now 1.6 (2026-09-22, matching what the
+        # deployed agent emits), so 1.6 would silently have become a PASSING case and this
+        # assertion would have asserted nothing while still looking like a guard.
+        $wrongVersion = [pscustomobject]@{ type = 'AdaptiveCard'; version = '1.5'; body = @() }
         (Test-MlsAdaptiveCard -Card $wrongVersion).Valid | Should -BeFalse
+        (Test-MlsAdaptiveCard -Card $wrongVersion).Problem -join ' ' | Should -BeLike "*1.5*1.6*"
     }
 
     It 'Test-MlsGeneratedUi catches HTML/JS/JSX in a response body' {

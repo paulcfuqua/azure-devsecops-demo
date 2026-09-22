@@ -72,7 +72,33 @@ const LAKEHOUSE_SCHEMA =
   "BUSINESS ledger, not cloud spend; " +
   "findings_history(finding_id, source, severity IN ('critical','high','medium','low'), title, " +
   "component, cve_id, opened_date, closed_date, status IN ('open','resolved','risk_accepted'), " +
-  "assignee, sla_days).";
+  "assignee, sla_days); " +
+  // THE GOVERNED VIEWS, AND DELIBERATELY NOT THE TABLES BENEATH THEM.
+  //
+  // dbo.hr_roster and dbo.defect_reports exist in the lakehouse and are NOT advertised here.
+  // The agent is told about the views, so the only HR shape it can compose a query against is
+  // the one without compensation, and the only defect shape is the one with third-party
+  // proprietary rows already filtered out. That is the control doing its work by CONSTRUCTION
+  // rather than by refusal: an agent that does not know a column exists cannot be argued into
+  // selecting it.
+  //
+  // RESTRICTED_OBJECT in sql-dialect.ts refuses the base tables if the agent ever guesses a
+  // name, and that backstop stays. But a refusal is a worse experience than an absence - it
+  // costs a turn and invites a retry - so the first line of defence is simply not mentioning
+  // them.
+  //
+  // WHY THIS WAS ADDED (2026-09-22): the two tables were seeded and protected, and nothing
+  // ever told the agent they were there. Asked "what day did Bertram Kingsleigh start working
+  // for MLS" it answered "I'm sorry, I'm not sure how to help with that" - not a refusal, a
+  // FALLBACK, because no tool call was attempted at all. A capability that exists in the data
+  // and not in the tool description does not exist to the agent.
+  "v_hr_roster(employee_id, display_name, department, job_family, location, start_date, " +
+  "tenure_years, manager_id, employment_type) — the employee roster. Start dates, tenure, " +
+  "departments, reporting lines and headcount are answerable from it. It carries NO salary, " +
+  "bonus or performance data and no such column exists for the agent to query; " +
+  "v_defect_reports(defect_id, vehicle_id, supplier_id, reported_date, severity, subsystem, " +
+  "status, summary, root_cause, classification) — hardware defect reports, already filtered " +
+  "to those Meridian may disclose.";
 
 function lakehouseSqlTool(profile: DialectProfile): Tool {
   return {

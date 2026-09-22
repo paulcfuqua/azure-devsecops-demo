@@ -101,7 +101,7 @@ BeforeAll {
                 toolCalls      = @([pscustomobject]@{ name = $(if ($RogueTool -and $i -eq 1) { $RogueTool } else { 'query_lakehouse_sql' }) })
                 cards          = @([pscustomobject]@{
                         type    = 'AdaptiveCard'
-                        version = '1.5'
+                        version = '1.6'
                         body    = @([pscustomobject]@{ type = 'TextBlock'; text = 'Saturday' })
                         actions = @([pscustomobject]@{ type = 'Action.Submit'; title = 'Details' })
                     })
@@ -166,7 +166,7 @@ BeforeAll {
         )
         Invoke-Main -EnvironmentUrl $EnvironmentUrl -DataverseToken 'dv-token' -SolutionPath $SolutionPath `
             -EvalResultPath $EvalResultPath -McpServerUrl $McpServerUrl -AllowedTool $script:AllowedTool `
-            -AdaptiveCardVersion '1.5' -LatencyBudgetSeconds 20 -EvalPassBar 9 -SqlEndpoint $SqlEndpoint `
+            -AdaptiveCardVersion '1.6' -LatencyBudgetSeconds 20 -EvalPassBar 9 -SqlEndpoint $SqlEndpoint `
             -LakehouseName 'mls_operations' -McpAuthToken $McpAuthToken -AwsGlueDatabase $AwsGlueDatabase `
             -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
     }
