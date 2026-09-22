@@ -989,7 +989,7 @@ jobs:
       # Neither is softened: -SqlPauseWaitMinutes 0 means "evaluate once", and
       # the criterion still FAILs if the deadline has already passed. This is
       # what docs/runbooks/kill-rebuild.md section 5 requires when it excludes
-      # both from the <60-minute clock — the alternative is 75 minutes of sleep
+      # both from the <180-minute clock — the alternative is 75 minutes of sleep
       # sitting on the rebuild's critical path, in front of L7 and L8.
       # ---------------------------------------------------------------------
       - name: Run verification/layer-06-audit.ps1 (layer run)
@@ -1060,7 +1060,7 @@ jobs:
             echo
             echo "Both are recorded PENDING with their deadlines in the L6 report, not"
             echo "passed and not failed. \`kill-rebuild.md\` section 5 excludes both from"
-            echo "the <60-minute rebuild clock; that exclusion is only honest if they are"
+            echo "the <180-minute rebuild clock; that exclusion is only honest if they are"
             echo "actually closed afterwards, so the re-check is not optional."
           } >> "${GITHUB_STEP_SUMMARY}"
 

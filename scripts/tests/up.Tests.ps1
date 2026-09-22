@@ -301,7 +301,7 @@ Describe 'up.ps1' {
         }
     }
 
-    Context 'wall clock - the L11 <60-minute proof is measured on this path' {
+    Context 'wall clock - the L11 <180-minute proof is measured on this path' {
         It 'reports its own elapsed time from the invocation' {
             $result = Invoke-UpForTest
             $result.Elapsed | Should -BeOfType [timespan]

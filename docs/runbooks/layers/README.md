@@ -77,7 +77,7 @@ each playbook.
 | 39 | L11 | All RGs absent post-down | `L11.md` § Validation cycle **V11.1** |
 | 40 | L11 | Tenant objects intact (L3/L4 audits still pass) | `L11.md` § Validation cycle **V11.2** |
 | 41 | L11 | Post-up: all layer audits green | `L11.md` § Validation cycle **V11.3** |
-| 42 | L11 | Wall-clock < 60 min | `L11.md` § Validation cycle **V11.4** |
+| 42 | L11 | Wall-clock < 180 min | `L11.md` § Validation cycle **V11.4** |
 | 43 | L11 | Run-rate returns to idle profile | `L11.md` § Validation cycle **V11.5** |
 
 > **A note on criterion 29 (V8.3), 2026-08-28.** Its wording is quoted verbatim above and

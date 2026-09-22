@@ -41,7 +41,7 @@
     kill-rebuild.md section 1 puts the workspace SHELL and its role assignments in the
     "persists every cycle (G3 to touch)" column, because `mls-verifier`'s Viewer grant
     has to survive - the Verifier audits the rebuilt lakehouse with it, and re-granting
-    a tenant-level role assignment costs 15-45 minutes of propagation the <60-minute
+    a tenant-level role assignment costs 15-45 minutes of propagation the <180-minute
     rebuild clock does not have.
 
     Structurally, therefore, this script:

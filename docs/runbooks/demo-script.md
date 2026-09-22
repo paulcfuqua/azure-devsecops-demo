@@ -39,7 +39,7 @@ the ten-minute compliance segment added with showpiece #4 on 2026-08-26, plus th
 five-minute cross-cloud segment added 2026-09-17. A **~65-minute** condensed variant (B) is
 at the end for slots that cannot absorb a live rebuild, **and it is the one being run on
 2026-09-17** — it now carries a running order rather than a paragraph of substitutions. All
-timings are [derived] estimates — the master plan pins only the <60-minute rebuild; segment
+timings are [derived] estimates — the master plan pins only the <180-minute rebuild; segment
 budgets follow from it.
 
 > **On "the four showpieces".** `docs/BRIEF.md` commits to four. There are now **five**
@@ -206,7 +206,7 @@ the rebuild's actual pace. Talk track, in order:
 
 ## Segment 4 — Rebuild confirmed + self-heal trigger (5 min)
 
-- Show the run summary: all layers green, wall-clock < 60 min (cite the
+- Show the run summary: all layers green, wall-clock < 180 min (cite the
   `rebuild-proof.md` from L11 for the formally measured proof).
 - **Showpiece #3 needs no arming — that model was retired (PR #237).** There is nothing to
   plant and nothing to trigger: `self-heal.yml` runs on a schedule (01:13 / 07:13 / 13:13 /

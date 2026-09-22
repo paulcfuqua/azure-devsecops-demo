@@ -22,7 +22,7 @@
          per-leg result table is printed - the same legs as the workflow's own
          summary, so the console and the Actions page agree.
 
-      3. REPORT THE WALL CLOCK, AND HAND IT OVER. L11's proof is "<60 minutes" and it
+      3. REPORT THE WALL CLOCK, AND HAND IT OVER. L11's proof is "<180 minutes" and it
          is measured on exactly this path (kill-rebuild.md section 5: clock starts at
          up.ps1 invocation, stops at the last synchronous layer audit green). The
          elapsed time is reported from TWO independent sources - this script's own
@@ -485,7 +485,7 @@ function Wait-WorkflowRun {
 # --- wall clock ------------------------------------------------------------------
 
 function Format-Duration {
-    <# `52m 14s`, the unit the <60-minute claim is argued in. #>
+    <# `52m 14s`, the unit the <180-minute claim is argued in. #>
     param([Parameter(Mandatory)][timespan]$Duration)
     if ($Duration.TotalHours -ge 1) {
         return ('{0}h {1:00}m {2:00}s' -f [int]$Duration.TotalHours, $Duration.Minutes, $Duration.Seconds)
@@ -757,7 +757,11 @@ function Invoke-Main {
         Write-Status '  (no job information available)' -Color Yellow
     }
 
-    # ---- the <60-minute clock (kill-rebuild.md section 5) ------------------------
+    # ---- the <180-minute clock (kill-rebuild.md section 5) -----------------------
+    # RAISED FROM 60 BY SPONSOR DECISION 2026-09-22, and it has to move here as well as
+    # in V11.4 or the two disagree out loud: this prints MET/EXCEEDED to an operator
+    # standing at a terminal, and the criterion decides the proof. A rebuild measured
+    # at 152.2 minutes would have read EXCEEDED here and PASS there.
     Write-Status 'Wall clock' -Color Cyan
     Write-Status "  up.ps1 (clock starts at invocation) : $(Format-Duration -Duration $elapsed)"
     if ($runElapsed) {
@@ -766,11 +770,11 @@ function Invoke-Main {
     else {
         Write-Status '  GitHub run timestamps               : unavailable' -Color Yellow
     }
-    if ($elapsed.TotalMinutes -lt 60) {
-        Write-Status "  L11 budget (<60 min)                : MET, $([int](60 - $elapsed.TotalMinutes)) min of margin" -Color Green
+    if ($elapsed.TotalMinutes -lt 180) {
+        Write-Status "  L11 budget (<180 min)               : MET, $([int](180 - $elapsed.TotalMinutes)) min of margin" -Color Green
     }
     else {
-        Write-Status '  L11 budget (<60 min)                : EXCEEDED' -Color Red
+        Write-Status '  L11 budget (<180 min)               : EXCEEDED' -Color Red
         Write-Status '  On a proof run that is a failed V11.4 - remediate the named bottleneck and' -Color Yellow
         Write-Status '  re-run clean. On an operational rebuild, log the overage and the cause.' -Color Yellow
         Write-Status '  Usual suspects, in observed-likelihood order: kill-rebuild.md section 5.' -Color Yellow

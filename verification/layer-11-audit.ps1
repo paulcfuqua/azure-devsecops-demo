@@ -10,7 +10,7 @@
       V11.1  All RGs absent post-down.
       V11.2  Tenant objects intact (L3/L4 audits still pass).
       V11.3  Post-up: all layer audits green.
-      V11.4  Wall-clock < 60 min.
+      V11.4  Wall-clock < 180 min (raised from 60, sponsor decision 2026-09-22).
       V11.5  Run-rate returns to idle profile.
 
     THE CYCLE HAS TWO CHECKPOINTS AND SO DOES THIS SCRIPT. -Phase Down runs the down-state
@@ -40,7 +40,7 @@ param(
     [string[]]$SurvivingResourceGroup = @('mls-rg-identity'),
     [string]$UpStartUtc,
     [string]$UpCompletedUtc,
-    [double]$WallClockBudgetMinutes = 60,
+    [double]$WallClockBudgetMinutes = 180,
     [string]$Repository,
     [string]$FabricCapacityId,
     [string]$SqlDatabaseId,
@@ -418,7 +418,7 @@ function Invoke-Main {
         [string[]]$SurvivingResourceGroup = @('mls-rg-identity'),
         [string]$UpStartUtc,
         [string]$UpCompletedUtc,
-        [double]$WallClockBudgetMinutes = 60,
+        [double]$WallClockBudgetMinutes = 180,
         [string]$Repository,
         [string]$FabricCapacityId,
         [string]$SqlDatabaseId,
@@ -505,7 +505,7 @@ function Invoke-Main {
 
         # -Control @(): rebuild wall-clock is an operational SLA, not CUI protection.
         Invoke-MlsCriterion -Context $context -Id 'V11.4' -Control @() `
-            -Description 'Wall-clock < 60 min' `
+            -Description 'Wall-clock < 180 min' `
             -Command "timestamps recorded by up.ps1 (start) and the Verifier's audit runner (last synchronous audit green), cross-checked against gh api repos/$repositoryName/actions/runs created_at/updated_at" `
             -Expected "elapsed < $WallClockBudgetMinutes:00 minutes on both clocks" -NoRetry `
             -Test {
@@ -530,7 +530,7 @@ function Invoke-Main {
         # evidentiary meaning does not change because this phase could not measure it.
         foreach ($pair in @(
                 @{ Id = 'V11.3'; Control = @('3.12.1', '3.12.3'); Description = 'Post-up: all layer audits green'; Command = 'foreach ($n in 1..10) { pwsh verification/layer-<nn>-audit.ps1 }'; Expected = 'PASS for every layer audit L1-L10 against the rebuilt environment' },
-                @{ Id = 'V11.4'; Control = @(); Description = 'Wall-clock < 60 min'; Command = 'up.ps1 start timestamp vs last synchronous audit green'; Expected = "elapsed < $WallClockBudgetMinutes minutes" },
+                @{ Id = 'V11.4'; Control = @(); Description = 'Wall-clock < 180 min'; Command = 'up.ps1 start timestamp vs last synchronous audit green'; Expected = "elapsed < $WallClockBudgetMinutes minutes" },
                 @{ Id = 'V11.5'; Control = @(); Description = 'Run-rate returns to idle profile'; Command = 'az consumption usage list ...'; Expected = 'daily cost within the idle envelope; capacity and SQL Paused' }
             )) {
             Invoke-MlsCriterion -Context $context -Id $pair.Id -Control $pair.Control -Description $pair.Description `

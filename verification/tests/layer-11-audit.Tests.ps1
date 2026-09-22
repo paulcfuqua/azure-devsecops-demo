@@ -30,7 +30,7 @@ BeforeAll {
         )
         if ([string]::IsNullOrWhiteSpace($UpStartUtc)) { $UpStartUtc = [datetime]::UtcNow.AddMinutes(-42).ToString('o') }
         Invoke-Main -Phase $Phase -SubscriptionId $SubscriptionId -ResourceGroupPrefix 'mls-rg-' `
-            -UpStartUtc $UpStartUtc -UpCompletedUtc $UpCompletedUtc -WallClockBudgetMinutes 60 `
+            -UpStartUtc $UpStartUtc -UpCompletedUtc $UpCompletedUtc -WallClockBudgetMinutes 180 `
             -Repository 'paulcfuqua/azure-devsecops-demo' -FabricCapacityId '99999999-9999-9999-9999-999999999999' `
             -SqlDatabaseId '/subscriptions/s/rg/db' -IdleDailyCostBudget 0.17 -ChildAuditLayer @(1, 2, 3, 4, 5, 6, 7, 8, 9, 10) `
             -SkipChildAudit:$SkipChildAudit -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
@@ -225,13 +225,29 @@ Describe 'layer-11-audit' {
             $row.Observed | Should -BeLike '*L6=FAIL*'
         }
 
-        It 'fails V11.4 when the rebuild took 60 minutes or more' {
+        It 'fails V11.4 when the rebuild took 180 minutes or more' {
+            # THE GATE MOVED, SO THIS MOVED. 95 minutes used to fail and now passes: the
+            # budget was raised from 60 to 180 by sponsor decision 2026-09-22, after two
+            # measured cycles missed 60 (87 min on 09-03, 152.2 on 09-21). A test left at
+            # the old number would have gone green by accident and stopped meaning
+            # anything, which is worse than going red.
             $context = Invoke-AuditForTest -Phase 'Up' -NoRetry `
-                -UpStartUtc ([datetime]::UtcNow.AddMinutes(-95).ToString('o')) `
+                -UpStartUtc ([datetime]::UtcNow.AddMinutes(-195).ToString('o')) `
                 -UpCompletedUtc ([datetime]::UtcNow.ToString('o'))
             $row = Get-Row -Context $context -Id 'V11.4'
             $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*elapsed 95*'
+            $row.Observed | Should -BeLike '*elapsed 195*'
+        }
+
+        It 'passes V11.4 at the real measured rebuild time, which the old gate failed' {
+            # 152.2 minutes is what the 2026-09-21 rebuild actually took. Under the old
+            # 60-minute gate it was a FAIL; under 180 it passes with ~28 minutes of margin.
+            # Pinned so the new number is anchored to the measurement that justified it
+            # rather than to a round figure someone liked.
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry `
+                -UpStartUtc ([datetime]::UtcNow.AddMinutes(-152).ToString('o')) `
+                -UpCompletedUtc ([datetime]::UtcNow.ToString('o'))
+            (Get-Row -Context $context -Id 'V11.4').Status | Should -Be 'PASS'
         }
 
         It 'cites both clocks for V11.4' {
@@ -305,7 +321,7 @@ Describe 'layer-11-audit' {
 
         It 'fails V11.4 rather than inventing a start time when up.ps1 recorded none' {
             $context = Invoke-Main -Phase 'Up' -SubscriptionId $script:Subscription -ResourceGroupPrefix 'mls-rg-' `
-                -UpStartUtc '' -UpCompletedUtc '' -WallClockBudgetMinutes 60 -Repository 'paulcfuqua/azure-devsecops-demo' `
+                -UpStartUtc '' -UpCompletedUtc '' -WallClockBudgetMinutes 180 -Repository 'paulcfuqua/azure-devsecops-demo' `
                 -ChildAuditLayer @(1) -ReportRoot $script:ReportRoot -NoRetry
             $row = Get-Row -Context $context -Id 'V11.4'
             $row.Status | Should -Be 'FAIL'

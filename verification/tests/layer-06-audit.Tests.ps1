@@ -175,7 +175,7 @@ Describe 'layer-06-audit' {
 
     Context 'the async SQL auto-pause criterion' {
         # L06.md schedules V6.4 "75 minutes after the last deployment touch of the DB", and
-        # kill-rebuild.md section 5 excludes it from the <60-minute rebuild clock. The layer
+        # kill-rebuild.md section 5 excludes it from the <180-minute rebuild clock. The layer
         # workflow therefore runs the audit inline with the seed timestamp and a zero wait
         # budget, and closes the criterion on a later re-check run.
         It 'records V6.4 as PENDING, without sleeping, while the 75-minute window is still open' {
