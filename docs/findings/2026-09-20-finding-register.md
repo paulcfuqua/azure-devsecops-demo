@@ -708,3 +708,58 @@ Detection now asks the **commit graph** instead: `repos/{}/compare/{base}...{hea
 describes a *prediction* (will this merge?) is computed when someone asks and may not be
 ready; a field that describes the *graph* (how many commits apart are these?) is a fact.
 Prefer the fact, especially in a check that runs at the moment the prediction is most stale.
+
+---
+
+## F232 — the heal PR is blocked by a comment the scanner wrote about the alert it is fixing
+
+*2026-09-22. Found by checking whether F231's fix actually made the showpiece work, rather than assuming it had.*
+
+F231 unstuck the heal PRs from being **behind** base. Both were updated, both stopped being
+behind, and **neither merged.** They moved from `BEHIND` to `BLOCKED`.
+
+`main`'s ruleset also sets **`required_review_thread_resolution: true`**. Copilot Autofix
+opens the heal PR, and the **`github-advanced-security`** bot posts a review comment
+describing the alert being fixed. That comment is an unresolved review thread. Nothing
+resolves it. Auto-merge never fires.
+
+| PR | state | review threads | unresolved |
+|---|---|---|---|
+| #286 | **MERGED** | **0** | 0 |
+| #285 | OPEN | 1 | **1** |
+| #291 | OPEN | 1 | **1** |
+
+**#285 had all twelve required checks green, `mergeable: MERGEABLE`, auto-merge `ARMED` — and
+was still `BLOCKED`.** Every gate the product claim talks about was satisfied.
+
+So showpiece #3 has worked exactly once, and it worked because **#286 happened to carry no
+review comment at all**. Not because the gauntlet passed — because the scanner stayed quiet.
+
+### Two independent defects, and the first fix hid the second
+
+F231 (behind base) and F232 (unresolved thread) are unrelated causes with the same symptom.
+Fixing F231 was necessary and did nothing observable, because F232 was waiting behind it.
+That is worth recording on its own: **a fix that removes one of two blockers produces no
+change in behaviour, which reads exactly like a fix that did not work.** The only reason this
+was found is that the claim was re-checked after the fix instead of being marked closed.
+
+### The fix, and the boundary that matters more than the fix
+
+A step in `self-heal.yml` resolves unresolved review threads on PRs that have auto-merge
+armed — **only where every comment on the thread was written by a known scanner bot**
+(`github-advanced-security`, `github-actions`, `dependabot`). A thread carrying even one
+human comment is left alone and reported.
+
+That boundary is the whole design. `required_review_thread_resolution` exists to stop a
+human's review being steamrolled, and a heal a human paused must stay paused. Resolving a
+machine's description of the alert it just fixed is what a human would do on merging;
+resolving a person's objection is not, and no amount of green makes it so.
+
+A refused mutation is reported as a warning naming the missing permission, never swallowed —
+the PR stays BLOCKED and says why.
+
+### Not fixed by widening the rule
+
+Turning `required_review_thread_resolution` off would unblock these PRs and every other one,
+including a PR where somebody raised a genuine concern. The narrow fix costs a bot allowlist;
+the wide one costs the control.

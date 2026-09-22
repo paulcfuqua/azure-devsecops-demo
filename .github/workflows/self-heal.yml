@@ -337,6 +337,99 @@ jobs:
 
           echo "Updated ${updated} pull request(s); ${refused} refused."
 
+      # THE SECOND REASON HEAL PRS NEVER MERGE, and it is independent of the first.
+      #
+      # main's ruleset sets required_review_thread_resolution: true. Copilot Autofix opens
+      # the heal PR and the github-advanced-security bot posts a review comment describing
+      # the alert it is fixing. That comment IS an unresolved review thread, nothing ever
+      # resolves it, and auto-merge therefore never fires - however green the gauntlet, and
+      # however up to date the branch.
+      #
+      # MEASURED 2026-09-22:
+      #   PR #286  MERGED  0 review threads   <- merged because it happened to have none
+      #   PR #285  OPEN    1 unresolved, author github-advanced-security
+      #   PR #291  OPEN    1 unresolved, author github-advanced-security
+      #
+      # #285 had all twelve required checks green, mergeable=MERGEABLE and auto-merge ARMED,
+      # and was still BLOCKED. So the showpiece worked only for the heal PRs Autofix happened
+      # to open WITHOUT a comment. That is luck, not a control.
+      #
+      # THE SAFETY BOUNDARY IS THE WHOLE DESIGN: a thread is resolved only when EVERY comment
+      # on it was written by a known scanner bot. One human comment anywhere in the thread and
+      # it is left alone and reported. required_review_thread_resolution exists to stop
+      # precisely that being steamrolled, and a heal a human paused must stay paused.
+      - name: Resolve scanner-bot review threads on armed heal pull requests
+        env:
+          GH_TOKEN: ${{ secrets.SELF_HEAL_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          owner="${REPO%%/*}"
+          name="${REPO##*/}"
+
+          # Bots whose review comments are machine-generated descriptions of an alert, never
+          # a human's opinion about the change. Anything not on this list counts as human.
+          bots="github-advanced-security github-actions dependabot"
+
+          armed=$(gh pr list --repo "${REPO}" --state open --limit 50 \
+                    --json number,autoMergeRequest --jq '.[] | select(.autoMergeRequest != null) | .number')
+          if [ -z "${armed}" ]; then
+            echo "No open pull request has auto-merge armed."
+            exit 0
+          fi
+
+          resolved=0
+          skipped=0
+          for pr in ${armed}; do
+            threads=$(gh api graphql -f query="
+              { repository(owner: \"${owner}\", name: \"${name}\") {
+                  pullRequest(number: ${pr}) {
+                    reviewThreads(first: 50) {
+                      nodes { id isResolved comments(first: 50) { nodes { author { login } } } }
+                    } } } }" \
+              --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+                    | select(.isResolved == false)
+                    | "\(.id) \([.comments.nodes[].author.login] | unique | join(","))"' 2>/dev/null || echo "")
+
+            if [ -z "${threads}" ]; then
+              continue
+            fi
+
+            while read -r tid authors; do
+              [ -n "${tid}" ] || continue
+              # EVERY author must be a known bot. One human and the thread is left alone.
+              human=0
+              for a in $(echo "${authors}" | tr ',' ' '); do
+                case " ${bots} " in
+                  *" ${a} "*) ;;
+                  *) human=1 ;;
+                esac
+              done
+              if [ "${human}" -eq 1 ]; then
+                echo "PR #${pr}: leaving a thread with human participation alone (authors: ${authors})."
+                skipped=$((skipped + 1))
+                continue
+              fi
+              if gh api graphql -f query="mutation { resolveReviewThread(input: {threadId: \"${tid}\"}) { thread { isResolved } } }" >/dev/null 2>&1; then
+                echo "PR #${pr}: resolved a scanner-bot thread (authors: ${authors})."
+                resolved=$((resolved + 1))
+              else
+                # A refusal is reported, never swallowed.
+                echo "::warning title=Could not resolve a thread on PR #${pr}::The mutation was refused. The pull request will stay BLOCKED until the thread is resolved; SELF_HEAL_TOKEN needs pull-request write on this repository."
+                skipped=$((skipped + 1))
+              fi
+            done <<< "${threads}"
+          done
+
+          {
+            echo "### Self-heal: scanner-bot review threads"
+            echo
+            echo "- resolved: ${resolved}"
+            echo "- left alone (human participation, or refused): ${skipped}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "Resolved ${resolved} scanner-bot thread(s); left ${skipped} alone."
+
   select:
     name: select the alert to heal
     runs-on: ubuntu-latest
