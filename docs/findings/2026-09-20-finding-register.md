@@ -763,3 +763,166 @@ the PR stays BLOCKED and says why.
 Turning `required_review_thread_resolution` off would unblock these PRs and every other one,
 including a PR where somebody raised a genuine concern. The narrow fix costs a bot allowlist;
 the wide one costs the control.
+
+---
+
+## F233 — the cards were always there, in the other field, and the probe I built to check agreed with me
+
+*2026-09-22. Found because the sponsor said "I have seen adaptive cards in responses I asked".*
+
+V8.4 reported zero Adaptive Cards across ten golden questions, and I concluded from that
+artifact that **"the agent answers in prose"**. The sponsor had watched the control tower's
+Ask tab render cards. Both observations were of the same system; at most one could be about
+the agent.
+
+Captured from the deployed agent over Direct Line:
+
+```
+attachments on the wire : 0
+text (1007 chars)       : Meridian's operations lakehouse shows Falcon 9 Block 5 leading
+                          with 486 launches.
+                          { "type": "AdaptiveCard", "version": "1.6", "body": [ ... ] }
+```
+
+**The agent emits Adaptive Cards embedded in the message TEXT, not as attachments.**
+`apps/control-tower/src/agent/transcript.ts` has always known this — *"only adopt the
+text-borne cards when the activity carried none as attachments"* — which is exactly why the
+Ask tab renders them and the eval recorded none.
+
+### V8.4 was wrong twice about the same capability, in opposite directions
+
+| | what it read | result |
+|---|---|---|
+| originally (F228) | `card` — a field the eval never wrote | always zero |
+| after F228's fix | `cards` — the **attachments** array | always zero, because the cards are in `text` |
+
+**I fixed the field name and kept the wrong transport.** A name and a channel are different
+mistakes, and repairing one while preserving the other produces a change that looks like
+progress and measures exactly as much as before: nothing.
+
+### The part that matters more than the bug
+
+When the artifact said zero, I wrote a probe to check — and **built it to count attachments**,
+because that is where I believed cards lived. It returned zero. I reported that as
+confirmation.
+
+**An instrument built from the belief it is testing cannot disconfirm that belief.** Three
+separate observations agreed with me (the artifact, the criterion, my probe) and all three
+shared one assumption. It took a person contradicting the result to break it, and the fix was
+then twenty minutes of work.
+
+This is the sharpest instance of the session's recurring class, and the only one that no
+sweep would have caught: every sweep here compares a check against a *declaration*, and the
+declaration was wrong too.
+
+**Closed as a check.** The eval now extracts text-borne cards, mirroring the control tower,
+with attachments still preferred if Copilot Studio ever sends them properly. The tests are
+pinned against the **real captured reply**, committed as
+`apps/mcp-tools/tests/fixtures/agent-reply-with-text-borne-card.txt` — a hand-written fixture
+would have encoded the same wrong assumption faithfully.
+
+### The version, resolved separately and deliberately
+
+The real card declares **1.6**; V8.4 pinned **1.5** and compared exactly, so the corrected
+criterion first failed with *"version is '1.6', expected '1.5'"* — **true**, where *"no
+Adaptive Card payload was recorded"* had been false.
+
+The pin moved to 1.6 by sponsor decision, on evidence rather than convenience:
+
+- the card uses `TextBlock` and `FactSet`, both **1.0** elements, so the version gates hosts
+  and describes nothing the card needs;
+- **there are no card builders in this repository** — Copilot Studio composes the card and
+  chooses the version, so pinning 1.5 would mean instructing an LLM to comply indefinitely;
+- the 1.5 rationale was *"Teams is limited to 1.5"*, explicitly marked `[derived]`, and Teams
+  is not a surface this demo uses.
+
+The **element allowlist was not widened**: accepting a 1.6 declaration is not accepting every
+1.6 element.
+
+---
+
+## F234 — a backspace where a word boundary was meant, in a test written an hour earlier
+
+*2026-09-22, caught by the repository's own control-character sweep.*
+
+```
+apps/mcp-tools/tests/sql-dialect.test.ts line 589 : 0x08
+```
+
+A reference-query test added an hour before carried **four literal BACKSPACE characters**
+where `\b` word boundaries were meant:
+
+```
+/<0x08>(strftime|julianday|group_concat)<0x08>/i
+/<0x08>LIMIT<0x08>/i
+```
+
+**Those regexes match nothing.** The test passed — vacuously — and would never have caught a
+golden question written with SQLite-only syntax, which is the only reason it exists.
+
+CLAUDE.md documents this class in the words it happened in: *"a regex of `/<0x08>429<0x08>/`
+where `\b` was meant (a literal BACKSPACE character, matching nothing, in a security-relevant
+throttle check)"*. The rule is that file **content** is written with a file tool, never
+through a shell heredoc. It was written through a heredoc, the content crossed two escaping
+layers, and `\\b` arrived as `\b` arrived as `0x08` — **within the hour, by someone who had
+just written about the rule.**
+
+**It is invisible to every ordinary check.** `git diff` renders it as nothing, the file
+reader renders it as nothing, TypeScript compiles it, and vitest reported 90 passing. Only
+the sweep that exists for this found it.
+
+**Repaired by byte value rather than another escape sequence** — `chr(8)` → `chr(92) + 'b'` —
+so the fix itself contains nothing that could be damaged the same way. Verified against the
+**bytes**, not the rendering, and then verified the regexes *discriminate*, which is the part
+that was actually broken:
+
+```
+/\b(strftime|julianday|group_concat)\b/i
+  'SELECT strftime(...)'        -> true       'SELECT TOP 1 DATENAME(...)'  -> false
+/\bLIMIT\b/i
+  '... LIMIT 1'                 -> true       '... TOP 1'                   -> false
+```
+
+A passing test proves nothing until it can fail.
+
+---
+
+## F235 — V11.3 claimed all ten layers were green after examining two
+
+*2026-09-22, run `35680129860`.*
+
+The run was narrowed with `-ChildAuditLayer 3,4` to test a certificate fix without a
+two-and-a-half-hour full pass. The report:
+
+```
+| **V11.3** | Post-up: all layer audits green | **PASS** |
+  - Expected: PASS for every layer audit L1-L10 against the rebuilt environment
+  - Observed: L3=PASS L4=PASS
+```
+
+**It examined two of ten and reported the whole claim as PASS.**
+
+The evidence underneath was honest — the `Observed` line names exactly what ran, and the
+preflight table says `Child audits | layers 3,4`. **The verdict was not**, and a criterion
+table is read by verdict. `l11_child_audit_layers` documents the constraint in its own
+description — *"narrowing the set narrows what V11.3 may claim"* — and **nothing enforced
+it**, so narrowing silently bought a green for a claim nobody had checked.
+
+### The symmetric form of this register's oldest rule
+
+F102/F103/F105 say an auditor that cannot see a control must not report it **absent**. It
+must equally not report it **present**. A partial run is a **diagnostic** — the standing
+`-OnlyCriterion` already has, exiting 3 precisely so a filtered run cannot be mistaken for a
+sign-off.
+
+V11.3 now records SKIP, naming what it examined and what it never looked at.
+
+### The branch that matters more than the fix
+
+**A failure inside a narrowed set is still a failure.** Narrowing removes the right to claim
+the whole; it does not excuse what was seen to be broken. Without that branch this fix would
+have laundered a real failure into a SKIP — a worse defect than the one it repairs — so it
+has its own test.
+
+Found by narrowing the set and then reading the report instead of the console. The criterion
+table is what people read, and it was the thing that lied.
