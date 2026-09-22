@@ -16,6 +16,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
+
+import { goldenQuestions } from "../evals/questions.js";
 import {
   assertReadOnlySingleStatement,
   DIALECTS,
@@ -569,6 +571,28 @@ describe("the restricted-object gate", () => {
   // A DENYLIST'S WEAKNESS CLOSED AT BUILD TIME. Adding a table to the manifest must not
   // silently expose it: every seeded table is either restricted here or deliberately
   // permitted, and a new one belongs to neither list until somebody decides.
+  it("gives every golden question a T-SQL reference query for the Verifier", () => {
+    // F229. V8.2 re-derives each answer from the lakehouse ITSELF; a question with no
+    // referenceSql is one the Verifier cannot check, and it must not be possible to add one
+    // silently. The dialect matters: `expected` runs SQLite against a local snapshot, this
+    // runs T-SQL against Fabric, and the two are not interchangeable.
+    expect(goldenQuestions.length).toBeGreaterThan(5);
+    for (const q of goldenQuestions) {
+      expect(q.referenceSql, `question ${q.id} has no referenceSql`).toBeTruthy();
+      expect(
+        q.referenceSql.trim().toUpperCase().startsWith("SELECT"),
+        `question ${q.id} reference query must be a SELECT`,
+      ).toBe(true);
+      // A SQLite-only construct throws against Fabric rather than returning a wrong answer,
+      // but it would do so inside a criterion rather than here.
+      expect(q.referenceSql, `question ${q.id} uses a SQLite-only function`).not.toMatch(
+        /(strftime|julianday|group_concat)/i,
+      );
+      // LIMIT is the other half of that trap: valid SQLite, a syntax error in T-SQL.
+      expect(q.referenceSql, `question ${q.id} uses LIMIT rather than TOP`).not.toMatch(/LIMIT/i);
+    }
+  });
+
   it("classifies every table in the schema manifest", () => {
     const manifestPath = resolve(__dirname, "../../../data/seed/schema-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {

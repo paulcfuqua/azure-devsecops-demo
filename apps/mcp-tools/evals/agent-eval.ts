@@ -290,6 +290,9 @@ export async function runAgentEval(options: AgentEvalOptions = {}): Promise<numb
       unobservable: throttled,
       latencySeconds,
       factScope: question.factScope,
+      // The Verifier re-runs this against Fabric itself (V8.2 / F229). Serialised into the
+      // artifact because that is the only channel from here to a separate audit process.
+      referenceSql: question.referenceSql,
       expectedFacts: expected,
       missingFacts: missing.map((f) => f.value),
       // V8.3's runtime half consumes this; V8.4 validates the cards.
