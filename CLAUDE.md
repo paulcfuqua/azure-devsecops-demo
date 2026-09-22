@@ -366,7 +366,9 @@ hand-applied Key Vault grant was gone. The Bicep grant deployed on its own.
 
 **What that cycle cost, and bought.** The rebuild ran **152.2 minutes against V11.4's
 60-minute budget** — a measurement, not a defect, and the second consecutive miss after 87
-minutes on 09-03. It produced **F226–F232**, and *five of the seven were checks that were
+minutes on 09-03. **The gate was raised to 180 minutes on 2026-09-22** by sponsor decision,
+with enforcement and declaration moved together; 60 had never been met by a real cycle, and
+a target nothing has ever hit is a wish rather than an SLA. It produced **F226–F232**, and *five of the seven were checks that were
 confidently wrong rather than infrastructure that was broken* — including a rebuild proof
 that could not start its own child audits, and a criterion that had never read a single
 agent response. Two were introduced while fixing the others and caught by tests within

@@ -137,7 +137,7 @@ nobody touching it**; until then this section says the claim is unproven, not fi
 | | |
 |---|---|
 | **L11 up-phase verdict** | Run `35661641603` was still executing when this was written — V11.2/V11.3's first run with their inputs present. **No verdict is recorded here because none exists yet** |
-| **V11.4** | **152.2 min against a 60-minute budget.** A measurement, not a defect. The budget in `kill-rebuild.md` § 5 has now been missed twice (87 min on 09-03) and should be restated or defended, not quietly carried |
+| **V11.4** | **RESOLVED 2026-09-22 — the gate is now 180 minutes.** The measured cycles were 87 min (09-03) and 152.2 (09-21); 60 was never met by a real rebuild, so the sponsor raised it to the measurement plus ~18% headroom. Enforcement and declaration moved together — `-WallClockBudgetMinutes`, `scripts/up.ps1`'s printed verdict, the master plan's two pins, the L11 playbook and the criteria index — because a figure declared in one place and enforced in another is the defect V1.5 exists to catch |
 | **V11.5** | PENDING by design — consumption data lags 24–48 h; closes on its own ~09-22/23 |
 | **V8.4** | Now that the check actually reads the artifact: **the agent returned zero Adaptive Cards across ten questions.** It answers in prose. Either the card path is not exercised on the tools-only path, or the claim needs retiring |
 | **V8.5** | p95 **20.04 s** against a 20 s budget, cold. Warming before a demo is already mandatory |
