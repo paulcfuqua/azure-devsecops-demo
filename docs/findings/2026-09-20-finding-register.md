@@ -623,3 +623,88 @@ that unwraps identifiers rather than erasing them. Every quoting form is now a t
 The general lesson is not about SQL: **a check that reuses a transform built for a different
 question inherits that question's assumptions.** The scrub was right; it was right about
 something else.
+## F231 — showpiece #3's product claim was resting on a 24-second race, which it lost every time after the first
+
+*2026-09-21. Found because it blocked three of this session's own pull requests in a row.*
+
+CLAUDE.md states it as a product claim, explicitly not a convenience:
+
+> *A security patch GitHub generated for a named advisory that cleared the full gauntlet
+> auto-merges unattended in **both** modes — that is the product claim, not a development
+> shortcut.*
+
+It does not. It arms, and then it stalls.
+
+### The mechanism, measured
+
+| fact | value |
+|---|---|
+| `main`'s ruleset | `strict_required_status_checks_policy: true` — a branch must be up to date with base |
+| the `compliance` workflow | commits verification state to `main` **after every merge** — 7 of the last 12 commits |
+| GitHub auto-merge | does **not** update a branch that falls behind; it waits for conditions that will never become true on their own |
+
+So an armed PR goes `BEHIND` the moment anything else lands, and waits there.
+
+**PR #285** — a Copilot Autofix for code scanning alert #8 — green, auto-merge enabled,
+**30 commits behind**, open since 09-17. **PR #291**, 17 behind.
+
+**PR #286 is the one heal that ever did merge unattended**, and it is the whole story:
+
+```
+created  2026-09-18T06:37:32Z
+merged   2026-09-18T06:41:39Z
+compliance commit lands 06:42:03Z   <- twenty-four seconds later
+```
+
+It won a race. Had the compliance job pushed first, #286 would have gone `BEHIND` and
+stalled exactly like #285 — and the register would have recorded showpiece #3 as never
+having worked at all, rather than as working once.
+
+**The estate's own automation defeats its own showpiece, on a schedule.** Nothing external
+is required.
+
+### It also blocked this session, three times
+
+#302 and #303 both went `BEHIND` between going green and being merged, and #303 twice. That
+is how it was found: not by auditing the showpiece, but by being unable to merge anything
+without racing a robot.
+
+### Fixed: a job that updates armed pull requests that have fallen behind
+
+Added to `self-heal.yml`, which already owns the showpiece and already runs every six hours.
+It updates any open PR with auto-merge **armed** that is behind its base, which re-runs its
+checks and lets auto-merge fire. It merges nothing itself and arms nothing: a PR nobody armed
+is left alone, and the gauntlet still decides. The stall is bounded to one scheduled interval
+instead of forever.
+
+A PAT is required rather than preferred: a branch update pushed with `GITHUB_TOKEN`
+triggers no workflow runs (**F120**), so the required checks would never report on the new
+head and the PR would be stuck in a different way. Without `SELF_HEAL_TOKEN` the job says so
+and exits rather than creating that.
+
+### The bug inside the fix, which is the part worth keeping
+
+The first version selected PRs with
+`select(.autoMergeRequest != null and .mergeStateStatus == "BEHIND")`. Tested against the
+live repository seconds after a rebase moved `main`, it returned **nothing** — then
+`291,285` on each of the next three calls.
+
+**`mergeStateStatus` is computed lazily.** Immediately after the base moves it reads
+`UNKNOWN`, and that is *exactly* the window this job runs in. An empty result is
+indistinguishable from "nothing to do", so the job would have announced **"No armed pull
+request is behind base"** at precisely the moment the most had just fallen behind — a
+confident, specific, wrong answer that nobody would have investigated, because it was green.
+
+That is F102/F103/F105's class occurring **inside the fix for a defect of the same family**,
+and it was caught only by running the filter against the live repository instead of reading
+it.
+
+Detection now asks the **commit graph** instead: `repos/{}/compare/{base}...{head}` returns
+`behind_by` as a number, immediately, every time. Verified live — `#285: behind_by=30`,
+`#291: behind_by=17`. A compare that does not answer is reported as UNKNOWN and never as
+"up to date".
+
+**The lesson is the one this register keeps paying for in new clothes:** a field that
+describes a *prediction* (will this merge?) is computed when someone asks and may not be
+ready; a field that describes the *graph* (how many commits apart are these?) is a fact.
+Prefer the fact, especially in a check that runs at the moment the prediction is most stale.
