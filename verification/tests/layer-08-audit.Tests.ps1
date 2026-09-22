@@ -77,20 +77,34 @@ BeforeAll {
             $latency = if ($SlowLatency -gt 0 -and $i -eq 10) { $SlowLatency } else { 2.5 }
             $answer = if ($pass) { 'Saturday has the most launches (309).' } else { 'Tuesday has the most launches (77).' }
             if ($GeneratedUi -and $i -eq 1) { $answer = '<div class="chart">Saturday</div>' }
+            # THE FIELD NAMES ARE agent-eval.ts's, NOT THE AUDIT'S OLD GUESS.
+            #
+            # This fixture used to emit 'answer' (a string), 'card' (one object) and rely on
+            # 'responseText'. The eval emits 'responses' and 'cards', both ARRAYS, and always
+            # has. Fixture and audit agreed with each other and both disagreed with the real
+            # artifact, so nineteen tests stayed green over a criterion that could not work
+            # against anything the estate actually produces - a fixture that supplies the
+            # answer it is checking is a mirror, not a test (CLAUDE.md).
+            #
+            # 'referenceSql' is deliberately KEPT even though the real eval does not emit it:
+            # V8.2's comparison logic is worth exercising, and the sweep in
+            # failure-classes.Tests.ps1 records that gap explicitly as a named exemption, so
+            # this fixture cannot be mistaken for evidence that the field exists upstream.
             $questions += [pscustomobject]@{
                 id             = "q$i"
                 question       = 'Which day of the week has the most launches?'
                 pass           = $pass
+                unobservable   = $false
                 latencySeconds = $latency
-                answer         = $answer
+                responses      = @($answer)
                 referenceSql   = 'SELECT TOP 1 weekday, launches FROM v_launch_weekday ORDER BY launches DESC'
                 toolCalls      = @([pscustomobject]@{ name = $(if ($RogueTool -and $i -eq 1) { $RogueTool } else { 'query_lakehouse_sql' }) })
-                card           = [pscustomobject]@{
-                    type    = 'AdaptiveCard'
-                    version = '1.5'
-                    body    = @([pscustomobject]@{ type = 'TextBlock'; text = 'Saturday' })
-                    actions = @([pscustomobject]@{ type = 'Action.Submit'; title = 'Details' })
-                }
+                cards          = @([pscustomobject]@{
+                        type    = 'AdaptiveCard'
+                        version = '1.5'
+                        body    = @([pscustomobject]@{ type = 'TextBlock'; text = 'Saturday' })
+                        actions = @([pscustomobject]@{ type = 'Action.Submit'; title = 'Details' })
+                    })
             }
         }
         $document = [ordered]@{
@@ -236,16 +250,78 @@ Describe 'layer-08-audit' {
             if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
             if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
             if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            # V8.8's probes. BOTH halves are modelled, because a fixture that only knows
+            # how to refuse would let a gate that refuses EVERYTHING pass as a control.
+            # $script:ObjectGateEnforced lets a test turn the gate off and watch the
+            # criterion go red, which is the only way to know it is not vacuous.
+            if ($statement -match '\bv_defect_reports\b|\bv_hr_roster\b') {
+                return [pscustomobject]@{
+                    Outcome = 'ok'; ElapsedMs = 12; ToolError = ''; Reason = ''
+                    Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(761)) }
+                }
+            }
+            if ($statement -match '\bdefect_reports\b|\bhr_roster\b') {
+                if (-not $script:ObjectGateEnforced) {
+                    return [pscustomobject]@{
+                        Outcome = 'ok'; ElapsedMs = 9; ToolError = ''; Reason = ''
+                        Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(900)) }
+                    }
+                }
+                $alternative = if ($statement -match '\bhr_roster\b') { 'dbo.v_hr_roster' } else { 'dbo.v_defect_reports' }
+                $name = if ($statement -match '\bhr_roster\b') { 'hr_roster' } else { 'defect_reports' }
+                return [pscustomobject]@{
+                    Outcome = 'tool-error'; ElapsedMs = 7; Reason = ''
+                    ToolError = "This tool cannot read `"$name`": it holds restricted data that is not exposed to the agent. Use $alternative, which returns the governed projection."
+                    Payload = $null
+                }
+            }
             throw "unexpected MCP tool call: $statement"
         }
+
+        # The deployed object gate is ON by default; a test flips it to prove V8.8 can fail.
+        $script:ObjectGateEnforced = $true
 
         Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
     }
 
+    Context 'the object gate (V8.8)' {
+        # SEGREGATION HERE IS BY OBJECT, NOT IDENTITY. Measured 2026-09-21 on the rebuilt
+        # estate as Global Admin: dbo.defect_reports returns 900 rows including all 139
+        # THIRD_PARTY_PROPRIETARY, dbo.v_defect_reports returns 761, and IS_ROLEMEMBER is 0
+        # for both tiers because CREATE USER is unsupported on this endpoint (F218). The
+        # base table is readable by anything that names it - including the agent.
+
+        It 'fails when the deployed tool ANSWERS a restricted table' {
+            # The defect this criterion exists for, and the reason the fixture can turn the
+            # gate off: a check that cannot be made to fail proves nothing.
+            $script:ObjectGateEnforced = $false
+            try {
+                $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.8'
+                $row.Status | Should -Be 'FAIL'
+                $row.Observed | Should -BeLike '*was NOT refused*'
+            }
+            finally { $script:ObjectGateEnforced = $true }
+        }
+
+        It 'passes when the restricted tables are refused and the views still answer' {
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.8'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*REFUSED*'
+            $row.Observed | Should -BeLike '*ANSWERED*'
+        }
+
+        It 'records a probe for every quoting form, not just the bare table name' {
+            # An agent writing T-SQL emits bracketed identifiers as a matter of course, and
+            # the first version of the gate was blind to them.
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.8'
+            $row.Observed | Should -BeLike '*[[]dbo[]].[[]defect_reports[]]*'
+        }
+    }
+
     Context 'all criteria pass' {
-        It 'records V8.1-V8.7 as PASS and exits 0' {
+        It 'records V8.1-V8.8 as PASS and exits 0' {
             $context = Invoke-AuditForTest
-            @($context.Criterion).Id | Should -Be @('V8.1', 'V8.2', 'V8.3', 'V8.4', 'V8.5', 'V8.6', 'V8.7')
+            @($context.Criterion).Id | Should -Be @('V8.1', 'V8.2', 'V8.3', 'V8.4', 'V8.5', 'V8.6', 'V8.7', 'V8.8')
             @($context.Criterion | Where-Object { $_.Status -ne 'PASS' }) | Should -BeNullOrEmpty
             Get-MlsExitCode -Context $context | Should -Be 0
         }
@@ -314,6 +390,56 @@ Describe 'layer-08-audit' {
             $row.Observed | Should -BeLike '*generated UI code*'
         }
 
+        It 'V8.4 distinguishes an artifact it could not read from an agent that sent no card' {
+            # THE WHOLE POINT OF THE FIX. Before it, both states produced the identical
+            # verdict "no Adaptive Card payload was recorded for any question" - because the
+            # audit read field names the eval has never written, so it saw nothing either
+            # way. One of these is a defect in the agent; the other is a defect in the
+            # check, and a criterion that cannot tell them apart sends a reader to the wrong
+            # system (F105).
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.cards = @(); $q.responses = @() }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*'
+            $row.Observed | Should -Not -BeLike '*no Adaptive Card payload in any*' `
+                -Because 'nothing was read, so nothing follows about what the agent sent'
+        }
+
+        It 'V8.4 reports a real missing card when the responses WERE readable' {
+            # The estate's actual 2026-09-21 state: ten questions, one response each, zero
+            # cards. The agent answered in prose. That is a genuine finding and must read as
+            # one, naming how many responses were successfully examined so the verdict
+            # carries its own evidence of having looked.
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.cards = @() }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*no Adaptive Card payload in any of 10 question(s)*'
+            $row.Observed | Should -BeLike '*over 10 response(s) that WERE recorded*'
+            $row.Observed | Should -Not -BeLike '*UNOBSERVABLE*'
+        }
+
+        It 'V8.2 records UNOBSERVABLE when no question carries a reference query' {
+            # agent-eval.ts does not serialise referenceSql, so this is the shape of every
+            # REAL artifact. Failing the agent for the harness's missing input would be
+            # blaming the estate for something the eval never produced.
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.referenceSql = '' }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.2'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*UNOBSERVABLE*referenceSql*'
+        }
+
         It 'fails V8.5 when p95 latency breaches the 20 s budget' {
             New-EvalArtifact -Passing 10 -SlowLatency 41.5
             $context = Invoke-AuditForTest -NoRetry
@@ -354,7 +480,7 @@ Describe 'layer-08-audit' {
         It 'records V8.2 as FAIL when the lakehouse re-derivation errors, and still evaluates the rest' {
             Mock Invoke-MlsSqlQuery { throw 'Login failed: the capacity is paused.' }
             $context = Invoke-AuditForTest -NoRetry
-            @($context.Criterion).Count | Should -Be 7
+            @($context.Criterion).Count | Should -Be 8
             (Get-Row -Context $context -Id 'V8.2').Status | Should -Be 'FAIL'
             (Get-Row -Context $context -Id 'V8.2').Observed | Should -BeLike '*capacity is paused*'
             (Get-Row -Context $context -Id 'V8.4').Status | Should -Be 'PASS'
@@ -365,7 +491,7 @@ Describe 'layer-08-audit' {
         It 'records every criterion as SKIP when nothing is deployed yet, and never as a pass' {
             $context = Invoke-AuditForTest -EnvironmentUrl '' -EvalResultPath (Join-Path -Path $script:ReportRoot -ChildPath 'absent.json') `
                 -McpServerUrl '' -SqlEndpoint '' -McpAuthToken '' -AwsGlueDatabase '' -NoRetry
-            @($context.Criterion).Count | Should -Be 7
+            @($context.Criterion).Count | Should -Be 8
             @($context.Criterion | Where-Object { $_.Status -ne 'SKIP' }) | Should -BeNullOrEmpty
             (Get-Row -Context $context -Id 'V8.1').Detail | Should -BeLike '*Power Platform environment*'
             (Get-Row -Context $context -Id 'V8.2').Detail | Should -BeLike '*copilot-eval.yml*'
@@ -434,6 +560,31 @@ Describe 'V8.6 - the AWS lakehouse answers with ROWS, not with a status code' {
             if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
             if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
             if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            # V8.8's probes. BOTH halves are modelled, because a fixture that only knows
+            # how to refuse would let a gate that refuses EVERYTHING pass as a control.
+            # $script:ObjectGateEnforced lets a test turn the gate off and watch the
+            # criterion go red, which is the only way to know it is not vacuous.
+            if ($statement -match '\bv_defect_reports\b|\bv_hr_roster\b') {
+                return [pscustomobject]@{
+                    Outcome = 'ok'; ElapsedMs = 12; ToolError = ''; Reason = ''
+                    Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(761)) }
+                }
+            }
+            if ($statement -match '\bdefect_reports\b|\bhr_roster\b') {
+                if (-not $script:ObjectGateEnforced) {
+                    return [pscustomobject]@{
+                        Outcome = 'ok'; ElapsedMs = 9; ToolError = ''; Reason = ''
+                        Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(900)) }
+                    }
+                }
+                $alternative = if ($statement -match '\bhr_roster\b') { 'dbo.v_hr_roster' } else { 'dbo.v_defect_reports' }
+                $name = if ($statement -match '\bhr_roster\b') { 'hr_roster' } else { 'defect_reports' }
+                return [pscustomobject]@{
+                    Outcome = 'tool-error'; ElapsedMs = 7; Reason = ''
+                    ToolError = "This tool cannot read `"$name`": it holds restricted data that is not exposed to the agent. Use $alternative, which returns the governed projection."
+                    Payload = $null
+                }
+            }
             throw "unexpected MCP tool call: $statement"
         }
         Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }
@@ -555,6 +706,31 @@ Describe 'V8.7 - a denial is never reported as an empty dataset (F105, one cloud
             if ($statement -like '*information_schema.tables*') { return $script:AwsCatalogResult }
             if ($statement -like '*launches_latest*') { return $script:AwsViewResult }
             if ($statement -like '*launches*') { return $script:AwsBaseResult }
+            # V8.8's probes. BOTH halves are modelled, because a fixture that only knows
+            # how to refuse would let a gate that refuses EVERYTHING pass as a control.
+            # $script:ObjectGateEnforced lets a test turn the gate off and watch the
+            # criterion go red, which is the only way to know it is not vacuous.
+            if ($statement -match '\bv_defect_reports\b|\bv_hr_roster\b') {
+                return [pscustomobject]@{
+                    Outcome = 'ok'; ElapsedMs = 12; ToolError = ''; Reason = ''
+                    Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(761)) }
+                }
+            }
+            if ($statement -match '\bdefect_reports\b|\bhr_roster\b') {
+                if (-not $script:ObjectGateEnforced) {
+                    return [pscustomobject]@{
+                        Outcome = 'ok'; ElapsedMs = 9; ToolError = ''; Reason = ''
+                        Payload = [pscustomobject]@{ rowCount = 1; rows = @(, @(900)) }
+                    }
+                }
+                $alternative = if ($statement -match '\bhr_roster\b') { 'dbo.v_hr_roster' } else { 'dbo.v_defect_reports' }
+                $name = if ($statement -match '\bhr_roster\b') { 'hr_roster' } else { 'defect_reports' }
+                return [pscustomobject]@{
+                    Outcome = 'tool-error'; ElapsedMs = 7; Reason = ''
+                    ToolError = "This tool cannot read `"$name`": it holds restricted data that is not exposed to the agent. Use $alternative, which returns the governed projection."
+                    Payload = $null
+                }
+            }
             throw "unexpected MCP tool call: $statement"
         }
         Mock Invoke-MlsAz { throw "unexpected az call: $($Argument -join ' ')" }

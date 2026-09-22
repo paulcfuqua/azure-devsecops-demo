@@ -1,17 +1,28 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    RETIRED - DO NOT RUN. Re-arms the vuln-lab after a self-healing cycle:
-    restores BOTH the seeded CodeQL code flaws and the three deliberately
-    vulnerable dependency pins.
+    MANUAL DEMONSTRATION GENERATOR - not a step in any automated cycle. Re-arms
+    the vuln-lab: restores BOTH the seeded CodeQL code flaws and the three
+    deliberately vulnerable dependency pins.
 
     The sponsor-approved design of 2026-09-05
-    (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md,
-    PR #237) removes this lab. Re-arming is F190: the pull request this script
-    produces reintroduces a critical alert and cannot merge past code scanning
-    protection without an administrator override. The chain now heals real
-    findings in real, deployed applications. This script is kept only until the
-    migration deletes it.
+    (docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md
+    section 7, PR #237) KEEPS this lab and this script in the repository and
+    stops them being load-bearing: no criterion depends on them, and the chain
+    heals real findings in real, deployed applications. F190 dissolves with that
+    change - the loop was the verification REQUIRING a re-seed every cycle, not
+    the act of re-seeding.
+
+    So running this is legitimate when it is deliberate: a human, a stated
+    reason, and an administrator override on the resulting pull request, when
+    the queue is empty, when demonstrating the chain to an audience, or when
+    testing a change to the pipeline itself. The override is the safety
+    property, not the obstacle - a pull request reintroducing a critical alert
+    cannot merge past code scanning protection unless a human chooses to bypass
+    it.
+
+    The one thing it is never for: manufacturing a subject so a criterion has
+    something to pass on.
 
 .DESCRIPTION
     L10 heals this lab along two tracks, and a completed cycle disarms both:
@@ -109,10 +120,13 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
     throw "vuln-lab manifest not found at $manifestPath"
 }
 
-Write-Warning ('RETIRED: re-seeding the vuln-lab is no longer part of any procedure. ' +
-    'The sponsor-approved design of 2026-09-05 (PR #237) retires this lab, and re-arming ' +
-    'is F190 - the resulting PR cannot merge without an administrator override. ' +
-    'Continuing anyway; nothing in the estate asks you to do this.')
+Write-Warning ('DELIBERATE ACT: re-seeding the vuln-lab is not part of any automated ' +
+    'procedure and no criterion needs it. The 2026-09-05 design (section 7, PR #237) ' +
+    'keeps this lab as a MANUAL demonstration generator - for a quiet queue, an ' +
+    'audience, or a pipeline change - and F190 dissolved with it. The pull request this ' +
+    'produces reintroduces a critical alert and will need an administrator override to ' +
+    'merge; that override is the point, so make sure you can state the reason. Do not ' +
+    'run this to give a failing criterion something to pass on.')
 Write-Information "Re-seeding vuln-lab at $labRoot" -InformationAction Continue
 
 # --- 1. restore the seeded code flaws ---------------------------------------

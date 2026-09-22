@@ -18,7 +18,7 @@ that gets rewritten and this one is a dated archive that does not.
 |---|---|---|
 | **F201** | Dependabot's per-directory npm entries for npm *workspace members* are dead on arrival | open |
 | **F202** | A newly discovered MCP tool arrives **disabled**, and a disabled tool is indistinguishable from an absent one | fixed in the runbooks 2026-09-17; the portal state is manual by nature |
-| **F203** | An L7 deploy re-tags every app to `:latest` and erases the commit provenance L10's V10.2 depends on | **open, and red right now** |
+| **F203** | An L7 deploy re-tags every app to `:latest` and erases the commit provenance L10's V10.2 depends on | fixed in the deploy path 2026-09-17; red in the estate until a deploy re-tags the three affected apps |
 | **F204** | The ledger said three Glue tables; the live catalog had five, two of them views | fixed 2026-09-16 |
 | **F205** | A *deferred minor* about deploy identity was the cause of a silent, unreportable write failure two tasks later | fixed 2026-09-16 |
 | **F206** | An IAM condition on a key the service never supplies for that action granted **nothing while reading as a tighter version of itself** | caught in review |
@@ -188,10 +188,37 @@ V7 criterion passed on the same revision — 7 of 7 — because none of them ask
 the image came from. The damage is only visible from another layer's audit, four hours
 later, on a schedule.
 
-**Not fixed here.** The obvious repair is for `layer-07-apps.yml` to resolve a concrete
-`sha-` tag rather than defaulting to a floating one, which is the same rule as *prefer a
-value the template derives over one a human stores* (F129). It is a workflow change, not a
-documentation change, and it is recorded rather than performed.
+**Not fixed when first recorded.** The obvious repair is for `layer-07-apps.yml` to resolve
+a concrete `sha-` tag rather than defaulting to a floating one, which is the same rule as
+*prefer a value the template derives over one a human stores* (F129). It is a workflow
+change, not a documentation change, and it was recorded rather than performed.
+
+**Fixed in the deploy path, 2026-09-17.** `layer-07-apps.yml` now resolves the requested tag
+to a digest against GHCR's registry API and then finds the `sha-` tag pointing at *that same
+digest*, per app, before anything is deployed. The bytes are identical to what `latest` would
+have shipped — app CI pushes both names to one digest in a single `build-push-action` call —
+so nothing about the running application changes; only the name it is deployed under, and
+that name is the evidence. Anonymous pull token, no credential, five apps in about ten
+seconds against the live registry.
+
+The fallback matters as much as the resolution. When GHCR cannot be read, or no `sha-` tag
+shares the digest, the requested tag is used **unchanged** and the step emits a warning that
+names V10.2 and says what will go red. Refusing the deploy over a traceability problem would
+be the wrong trade; leaving it silent is what let this finding exist for a day, so the
+connection between an L7 deploy and an L10 failure is now printed at the moment it is made.
+
+**The coupling is now a test, not a memory.** `verification/tests/failure-classes.Tests.ps1`
+reads the tag pattern V10.2 parses out of `verification/layer-10-audit.ps1` and the pattern
+the deploy path resolves to out of `layer-07-apps.yml`, retypes neither, and fails when they
+disagree about any sample tag — plus asserts the resolver is wired, the warning names the
+criterion, and every `app-*-ci.yml` still deploys the tag that names its commit. All four
+reversions were mutation-tested red. One of them initially passed: the first draft asserted
+the *absence* of one spelling of the defect, and a revert wearing a different spelling walked
+straight through it. Assert what makes the deploy safe, not one shape of its opposite.
+
+**Still red until the estate catches up.** The fix is in the deploy path, not in the estate:
+three apps are still *running* `:latest` from the 2026-09-16 deploys. V10.2 stays red for
+those apps until an L7 deploy or an app CI run re-tags them, and no deploy is performed here.
 
 ---
 

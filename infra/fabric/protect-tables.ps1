@@ -61,7 +61,18 @@
     Justification = 'SqlEndpoint, AccessToken, Database and TimeoutSec are read by Get-EndpointColumn and Invoke-ProtectionSql through PowerShell dynamic scoping rather than being passed down explicitly, which the analyser cannot follow. They are the connection, so a genuinely unused one would fail on the first query. The parameters that were REALLY unused - StandardPrincipal and PrivilegedPrincipal - were removed rather than suppressed: see Invoke-TableProtection.')]
 param(
     # The lakehouse SQL analytics endpoint FQDN. RESOLVED from the Fabric API by the
-    # caller, never stored: the endpoint name does not survive a rebuild (F129's class).
+    # caller, never stored.
+    #
+    # NOT because it changes every rebuild - MEASURED 2026-09-21, it does not. The
+    # lakehouse was deleted and recreated (id 6c8f6a71... -> f578ec8c...) and the FQDN
+    # was identical, because it is WORKSPACE-scoped and the standard teardown leaves the
+    # workspace shell standing. The earlier comment here claimed otherwise and was wrong.
+    #
+    # Resolving is still correct, for reasons that survive that correction: recreating
+    # the WORKSPACE is a G3 path that does exist, the lakehouse id demonstrably does
+    # change, and a stored endpoint is a claim somebody has to keep true. A value the
+    # template derives beats one a human stores (F129) even when the stored one would
+    # have happened to work.
     [Parameter(Mandatory)][string]$SqlEndpoint,
 
     [Parameter(Mandatory)][string]$AccessToken,
@@ -198,6 +209,30 @@ GRANT SELECT ON dbo.hr_roster TO [$standard];
 DENY SELECT ($restrictedList) ON dbo.hr_roster TO [$standard];
 "@
 
+    # THE HR HALF HAD NO VIEW, ONLY THE INERT COLUMN DENY ABOVE.
+    #
+    # cls_hr_roster denies the compensation columns to $standard, and no principal can be
+    # a member of $standard - CREATE USER is unsupported on this endpoint (F218). So the
+    # DENY binds to nobody and salary_usd was readable by every caller, including the
+    # agent's SQL tool.
+    #
+    # defect_reports got a schema-bound view and a row-level policy; hr_roster got a
+    # column DENY that cannot bind. This is the missing half: a view that simply does not
+    # project the restricted columns, which needs no role membership to be true.
+    $hrOpenColumn = @($script:HrRosterColumn | Where-Object { $_ -notin $script:HrRestrictedColumn })
+    $hrViewColumnList = ($hrOpenColumn | ForEach-Object { "[$_]" }) -join ', '
+    $hrViewBody = "CREATE VIEW dbo.v_hr_roster WITH SCHEMABINDING AS SELECT $hrViewColumnList FROM dbo.hr_roster"
+
+    Add-Statement -Key 'hr_view' -Description 'schema-bound view over hr_roster without the compensation columns' -Sql @"
+IF NOT EXISTS (SELECT 1 FROM sys.views WHERE [name] = N'v_hr_roster' AND [schema_id] = SCHEMA_ID(N'dbo'))
+    EXEC('$(ConvertTo-SqlLiteral $hrViewBody)');
+"@
+
+    Add-Statement -Key 'grant_hr_view' -Description 'both tiers may read the governed hr view' -Sql @"
+GRANT SELECT ON dbo.v_hr_roster TO [$standard];
+GRANT SELECT ON dbo.v_hr_roster TO [$privileged];
+"@
+
     Add-Statement -Key 'rls_view' -Description 'schema-bound view over defect_reports' -Sql @"
 IF NOT EXISTS (SELECT 1 FROM sys.views WHERE [name] = N'v_defect_reports' AND [schema_id] = SCHEMA_ID(N'dbo'))
     EXEC('$(ConvertTo-SqlLiteral $viewBody)');
@@ -260,14 +295,66 @@ function Assert-ExpectedColumn {
 }
 
 function Get-EndpointColumn {
-    <# The columns the endpoint actually reports for a table. Resolved, never remembered. #>
+    <#
+        The columns the endpoint actually reports for a table. Resolved, never remembered.
+
+        ALWAYS RETURNS AN ARRAY, never $null. The first version could hand back $null when
+        the endpoint reported nothing, and the caller then failed with "Cannot bind argument
+        to parameter 'Actual' because it is null" - an error naming a PowerShell binding
+        rule and saying nothing about the sync lag that actually caused it.
+    #>
     param([Parameter(Mandatory)][string]$Table)
     $rows = @(Invoke-Sqlcmd -ServerInstance $SqlEndpoint -Database $Database -AccessToken $AccessToken `
             -ConnectionTimeout $TimeoutSec -ErrorAction Stop -Query @"
 SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = '$(ConvertTo-SqlLiteral $Table)'
 "@)
-    return @($rows | ForEach-Object { $_.COLUMN_NAME })
+    $names = @($rows | ForEach-Object { "$($_.COLUMN_NAME)" } | Where-Object { $_ })
+    return , $names
+}
+
+function Wait-EndpointTable {
+    <#
+    .SYNOPSIS
+        Wait for the SQL analytics endpoint to see tables the seed has just loaded.
+    .DESCRIPTION
+        A newly loaded Delta table is NOT immediately visible to the SQL analytics endpoint.
+        MEASURED 2026-09-20: Fabric's /tables route reported all twelve tables while the SQL
+        catalog still reported ten, and the two new ones appeared there after 63 seconds.
+
+        This step runs immediately after the load, so without a wait it queries an endpoint
+        that has not caught up and concludes the tables do not exist. V5.5 already carries a
+        retry window citing this measurement; the deploy path had none, which is how a
+        CORRECT seed produced a failed protection step.
+
+        The window is ten minutes - roughly 10x the observation - and the failure names the
+        lag rather than the symptom, because "no columns" and "not synced yet" are the same
+        observation five seconds apart.
+    #>
+    param(
+        [Parameter(Mandatory)][string[]]$Table,
+        [int]$TimeoutMinutes = 10,
+        [int]$PollSeconds = 15
+    )
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $pending = [System.Collections.Generic.List[string]]::new()
+    foreach ($t in $Table) { $pending.Add($t) }
+
+    while ($pending.Count -gt 0 -and (Get-Date) -lt $deadline) {
+        foreach ($t in @($pending)) {
+            if ((Get-EndpointColumn -Table $t).Count -gt 0) {
+                Write-Status "  visible to the SQL endpoint: $t" -Color Green
+                $pending.Remove($t) | Out-Null
+            }
+        }
+        if ($pending.Count -eq 0) { break }
+        Write-Status "  waiting for the SQL endpoint to catch up on: $($pending -join ', ')" -Color Yellow
+        Start-Sleep -Seconds $PollSeconds
+    }
+
+    if ($pending.Count -gt 0) {
+        throw "The SQL analytics endpoint still reports no columns for $($pending -join ', ') after $TimeoutMinutes minute(s). A newly loaded Delta table is invisible to this endpoint for a short period - measured at 63 seconds on 2026-09-20 - but this is well beyond that. Check that the L5 seed actually loaded the tables (Fabric's /tables route answers independently of the SQL catalog) before assuming the protection is at fault."
+    }
 }
 
 function Invoke-ProtectionSql {
@@ -298,7 +385,13 @@ function Invoke-TableProtection {
 
     if ([string]::IsNullOrWhiteSpace($Prefix)) { $Prefix = Get-CompanyPrefix }
 
-    Write-Status "Resolving the live schema for dbo.hr_roster and dbo.defect_reports..." -Color Cyan
+    # WAIT BEFORE RESOLVING. This runs immediately after the seed, and the SQL analytics
+    # endpoint lags the Delta load by roughly a minute (F223). Without this the schema
+    # resolution below reads an empty catalog and reports a correct seed as a broken one.
+    Write-Status 'Waiting for the SQL analytics endpoint to see the seeded tables...' -Color Cyan
+    Wait-EndpointTable -Table @('hr_roster', 'defect_reports')
+
+    Write-Status 'Resolving the live schema for dbo.hr_roster and dbo.defect_reports...' -Color Cyan
     Assert-ExpectedColumn -Table 'hr_roster' -Expected $script:HrRosterColumn -Actual (Get-EndpointColumn -Table 'hr_roster')
     Assert-ExpectedColumn -Table 'defect_reports' -Expected $script:DefectReportColumn -Actual (Get-EndpointColumn -Table 'defect_reports')
     Write-Status 'Schema matches; applying protection.' -Color Green
