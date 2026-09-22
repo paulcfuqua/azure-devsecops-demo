@@ -352,9 +352,25 @@ created nothing. Re-running `layer-03-entra.yml` repaired it; g0-bootstrap step 
 a direct additive POST and carries a warning. **Never run `admin-consent` against
 `mls-verifier`** — and if someone has, re-run L3.
 
-**Still open:** V11.2's fix is untested, and so are the L5/L7 fixes from 2026-09-03 — all
-three were verified against a LIVE estate, not through a teardown. L7's especially: it fixes
-a principal id that does not survive a rebuild, so only a rebuild can prove it.
+**CLOSED 2026-09-21 by a second full cycle.** The three fixes above were verified against a
+LIVE estate, not through a teardown, and that gap is now shut: the estate was torn down
+(**30m51s**, clean) and rebuilt (**152.2 min**), and **V11.2 returned the first evidence it
+has ever had on a real teardown**. L7 signed off **7 of 7** on the rebuilt estate, which is
+what proves the principal id fix — only a rebuild can, and one did.
+
+Also converted from observation to property in that cycle: **V5.6** (row-level security
+enforces on an estate built from nothing), **V6.2** (whose fix this file previously recorded
+as never once executed), **V6.7/V6.8** (F119's and F122's fixes), and **V8.6/V8.7 — the AWS
+cross-cloud link**, which the readiness page had predicted would degrade to SKIP once the
+hand-applied Key Vault grant was gone. The Bicep grant deployed on its own.
+
+**What that cycle cost, and bought.** The rebuild ran **152.2 minutes against V11.4's
+60-minute budget** — a measurement, not a defect, and the second consecutive miss after 87
+minutes on 09-03. It produced **F226–F232**, and *five of the seven were checks that were
+confidently wrong rather than infrastructure that was broken* — including a rebuild proof
+that could not start its own child audits, and a criterion that had never read a single
+agent response. Two were introduced while fixing the others and caught by tests within
+minutes. See [the register](docs/findings/2026-09-20-finding-register.md).
 
 **2. The apps tell the truth about what is there.** The dashboards render real rows from the
 lakehouse, and what they display matches what the estate actually contains. *F101 was the

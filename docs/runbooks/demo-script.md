@@ -15,12 +15,17 @@
 > | **#5 Cross-cloud lakehouse** | ✅ New 2026-09-16, and not in the original script at all. **V8.6 + V8.7 PASS.** See § *Segment 5b* |
 >
 > **The one thing this script can no longer do unrehearsed is Variant A.** The estate is
-> **up** — 30 resources across four RGs since the 2026-09-03 rebuild — so the cold open in
+> **up** — **29 resources across the four teardown RGs plus `mls-rg-identity` outside them**,
+> rebuilt 2026-09-21 — so the cold open in
 > Segment 1 and the live rebuild in Segment 2 would need a teardown first, and the
-> cross-cloud link has **never survived a teardown**. Run **Variant B** and keep the kill
-> demo at the end, where it already is.
+> cross-cloud link **has now survived one** — V8.6 and V8.7 passed on the 09-21 rebuild,
+> which the 09-17 readiness page predicted would degrade to SKIP. Run **Variant B** and keep
+> the kill demo at the end, where it already is.
 >
-> See [docs/DEMO-READINESS.md](../DEMO-READINESS.md), refreshed 2026-09-17 01:30Z. Revise
+> *Corrected 2026-09-22. The sentence this replaces said the link had never survived a
+> teardown, which was true when written and is the demo's strongest single upgrade since.*
+>
+> See [docs/DEMO-READINESS.md](../DEMO-READINESS.md), refreshed 2026-09-22. Revise
 > this box when a row changes; do not delete it because it is flattering, either.
 
 
@@ -34,7 +39,7 @@ the ten-minute compliance segment added with showpiece #4 on 2026-08-26, plus th
 five-minute cross-cloud segment added 2026-09-17. A **~65-minute** condensed variant (B) is
 at the end for slots that cannot absorb a live rebuild, **and it is the one being run on
 2026-09-17** — it now carries a running order rather than a paragraph of substitutions. All
-timings are [derived] estimates — the master plan pins only the <60-minute rebuild; segment
+timings are [derived] estimates — the master plan pins only the <180-minute rebuild; segment
 budgets follow from it.
 
 > **On "the four showpieces".** `docs/BRIEF.md` commits to four. There are now **five**
@@ -69,7 +74,7 @@ down subscription and does not apply. Times are measured, not estimated.
 
 | # | Check | How | Pass state |
 |---|---|---|---|
-| 1 | **The estate is up and is the estate you think it is** | `az containerapp list -o table` | **6/6 `Running`**: compliance, control-tower, data-api, launch-ops, mcp, vuln-lab. `vuln-lab` has **no ingress and runs the helloworld image** — that is correct, it is L10's witness, not a broken app |
+| 1 | **The estate is up and is the estate you think it is** | `az containerapp list -o table` | **5/5 `Running`**: compliance, control-tower, data-api, launch-ops, mcp. *Corrected 2026-09-22: this said **6/6** including `vuln-lab` until the 09-21 rebuild made the drift visible. There is no `vuln-lab` container — L10 stopped needing a witness when PR #237 retired the seeded-CVE plant. `apps/vuln-lab` the **source directory** is still in the repo and still carries its three policy-excluded alerts (row 7); only the deployment is gone* |
 | 2 | **Every app is on a `sha-` tag, not `:latest`** | `az containerapp list --query "[].{n:name,i:properties.template.containers[0].image}" -o tsv` | Every image ends `:sha-<7>`. A `:latest` anywhere means an L7 deploy has erased the commit provenance V10.2 reads — **that is F203, and it turns showpiece #3 red about four hours later.** Do not run `layer-07-apps.yml` on demo morning |
 | 3 | **Warm the two browser apps** — this is not optional | `curl -so /dev/null -w '%{time_total}\n' https://<control-tower-fqdn>/` twice | First call **~23 s**, second **~0.15 s** (measured 2026-09-17 01:55Z). A **401 is the correct answer** to curl — Easy Auth challenges a client that sends no `Accept` header. You are warming the container, not testing auth |
 | 4 | **Warm the agent** — the single biggest stage risk | Ask tab, one throwaway question | The eval's **p95 is 34.18 s against V8.5's 20 s budget**, driven entirely by an un-warmed first question. Spend it off the record |
@@ -201,7 +206,7 @@ the rebuild's actual pace. Talk track, in order:
 
 ## Segment 4 — Rebuild confirmed + self-heal trigger (5 min)
 
-- Show the run summary: all layers green, wall-clock < 60 min (cite the
+- Show the run summary: all layers green, wall-clock < 180 min (cite the
   `rebuild-proof.md` from L11 for the formally measured proof).
 - **Showpiece #3 needs no arming — that model was retired (PR #237).** There is nothing to
   plant and nothing to trigger: `self-heal.yml` runs on a schedule (01:13 / 07:13 / 13:13 /
@@ -626,7 +631,7 @@ The estate is already up, so nothing is built on stage. Run this order:
 
 | # | Segment | Min | Note |
 |---|---|---|---|
-| 1 | **Cold open, from the proof** | 7 | You cannot show an empty subscription — show the committed `rebuild-proof.md` and its **down-state audit** instead. Be explicit that the figures are **2026-09-03**: teardown ~14 min, rebuild 87 min, 30 → 0 → 30 resources. *History, not a live claim* |
+| 1 | **Cold open, from the proof** | 7 | You cannot show an empty subscription — show the committed `rebuild-proof.md` and its **down-state audit** instead. Be explicit which cycle the figures come from. **Most recent, 2026-09-21:** teardown **30m51s** clean, rebuild **152.2 min**, 29 → 0 → 29 in the blast radius with `mls-rg-identity` standing throughout. **2026-09-03:** teardown ~14 min, rebuild 87 min, 30 → 0 → 30 — a six-app estate, which is why the resource count differs. *History, not a live claim* |
 | 2 | **Repo tour** | 8 | Compressed Segment 3: working agreements + the five gates, the agent team, `verification/reports/`, the DevSecOps chain as code. Land *"RG-scoped teardown is gate-free by design"* — it sets up segment 8 |
 | 3 | **Showpiece #1 — the copilot** | 10 | Segment 5, warm |
 | 4 | **Showpiece #5 — cross-cloud** | 5 | **Segment 5b. Do not cut this one.** Same tab, no setup, and it is the newest thing here |

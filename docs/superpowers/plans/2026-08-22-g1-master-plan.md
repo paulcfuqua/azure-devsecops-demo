@@ -64,7 +64,10 @@ showpiece #3, Trivy, ZAP, Syft/sbom-tool, OpenTelemetry.
   C8) — Copilot Studio pay-as-you-go bills to the same Azure subscription, so it sits
   inside that budget.
 - Standard kill/rebuild path: delete RGs `mls-rg-{platform,apps,data,ops}` + Fabric
-  workspace items; tenant objects persist; rebuild < 60 minutes wall-clock (proven L11).
+  workspace items; tenant objects persist; rebuild < 180 minutes wall-clock (proven L11).
+  *(Raised from 60 by sponsor decision 2026-09-22. Two measured cycles: 87 minutes on
+  2026-09-03, 152.2 on 2026-09-21. A target nothing has ever hit is a wish, not an SLA;
+  180 is the measurement plus ~18% headroom, and V11.4 enforces the same number.)*
 - Every resource name from `infra/bicep/naming.bicep`; required tags `env`, `app`,
   `costCenter`, `owner`, `dataClassification`, `managedBy=iac` (deny-enforced on RGs).
 - Synthetic data only; deterministic generator seed `20260822` so Verifier expectations
@@ -337,7 +340,7 @@ confirms empty + idle cost profile → `up.ps1` (replays L2–L10 pipelines + se
 Verifier re-runs **every** layer audit → wall-clock report committed to
 `verification/reports/rebuild-proof.md`.
 **Verify:** all RGs absent post-down; tenant objects intact (L3/L4 audits still pass);
-post-up: all layer audits green; wall-clock < 60 min; run-rate returns to idle profile.
+post-up: all layer audits green; wall-clock < 180 min; run-rate returns to idle profile.
 **Teardown:** is the deliverable.
 **Cost:** ~$1–2/cycle.
 

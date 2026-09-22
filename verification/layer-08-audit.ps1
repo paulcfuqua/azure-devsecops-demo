@@ -363,27 +363,32 @@ function Test-EvalSuite {
     if ($questions.Count -eq 0) {
         return New-MlsCheckResult -Passed $false -Observed 'the eval artifact carries no questions' -Final
     }
-    # NO ARTIFACT CARRIES referenceSql, AND NONE EVER HAS. agent-eval.ts writes id,
-    # question, pass, unobservable, latencySeconds, factScope, expectedFacts, missingFacts,
-    # toolCalls, cards, responses, error - and nothing else. The golden questions compute
-    # their expectations with an `expected: () => Promise<ExpectedFact[]>` FUNCTION that
-    # queries the lakehouse inside the eval process; there is no SQL string to hand on.
+    # THE ARTIFACT NOW CARRIES referenceSql, AND FOR MOST OF THE PROJECT IT DID NOT (F229).
     #
-    # So this criterion's premise - that the Verifier re-runs the reference query ITSELF and
-    # compares - has never had an input. Every question hit the branch below and V8.2 could
-    # only ever have reported failure once it got as far as looking.
+    # This criterion's premise is independence: the Verifier re-runs the reference query
+    # ITSELF, against the lakehouse, and compares - because "accepting the artifact's own
+    # score would be trusting the claim the criterion exists to check". For most of the
+    # project there was no query to re-run. The golden questions computed their expectations
+    # with an `expected: () => Promise<ExpectedFact[]>` FUNCTION against a LOCAL SQLite
+    # snapshot, in SQLite dialect, inside the eval process; the agent answers from FABRIC in
+    # T-SQL. There was nothing to hand across.
     #
-    # IT IS NOT FIXED BY READING expectedFacts INSTEAD. Those are the eval's own computed
-    # answers; checking the eval's answer against the eval's answer is a mirror, not a test
-    # (CLAUDE.md: "no test that supplies the answer it is checking"). V8.2 exists precisely
-    # because "accepting the artifact's own score would be trusting the claim the criterion
-    # exists to check".
+    # IT WAS NOT FIXED BY READING expectedFacts. Those are the eval's own computed answers,
+    # and checking the eval's answer against the eval's answer is a mirror, not a test
+    # (CLAUDE.md: "no test that supplies the answer it is checking").
     #
-    # The real remedy is for the eval to serialise each question's reference SQL into the
-    # artifact so the Verifier can re-run it against the lakehouse independently. That is a
-    # change to the eval's question schema and to what the demo claims, so it is recorded as
-    # a finding rather than decided here. Until then this reports UNOBSERVABLE - naming the
-    # missing input - instead of failing the agent for the harness's gap.
+    # It was fixed by giving each golden question a T-SQL reference query written for the
+    # store the Verifier actually reads, every one executed against the live endpoint before
+    # being committed - which is how a query that was arithmetically right but returned
+    # "93.600000000000" against an answer saying "93.6" was caught before it could fail a
+    # correct agent.
+    #
+    # WHAT THAT BUYS, STATED HONESTLY: the Verifier independently EXECUTES the query, in a
+    # different engine, against a different store, in a different process from the eval. It
+    # catches agent error, tool error, data drift and endpoint disagreement. It does not
+    # catch a reference query that was always wrong - that needs a second DERIVATION, not a
+    # second execution. The branch below survives as the guard for an artifact predating the
+    # schema change, or a future question added without a reference query.
     $withReference = @($questions | Where-Object {
             -not [string]::IsNullOrWhiteSpace("$(Get-MlsProperty -InputObject $_ -Name 'referenceSql')")
         })

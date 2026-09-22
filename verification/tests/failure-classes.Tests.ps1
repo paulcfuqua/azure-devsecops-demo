@@ -4262,12 +4262,12 @@ almost no keys means the parser no longer recognises it, and the check below is 
         $written = Get-ArtifactQuestionField -Path $script:EvalPath
         $read = Get-AuditReadField -Path $script:AuditPath
 
-        # referenceSql is a KNOWN, DOCUMENTED gap, not a typo: the audit asks for it, the
-        # eval cannot supply it (the golden questions compute expectations with a function
-        # rather than a stored query), and V8.2 reports UNOBSERVABLE naming exactly that.
-        # It is exempted here so this check stays about MISSPELLINGS - and the exemption is
-        # named, so closing the gap removes the line rather than quietly widening the sweep.
-        $knownGap = @('referenceSql')
+        # NO EXEMPTIONS. referenceSql was one, named rather than hidden, because the audit
+        # asked for a field the eval could not supply (F229). The eval now serialises it, so
+        # the exemption is gone - which is exactly why it was a named list and not a widened
+        # filter. An empty list here is a statement: every field the audit reads is one the
+        # artifact carries.
+        $knownGap = @()
 
         $orphan = @($read | Where-Object { $_ -notin $written -and $_ -notin $knownGap })
         $orphan -join ', ' | Should -BeNullOrEmpty -Because @'
