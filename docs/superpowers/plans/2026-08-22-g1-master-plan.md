@@ -337,8 +337,10 @@ and needs no Copilot subscription; CI minutes are free on a public repo.
 
 `down.ps1` (deletes 4 RGs + Fabric workspace items, pauses capacity) → Verifier
 confirms empty + idle cost profile → `up.ps1` (replays L2–L10 pipelines + seed) →
-Verifier re-runs **every** layer audit → wall-clock report committed to
-`verification/reports/rebuild-proof.md`.
+Verifier re-runs **every** layer audit → wall-clock report written to
+`verification/reports/L11-<stamp>.md`. *This read `rebuild-proof.md` as issued; that file
+was never built and nothing writes it (F236, 2026-09-22). Cycle figures of record:
+`docs/runbooks/kill-rebuild.md` § 5.*
 **Verify:** all RGs absent post-down; tenant objects intact (L3/L4 audits still pass);
 post-up: all layer audits green; wall-clock < 180 min; run-rate returns to idle profile.
 **Teardown:** is the deliverable.
