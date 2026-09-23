@@ -137,6 +137,74 @@ Not because the link works — because a green-looking answer with a correct-loo
 was wrong, a human caught it by adding up the numbers, and the failure sat in the one layer
 nothing automated asserted. V8.6 exists to make that layer machine-checked.
 
+**REOPENED AND RE-CLOSED 2026-09-22, and the bound above was wrong in one direction.**
+
+The 09-17 note bounded the hazard: *"a subsequent solution re-import did not disable the tool
+again — so the hazard is a **newly discovered** tool arriving disabled, not every import
+resetting every tool."* That measurement was correct and the conclusion was too narrow.
+
+**A third trigger exists: refreshing the tool list in the maker portal re-disables it.** Found
+by the sponsor on 2026-09-22, the same way and in the same place as the original — asking the
+agent a question through the Ask tab and getting Copilot Studio's Escalate topic instead of an
+answer. Toggling the tool on, then refreshing the list to check, put it straight back to off.
+
+**And the published sequence was missing a step.** `infra/copilot-studio/README.md` § 6 step 4
+said *"toggle every tool on, then publish"*. Toggling and publishing is not enough: the toggle
+has to be **SAVED** first. A publish without a save captures the previously saved state, which
+is exactly what happened — three separate probes returned Escalate after a publish, and the
+sponsor's own diagnosis was the right one: *"I might not have hit save before publishing."*
+
+**The sequence that works, in order:**
+
+1. toggle the tool **on**
+2. **save**
+3. **publish**
+4. do **not** refresh the tool list afterwards — that undoes step 1
+
+**Confirmed by arithmetic, as this finding requires.** After save-then-publish, the agent
+answered *"There are 334,296 rows in the launches table in the AWS launch-intelligence
+lakehouse"* in 9.2 seconds — matching a direct MCP `tools/call` to the same tool exactly
+(334,296 in 2.9 s), and nowhere near Fabric's 1,200.
+
+**The discriminating number has moved, and any future check must not pin it.** This finding
+recorded 286,473 on 2026-09-16; the live count on 2026-09-22 is **334,296**. It is real
+launch-industry data and it accumulates. A check that asserts the literal figure will fail for
+the wrong reason within weeks. **Assert "not 1,200"** — that is the number that means the
+wrong lakehouse answered, and it is pinned by V5.3.
+
+### Two things that were NOT the cause, recorded because each was chased
+
+- **The MCP server.** `tools/list` — the call the agent actually makes — returned all seven
+  tools including `query_aws_lakehouse_sql` throughout. The server was never at fault.
+- **The container's own startup log**, which prints `5 tools` while `/healthz` on the same
+  revision reports 7. That is **F215**, still open, and it is cosmetic here: two different
+  code paths, and the registry the agent reads is the correct one. It is a standing trap for
+  the next person debugging this, because it looks exactly like the cause.
+
+A third false lead is worth recording for method rather than content: the MCP container was
+checked for AWS tool-call log lines, found none, and the absence was briefly treated as
+meaningful. **The server has no per-call logging at all**, so that check could never have
+produced evidence either way — silence read as a signal, in the middle of an investigation
+about exactly that error.
+
+### Reproducibility, which is the half that outlives the demo
+
+`infra/copilot-studio/solution/.../topic.MeridianOpsTools/data` listed six tools until
+2026-09-22 — `query_aws_lakehouse_sql` was never committed, so the sponsor's hand-toggle
+existed only in the estate and F159's rule applied: a change is finished when a **rebuild**
+reproduces it. The committed solution now enables all seven, and
+`verification/tests/failure-classes.Tests.ps1` compares that list against the `-AllowedTool`
+default in `layer-08-audit.ps1` — **read from the script rather than copied**, so the two
+cannot drift apart again. Run against the pre-fix file it names `query_aws_lakehouse_sql`
+exactly.
+
+**Nothing went red for the six days this was broken.** V8.6 and V8.7 passed throughout,
+because the Verifier calls the MCP server directly — which proves the link works and says
+nothing about whether the agent can use it. V8.1 compares component names; V8.3 reads the
+server's declared tools and the solution's components. Three criteria in the area, none
+reading the one field that decides whether the demo question can be answered. **The only
+thing that found it, twice now, was a person asking the agent a question.**
+
 ---
 
 ### F203 — an L7 deploy re-tags every app to `:latest` and erases the commit provenance V10.2 depends on *(open, and red right now)*

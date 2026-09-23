@@ -5,9 +5,10 @@
 > *This replaces a banner that said the package was being removed and that re-arming is
 > F190. Both were wrong.* The sponsor-approved design of 2026-09-05 —
 > `docs/superpowers/specs/2026-09-05-operationalize-self-healing-design.md` **section 7**,
-> merged as PR #237 — says this package, `reseed.ps1` and
-> `.github/workflows/vuln-lab-witness.yml` **stay in the repository** and stop being
-> load-bearing. **No criterion depends on them**, and **F190 dissolves**: re-arming was a
+> merged as PR #237 — says this package and `reseed.ps1` **stay in the repository** and
+> stop being load-bearing. *(It named `.github/workflows/vuln-lab-witness.yml` too; that
+> file and the container app it stamped were deleted later the same day by PR #255 — see
+> the last section.)* **No criterion depends on them**, and **F190 dissolves**: re-arming was a
 > loop because the verification *required* it every cycle, not because the act itself is
 > wrong.
 >
@@ -253,29 +254,35 @@ seeds/
   reports/                        a real directory so report-viewer.js is plausible
 ```
 
-## `mls-vuln-lab-demo-ca` — a witness, not this package
+## ~~`mls-vuln-lab-demo-ca` — a witness, not this package~~ — DELETED
 
-There is a container app named after this lab. **It does not contain this lab.**
+**[corrected 2026-09-22] There is no longer a container app named after this lab, and
+no `vuln-lab-witness.yml` workflow.** Both were deleted by **PR #255**
+(`fix(L10): a pull request that TALKS about an alert did not heal it, and the witness
+goes`), because nothing had read the witness since the operations model landed and dead
+scaffolding is how someone rediscovers a retired mechanism. `infra/bicep/apps/main.bicep`
+declares **five** container apps and none of them is this one; the only surviving trace is
+the `vulnLab` key in `infra/bicep/naming.bicep`, whose description still describes the
+deleted app.
 
-L10's audit ends each healing trail with a deploy stage — a container-app revision
-timestamped after the heal merged — so something in Azure has to move when a heal
-lands. That something is `mls-vuln-lab-demo-ca` (`infra/bicep/apps/main.bicep`,
-module `vulnLabWitnessApp`): a container app running a **pinned public placeholder
-image**, with ingress disabled and `minReplicas: 0`, whose environment carries the
-heal's merge commit. `.github/workflows/vuln-lab-witness.yml` re-stamps it on every
-push to `main` touching `apps/vuln-lab/**`.
+What the section used to say: L10's audit ended each healing trail with a deploy stage — a
+container-app revision timestamped after the heal merged — and `mls-vuln-lab-demo-ca`
+(module `vulnLabWitnessApp`) was a container app running a pinned public placeholder
+image, ingress disabled, `minReplicas: 0`, whose environment carried the heal's merge
+commit.
 
-Nothing here is built into it, and the guarantees above hold unchanged:
+The guarantees this package makes are unaffected, because they were never about the
+witness:
 
 - **no Dockerfile** references this package;
 - the pins never reach a running container, so the L9 Trivy CRITICAL gate — the same
   gauntlet every heal PR must pass — never sees them;
 - neither seed factory is ever called, so no server is started anywhere.
 
-The revision proves the merged commit reached Azure through the pipeline with no human
-hand. It does not claim the healed code runs somewhere; nothing can claim that about a
-package that is deliberately never deployed, and `docs/runbooks/layers/L10.md` says so
-in *The deployment witness*.
+**What does still exist:** this source directory, its three seeded pins, and the
+**3 Dependabot alerts** they raise. Those alerts are excluded from the self-healing
+backlog by policy — they are a manual demonstration generator, not queue material — which
+is the banner at the top of this file.
 
 ## Notes
 

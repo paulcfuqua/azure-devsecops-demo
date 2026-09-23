@@ -4,7 +4,8 @@ Showpiece #1, rebuilt per
 [`docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md`](../../docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md).
 
 **Executed against a tenant on 2026-08-31.** The agent exists in `mls-authoring`, the MCP
-tool server is bound and discovering its six tools, `export-agent.ps1` has run and its
+tool server is bound and discovering its tools — six on that date, **seven since
+`query_aws_lakehouse_sql` landed 2026-09-16** — `export-agent.ps1` has run and its
 output is committed under `solution/`, and the Conversation Start card was authored
 through `pac copilot push`. Passages marked **[verified 2026-08-31]** were settled by
 doing it. What has *not* happened: no import into a demo environment (there isn't one
@@ -311,18 +312,33 @@ None of this travels in a solution. Verified, not guessed.
 3. **Paid-F2 path only:** re-create the Fabric connection and re-attach the data agent
    under **Agents** (a connected agent, not a knowledge source). Skip on the trial
    capacity — tools-only is the default there.
-4. **Create the MCP connection, confirm the tool list populates, and TOGGLE EVERY TOOL ON,
-   then publish.** The list should carry **seven** tools (`agent-definition.md` §4.2);
+4. **Create the MCP connection, confirm the tool list populates, then TOGGLE EVERY TOOL ON
+   → SAVE → PUBLISH, in that order.** The list should carry **seven** tools
+   (`agent-definition.md` §4.2);
    fewer with no error usually means a rejected API key, because a 401 during discovery
    surfaces as an empty list rather than an auth message — *or* that the AWS settings did
    not resolve inside the running container, which makes `query_aws_lakehouse_sql` decline
    to register and the server advertise six.
 
-   **[verified 2026-09-16 — F202]** A tool the connector newly *discovers* arrives
-   **disabled**, and a disabled tool is indistinguishable from an absent one: the agent
-   answers from whatever source remains, confidently and with a plausible citation. Count
-   is not enough — **read the toggles.** Then **publish**; a save alone does not reach the
-   published agent that Direct Line serves. Confirm by arithmetic afterwards: *"how many
+   **[verified 2026-09-16 — F202; sequence restated 2026-09-22 after it cost a second
+   afternoon]** A tool the connector newly *discovers* arrives **disabled**, and a disabled
+   tool is indistinguishable from an absent one: the agent answers from whatever source
+   remains, confidently and with a plausible citation. Count is not enough — **read the
+   toggles.** Three separate acts, and skipping any one of them leaves the published agent
+   exactly as it was:
+
+   1. **toggle** every tool on — the toggle alone changes nothing that is persisted;
+   2. **save** the tool/connector pane — a publish without a save publishes the *old*
+      toggle state;
+   3. **publish** — a save alone does not reach the published agent that Direct Line
+      serves.
+
+   **The hazard afterwards: "refresh tools" re-disables them.** Re-running discovery on an
+   existing connection returns every tool to OFF, so a refresh performed to pick up an
+   eighth tool silently switches off the seven that were working. After any refresh, redo
+   all three steps.
+
+   Confirm by arithmetic afterwards: *"how many
    rows are in the launches table?"* must name **both** lakehouses — **1,200** (Meridian,
    synthetic) and **286,473** (AWS launch-intelligence, real). A single unqualified 1,200
    means the AWS tool is not reachable no matter what the list shows.

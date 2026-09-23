@@ -32,7 +32,7 @@ Every cloud call in all of them is mocked; the suite has never contacted Azure, 
 Fabric or GitHub. Two gates sit alongside and are not counted as tests, because they are
 not test cases: **PSScriptAnalyzer** at Error + Warning across `scripts`, `infra`,
 `verification`, `data`, `compliance` and `.github` (**0 findings**), and **actionlint**
-across all 24 workflows (**clean**).
+across all 23 workflows (**clean**). *Corrected 2026-09-22: this read 24 until `vuln-lab-witness.yml` was found to have been deleted on 2026-09-07 while three documents still listed it.*
 
 ## The rebuild, measured
 

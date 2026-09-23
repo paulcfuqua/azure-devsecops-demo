@@ -11,14 +11,15 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 > An enterprise Azure estate — landing zone, identity, data platform, three applications,
 > a copilot, a DevSecOps chain and a compliance board — defined entirely in this
 > repository and built by pipelines. It can be **destroyed and rebuilt on demand**, which
-> it has been, and it comes back with the same thirty resources.
+> it has been, and it comes back with the same twenty-nine resources.
 >
 > The unusual part is not the estate. It is that **the estate audits itself, independently,
 > and is built so that it cannot overstate the result.** Every layer ships three things —
 > a deploy path, a teardown, and a verification script that runs read-only under a
 > different identity. A layer is done when that auditor says so, not when a deploy exits
-> zero. Fifty-seven criteria work that way, and four of them are red today; they are in
-> the same table as the greens.
+> zero. Sixty-five criteria across twelve layer audits work that way, and whichever are
+> red today sit in the same table as the greens — the scorecard named below carries the
+> current verdicts.
 >
 > The compliance board makes the same argument in a form an auditor recognises: 110 NIST
 > SP 800-171 requirements, **0 of them machine-verified**, no percentage anywhere, and a
@@ -28,7 +29,7 @@ it can be destroyed and rebuilt from nothing via pipelines to keep idle cost nea
 > scorecard — what is verified, what is blocked, and what the audits cannot see. If you
 > are evaluating this repository as an example, the interesting reading is that file, the
 > failure classes in `verification/tests/failure-classes.Tests.ps1`, and the
-> [finding register](docs/findings/2026-09-03-finding-register.md) — not the badges.
+> [finding registers](docs/findings/) — four dated files running to F235 — not the badges.
 
 ## Before you deploy this anywhere
 
@@ -72,12 +73,12 @@ recalled from a design document. **The whole estate runs on trial and free tiers
 licence cost is **$0**, and measured Azure spend is **$14.74 month-to-date**, of which the
 serverless SQL database is 99%.
 
-### Azure — one subscription, thirty resources
+### Azure — one subscription, thirty resources across five resource groups
 
 | What | SKU as deployed | Count |
 |---|---|---|
 | Container Apps environment | Consumption (no workload profile) | 1 |
-| Container apps | Consumption, scale-to-zero, 15-minute cooldown | 6 |
+| Container apps | Consumption, scale-to-zero, 15-minute cooldown | 5 |
 | Azure SQL Database | `GP_S_Gen5` — General Purpose **serverless**, 0.5–2 vCore, 60-minute auto-pause | 1 |
 | Azure SQL logical server | no charge; billing sits on the database | 1 |
 | Function App plans | `FC1` — **Flex Consumption** | 2 |
@@ -95,7 +96,7 @@ Subscription-scope objects — the NIST SP 800-53 R5 policy initiative, the six
 Policy and Cost Management, both free**.
 
 Two things this estate deliberately does **not** need: there is **no Azure Container
-Registry** (the six images are hosted on GHCR, free for a public repository) and **no
+Registry** (the five images are hosted on GHCR, free for a public repository) and **no
 Microsoft Purview account resource** — the sensitivity labels are Microsoft 365 Purview,
 covered by the E5 service plans below.
 
@@ -151,9 +152,11 @@ Autofix being GA and free on public repositories.
 
 ## Status
 
-**Deployed and running.** Thirty Azure resources across four resource groups in one
-region. Teardown takes about fourteen minutes and a full rebuild about ninety, ending with
-the same resource count.
+**Deployed and running.** Twenty-nine Azure resources across the four resource groups a
+teardown deletes, plus one in `mls-rg-identity` that survives it by design — thirty across
+five groups, one region. Measured on the 2026-09-21 cycle: teardown **30m51s**, full
+rebuild **152.2 minutes**, ending with the same resource count. (The wall-clock gate was
+raised from 60 to 180 minutes on 2026-09-22; 60 had never been met by a real cycle.)
 
 **Turn-key.** Everything is tenant-independent: the company prefix, environment segment
 and every derived name resolve from `infra/bicep/naming.bicep` or the `demo` GitHub
@@ -166,7 +169,7 @@ Copilot Autofix. **There is no LLM API key anywhere in the system**, and CI auth
 to Azure only by OIDC / workload identity federation.
 
 What is here: data generators and seeding, the SQL schema, the Fabric lakehouse loaders,
-the shared renderer library, three frontends, the data API, the MCP tool server with six
+the shared renderer library, three frontends, the data API, the MCP tool server with seven
 real cloud-backed tools, the Copilot Studio agent and its ALM, OpenTelemetry throughout,
 the DevSecOps chain, **12 Verifier audit scripts wired into their layer workflows**, the
 compliance catalog / collectors / board, and the `up.ps1` / `down.ps1` fuse.
@@ -180,7 +183,7 @@ compliance catalog / collectors / board, and the `up.ps1` / `down.ps1` fuse.
 | pytest (`data/generators`) | **30 passed** |
 | **Total** | **2,719 automated tests** |
 | PSScriptAnalyzer, Error + Warning, over `scripts infra verification data compliance .github` | **0 findings** |
-| actionlint | **clean across all 24 workflows** |
+| actionlint | **clean across all 23 workflows** |
 | `az bicep build` / `build-params` | **3 templates + 3 parameter files, clean** |
 
 These are reproducible from a checkout and they are **not evidence the estate works** —
@@ -217,11 +220,13 @@ enforced in the workflows and the scripts, not just written down.
 - [Lifecycle and shutdown](docs/runbooks/lifecycle-and-shutdown.md) — what expires when,
   what bills outside the Azure spending limit, and what teardown deliberately leaves alone
 - [Layer playbooks L01–L12](docs/runbooks/layers/) · [demo script](docs/runbooks/demo-script.md)
-- Finding register — [2026-08-22 → 09-03](docs/findings/2026-09-03-finding-register.md) ·
-  [2026-09-04](docs/findings/2026-09-04-finding-register.md). A dated archive of every
-  defect found while building this, including the diagnoses that turned out to be wrong
-  and the ones still open. Kept because a register that edits its own history is not
-  evidence
+- Finding registers — [2026-08-22 → 09-03](docs/findings/2026-09-03-finding-register.md) ·
+  [2026-09-04](docs/findings/2026-09-04-finding-register.md) ·
+  [2026-09-16](docs/findings/2026-09-16-finding-register.md) ·
+  [2026-09-20](docs/findings/2026-09-20-finding-register.md). Four dated files, running to
+  **F235**. An archive of every defect found while building this, including the diagnoses
+  that turned out to be wrong and the ones still open. Kept because a register that edits
+  its own history is not evidence
 - [Working agreements for all agents](CLAUDE.md)
 ## Run locally
 
@@ -273,9 +278,12 @@ knowing before you plan an afternoon around iterating on the agent.
    Its knowledge is a **Fabric data agent** over the lakehouse (preview integration, and
    it needs a paid F2 capacity — there is a documented tools-only fallback); its tools are
    the five ops/sec/cost tools re-hosted as an **MCP server** on Container Apps, plus a
-   sixth, `query_compliance`, that reads showpiece #4's artifact. The agent is a Power
-   Platform solution that lives in this repo and deploys by pipeline — edit it in a
-   browser and the auditor fails the layer.
+   sixth, `query_compliance`, that reads showpiece #4's artifact, and a seventh,
+   `query_aws_lakehouse_sql`, that reaches the sponsor's own AWS Athena lakehouse over OIDC
+   federation with no stored AWS credential (added 2026-09-16; it is gated on
+   configuration, so a server with no AWS backend still advertises exactly six). The agent
+   is a Power Platform solution that lives in this repo and deploys by pipeline — edit it
+   in a browser and the auditor fails the layer.
 2. **Control tower** — Dev / Sec / Ops posture on Well-Architected pillars, fed by live
    Azure, GitHub, and Defender APIs plus cost exports in the lakehouse. Now also the host
    for showpiece #1.
@@ -297,7 +305,8 @@ Showpiece #3 proves this repo can *fix* a vulnerability. Showpiece #4 proves it 
 *govern an estate against a standard* — the question the audience has to answer to their
 own auditors.
 
-**What the board says, collected 2026-09-04:**
+**What the board says, collected 2026-09-22** (the figures have not moved since
+2026-09-04, which is the honest part)**:**
 
 | | COMPLIANT | PARTIAL | GAP | INCONCLUSIVE | NOT_APPLICABLE | NOT_ASSESSED |
 |---|---|---|---|---|---|---|
@@ -307,12 +316,16 @@ Plus four out-of-catalog rows keyed on 800-53 control ids the 800-171 catalog ha
 requirement for, counted separately so the 110 stays arithmetic.
 
 **One caveat, because omitting it would be the exact failure this board exists to
-prevent.** The nightly collection runs and opens a pull request, and that pull request
-cannot merge on its own: a `GITHUB_TOKEN` push triggers no workflow runs, so no required
-check ever reports. State therefore reaches `main` when someone collects it deliberately,
-which is how the snapshot above got here. The automation is real and the merge step is
-not, and a board whose selling point is *"the history is a git history"* is the wrong
-place to be quiet about that.
+prevent.** *Corrected 2026-09-22: this paragraph used to read "The nightly collection runs
+and opens a pull request, and that pull request cannot merge on its own: a `GITHUB_TOKEN`
+push triggers no workflow runs, so no required check ever reports. State therefore reaches
+`main` when someone collects it deliberately … The automation is real and the merge step is
+not." That was F120, and it is fixed.* `.github/workflows/compliance.yml` now pushes the
+dated snapshot **direct to `main`**, falling back to one force-updated branch and a single
+pull request if the push is refused — and `compliance/state/` carries an unbroken daily run
+since 2026-09-05 to show for it. What remains true is the reason the caveat was written: a
+board whose selling point is *"the history is a git history"* is the wrong place to be
+quiet about a merge step that does not work, so if the fallback ever fires, say so here.
 
 **A compliance dashboard that showed green would be worthless.** This estate is deployed,
 audited and rebuildable, and the number that matters is still zero: of 110 requirements,
@@ -337,10 +350,12 @@ is the whole product:
   subsystems once reported a control as *missing* when the truth was that the auditor had
   been refused permission to look (F102, F103, F105), and each produced a confident,
   specific, wrong answer a reader would have acted on.
-- **The history is a git history** — when it can merge. `.github/workflows/compliance.yml`
-  commits a dated snapshot on every run, so `git log compliance/state/` answers when the
-  estate became compliant and when it regressed. There are **two** snapshots today and the
-  trend view says so in those words rather than drawing a flat line.
+- **The history is a git history.** `.github/workflows/compliance.yml` commits a dated
+  snapshot on every run, so `git log compliance/state/` answers when the estate became
+  compliant and when it regressed. There are **twenty** dated snapshots today — two from
+  2026-08-28/29 and an unbroken daily run from 2026-09-05 — and the trend view plots one
+  row per collection date, with named copy for the nothing-yet and one-collection cases so
+  a short series never renders as a flat chart that looks like a long one.
 
 Read [`compliance/README.md`](compliance/README.md) for the two vocabularies — what a
 human may assert, and what the platform will derive from it — and
@@ -351,10 +366,17 @@ including a plain statement of which leg of its deploy/teardown/audit triplet is
 
 Some of the vulnerabilities in this repository are **deliberate**. Everything under
 [`apps/vuln-lab/`](apps/vuln-lab/) carries real, deliberately unpatched CVEs and two
-CodeQL-detectable flaws — they are the fixtures showpiece #3 heals, they are never
-imported by any deployed app, and Dependabot or CodeQL alerts against them are the demo
-working rather than a defect. Read [SECURITY.md](SECURITY.md) before reporting anything
-found there; it also explains how to privately report a genuine issue found anywhere else.
+CodeQL-detectable flaws — they are never imported by any deployed app, and Dependabot or
+CodeQL alerts against them are the demo working rather than a defect. *Corrected
+2026-09-22: this used to call them "the fixtures showpiece #3 heals". **PR #237 retired the
+seeded-CVE model.** The directory and its `reseed.ps1` stay in the repository, and its
+three Dependabot alerts are still open — but they are **excluded from the self-healing
+backlog by policy** and no criterion depends on them. `vuln-lab` is now a manual
+demonstration generator, armed by a human on purpose; showpiece #3 runs against the real
+finding backlog. There is no `vuln-lab` container app any more either — the estate deploys
+five, not six.* Read [SECURITY.md](SECURITY.md) before reporting
+anything found there; it also explains how to privately report a genuine issue found
+anywhere else.
 
 "Meridian Launch Systems" is a fictional company. Every person, credential and business
 record here is synthetic — see [NOTICE](NOTICE).

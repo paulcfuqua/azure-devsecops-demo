@@ -90,7 +90,7 @@ creation), then:
 | Log Analytics workspace | `mls-rg-platform` | PerGB2018, 90-day retention, 1 GB/day cap |
 | Application Insights (workspace-based) | `mls-rg-platform` | bills only via LAW ingestion |
 | Container Apps environment (wired to LAW) | `mls-rg-platform` | consumption-only; env itself bills $0 |
-| Key Vault (RBAC mode, soft-delete on) — **currently empty** | `mls-rg-platform` | ~$0 |
+| Key Vault (RBAC mode, soft-delete on) — **three secrets** *(corrected 2026-09-22; this said "currently empty", which the paragraph below already contradicted)*: `mcp-auth-token`, `mls-directline-secret`, `mls-data-api-github-token` | `mls-rg-platform` | ~$0 |
 | SQL server + serverless DB | `mls-rg-data` | auto-pause 60 min, 0.5–2 vCore; storage only when paused |
 | Cost-export storage account | `mls-rg-ops` | Standard_LRS, pennies |
 | cost-ingest Function App + Flex Consumption plan | `mls-rg-ops` | **$0 idle** — no always-ready instances; ~30 executions/month |
@@ -114,23 +114,31 @@ Bicep never held the value, so nothing was deleted at L6 — only the comments a
 `keyVaultUri` output description changed. That zero-consumer state did not last: Task 5
 (2026-08-26, closing finding F2's infra half) gave the vault a new tenant, `mcp-auth-token`
 — the MCP server's inbound auth token — read by `apps/main.bicep` via `keyVaultUrl` and the
-mcp-tools UAMI (see the L7 section below). The Direct Line channel key (a G0 item) is
-expected to be the vault's second occupant; destroying/recreating a soft-deleted vault name
-is precisely the rebuild hazard `KEY_VAULT_CREATE_MODE=recover` exists to absorb. Whether
-the Direct Line key is vaulted at all is a sponsor decision.
+mcp-tools UAMI (see the L7 section below). **Both of the expected later occupants now
+exist** *(corrected 2026-09-22)*: the Direct Line channel key, under the name
+`MLS_DIRECTLINE_SECRET_NAME` carries — which is `mls-directline-secret`, **not** the
+`directline-secret` the G0 runbook used to say (F147) — and `mls-data-api-github-token`,
+the read-only GitHub PAT behind the control tower's Dev and Sec tabs, created by G0 step 11b
+for F116. Destroying/recreating a soft-deleted vault name
+is precisely the rebuild hazard `KEY_VAULT_CREATE_MODE=recover` exists to absorb.
 
 ### L7 — apps (`apps/main.bicep`)
 
-Three container apps, all `minReplicas: 0`:
+**Five** container apps, all `minReplicas: 0` *(corrected 2026-09-22 — this said three,
+which was true before `data-api` and `compliance` landed; there is no sixth, and in
+particular no `mls-vuln-lab-demo-ca`, whose witness app was deleted with PR #255)*:
 
 | App | Resource name | Ingress |
 |---|---|---|
-| launch-ops | `mls-launch-ops-demo-ca` | external |
-| control-tower | `mls-control-tower-demo-ca` | external |
+| launch-ops | `mls-launch-ops-demo-ca` | external **only when an Entra client ID is configured** — `ingressExternal` is the same expression as "has Easy Auth in front of it" (F26) |
+| control-tower | `mls-control-tower-demo-ca` | same fail-closed expression as launch-ops |
 | mcp-tools | `mls-mcp-demo-ca` | **external, HTTPS only, not parameterised** |
+| data-api | `mls-data-api-demo-ca` | **internal only** (F1, Task 6 — was external until 2026-08-26); both frontends proxy `/api/*` to it from inside the environment |
+| compliance | `mls-compliance-demo-ca` | same fail-closed expression as launch-ops; deliberately excluded from the `containerAppNames` output |
 
-`mcp-tools` replaced `copilot-svc` at the Copilot Studio amendment. It hosts the same
-five Ops/Sec/Cost tool implementations as an MCP server (Streamable HTTP); the LLM loop
+`mcp-tools` replaced `copilot-svc` at the Copilot Studio amendment. It hosts the
+Ops/Sec/Cost tool implementations as an MCP server (Streamable HTTP) — seven tools as of
+2026-09-16, not the five this line used to name; the LLM loop
 moved into a Copilot Studio agent (`infra/copilot-studio/`).
 
 **Ingress is external by requirement, not by configuration.** Copilot Studio is a SaaS
@@ -193,7 +201,7 @@ Every resource that has an AVM module uses one, pinned to an explicit version.
 | Log Analytics workspace | `avm/res/operational-insights/workspace` | 0.16.1 |
 | Application Insights | `avm/res/insights/component` | 0.8.0 |
 | Container Apps environment | `avm/res/app/managed-environment` | 0.15.0 |
-| Container apps (all 3) | `avm/res/app/container-app` | 0.23.0 |
+| Container apps (all 5) | `avm/res/app/container-app` | 0.23.0 |
 | SQL server + database | `avm/res/sql/server` | 0.22.0 |
 | Storage account | `avm/res/storage/storage-account` | 0.33.0 |
 | Key Vault | `avm/res/key-vault/vault` | 0.14.0 |
@@ -379,7 +387,7 @@ reversible by changing one parameter or one line of `naming.bicep`.
 - **[derived] `zoneRedundant: false`** on the Container Apps environment: zone redundancy
   requires an infrastructure subnet (a VNet), which this consumption-only design does not
   have.
-- **[derived] `ingressAllowInsecure: false`** on all four apps (AVM defaults to `true`).
+- **[derived] `ingressAllowInsecure: false`** on all five apps (AVM defaults to `true`).
 - **Not derived — required: `data-api` is provisioned here, and `DATA_API_ORIGIN` is
   injected into both frontends.** This template predates `apps/data-api`, so it shipped
   three apps while both frontends' `ApiProvider` fetched `/api/...` and their nginx
@@ -389,10 +397,14 @@ reversible by changing one parameter or one line of `naming.bicep`.
   FQDN, so Bicep orders it), with its own user-assigned identity for the same reason
   `mcp-tools` has one: it reads Entra-only Azure SQL, the Fabric SQL analytics endpoint,
   Defender and Log Analytics with no stored credential.
-- **[derived] `data-api` ingress is external.** Internal-only would be tighter, but it is
-  the browser's data path through a same-origin proxy, `/healthz` is the first thing
-  anyone checks when a dashboard is blank, and it serves read-only, allowlisted,
-  row-capped synthetic data.
+- **[derived] `data-api` ingress is INTERNAL.** *(Corrected 2026-09-22 — this said
+  "external", which the template stopped doing at F1 / Task 6 on 2026-08-26.)* The old
+  rationale was that it is the browser's data path and that `/healthz` is the first thing
+  anyone checks when a dashboard is blank. Both frontends proxy `/api/*` server-side
+  through nginx, so the only legitimate callers live inside the Container Apps environment,
+  and an unauthenticated request every 59 minutes from anywhere on the internet holds
+  serverless SQL open. Internal ingress still gets an FQDN resolvable within the
+  environment, which is what `DATA_API_ORIGIN` points at.
 - **[derived] `MLS_IMAGE_DIGEST` on every app.** L7's V7.1 binds "endpoint is up" to
   "endpoint serves the audited build" by comparing the health payload's content-hash
   marker with the digest the deploy run recorded, and it refuses to pass on liveness
