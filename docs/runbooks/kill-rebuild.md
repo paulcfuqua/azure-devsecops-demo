@@ -1,7 +1,7 @@
 # Kill/Rebuild Runbook — Standard Cycle, Region Change, and G3 Variant
 
 Operational runbook for the demo's central trick: destroy the environment on demand,
-rebuild it in under an hour, spend almost nothing in between. The standard cycle is
+rebuild it inside a 180-minute budget, spend almost nothing in between. The standard cycle is
 **gate-free by design** (CLAUDE.md hard rule 2); the full-tenant variant at the end
 is **G3-gated** with an honest 2–3 hour rebuild SLA (spec F6). L11's playbook
 (`docs/runbooks/layers/L11.md`) is the formal *proof* procedure; this runbook is the
@@ -18,7 +18,8 @@ day-to-day operation.
 | Subscription-scope cost-export definition [derived — removed so it doesn't point at deleted storage] | Fabric workspace shell `mls-operations` + role assignments |
 | — | **The Fabric capacity, trial or paid F2.** The trial is Microsoft-managed with no ARM resource for `az group delete` to reach; a paid F2 lives in `<prefix>-rg-fabric`, deliberately outside the four groups this teardown deletes (see the note below) |
 | | OIDC federation on `mls-github-deployer`; `mls-verifier`; MG `mls` + policy/NIST assignments; the $75 budget; the GitHub repo and all its config |
-| | **The Power Platform environment, its pay-as-you-go billing plan, and the Copilot Studio agent + its solution** (2026-08-24) — not RG-scoped, and re-import + republish + Direct Line reconfiguration does not fit inside the hour |
+| | **The Power Platform environment, its pay-as-you-go billing plan, and the Copilot Studio agent + its solution** (2026-08-24) — not RG-scoped, and re-import + republish + Direct Line reconfiguration does not fit inside the rebuild budget |
+| | **RG `<prefix>-rg-identity`** and its one resource, the `mls-aws-demo-id` user-assigned managed identity behind the cross-cloud AWS link. Deliberately outside the four groups the teardown names, exactly like `<prefix>-rg-fabric` below |
 
 Why the line sits here: tenant-level objects propagate in 15–45 minutes — churning
 them makes a <180-minute rebuild impossible (spec F6). Money is disposable; identity
@@ -79,8 +80,11 @@ run). What the workflow does, in order:
    code path in `down.ps1` that can reach a tenant object — that separation is
    structural (different scripts, G3-gated), not a runtime flag.
 
-Idempotent, order-safe, no confirmation prompt. Expected wall time: 10–20 minutes
-for the deletes to fully drain (not on any rebuild clock).
+Idempotent, order-safe, no confirmation prompt. Expected wall time (not on any rebuild
+clock): *corrected 2026-09-22 — this said 10–20 minutes.* The measured teardown on
+**2026-09-21 was 30m51s** end to end, clean. The 2026-09-03 cycle was ~14 minutes, so the
+spread is real; budget for the larger number and treat anything past it as worth reading
+the run log over.
 
 ## 3. Verifying the down state
 
@@ -90,7 +94,7 @@ Verifier — or any operator, read-only — runs the down-state half of
 
 | Check | Query | Pass |
 |---|---|---|
-| RGs gone | `az group list --query "[?starts_with(name,'mls-rg-')].name"` | `[]` |
+| RGs gone | `az group list --query "[?starts_with(name,'mls-rg-')].name"` | Exactly `["mls-rg-identity"]` — *corrected 2026-09-22: this expected `[]`, which has been unreachable since `mls-rg-identity` was added outside the teardown's four-group list. An operator reading `[]` as the pass state would have called a correct teardown a failure* |
 | Workspace emptied | Fabric REST: list items in `mls-operations` | zero items; workspace shell present |
 | Capacity | ARM state (paid F2) / trial equivalent | `Paused` / `Active (trial, $0)` |
 | Tenant objects intact | re-run `verification/layer-03-audit.ps1` + `layer-04-audit.ps1` | both PASS, label GUIDs unchanged |
@@ -118,7 +122,7 @@ on a *standard* rebuild (tenant objects present):
 | 3 | L4 labels (`labels.ps1`) | create-if-absent no-op; GUIDs untouched | ~1 min |
 | 4a | L5 Fabric + seed | **real work**: resume capacity (G2 stated per resume; trial $0), recreate lakehouse `mls_operations`, `python -m generators build` (seed `20260822`), load 10 tables, re-pause | ~20–25 min |
 | 4b | L6 platform Bicep | **real work**: full redeploy into `mls-rg-platform` (+ data/ops RG contents per the Bicep tree); Key Vault recovers from soft-delete; cost export recreated | ~12–18 min |
-| 5 | L7 apps | `layer-07-apps.yml` redeploys the whole `infra/bicep/apps` template into `mls-rg-apps` **by image digest** — five serving container apps (`launch-ops`, `control-tower`, `data-api`, `mcp-tools`, `compliance`) plus the L10 witness. No image is rebuilt: `infra-up.yml` deliberately does not call the per-app CI workflows, because GHCR does not die with the resource groups | ~10–15 min |
+| 5 | L7 apps | `layer-07-apps.yml` redeploys the whole `infra/bicep/apps` template into `mls-rg-apps` **by image digest** — five serving container apps (`launch-ops`, `control-tower`, `data-api`, `mcp-tools`, `compliance`) and nothing else. *Corrected 2026-09-22: this read "plus the L10 witness". There is no sixth container — `infra/bicep/apps` contains no `vuln` anything, and the 09-21 rebuild came back with exactly these five (PR #237 retired the plant; the `apps/vuln-lab` source directory stays in the repo and still carries its three policy-excluded alerts).* No image is rebuilt: `infra-up.yml` deliberately does not call the per-app CI workflows, because GHCR does not die with the resource groups | ~10–15 min |
 | 6 | L8 MCP tools CI + agent repoint + eval | **real work**: rebuild/deploy `apps/mcp-tools` to ACA; **repoint the surviving Copilot Studio agent at the new MCP FQDN** (the ACA environment's domain suffix changes when the RG is recreated) and, on the paid-F2 path, recreate + republish the Fabric data agent and reattach it; then the golden-question eval over Direct Line (needs capacity resumed — scheduled inside leg 4a's window or its own stated resume) | ~10–14 min |
 | 7 | L9 chain re-verify | config-as-code already in repo; re-assert states (Defender `Free`) | ~2–3 min |
 | — | ~~L10 re-arm~~ | **RETIRED — nothing to do.** `apps/vuln-lab/reseed.ps1` was demo-prep run from the pre-demo checklist; the sponsor-approved design of 2026-09-05 (PR #237) retires the plant, so a rebuild restores no seed and needs none | — |
@@ -149,21 +153,27 @@ margin fails on ordinary variance and teaches people to ignore it.
 comments and the criterion's `-WallClockBudgetMinutes` were all moved together. A declared
 figure that nothing checks is the defect V1.5 exists to catch, one document over.
 
-**What the number is made of, and why it is not a deploy problem.** The budget in this section's heading has never been met by a real cycle, and
-after two attempts that is a property of the estate rather than an unlucky run. The number
-is honest and the heading is not; **do not repeat the `<60-minute` figure in an outbrief or
-to a sponsor without the two measurements beside it.**
+**What the number is made of, and why it is not a deploy problem.** *Corrected 2026-09-22:
+this paragraph read "the budget in this section's heading has never been met by a real cycle
+… the number is honest and the heading is not", and warned against repeating the
+`<60-minute` figure. That was true of the 60-minute heading and is not true of this one —
+152.2 fits inside 180.* What survives the correction is the habit: **do not quote a rebuild
+time without a measurement beside it**, because the figure that moves is the measurement,
+not the gate.
 
-The 09-21 cycle is the current one: teardown **30m51s** clean, rebuild **152.2 min**, with
-V11.4 correctly recording it as a FAIL against the 60-minute budget. Where the extra time
+The 09-21 cycle is the current one: teardown **30m51s** clean, rebuild **152.2 min**, which
+V11.4 correctly recorded as a FAIL against the then-60-minute budget and which fits inside
+the 180 now in force. Where the extra time
 went is the same place it went in 09-03 — the audits, not the deploys — and L7's verify
 alone waits out a real Container Apps scale-in cycle.
 
-**Restate or defend the budget; do not quietly carry it.** Either the SLA becomes a measured
-number (a rebuild in roughly two and a half hours, most of it verification that could be run
-in parallel or deferred), or V11.4's `-WallClockBudgetMinutes` is raised deliberately with
-the reason recorded. What must not happen is a third cycle failing the same criterion while
-the document still advertises 60.
+**Restate or defend the budget; do not quietly carry it. Settled 2026-09-22 by taking the
+second option.** The choice was: either the SLA becomes a measured number (a rebuild in
+roughly two and a half hours, most of it verification that could be run in parallel or
+deferred), or V11.4's `-WallClockBudgetMinutes` is raised deliberately with the reason
+recorded. The sponsor raised it, and the reason is recorded above. The first option is still
+the better outcome and is still open — 180 is a gate the estate clears, not a claim that
+152.2 minutes is the right number.
 
 **The 2026-09-03 breakdown, kept because the shape still holds.** Every deploy was at or
 under estimate; two audits were not:
@@ -264,7 +274,7 @@ label replication each lag 15–45 minutes, serialized across L2→L3→L4 with
 Verifier-gated audits between. **Honest SLA: 2–3 hours** (spec F6) — plus human
 time for G0's portal-only steps (trials, Fabric SP toggle). The <180-minute claim
 never applies to this path, and the demo script never depends on it: the standard
-cycle exists precisely so the show can promise the hour.
+cycle exists precisely so the show can promise the measured rebuild.
 
 ## 8. Changing the estate's region
 
@@ -339,7 +349,7 @@ exactly what L2 converges.
 pwsh scripts/down.ps1
 
 # verify dead (read-only)
-az group list --query "[?starts_with(name,'mls-rg-')].name"    # expect []
+az group list --query "[?starts_with(name,'mls-rg-')].name"    # expect ["mls-rg-identity"] only
 
 # rebuild (G2 statement for the capacity resume rides with the run)
 pwsh scripts/up.ps1
@@ -350,3 +360,11 @@ foreach ($n in 1..10) { pwsh verification/layer-$('{0:d2}' -f $n)-audit.ps1 }
 # the proof of record
 verification/reports/rebuild-proof.md
 ```
+
+> **`rebuild-proof.md` does not exist and never has** — *noted 2026-09-22*. `git log --all
+> -- verification/reports/rebuild-proof.md` is empty, and nothing in `.github/workflows/` or
+> `scripts/` writes it; `verification/layer-11-audit.ps1` only *names* it in a note. The
+> artifact that does get written is `verification/reports/up-clock.json` (by `scripts/up.ps1`),
+> and the copy committed today is from the **2026-08-31** run, not 09-21. So the 30m51s /
+> 152.2 min figures in § 5 are the record, and this runbook is where they live. Left pointing
+> at the intended filename rather than deleted, because the L11 triplet still owes it.

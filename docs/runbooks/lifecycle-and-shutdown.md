@@ -37,7 +37,7 @@ month, L8 needs rebuilding even though nothing "expired".
 
 | | Covered by `down.ps1` | Survives every teardown |
 |---|---|---|
-| Azure | the four demo RGs | subscription policy, budget, Defender plan, role assignments |
+| Azure | the four demo RGs | subscription policy, budget, Defender plan, role assignments — **and `mls-rg-identity`**, a fifth resource group holding the `mls-aws-demo-id` managed identity behind the cross-cloud AWS link. It is outside the four groups `down.ps1` names, so `az group list` never comes back empty (*added 2026-09-22*) |
 | Identity | — | **every Entra user, group, app registration and CA policy** |
 | Purview | — | sensitivity labels and the label policy |
 | Fabric | — | workspace, lakehouse, trial capacity |
@@ -67,7 +67,12 @@ In this order. Steps 1–2 stop spend; the rest release the tenant.
    `infra/entra/teardown.ps1`, `infra/policy/teardown.ps1`, `infra/purview/teardown.ps1`.
 6. **Remove the subscription-scoped leftovers** the RG teardown never sees: the NIST
    initiative assignment, the budget, and the Defender for Containers plan if L9 enabled
-   it.
+   it. **Also `mls-rg-identity`** (*added 2026-09-22*) — `down.ps1` deletes four groups by
+   name and this is the fifth, so it survives every ordinary cycle and is only ever removed
+   here. Its AWS counterparts are a separate matter: deleting the IAM role or either OIDC
+   provider is **G3-equivalent** (CLAUDE.md hard rule 1) because nothing in the Azure deploy
+   path can recreate them, and `scripts/aws/teardown.sh` is the sponsor's to run, not this
+   estate's.
 
 **If you deployed into a shared subscription against the README's advice**, step 6 is not
 optional — the deny policies stay assigned and refuse everyone else's deployments.

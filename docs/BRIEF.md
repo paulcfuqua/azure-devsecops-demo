@@ -220,6 +220,7 @@ cost-per-app-over-time as a first-class control tower visual.
 12. *(2026-08-26 amendment)* Compliance platform: NIST 800-171 catalog, collectors, the
     committed state artifact, the board behind Easy Auth, and the `query_compliance` MCP
     tool — DevSecOps + Platform. Playbook: `runbooks/layers/L12.md`. Unlike layers 1–11
-    its collection half needs no tenant and is green today; and unlike layers 1–11 it does
-    **not** yet have a `verification/layer-12-audit.ps1`, which its playbook states
-    plainly rather than implying otherwise.
+    its collection half needs no tenant and is green today. *It once lacked a
+    `verification/layer-12-audit.ps1`, and this brief said so plainly rather than implying
+    otherwise. **Corrected 2026-09-22: that script now exists and declares six criteria**, so
+    all twelve layers ship the full triplet — deploy path, teardown, independent audit.*

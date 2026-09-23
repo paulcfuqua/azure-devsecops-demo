@@ -105,6 +105,29 @@ severity (critical/high/medium/low), title, component (repo path), cve_id
 (nullable; Dependabot/Trivy only), opened_date, closed_date (nullable), status
 (resolved/open/risk_accepted), assignee (fictional), sla_days (by severity).
 
+*The two tables below were added 2026-09-20 for the tiered-access work and were missing
+from this section until 2026-09-22. They are the **sensitivity** pair: one mixes
+sensitivities within a row, the other across rows.*
+
+### hr_roster (240 rows; start dates 2015-01-05 .. 2026-05-29)
+employee_id PK, display_name (fictional, composed from fixed pools), department,
+job_family (Engineering/Operations/Corporate/Technician), location (Canaveral/
+Vandenberg/Wallops/Remote), start_date, tenure_years, manager_id (nullable self-FK —
+the first 24 rows are the managers), employment_type (Full-time 82 / Contract 13 /
+Intern 5), **salary_usd, bonus_target_pct, performance_band**. The last three are
+RESTRICTED: `infra/fabric/protect-tables.ps1` denies them at L4 and the governed view
+`dbo.v_hr_roster` omits them. **Mixed sensitivity within one row is the point** — if the
+sensitive columns lived in a separate table the demo would be a join rather than a denial.
+
+### defect_reports (900 rows; reported 2024-01-02 .. 2026-06-01)
+defect_id PK, vehicle_id FK, supplier_id (nullable FK; always set on a restricted row),
+reported_date, severity (Critical 6 / Major 24 / Minor 70), subsystem, status (Closed 63 /
+In Analysis 22 / Open 15), summary, root_cause, **classification**. `DEFECT_RESTRICTED_RATE`
+0.17 makes **139** rows `THIRD_PARTY_PROPRIETARY` at the default seed and the rest
+`INTERNAL`; a row-level security policy leaves `dbo.v_defect_reports` with **761**. The
+contrast with `hr_roster` is deliberate: RLS **hides** (rows vanish silently), column-level
+denial **refuses** (a visible error naming the column).
+
 ## Messiness knobs (`config.py`; bounds asserted in `tests/test_messiness.py`)
 
 | knob | default | effect |

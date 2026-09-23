@@ -4,8 +4,13 @@
     L4 Verifier audit - Purview sensitivity labels. READ-ONLY.
 
 .DESCRIPTION
-    Implements the two master-plan Verify criteria owned by
-    docs/runbooks/layers/L04.md section Validation cycle, and nothing else:
+    Implements the label-taxonomy criteria owned by docs/runbooks/layers/L04.md section
+    Validation cycle, and nothing else. L4 declares THREE: V4.1, V4.2 and V4.3.
+
+    The data-layer criteria that used to live here are gone: V4.4 was retired and V4.5/V4.6
+    MOVED to L5 as V5.6/V5.7 on 2026-09-21, following the protect step that #294 moved there
+    (protection cannot be applied before the tables exist). The notes below are kept because
+    the reasoning is worth having; they describe history, not this script's contents.
 
       V4.1  Get-Label returns the 6 labels with expected GUIDs recorded to
             verification/reports/.
@@ -342,7 +347,7 @@ function Invoke-Main {
 
     # L04: reads the replication V4.1 has already waited out
     Invoke-MlsCriterion -Context $context -Id 'V4.3' -Control @('3.8.4') `
-        -Description "Label policy exists, publishing the taxonomy to the demo groups (supplementary - L04.md Failure mode 5, F18)" `
+        -Description "Label policy exists, publishing the taxonomy at its declared scope (supplementary - L04.md Failure mode 5, F18)" `
         -Command "Connect-IPPSSession -AppId <mls-verifier> -Organization $organizationName -CertificateThumbprint <thumbprint>`nGet-LabelPolicy -Identity '$ExpectedLabelPolicy' | Select-Object Labels, ExchangeLocation" `
         -Expected "policy '$ExpectedLabelPolicy' exists; Labels == [$($ExpectedLabel -join ', ')]; ExchangeLocation == [$($ExpectedLabelPolicyScope -join ', ')]" `
         -RetryWindowMinutes 10 `

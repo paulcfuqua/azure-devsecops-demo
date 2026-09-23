@@ -7,9 +7,12 @@ authoritative brief is [docs/BRIEF.md](docs/BRIEF.md); the current plan is
 > **Starting cold, or resuming after a compaction? Read
 > [docs/DEMO-READINESS.md](docs/DEMO-READINESS.md) first — its SCORECARD and BLOCKER TREE
 > are at the top.** The brief says what the demo is *for*; the scorecard says how much of
-> it actually works today (1 showpiece of 4, 5 layers verified of 12) and the blocker tree
+> it actually works today, showpiece by showpiece and layer by layer, and the blocker tree
 > says what stands in the way, ordered by how much each one unblocks. Nothing in this file
-> tells you what to *do next*; that document does.
+> tells you what to *do next*; that document does. *Corrected 2026-09-22: this sentence used
+> to carry the counts inline — "1 showpiece of 4, 5 layers verified of 12" — and both had
+> drifted well past true. A count copied out of the scorecard is a second source for the one
+> number the scorecard exists to hold, so there is no count here any more.*
 >
 > Two habits it will save you: check a blocker's evidence yourself before acting on it -
 > several entries record a confident diagnosis that a second sample disproved - and treat a
@@ -423,7 +426,14 @@ itself is a stronger argument than any board or dashboard.
 - Required tags on every RG (policy-enforced): `env`, `app`, `costCenter`, `owner`,
   `dataClassification`, `managedBy=iac`. Resources inherit via modify policy.
 - Demo RGs: `mls-rg-platform`, `mls-rg-apps`, `mls-rg-data`, `mls-rg-ops`. Teardown =
-  delete these four.
+  delete these four. **A fifth, `mls-rg-identity`, sits outside that blast radius on
+  purpose** and `infra-down.yml` never names it: it holds `mls-aws-demo-id`, the
+  user-assigned identity the AWS trust chain federates from, and the AWS trust policy pins
+  that identity's `sub`. Delete the group and the next deploy rebuilds the identity with a
+  **new principal id**, which breaks the trust on the AWS side, where nothing in the Azure
+  deploy path can repair it — so removing it is a deliberate decision paired with an
+  AWS-side update, never a teardown step. Read 2026-09-22: **29 resources in the four, 1 in
+  the fifth, 30 across all five.**
 
 ## Commit conventions
 

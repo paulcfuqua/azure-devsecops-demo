@@ -26,7 +26,15 @@ references:
 | 080 | `080_work_orders.sql` | `work_orders` | **operational** | 010, 040, 050 |
 | 090 | `090_cost_daily.sql` | `cost_daily` | analytical mirror | — |
 | 100 | `100_findings_history.sql` | `findings_history` | analytical mirror | — |
-| 110 | `110_indexes.sql` | (all) | — | every table |
+| 110 | `110_indexes.sql` | (010–100) | — | every table above |
+| 120 | `120_hr_roster.sql` | `hr_roster` | reference | — |
+| 130 | `130_defect_reports.sql` | `defect_reports` | **operational** | 010, 030 |
+| 900 | `900-contained-users.sql` | (none — a `schema_version` row and the F172 explanation; the workload grant moved into `Set-SeedWorkloadUser`) | — | — |
+
+*(Rows 120, 130 and 900 added to this table 2026-09-22 — the first two landed with the
+tiered-access work on 2026-09-20, and 900 had never been listed. `110_indexes.sql` indexes
+only the ten tables above it; `hr_roster` and `defect_reports` declare no secondary
+indexes.)*
 
 Data load order is the same minus the meta and index files — it is `load_order` in
 [`../schema-manifest.json`](../schema-manifest.json), and `seed.ps1` reads it from there
@@ -37,12 +45,12 @@ rather than re-deriving it.
 The master plan puts the operational database in Azure SQL, per app, and the analytical
 plane in the lakehouse. That split is real here, not decorative:
 
-- **operational** — `launches`, `scrubs`, `work_orders`. Azure SQL is the system of
-  record. `apps/launch-ops` (L7) does CRUD against these; the seed only provides the
-  starting state.
-- **reference** — `vehicles`, `pads`, `suppliers`, `parts`. Seeded once, read-mostly,
-  and the FK targets for everything above. An app may read them; nothing writes them
-  outside a reseed.
+- **operational** — `launches`, `scrubs`, `work_orders`, `defect_reports`. Azure SQL is the
+  system of record. `apps/launch-ops` (L7) does CRUD against these; the seed only provides
+  the starting state.
+- **reference** — `vehicles`, `pads`, `suppliers`, `parts`, `hr_roster`. Seeded once,
+  read-mostly, and the FK targets for everything above. An app may read them; nothing
+  writes them outside a reseed.
 - **analytical mirror** — `telemetry_summary`, `cost_daily`, `findings_history`. The
   **lakehouse** is the system of record (L6: the Cost Management export → Function
   pipeline writes `cost_daily` into `mls_operations`). The Azure SQL copies exist so L7
@@ -92,10 +100,13 @@ insertion order == CSV header order == JSON key order). Types follow one rule se
 `NOT NULL` is asserted wherever the generator never emits a null. Only the five
 `NULLABLE_COLUMNS` (`launches.weather_delay_min`, `launches.insurance_value_musd`,
 `scrubs.recycle_hours`, `telemetry_summary.data_dropout_s`, `parts.material`) plus the
-four structurally-optional columns (`vehicles.gto_capacity_kg`,
+nine structurally-optional columns (`vehicles.gto_capacity_kg`,
 `vehicles.last_flight_year`, `work_orders.launch_id`, `work_orders.closed_date`,
-`work_orders.disposition`, `findings_history.cve_id`, `findings_history.closed_date`)
-are nullable. `apps/launch-ops` types several of these defensively as `| null` in
+`work_orders.disposition`, `findings_history.cve_id`, `findings_history.closed_date`,
+`hr_roster.manager_id` — the first 24 rows are the managers — and
+`defect_reports.supplier_id`)
+are nullable. *(Said "four" while listing seven until 2026-09-22; the two new tables add
+two more.)* `apps/launch-ops` types several of these defensively as `| null` in
 TypeScript; that is caller-side caution, not a schema relaxation.
 
 ## Messiness is preserved, on purpose
@@ -117,3 +128,11 @@ and re-derived independently by `verification/layer-05-audit.ps1`:
 | `vehicles` | 12 | | `work_orders` | 800 |
 | `pads` | 11 | | `cost_daily` | 4515 |
 | `telemetry_summary` | 1200 | | `findings_history` | 420 |
+| `hr_roster` | 240 | | `defect_reports` | 900 |
+
+*(The last row added 2026-09-22. Of the 900 `defect_reports` rows, **139** are classified
+`THIRD_PARTY_PROPRIETARY`; the governed view `dbo.v_defect_reports` in the **lakehouse**
+returns the remaining **761**. Nothing in this directory creates that view or the
+column-denying `dbo.v_hr_roster` — a DDL grant is not a security policy, and the
+enforcement lives in `infra/fabric/protect-tables.ps1` so a rebuild reproduces it in one
+place.)*

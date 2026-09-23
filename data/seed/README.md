@@ -10,7 +10,7 @@ pwsh data/seed/seed.ps1 -Target both -WhatIf
 |---|---|
 | **Layers** | L5 (Fabric lakehouse, analytical plane) and L6 (Azure SQL, operational plane) |
 | **Generator seed** | `20260822` — deterministic, so every downstream expectation is exact |
-| **Row counts** | `launches` 1200 · `scrubs` 475 · `vehicles` 12 · `pads` 11 · `telemetry_summary` 1200 · `parts` 300 · `suppliers` 24 · `work_orders` 800 · `cost_daily` 4515 · `findings_history` 420 |
+| **Row counts** | `launches` 1200 · `scrubs` 475 · `vehicles` 12 · `pads` 11 · `telemetry_summary` 1200 · `parts` 300 · `suppliers` 24 · `work_orders` 800 · `cost_daily` 4515 · `findings_history` 420 · `hr_roster` 240 · `defect_reports` 900 *(the last two added 2026-09-20; this row listed ten counts under a "twelve tables" heading until 2026-09-22)* |
 
 ## Layout
 
@@ -19,7 +19,7 @@ data/seed/
   seed.ps1              ONE entry point: generate -> SQL -> lakehouse
   schema-manifest.json  the contract: tables, ordered columns, types, keys, row counts
   seed-common.psm1      manifest reader, generated-data reader, status output
-  sql/                  T-SQL DDL (12 files) + sql-seed.psm1        -> README.md
+  sql/                  T-SQL DDL (15 files) + sql-seed.psm1        -> README.md
   lakehouse/            Fabric REST loader (lakehouse-seed.psm1)    -> README.md
   tests/                Pester 5-syntax suites; every cloud call mocked
 ```
@@ -31,7 +31,7 @@ one entry point.
 ## What a run does
 
 1. **Generate** — `python -m generators build` from `data/`, but only when
-   `data/generated/` is missing or incomplete (any of the twenty files: 10 tables ×
+   `data/generated/` is missing or incomplete (any of the twenty-four files: 12 tables ×
    CSV + JSON). The seed, not the artifacts, is the source of truth; `data/generated/`
    is gitignored and disposable.
 2. **Azure SQL** (`-Target sql|both`) — apply `sql/*.sql` in filename order, then load

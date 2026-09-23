@@ -38,7 +38,7 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
 export const DEFAULT_DIRECTLINE_BASE = "https://directline.botframework.com";
 
-/** The Adaptive Card content type Copilot Studio attaches (V8.4 pins schema 1.5). */
+/** The Adaptive Card content type Copilot Studio attaches (V8.4 pins schema 1.6 since 2026-09-22, matching what the deployed agent emits). */
 export const ADAPTIVE_CARD_CONTENT_TYPE = "application/vnd.microsoft.card.adaptive";
 
 export interface DirectLineActivity {

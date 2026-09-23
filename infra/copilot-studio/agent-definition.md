@@ -371,8 +371,12 @@ Also verified and worth knowing:
   connector existed**, so it had never been exercised by adding a tool to a live
   connection. When `query_aws_lakehouse_sql` became the seventh, it was listed, it was off,
   and the agent answered from the other lakehouse with a confident and plausible citation.
-  Enabling it takes a toggle **and a publish**; a save alone does not reach the published
-  agent. Post-import checklist step 4 is where this is enforced.
+  Enabling it takes **a toggle, then a SAVE, then a PUBLISH** — three acts, and skipping any
+  one leaves the published agent unchanged: the toggle alone persists nothing, and a save
+  alone does not reach the published agent Direct Line serves. **And a subsequent "refresh
+  tools" on the connection returns every tool to OFF**, so a refresh done to pick up a new
+  tool silently disables the ones that were working. Post-import checklist step 4 is where
+  this is enforced.
 
 ### 4.2 The tools **[verified 2026-08-31; seventh added 2026-09-16]**
 
@@ -418,8 +422,10 @@ AWS lakehouse in either configuration — the Fabric data agent of §3 does not 
 >
 > The deployed container app runs with `MLS_TOOL_BACKENDS=local`, and
 > `apps/mcp-tools/src/tools/backends.ts` resolves that to `createLocalBackends()` —
-> *"Phase P default: all-local backends."* Five of the six serve `Local*Backend`
-> implementations; only `query_compliance` has no cloud/local split. The portal shows this
+> *"Phase P default: all-local backends."* Five of the seven serve `Local*Backend`
+> implementations; `query_compliance` has no cloud/local split, and
+> `query_aws_lakehouse_sql` has no local implementation at all — it is cloud-only and is
+> simply not registered when the AWS settings are absent. The portal shows this
 > in plain sight: `query_lakehouse_sql`'s own description reads *"(SQLite dialect)"*.
 >
 > This is a deliberate default, not an omission — `infra/bicep/apps/main.bicep` sets

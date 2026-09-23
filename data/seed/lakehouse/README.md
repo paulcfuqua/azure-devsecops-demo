@@ -80,7 +80,9 @@ that the two forms cannot be mixed — GUIDs for both segments or names for both
 ## Row-count fidelity
 
 `launches` must be **1,200 ± 0** at L5 V5.3, and the same exactness applies to the other
-nine tables. Four settings carry that, and each one prevents a specific failure:
+eleven tables *(said "nine" until 2026-09-22; `hr_roster` 240 and `defect_reports` 900
+joined the manifest on 2026-09-20)*. Four settings carry that, and each one prevents a
+specific failure:
 
 | Setting | What it prevents |
 |---|---|
@@ -91,6 +93,13 @@ nine tables. Four settings carry that, and each one prevents a specific failure:
 
 Nothing in the path de-duplicates, filters or samples. The loader uploads the generator's
 bytes unmodified and Fabric parses them.
+
+**Two of the twelve are later fronted by governed views, and this script does not create
+them.** `infra/fabric/protect-tables.ps1` adds `dbo.v_hr_roster` (the roster without
+`salary_usd`, `bonus_target_pct` or `performance_band`) and `dbo.v_defect_reports` (900
+base rows reduced to **761** by a row-level security policy that drops the 139
+`THIRD_PARTY_PROPRIETARY` rows). The loader's own read-back therefore counts the base
+tables at their manifest figures; the view counts are asserted elsewhere.
 
 ## Column types — the one open item
 

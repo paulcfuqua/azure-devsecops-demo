@@ -1,14 +1,17 @@
 # @mls/mcp-tools
 
 The Meridian Launch Systems **MCP tool server** — the tool half of showpiece #1
-(L8). It exposes exactly **six** read-only tools over the Model Context
+(L8). It exposes exactly **seven** read-only tools over the Model Context
 Protocol so a **custom Microsoft Copilot Studio agent** can attach to it and
 call them: the five operations tools, plus `query_compliance` (added 2026-08-26
-with the compliance platform, L12).
+with the compliance platform, L12) and `query_aws_lakehouse_sql` (added
+2026-09-16 with the AWS lakehouse link). The seventh is **gated on
+configuration** — a server with no AWS settings resolved declines to register it
+and advertises six.
 
 ```
 Copilot Studio agent  ──MCP / Streamable HTTP──▶  POST /mcp  (this service)
-   (all orchestration)                              6 tools, data only
+   (all orchestration)                              7 tools, data only
 ```
 
 There is **no LLM in this package**. Per the sponsor-directed amendment
@@ -26,7 +29,7 @@ nothing else. No Anthropic SDK, no API key, no prompt, no `/ask`.
 | URL | `https://<container-app-fqdn>/mcp` (local: `http://localhost:8080/mcp`) |
 | Session | **Stateless.** No `Mcp-Session-Id` is issued or required; every POST is self-contained, so the container app can scale to zero and back mid-conversation. `GET`/`DELETE /mcp` answer `405` — there is no server-initiated stream and no session to delete. |
 | Auth | **Bearer token, enforced in the app, failing closed at boot** (`src/auth-gate.ts`, finding F2). Ingress is `external` unconditionally — Copilot Studio calls from outside Azure — so the endpoint is reachable by anyone who finds the FQDN, and an ingress-only story was not one. The token is read from a Key Vault secret at deploy time; the server refuses to start without it in **every** backend mode. Local development opts out explicitly via `MCP_ALLOW_UNAUTHENTICATED=true`, which `npm run dev` sets and which announces itself loudly at boot. |
-| Tools | Exactly six (below). `tools/list` returning anything other than those six names is an audit failure (V8.3 — see `docs/runbooks/layers/L08.md`, which explains why the master plan's wording says "five"). |
+| Tools | Exactly seven (below). `tools/list` returning anything other than those seven names is an audit failure (V8.3 — see `docs/runbooks/layers/L08.md`, which explains why the master plan's wording says "five"). |
 | Result shape | Data only — each result is one `text` block containing the adapter's JSON, plus the same payload as `structuredContent.result`. No prose, no UI, no component specs: the agent renders the Adaptive Card. |
 | Errors | A bad query or a failing adapter comes back as an `isError` tool result with the message, not a protocol error, so the agent can correct itself and retry. |
 
@@ -34,16 +37,21 @@ Registering it: Copilot Studio → **Tools → Add a tool → Model Context
 Protocol → connect to an existing MCP server**, pointing at the `/mcp` URL
 ([docs](https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-add-existing-server-to-agent)).
 The Fabric data agent is attached separately as a *knowledge* source for NL2SQL;
-these six are *tools*. The Copilot Studio tool list refreshes dynamically from the
-server, so the sixth tool needed no re-authoring of the agent. If the Fabric preview
+these seven are *tools*. The Copilot Studio tool list refreshes dynamically from the
+server, so a newly added tool needs no re-authoring of the agent — **but it arrives
+switched OFF, and a disabled tool is indistinguishable from an absent one**
+(corrected 2026-09-16, finding F202; this line used to claim the sixth tool needed
+nothing at all). Enabling it takes a toggle, a save and a publish — see
+`infra/copilot-studio/README.md` §6 step 4. If the Fabric preview
 is unavailable in the region, `query_lakehouse_sql` here is the documented fallback
 for lakehouse questions.
 
-## The six tools
+## The seven tools
 
 | Tool | What it answers | Local backend (Phase P) | Cloud backend (L5–L8) |
 | --- | --- | --- | --- |
-| `query_lakehouse_sql` | anything in the operations lakehouse | real SQL via sql.js over `data/generated/*.csv` (SQLite) | Fabric lakehouse SQL analytics endpoint (T-SQL) |
+| `query_lakehouse_sql` | anything in Meridian's own operations lakehouse (synthetic) | real SQL via sql.js over `data/generated/*.csv` (SQLite) | Fabric lakehouse SQL analytics endpoint (T-SQL) |
+| `query_aws_lakehouse_sql` | anything in the sponsor's AWS `launch-intel` lakehouse (real) | *(none — the tool is not registered without AWS settings)* | Athena over the Glue Data Catalog (Trino) |
 | `query_log_analytics` | platform health/latency/errors | committed fixture | Azure Monitor Log Analytics |
 | `get_github_security` | open dependency and code-scanning alerts | committed fixture | GitHub Security REST API |
 | `get_defender_posture` | secure score and failing controls | committed fixture | Defender for Cloud (ARM) |
@@ -83,7 +91,21 @@ The reasoning, and the DATEFIRST pin behind the T-SQL weekday numbering, are in
 The **read-only gate is one function in both dialects**
 (`assertReadOnlySingleStatement`): exactly one statement, `SELECT`/`WITH` only,
 DDL/DML refused, 500-row cap. T-SQL adds refusals SQLite never needed (`SET`,
-`EXEC`, `sp_`/`xp_`, `OPENROWSET`) because a TDS batch would execute them.
+`EXEC`, `sp_`/`xp_`, `OPENROWSET`) because a TDS batch would execute them. Trino
+adds `UNLOAD`, which writes results to S3 from inside a SELECT-shaped statement.
+
+### The two restricted objects are named, not merely unadvertised
+
+`RESTRICTED_OBJECT` in `sql-dialect.ts` refuses `dbo.hr_roster` and
+`dbo.defect_reports` by name and points the caller at the governed view over each
+(`dbo.v_hr_roster`, `dbo.v_defect_reports`). That is the **backstop**. The first
+line of defence is in the tool description: `LAKEHOUSE_SCHEMA` advertises the two
+views and deliberately not the tables beneath them, so the only HR shape the agent
+can compose a query against is the one without `salary_usd`, `bonus_target_pct` or
+`performance_band`, and the only defect shape is the one with
+`THIRD_PARTY_PROPRIETARY` rows already filtered out. An agent that does not know a
+column exists cannot be argued into selecting it, and an absence costs no turn the
+way a refusal does.
 
 ## Backends
 
@@ -96,6 +118,7 @@ one shared shape function so drift on either side fails a test.
 | Tool | Local | Cloud | Auth |
 | --- | --- | --- | --- |
 | `query_lakehouse_sql` | sql.js over `data/generated/*.csv` | Fabric SQL analytics endpoint (TDS via `mssql`) | managed identity, `https://database.windows.net/.default` |
+| `query_aws_lakehouse_sql` | *(not registered)* | Athena over Glue (AWS SDK) | Entra token exchanged for temporary AWS credentials via STS `AssumeRoleWithWebIdentity` — no AWS key exists ahead of time |
 | `query_log_analytics` | fixture | Azure Monitor query API | managed identity, `https://api.loganalytics.io/.default` |
 | `get_github_security` | fixture | GitHub REST (Dependabot + code scanning) | `GITHUB_TOKEN` from the environment |
 | `get_defender_posture` | fixture | ARM `Microsoft.Security/secureScores` | managed identity, `https://management.azure.com/.default` |
@@ -125,7 +148,12 @@ one shared shape function so drift on either side fails a test.
 ### Selecting the backend set
 
 `MLS_TOOL_BACKENDS=local|cloud`. `local` needs nothing. `cloud` needs six
-settings and **fails fast at boot listing every missing one at once**:
+settings and **fails fast at boot listing every missing one at once**.
+`query_aws_lakehouse_sql` is configured separately and independently of the
+backend mode, by seven `MLS_AWS_*` / `MLS_ATHENA_*` / `MLS_GLUE_DATABASE`
+settings: **none** set means the tool is simply not offered, **all seven** set
+registers it, and a partial set is fatal at boot rather than a silently missing
+tool (F125's lesson — an absent variable is the empty string, not an error):
 
 ```sh
 MLS_TOOL_BACKENDS=cloud
@@ -143,7 +171,7 @@ APPLICATIONINSIGHTS_CONNECTION_STRING=<App Insights>
 ```
 
 The selection is observable on `GET /healthz`, which reports `mode`,
-`sqlDialect` and the implementation class behind each of the six tools — a
+`sqlDialect` and the implementation class behind each registered tool — a
 `cloud` server still advertising `sqlite` would mean the descriptions and the
 engine had come apart.
 
@@ -237,12 +265,13 @@ npm run dev     # tsx src/index.ts, listens on :8080
 ```
 
 The suite covers the MCP client smoke test, the allowlist, the sql.js adapter,
-the CSV parser, the SQLite/T-SQL dialect and its shared read-only gate, the five
-cloud adapters, the shared HTTP retry/pagination layer, local↔cloud shape
+the CSV parser, the SQLite/T-SQL/Trino dialects and their shared read-only gate,
+the six cloud adapters, the shared HTTP retry/pagination layer, local↔cloud shape
 parity, the OTel span contract, backend selection, and the eval:agent Direct
-Line driver. **Every cloud test runs against a mocked `fetch` or an injected TDS
-executor — the suite makes zero live cloud calls**, which is also why it needs no
-tenant to be meaningful.
+Line driver. **Every cloud test runs against a mocked `fetch` or an injected
+executor (`TdsExecutor` for Fabric, `AthenaExecutor` for AWS) — the suite makes
+zero live cloud calls**, which is also why it needs neither a tenant nor an AWS
+account to be meaningful.
 
 Container build (context is the repo root by convention with the other apps;
 nothing needs pre-building into it):

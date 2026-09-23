@@ -926,3 +926,113 @@ has its own test.
 
 Found by narrowing the set and then reading the report instead of the console. The criterion
 table is what people read, and it was the thing that lied.
+
+---
+
+## F236 — the rebuild proof of record is a file that has never existed
+
+*2026-09-22, found during a documentation accuracy sweep.*
+
+Five places name `verification/reports/rebuild-proof.md` as the artifact L11 produces and the
+thing a presenter or auditor should open:
+
+```
+docs/runbooks/demo-script.md          "show the committed rebuild-proof.md"
+docs/runbooks/kill-rebuild.md         recorded "into verification/reports/rebuild-proof.md (L11)"
+docs/runbooks/layers/L11.md           the proof of record
+docs/superpowers/plans/…g1-master-plan.md
+verification/layer-11-audit.ps1:582   names it in a message string
+```
+
+**`git log --all -- verification/reports/rebuild-proof.md` is empty. The file has never been
+committed, and nothing in `.github/workflows/` or `scripts/` writes it.** `layer-11-audit.ps1`
+mentions it only inside a message; it does not produce it.
+
+What L11 *does* produce is the per-run audit report (`verification/reports/L11-<stamp>.md`
+plus its JSON sibling, uploaded as a run artifact) and `verification/reports/up-clock.json`.
+Those are real. The proof-of-record document is not.
+
+### Why it survived
+
+The same shape as F119 and F227: **nothing asserts the existence of an artifact whose absence
+is only visible to a human following a runbook.** V11.1–V11.5 assert facts about the estate;
+none asserts that the document those facts are supposed to land in was written. A presenter
+discovers it at the moment they try to open it, which per the demo script is during a cold
+open in front of an audience.
+
+It is also the third instance today of a document confidently citing something that is not
+there — after `verification/schemas/adaptive-card-1.5.json` (L08.md) and the "card builders
+in apps/mcp-tools" that do not exist. A reference is a claim, and an unfollowed link is an
+unchecked claim.
+
+### Not fixed here, and the decision belongs to a human
+
+Two defensible resolutions and they differ in what the project is claiming:
+
+1. **Make L11 write it.** The rebuild proof becomes a committed, diffable artifact — which is
+   what the runbooks have been promising and what an auditor would expect. This is the
+   stronger position and it is a code change to `layer-11-audit.ps1` plus a workflow step.
+2. **Drop the references.** Point every citation at the L11 audit report and `up-clock.json`,
+   which already exist and already carry the numbers. Cheaper, honest, and quietly reduces
+   what the project claims.
+
+The sweep left the pointers in place and flagged them rather than choosing, because deleting
+them silently would take option 2 without anyone deciding it.
+
+### A related staleness, recorded with it
+
+`verification/reports/up-clock.json` is committed and carries the **2026-08-31** run:
+`elapsedMinutes: 60.84`, `budgetMinutes: 60.0`, `withinBudget: false`. It is read by
+`infra-up.yml`, `scripts/up.ps1` and `scripts/tests/up.Tests.ps1`, and rewritten on every
+run — so the committed copy is a stale snapshot rather than a live input, and its
+`budgetMinutes: 60.0` predates the 2026-09-22 raise to 180. Left in place: it is an accurate
+record of the run it describes, and rewriting a historical artifact to match a later decision
+is exactly the kind of tidying this register exists to prevent.
+
+---
+
+## F237 — F165 changed the criterion and the tests, and left the deploy path on the old premise
+
+*2026-09-22, found by a documentation sweep reading the runbook against the code.*
+
+Three artifacts describe what Defender for Containers should be at the end of an L9 run, and
+they do not agree:
+
+| artifact | says |
+|---|---|
+| the comment above V9.5 in `layer-09-audit.ps1` | *"asserts Defender for Containers ends the demo **OFF**"* |
+| V9.5's own `-Expected`, three lines below it | `pricingTier == "**Standard**"` |
+| `layer-09-devsecops.yml`'s `defender` job | exits 1 unless the closing tier is `**Free**` |
+
+**F165 settles which is right.** On 2026-09-02 the sponsor said the criterion *"was built on a
+false premise"* and the decision was recorded plainly: **"the plan stays on."** A security demo
+whose normal condition is protection switched off is backwards, and the old failure text
+called an enabled security control *"a cost leak: disable immediately"*.
+
+So V9.5 is correct. **The comment and the deploy job are both pre-F165 leftovers.**
+
+**The consequence is a criterion that cannot pass on a run that exercises its subject.** With
+`defender_toggle: true`, the deploy job disables the plan and fails the run unless it reads
+`Free`; V9.5 then reads `Free` and fails because it wants `Standard`. Whichever way that run
+goes, something is red by construction.
+
+### What this is an instance of
+
+F165's own words: *"This needed code, not just documentation … Leaving a criterion permanently
+red while a document explains that the red is fine produces exactly the thing this repository
+spends its budget avoiding: a failing check people learn to scroll past."* It changed the
+criterion, the tests and the failure text — and not the workflow that produces the state the
+criterion reads. **A decision applied to the verifier and not to the deployer is half a
+decision**, the same shape as F227's env block reaching one of two callers.
+
+It survived because nothing exercises it: `defender_toggle` defaults off, so the contradiction
+only appears on a run nobody has made since 09-02.
+
+### Fixed here: the comment. Not fixed here: the workflow.
+
+The stale comment is corrected — it now states the F165 premise and explains why V9.5 carries
+no NIST control while V9.6 carries 3.11.2/3.12.1.
+
+The deploy job is a code change with a cost attached (~USD 0.29/day, free trial to
+2026-10-01), and *whether the estate ends a run with the plan on* is a spend decision that
+belongs to the sponsor under G2, not to a documentation sweep. Recorded rather than taken.

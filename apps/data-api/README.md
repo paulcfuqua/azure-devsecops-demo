@@ -19,7 +19,9 @@ Ten allowlisted tables: `launches`, `scrubs`, `vehicles`, `pads`, `parts`,
 `suppliers`, `work_orders`, `telemetry_summary`, `cost_daily`,
 `findings_history`.
 
-Six allowlisted feeds, and the top-level shape each one answers with:
+Seven allowlisted feeds *(corrected 2026-09-22 — this said six and omitted `azure-cost`;
+`FEED_NAMES` in `src/contract/allowlist.ts` is the list)*, and the top-level shape each one
+answers with:
 
 | Feed | Shape | Upstream |
 |---|---|---|
@@ -29,6 +31,7 @@ Six allowlisted feeds, and the top-level shape each one answers with:
 | `secure-score` | `{ value[] }` | Defender for Cloud |
 | `secure-score-controls` | `{ value[] }` | Defender for Cloud |
 | `app-requests` | `{ tables[] }` | Log Analytics query API |
+| `azure-cost` | `{ asOf, stale, currency, timeframe, total, byService[], byResourceGroup[], daily[] }` | Cost Management |
 
 The array-vs-object distinction is not cosmetic: launch-ops' provider throws
 unless `/tables/:table` returns an array, which is why row metadata lives in

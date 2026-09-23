@@ -1,5 +1,5 @@
 /**
- * `query_lakehouse_sql` — CLOUD adapter: AWS Athena over the Glue Data Catalog
+ * `query_aws_lakehouse_sql` — CLOUD adapter: AWS Athena over the Glue Data Catalog
  * (the sponsor's `launch-intel` lakehouse, database `launch_intel_lakehouse`).
  *
  * Athena's query surface is HTTP (the AWS SDK), not a persistent connection,
