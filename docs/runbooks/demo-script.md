@@ -88,7 +88,7 @@ Derive them, paste them into the browser tabs in step 9, and do not commit them 
 That command returns **five** rows. Only **four are browsable** — `mls-data-api-demo-ca`'s
 FQDN carries an **`.internal.`** segment and is reachable only from inside the Container
 Apps environment, which is deliberate (it is the app the dashboards proxy to server-side).
-`mls-vuln-lab-demo-ca` has no ingress at all and does not appear.
+*Corrected 2026-09-22: this sentence used to end "`mls-vuln-lab-demo-ca` has no ingress at all and does not appear", which implied that app exists. It does not — PR #255 deleted it and its workflow on 2026-09-07. Five apps is the whole estate.* Verified against the live estate 2026-09-22: the command returns exactly these five, and only `mls-data-api-demo-ca` carries `.internal.`.
 
 | # | Check | How | Pass state |
 |---|---|---|---|
