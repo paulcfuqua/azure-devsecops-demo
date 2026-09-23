@@ -579,7 +579,12 @@ function Invoke-Main {
         }
     }
 
-    Add-MlsNote -Context $context -Message 'The wall clock covers up.ps1 start -> all synchronous audits green; explicitly-async criteria (V6.3 cost export, V6.4 SQL auto-pause, V11.5 consumption) re-attach on their own clocks and are recorded PENDING -> PASS in verification/reports/rebuild-proof.md.'
+    # F236: this note used to end "... are recorded PENDING -> PASS in
+    # verification/reports/rebuild-proof.md", naming a file that has never existed and that
+    # nothing in this repository writes. An audit that cites a nonexistent artifact in its own
+    # output is the same defect class the audit exists to catch, so it now names what it
+    # actually produces.
+    Add-MlsNote -Context $context -Message 'The wall clock covers up.ps1 start -> all synchronous audits green; explicitly-async criteria (V6.3 cost export, V6.4 SQL auto-pause, V11.5 consumption) re-attach on their own clocks and are recorded PENDING -> PASS in this run''s own report, verification/reports/L11-<stamp>.md. The cycle figures of record live in docs/runbooks/kill-rebuild.md section 5.'
     return $context
 }
 

@@ -989,6 +989,39 @@ run — so the committed copy is a stale snapshot rather than a live input, and 
 record of the run it describes, and rewriting a historical artifact to match a later decision
 is exactly the kind of tidying this register exists to prevent.
 
+**Corrected 2026-09-22: "read by `infra-up.yml`, `scripts/up.ps1` and
+`scripts/tests/up.Tests.ps1`" was wrong on two of three.** `infra-up.yml` never reads the
+file — it has its own `up-clock` job and consumes `needs.up-clock.outputs.started`. The
+tests write to a temp report root and explicitly never touch the real one. `up.ps1` *writes*
+it and does not read it back. **Nothing reads the committed copy at all**, which makes it
+weaker than "a stale input": it is residue. The description above was itself an unchecked
+claim about who consumes a file, in a finding about unchecked claims.
+
+### RESOLVED 2026-09-22 — by dropping the claim, and the rejected option is the interesting half
+
+**Option 2.** The five citations now point at `kill-rebuild.md` § 5, and
+`layer-11-audit.ps1`'s note string names the report it actually writes.
+
+**Option 1 — "make L11 write it" — was drafted and then rejected**, which is worth recording
+because it was the register's own stated preference ("the stronger position"). A curated
+`rebuild-proof.md` would hold the teardown and rebuild figures. **§ 5 already holds them.**
+That makes it a second source for one number, which is precisely the drift class this
+repository spent the same day removing: `CLAUDE.md`'s header had carried *"1 showpiece of 4,
+5 layers verified of 12"* copied out of the scorecard, both had drifted well past true, and
+the fix was to delete the copy rather than refresh it. Building a second home for the rebuild
+figures four days before shutdown, on the same day, would have been the same mistake with a
+verification-flavoured name on it.
+
+**The generalisation:** *"the stronger position" for a missing artifact is not always to build
+it.* Ask what reads it. If the answer is "a human, who has another correct source two clicks
+away", the artifact is a duplicate waiting to go stale, and the honest fix is the citation.
+An artifact earns its existence by being **read by something that cannot get the fact
+elsewhere** — which is why `L11-<stamp>.md` stays and `rebuild-proof.md` never arrives.
+
+**One practical note for anyone who assumed otherwise:** running L11 would not have closed
+this. Nothing writes the path, so an L11 run emits `L11-<stamp>.md` and rewrites
+`up-clock.json` and cannot emit a file no code creates.
+
 ---
 
 ## F237 — F165 changed the criterion and the tests, and left the deploy path on the old premise

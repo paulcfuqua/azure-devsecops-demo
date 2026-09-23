@@ -139,7 +139,8 @@ outcome; the parallelization is the conservative schedule that achieves it.
 
 **Clock starts:** `up.ps1` invocation. **Clock stops:** last synchronous layer
 audit green. Recorded from two independent sources (script timestamps + GitHub run
-timestamps) into `verification/reports/rebuild-proof.md` (L11).
+timestamps). **This section is the record** — see § 9 for why there is no separate
+proof file.
 
 **THE GATE IS NOW 180 MINUTES. Sponsor decision, 2026-09-22.**
 
@@ -357,14 +358,27 @@ pwsh scripts/up.ps1
 # verify alive (Verifier)
 foreach ($n in 1..10) { pwsh verification/layer-$('{0:d2}' -f $n)-audit.ps1 }
 
-# the proof of record
-verification/reports/rebuild-proof.md
+# the proof of record: this runbook, section 5 (there is no rebuild-proof.md - see below)
+verification/reports/L11-<stamp>.md        # what the L11 run itself writes
 ```
 
-> **`rebuild-proof.md` does not exist and never has** — *noted 2026-09-22*. `git log --all
-> -- verification/reports/rebuild-proof.md` is empty, and nothing in `.github/workflows/` or
-> `scripts/` writes it; `verification/layer-11-audit.ps1` only *names* it in a note. The
-> artifact that does get written is `verification/reports/up-clock.json` (by `scripts/up.ps1`),
-> and the copy committed today is from the **2026-08-31** run, not 09-21. So the 30m51s /
-> 152.2 min figures in § 5 are the record, and this runbook is where they live. Left pointing
-> at the intended filename rather than deleted, because the L11 triplet still owes it.
+> **`rebuild-proof.md` does not exist and never has** — *F236, resolved 2026-09-22*.
+> `git log --all -- verification/reports/rebuild-proof.md` is empty, and nothing in
+> `.github/workflows/`, `scripts/` or `verification/` writes it; `layer-11-audit.ps1` only
+> ever *named* it in a note string, now corrected. **Running L11 does not produce it** —
+> that is the natural assumption and it is wrong.
+>
+> **Resolved by dropping the claim, not by building the file.** A curated proof document
+> would be a *second* source for the figures in § 5, which is the drift class this
+> repository spent 2026-09-22 removing elsewhere — `CLAUDE.md` deleted its own inline
+> scorecard counts the same day, for the same reason. **§ 5 is the single source** and the
+> five citations now point here.
+>
+> What L11 *does* write is `verification/reports/L11-<stamp>.md` plus a JSON sibling,
+> uploaded as a run artifact. The other real artifact is
+> `verification/reports/up-clock.json`, written by **local `scripts/up.ps1` runs only** —
+> CI uses its own `up-clock` job outputs and never reads the file. **Nothing reads the
+> committed copy**, including the tests, which write to a temp report root. That copy is a
+> snapshot of the **2026-08-31** run: `"conclusion": "failure"`, `elapsedMinutes: 60.84`
+> against a `budgetMinutes: 60.0` that the 2026-09-22 decision replaced with 180. Read it
+> as a dated sample of the file's shape, never as the state of this estate.
