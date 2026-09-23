@@ -314,19 +314,19 @@
   </div>
 
   <div class="numbers">
-    <div class="num"><b>90 min</b><span>Destroy and rebuild, measured</span></div>
-    <div class="num"><b>$15</b><span>Monthly run cost, 99% one database</span></div>
-    <div class="num"><b>57</b><span>Independently verified criteria</span></div>
-    <div class="num"><b>2,719</b><span>Automated tests</span></div>
-    <div class="num"><b>0</b><span>Stored Azure credentials</span></div>
+    <div class="num"><b>152 min</b><span>Destroy and rebuild, measured</span></div>
+    <div class="num"><b>&lt;$15</b><span>Monthly run cost, parked</span></div>
+    <div class="num"><b>65</b><span>Independently verified criteria</span></div>
+    <div class="num"><b>3,097</b><span>Automated tests</span></div>
+    <div class="num"><b>7</b><span>Long-lived credentials, listed</span></div>
   </div>
 
   <div>
     <p class="risk-head">What it removes from the risk register</p>
     <ul class="risks">
       <li>
-        <strong>No credential to steal</strong>
-        <p>Pipelines and services authenticate with short-lived federated identity. No cloud key is stored anywhere, and the database has no password in existence to leak or rotate.</p>
+        <strong>No unaccounted credential</strong>
+        <p>Pipelines authenticate by short-lived federated identity; the database has no password to leak. Seven long-lived credentials remain, where no federated path exists, all named in the rotation list.</p>
       </li>
       <li>
         <strong>Drift cannot accumulate</strong>
@@ -343,6 +343,6 @@
     </ul>
   </div>
 
-  <p class="close-line">A working environment, not an architecture diagram — demonstrable end to end from an empty subscription, inside a single meeting.</p>
+  <p class="close-line">A working environment, not an architecture diagram — rebuilt end to end from an empty subscription in under three hours, unattended.</p>
 
 </div>

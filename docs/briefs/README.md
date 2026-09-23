@@ -1,7 +1,8 @@
 # Briefs
 
-Two presentation documents about the reference environment, and the script that
-exports them to print-ready PDF.
+Three documents about the reference environment — two written to present it, one
+reproducing the prompt that started it — and the script that exports all three to
+print-ready PDF.
 
 | File | Audience | Length |
 |---|---|---|

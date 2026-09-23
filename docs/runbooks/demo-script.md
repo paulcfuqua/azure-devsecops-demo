@@ -72,6 +72,24 @@ budgets follow from it.
 **This is the one to run on 2026-09-17.** The Variant A checklist below it opens on a torn
 down subscription and does not apply. Times are measured, not estimated.
 
+**Step 0 — resolve the URLs. Do this first; everything below needs them.**
+
+```bash
+az containerapp list -g mls-rg-apps \
+  --query "[?properties.configuration.ingress.fqdn].{app:name,url:properties.configuration.ingress.fqdn}" -o tsv
+```
+
+**No URL is written down in this file on purpose.** The Container Apps domain suffix
+regenerates on every rebuild, so a stored FQDN is wrong the first time the estate is
+rebuilt and *looks* right until someone clicks it — that is F129's class, and it has
+already cost this project a shipped image that could not reach its own token endpoint.
+Derive them, paste them into the browser tabs in step 9, and do not commit them back here.
+
+That command returns **five** rows. Only **four are browsable** — `mls-data-api-demo-ca`'s
+FQDN carries an **`.internal.`** segment and is reachable only from inside the Container
+Apps environment, which is deliberate (it is the app the dashboards proxy to server-side).
+*Corrected 2026-09-22: this sentence used to end "`mls-vuln-lab-demo-ca` has no ingress at all and does not appear", which implied that app exists. It does not — PR #255 deleted it and its workflow on 2026-09-07. Five apps is the whole estate.* Verified against the live estate 2026-09-22: the command returns exactly these five, and only `mls-data-api-demo-ca` carries `.internal.`.
+
 | # | Check | How | Pass state |
 |---|---|---|---|
 | 1 | **The estate is up and is the estate you think it is** | `az containerapp list -o table` | **5/5 `Running`**: compliance, control-tower, data-api, launch-ops, mcp. *Corrected 2026-09-22: this said **6/6** including `vuln-lab` until the 09-21 rebuild made the drift visible. There is no `vuln-lab` container — L10 stopped needing a witness when PR #237 retired the seeded-CVE plant. `apps/vuln-lab` the **source directory** is still in the repo and still carries its three policy-excluded alerts (row 7); only the deployment is gone* |
