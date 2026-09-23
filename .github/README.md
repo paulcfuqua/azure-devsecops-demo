@@ -1,11 +1,32 @@
 # `.github/` — the GitHub Actions layer
 
+> **Deleted 2026-09-07, and this file documented it until 2026-09-22.**
+> `vuln-lab-witness.yml` and the `mls-vuln-lab-demo-ca` container app it stamped were both
+> removed by PR #255, when the operations cycle replaced the seeded-CVE model (PR #237). The
+> layout tree and the two workflow tables below carried it for fifteen days, and the
+> workflow count read 24 against 23 on disk.
+>
+> `apps/vuln-lab` the **source directory** still exists and still raises three
+> policy-excluded Dependabot alerts — only the workflow and the container app are gone.
+> `.github/actions/naming/action.yml` and `self-heal.yml` still mention the workflow by name
+> in comments; those are noted rather than edited here.
+
+
+
 Everything the demo deploys through. Authored in Phase P Track G against the
 [master plan](../docs/superpowers/plans/2026-08-22-g1-master-plan.md) and the layer
 playbooks in [`docs/runbooks/layers/`](../docs/runbooks/layers/).
 
-Nothing here has ever run against a tenant. Every Azure-facing job is guarded so the
-repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-guards).
+**Corrected 2026-09-22.** This paragraph read *"Nothing here has ever run against a tenant"*,
+which was true when it was written in Phase P and has been false since G0. These workflows
+have built the estate, torn it down and rebuilt it — most recently on 2026-09-21, a teardown
+in 30m51s and a rebuild in 152.2 minutes ending with the same resource count.
+
+The pre-G0 guards described below are still real and still worth understanding: every
+Azure-facing job no-ops cleanly when the demo environment variables are absent, so the
+repository stays pushable and green in a fork that has no tenant behind it — see
+[Pre-G0 guards](#pre-g0-guards). That is what makes this repo runnable by someone else
+before they have provisioned anything.
 
 ## Layout
 
@@ -35,7 +56,6 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
     ├── app-mcp-tools-ci.yml          # │
     ├── app-data-api-ci.yml           # │
     ├── app-compliance-ci.yml         # ┘
-    ├── vuln-lab-witness.yml          # stamps the heal commit onto the witness app
     ├── codeql.yml                    # ┐
     ├── sbom.yml                      # │ DevSecOps chain (L9)
     ├── zap.yml                       # │
@@ -64,7 +84,6 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
 | `layer-08-copilot-studio.yml` | L8 | Power Platform solution import + agent eval | **Yes** — every job |
 | `layer-09-devsecops.yml` | L9 | GHAS report, Trivy negative tests, release + SBOM, ZAP, Defender toggle | **Yes** — every deploy job |
 | `verify-l1.yml` | L1 | L1 audit, on `workflow_run` after `infra-up` (V1.1 reads that run's conclusion, which is null from inside it) | **Yes** |
-| `vuln-lab-witness.yml` | L10 | Stamps `MLS_HEAL_COMMIT` onto the witness container app so V10.1/V10.2 can bind a heal to a deployment | **Yes** |
 | `self-heal.yml` | L10 | finding → GitHub-generated fix → PR → gauntlet → auto-merge | Runs today; needs no Azure and no stored LLM key |
 | `zap.yml` | L9 | ZAP baseline vs the staging URL | **Yes** — skips with a notice until a staging URL exists |
 | `infra-up.yml` | L1–L7 | Layer-ordered instantiation, L5 ∥ L6 | **Yes** — every deploy job |
@@ -76,7 +95,6 @@ repository is pushable and green **before G0** — see [Pre-G0 guards](#pre-g0-g
 | `layer-06-platform.yml` | L6 | `infra/bicep/platform` (sub scope), Key Vault secret, cost export | **Yes** |
 | `layer-07-apps.yml` | L7 | `infra/bicep/apps` (RG scope) — the five serving container apps (`launch-ops`, `control-tower`, `data-api`, `mcp-tools`, `compliance`) plus the L10 deployment witness | **Yes** |
 | `layer-09-devsecops.yml` | L9 | GHAS state report (read-only), `trivy-negative-fail`/`-pass`, SBOM release (calls `sbom.yml`), ZAP baseline (calls `zap.yml`), Defender `Containers` round-trip (**G2**) | **Yes** |
-| `vuln-lab-witness.yml` | L10 | Stamps a heal's merge commit onto `mls-vuln-lab-demo-ca`, rolling the revision V10.1/V10.2's deploy stage reads | **Yes** |
 
 L1 has no workflow of its own: it *is* the repo, the `demo` environment, and the OIDC
 job inside `infra-up.yml` (the job named `oidc-login`, which `layer-01-audit.ps1`

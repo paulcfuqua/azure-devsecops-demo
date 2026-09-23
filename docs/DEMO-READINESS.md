@@ -132,6 +132,45 @@ passing.
 Both fixes are in `self-heal.yml`. **The claim is not proven until a heal PR merges with
 nobody touching it**; until then this section says the claim is unproven, not fixed.
 
+## Late on 2026-09-22 — the agent half of the cross-cloud link, and the roster
+
+Two things worked in the estate and did **not** work through the Ask tab, which is the only
+surface a demo uses. Both are now fixed and verified against the deployed agent.
+
+**The roster was invisible to the agent.** `hr_roster` and `defect_reports` were seeded,
+protected and verified by V5.5/V5.6, and never added to `LAKEHOUSE_SCHEMA` — the table list
+inside the tool description, which is the only thing telling the agent what it may query.
+Asked *"what day did Bertram Kingsleigh start working for MLS"* the agent returned Copilot
+Studio's FALLBACK, not a refusal: no tool call was attempted at all. **A capability that
+exists in the data and not in the tool description does not exist to the agent.**
+
+Fixed by advertising the two GOVERNED VIEWS and deliberately not the tables beneath them. The
+demo beat now works as designed and the refusal is better than a refusal:
+
+| asked | answered |
+|---|---|
+| start date, department, tenure | *"Bertram Kingsleigh started working for MLS on May 6, 2019"* |
+| *"How much does Bertram earn?"* | *"…does not contain salary, bonus, or other compensation data"* |
+
+Salary is unanswerable because `salary_usd` is not in the shape the agent knows about — the
+control works by **construction**, not refusal. An agent that does not know a column exists
+cannot be argued into selecting it.
+
+**The AWS tool was switched off for the agent.** `query_aws_lakehouse_sql` arrived 09-16; the
+Copilot Studio topic enabling tools was last edited 09-01 and listed six. For six days the
+cross-cloud showpiece was **green in the audit and unreachable in the product** — V8.6/V8.7
+pass because the Verifier calls the MCP server directly, which says nothing about the agent.
+See the 2026-09-22 reopening of [F202](findings/2026-09-16-finding-register.md).
+
+Now working, confirmed by arithmetic: the agent answers **334,296** rows for the AWS launches
+table, matching a direct tool call exactly and nowhere near Fabric's 1,200. The sequence that
+makes it stick is **toggle → save → publish → do not refresh the tool list**; a publish
+without a save captures the previous state, and a refresh re-disables the tool.
+
+**Warming is measurable, and mandatory before recording.** Same class of question: **51.7 s**
+cold, **9.2 s** warm. Ask two throwaway questions before a demo or the first answer looks
+broken.
+
 ## Still open
 
 | | |

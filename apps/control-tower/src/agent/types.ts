@@ -82,6 +82,22 @@ export const ADAPTIVE_CARD_CONTENT_TYPE = "application/vnd.microsoft.card.adapti
  * `Action.Execute` is reported as out-of-profile rather than rendered, so a
  * card that would break on Teams or Web Chat is visible here instead of
  * shipping and failing somewhere else.
+ *
+ * THIS STAYS 1.5 WHILE V8.4 NOW EXPECTS 1.6, AND THAT IS DELIBERATE (2026-09-22).
+ * The two numbers answer different questions and collapsing them would lose one:
+ *
+ *   - This constant is the profile a card SHOULD BE AUTHORED AGAINST for maximum
+ *     portability. Its reasoning is sourced and unchanged: Teams caps at 1.5.
+ *   - V8.4's pin is what the deployed agent IS OBSERVED TO EMIT. Copilot Studio
+ *     composes these cards and chooses the version; nothing in this repository
+ *     authors one. Measured 2026-09-22: it emits `"version": "1.6"` with TextBlock
+ *     and FactSet, both 1.0 elements.
+ *
+ * So the verification pin moved to match reality, and this target stays as the
+ * portability contract. It costs nothing today because the renderer dispatches on
+ * ELEMENT TYPE, not on the version string — a 1.6 card built from 1.0 elements
+ * renders here exactly as a 1.5 one would. If this repository ever starts authoring
+ * cards, this is the number to author against.
  */
 export const ADAPTIVE_CARD_TARGET_VERSION = "1.5";
 

@@ -78,12 +78,12 @@ down subscription and does not apply. Times are measured, not estimated.
 | 2 | **Every app is on a `sha-` tag, not `:latest`** | `az containerapp list --query "[].{n:name,i:properties.template.containers[0].image}" -o tsv` | Every image ends `:sha-<7>`. A `:latest` anywhere means an L7 deploy has erased the commit provenance V10.2 reads — **that is F203, and it turns showpiece #3 red about four hours later.** Do not run `layer-07-apps.yml` on demo morning |
 | 3 | **Warm the two browser apps** — this is not optional | `curl -so /dev/null -w '%{time_total}\n' https://<control-tower-fqdn>/` twice | First call **~23 s**, second **~0.15 s** (measured 2026-09-17 01:55Z). A **401 is the correct answer** to curl — Easy Auth challenges a client that sends no `Accept` header. You are warming the container, not testing auth |
 | 4 | **Warm the agent** — the single biggest stage risk | Ask tab, one throwaway question | The eval's **p95 is 34.18 s against V8.5's 20 s budget**, driven entirely by an un-warmed first question. Spend it off the record |
-| 5 | **Confirm the 7th MCP tool is ON, by arithmetic** | Ask: *"how many rows are in the launches table?"* | The answer must contain **both 1,200 and 286,473**. **1,200 alone means the AWS tool is switched off in Copilot Studio** — that is **F202**, and neither the tool count nor the orchestration setting distinguishes it from a working one. Only the numbers do. Fix: Copilot Studio → toggle every tool on → **publish** |
+| 5 | **Confirm the 7th MCP tool is ON, by arithmetic** | Ask: *"how many rows are in the launches table?"* | The answer must contain **two** numbers: **1,200** (Fabric) and a second, far larger one from AWS — **334,296 when measured 2026-09-22**. **Check that the AWS number is not 1,200, not that it equals any particular figure**: the AWS table is live and growing, so a literal expected value goes stale between rehearsal and stage. **1,200 alone means the AWS tool is switched off in Copilot Studio** — that is **F202**, and neither the tool count nor the orchestration setting distinguishes it from a working one. Only the numbers do. Fix: Copilot Studio → toggle every tool on → **publish** |
 | 6 | **MCP server itself is healthy** | `curl -s https://<mcp-fqdn>/healthz` | `"tools":7`, `"auth":{"enforced":true}`, and `AthenaLakehouseSqlBackend` among the adapters. **Ignore the container's own startup log, which says `5 tools`** — that is F215, a diagnostic that lies in exactly the place you would look |
 | 7 | **Alert surface is readable** | `gh api repos/:owner/:repo/dependabot/alerts` | Four open: `esbuild` (low, root) and three in `apps/vuln-lab` excluded by policy. **An empty backlog is a PASS for the demo, not a gap** — the story is the operations cycle |
 | 8 | **Compliance board serves the current snapshot** | Open the board, read its *Collected `<date>` from commit `<short>`* line; compare `git log -1 --format=%h -- compliance/state/` | The two match. If they differ, the image predates the collection — re-run `app-compliance-ci.yml` |
 | 9 | **Browser prepped** | Tabs: Azure portal (Resource groups + Cost analysis), GitHub Actions, GitHub Security (Code scanning **and** Dependabot), control tower (Ask + Dev/Sec/Ops), Copilot Studio, compliance board | Logged in, MFA done — never authenticate on stage, with **one deliberate exception: do not pre-authenticate the compliance board.** Its Easy Auth redirect is a beat in Segment 8 |
-| 10 | **Fallback pack** | Screenshots of every showpiece + the last `rebuild-proof.md` | On local disk. The rebuild figures are from **2026-09-03** and are history, not current state — say so if you cite them |
+| 10 | **Fallback pack** | Screenshots of every showpiece + the latest rebuild figures | On local disk. The current cycle is **2026-09-21** — teardown 30m51s, rebuild 152.2 min; 2026-09-03's ~14 min / 87 min is the older one. Both are history, not current state — say which one you are citing. *Note `verification/reports/rebuild-proof.md` does not exist (see `kill-rebuild.md` § 9); § Variant B row 1 and `kill-rebuild.md` § 5 are where the figures actually live* |
 
 **What is deliberately NOT on this list:** re-seeding `apps/vuln-lab` (retired by PR #237;
 re-arming it is F190), and resuming a Fabric capacity (none exists, so nothing is on the
@@ -108,7 +108,7 @@ Run through in order; every box must be checked before the audience sits down.
 
 | # | Check | How | Pass state |
 |---|---|---|---|
-| 1 | **Environment torn down** (this demo opens cold) | `az group list --query "[?starts_with(name,'mls-rg-')]"` | Empty — the cold open depends on it |
+| 1 | **Environment torn down** (this demo opens cold) | `az group list --query "[?starts_with(name,'mls-rg-')].name"` | Exactly `["mls-rg-identity"]` — *corrected 2026-09-22: this expected the list to be empty, which it cannot be. `mls-rg-identity` (one managed identity, behind the cross-cloud AWS link) sits outside the teardown's four-group list by design. An empty result would mean something deleted more than `down.ps1` does* |
 | 2 | **Tenant objects intact** | quick re-run of `verification/layer-03-audit.ps1` + `layer-04-audit.ps1` | PASS — rebuild will no-op through L2–L4 as rehearsed |
 | 3 | **Capacity state known** | trial: confirmed active trial window; paid F2: `Paused` now, **G2 filed** for the rebuild's resume (the rebuild resumes it — do not resume manually) | Recorded |
 | 4 | **Seed data contract verified** (from the last green cycle) | last `verification/reports/L05-*.md` shows `launches = 1,200` and table set green | PASS report ≤ 7 days old |
@@ -117,7 +117,7 @@ Run through in order; every box must be checked before the audience sits down.
 | 7 | **All layer audits green** | latest `verification/reports/L*.md` set | All PASS, ≤ 7 days old |
 | 8 | **Budget headroom** | Azure portal → Cost Management → budget `$75/month` | < 80% consumed, no unacknowledged alerts |
 | 9 | **Browser prepped** | tabs: Azure portal (Resource groups + Cost analysis), GitHub Actions, GitHub Security (**Code scanning** and **Dependabot** views), launch-ops URL placeholder tab, control-tower URL placeholder tab (Ask + Dev/Sec/Ops all in this one), Copilot Studio (for the "here's the agent, in a solution, in the repo" beat), compliance-board URL placeholder tab | Logged in, MFA done — never authenticate on stage, with **one deliberate exception: do not pre-authenticate the compliance board.** Its Easy Auth redirect is a beat in Segment 8 |
-| 10 | **Fallback pack** | screenshots of every showpiece state + the last committed `rebuild-proof.md` | On local disk |
+| 10 | **Fallback pack** | screenshots of every showpiece state + the latest rebuild figures (`kill-rebuild.md` § 5 — **not** `rebuild-proof.md`, which has never been committed) | On local disk |
 | 11 | **Compliance board serves the current snapshot** | open the board, read its "Collected `<date>` from commit `<short>`" line and compare with `git log -1 --format=%h -- compliance/state/` | The two match. If they differ the image predates the latest collection — re-run `app-compliance-ci.yml`, which is path-filtered on `compliance/state/**` precisely so this cannot happen quietly |
 
 Notes for step 5: ~~re-seed at T-60~~ — **do not re-seed at all.** The plant is retired
@@ -139,9 +139,14 @@ break). If the estate was rebuilt since the last demo, do not skip this.
 
 **Stage picture:** Azure portal, Resource groups blade, filtered to `mls`.
 
-- Show: zero resource groups. "This is the entire Azure footprint of Meridian
-  Launch Systems right now. Idle cost: under five dollars a month — OneLake
-  storage, log retention, a Key Vault."
+- Show: one resource group, `mls-rg-identity`, holding a single managed identity.
+  "This is the entire Azure footprint of Meridian Launch Systems right now — one
+  identity, no compute, no data plane. Idle cost: under five dollars a month —
+  OneLake storage, log retention, a Key Vault."
+  *Corrected 2026-09-22: this said "zero resource groups", and the blade filtered to
+  `mls` will not show zero. Claiming zero while one is on the screen behind you is a
+  worse opening than the truth, which is a stronger line anyway — the one thing that
+  survives is an identity, which is exactly the persistence point made two bullets down.*
 - Flip to Cost analysis: the idle run-rate flatline.
 - One sentence on what persists and why: identities, Conditional Access, sensitivity
   labels — tenant-level objects that take 15–45 minutes to propagate, so they stay;
@@ -160,10 +165,14 @@ break). If the estate was rebuilt since the last demo, do not skip this.
   pwsh scripts/up.ps1
   ```
 
-- Show `infra-up.yml` fan out in the Actions graph. Call the shot: "Under sixty
-  minutes from nothing to fully verified — an independent auditor agent signs off
-  every layer against the live APIs, and we'll check its wall-clock report at the
-  end."
+- Show `infra-up.yml` fan out in the Actions graph. Call the shot: "Under three
+  hours from nothing to fully verified — the last measured cycle was two and a half
+  — an independent auditor agent signs off every layer against the live APIs, and
+  we'll check its wall-clock report at the end."
+  *Corrected 2026-09-22: this said "under sixty minutes", which no cycle has ever
+  achieved (87 min on 09-03, 152.2 min on 09-21) and which the sponsor replaced with
+  a 180-minute gate the same day. Calling the old shot on stage guarantees the
+  wall-clock reveal at the end of Segment 4 contradicts you in front of the room.*
 - Point at L2–L4 completing in seconds: "Identity layers no-op — create-if-absent.
   That's why the rebuild is fast."
 
@@ -206,8 +215,9 @@ the rebuild's actual pace. Talk track, in order:
 
 ## Segment 4 — Rebuild confirmed + self-heal trigger (5 min)
 
-- Show the run summary: all layers green, wall-clock < 180 min (cite the
-  `rebuild-proof.md` from L11 for the formally measured proof).
+- Show the run summary: all layers green, wall-clock < 180 min (cite the run's own
+  V11.4 line for the formally measured proof — **not** `rebuild-proof.md`, which L11
+  still owes and has never committed; see `kill-rebuild.md` § 9).
 - **Showpiece #3 needs no arming — that model was retired (PR #237).** There is nothing to
   plant and nothing to trigger: `self-heal.yml` runs on a schedule (01:13 / 07:13 / 13:13 /
   19:13 UTC) over whatever the repository's **real** backlog holds. Show the most recent run
@@ -276,7 +286,12 @@ The agent answers **both**, unprompted, and says why:
 
 > *"There are two different `launches` tables … Meridian's operations lakehouse
 > (synthetic): **1,200** rows. AWS launch-intelligence lakehouse (real launch-industry
-> data): **286,473** rows. I queried both because the question is ambiguous."*
+> data): **334,296** rows. I queried both because the question is ambiguous."*
+
+*The AWS figure moves — it was 286,473 when this script was written and 334,296 on
+2026-09-22, because that table is live and growing. **Do not memorise it and do not
+correct the agent if it says something else.** The only thing that must be true on stage
+is that the second number is not 1,200; see pre-demo check 5.*
 
 Then land the three beats, in this order — the last is the one the room will remember:
 
@@ -294,12 +309,17 @@ Then land the three beats, in this order — the last is the one the room will r
 
 **What to say if asked "is this verified, or is it a demo?"** — "Two criteria. **V8.6** asserts
 the AWS lakehouse returns rows rather than a status code. **V8.7** refuses to call a denial an
-empty dataset, which is the specific way this estate has been lied to before. Both pass. And
-the honest limit: they have passed **once**, on an estate that has not been torn down since
-they existed — so today that is an observation, not yet a property."
+empty dataset, which is the specific way this estate has been lied to before. Both pass —
+and both **survived a teardown and rebuild on 2026-09-21**, which is the thing that turns an
+observation into a property."
+
+> *Corrected 2026-09-22. This answer used to end "they have passed **once**, on an estate
+> that has not been torn down since they existed — so today that is an observation, not yet
+> a property." That was true when written and the 09-21 rebuild retired it. It is the
+> strongest single upgrade to this segment, so do not read the old caveat out of habit.*
 
 **Do not claim** the control tower's 7/7 covers this. **No L7 criterion touches AWS.** The
-green board and the 286,473 rows are two independent facts that look like one, and merging
+green board and the AWS row count are two independent facts that look like one, and merging
 them on stage is the exact error this repository spends its verification budget preventing.
 
 **Cost line if asked, and say it unprompted if the room is technical:** "Athena bills per
@@ -461,7 +481,7 @@ controls carry a status — 15 `PARTIAL` and 1 `GAP` — all sixteen `asserted`,
   code-review convention."
 - If someone asks for the percentage — and someone will — this is the strongest answer
   in the demo: **"There isn't one, deliberately, anywhere in the artifact or the UI. A
-  single number blending fifteen controls a human asserted with ninety-five nobody
+  single number blending sixteen controls a human asserted with ninety-four nobody
   looked at is the number you'd put in front of an auditor, and it's the number that
   would be wrong. Counts by status, counts by provenance, and the cross-tab of the two.
   That's it."**
@@ -571,8 +591,12 @@ stronger the more sceptical the room is.
   labels — re-run the one-liner from the L3 audit for effect.
 - Close on Cost analysis: the run-rate stepping back to the <$5/month idle line,
   backstopped by the $75 budget with alerts at 50/80/100%.
-- Final line: "Everything you watched exists as code. Kill it, rebuild it, audit
-  it — under an hour, under five dollars a month at rest."
+- Final line: "Everything you watched exists as code. Kill it in half an hour,
+  rebuild and audit it in two and a half, under five dollars a month at rest."
+  *Corrected 2026-09-22: this said "under an hour". The measured cycle is teardown
+  30m51s and rebuild 152.2 min (2026-09-21) against a 180-minute gate — and the
+  measured numbers are the better closing line anyway, because they are the ones in
+  the proof.*
 
 ## Segment 10 — Q&A buffer (10 min)
 
@@ -631,7 +655,7 @@ The estate is already up, so nothing is built on stage. Run this order:
 
 | # | Segment | Min | Note |
 |---|---|---|---|
-| 1 | **Cold open, from the proof** | 7 | You cannot show an empty subscription — show the committed `rebuild-proof.md` and its **down-state audit** instead. Be explicit which cycle the figures come from. **Most recent, 2026-09-21:** teardown **30m51s** clean, rebuild **152.2 min**, 29 → 0 → 29 in the blast radius with `mls-rg-identity` standing throughout. **2026-09-03:** teardown ~14 min, rebuild 87 min, 30 → 0 → 30 — a six-app estate, which is why the resource count differs. *History, not a live claim* |
+| 1 | **Cold open, from the proof** | 7 | You cannot show an empty subscription — show the figures below and the **down-state audit** instead. (**`rebuild-proof.md` is not a file you can open** — it has never been committed; see `kill-rebuild.md` § 9. Cite § 5 of that runbook, or the Actions run itself.) Be explicit which cycle the figures come from. **Most recent, 2026-09-21:** teardown **30m51s** clean, rebuild **152.2 min**, 29 → 0 → 29 in the blast radius with `mls-rg-identity` standing throughout. **2026-09-03:** teardown ~14 min, rebuild 87 min, 30 → 0 → 30 — a six-app estate, which is why the resource count differs. *History, not a live claim* |
 | 2 | **Repo tour** | 8 | Compressed Segment 3: working agreements + the five gates, the agent team, `verification/reports/`, the DevSecOps chain as code. Land *"RG-scoped teardown is gate-free by design"* — it sets up segment 8 |
 | 3 | **Showpiece #1 — the copilot** | 10 | Segment 5, warm |
 | 4 | **Showpiece #5 — cross-cloud** | 5 | **Segment 5b. Do not cut this one.** Same tab, no setup, and it is the newest thing here |
@@ -645,20 +669,34 @@ The estate is already up, so nothing is built on stage. Run this order:
 here it is the teardown — so run it live, narrate it, and make the persistence point
 properly: users, groups, CA policies and labels survive; the four resource groups do not.
 
-> **Read this before running `down.ps1` on 2026-09-17.** The estate is scheduled for
-> shutdown around **2026-09-27**, and a rebuild is wanted before then to convert several
-> things that have passed exactly **once** into properties — V8.6/V8.7 and the whole
-> cross-cloud link have never survived a teardown. So **plan the rebuild after the audience
-> leaves, and treat it as instrumented evidence rather than cleanup** — V11.3, V11.4 and
-> V11.5 have *never reported at all*, and this is one of the last chances they will get.
+> **Read this before running `down.ps1`.** *Rewritten 2026-09-22 — the rebuild this box
+> asked for happened on 2026-09-21 and settled most of it.* The estate is still scheduled
+> for shutdown around **2026-09-27**.
 >
-> Two things to do **before** that teardown, in this order, or the rebuild loses ground:
+> **What the 09-21 cycle converted from an observation into a property:** V8.6 and V8.7
+> **passed on the rebuilt estate**, so the cross-cloud link has now survived a teardown —
+> the prediction below that a teardown would return both criteria to `SKIP` did not come
+> true. V11.4 reported too, recording the **152.2-minute** rebuild (a FAIL against the
+> then-60-minute budget, inside the 180 adopted 2026-09-22).
+>
+> **What this box asserted and can no longer be read as current:** that V8.6/V8.7 had never
+> survived a teardown, and that "V11.3, V11.4 and V11.5 have *never reported at all*" —
+> V11.4 plainly has. **Closed 2026-09-22: V11.3 and V11.5 have both reported too.** V11.3
+> returned FAIL on the 09-21 up-phase (child audits could not start, F227) and PASS on the
+> 09-22 re-run once they could; V11.5 returned FAIL, observing "897 consumption line items,
+> none carrying a readable cost" — a real verdict, and a real gap in the cost data rather
+> than a criterion that never ran. So the "never reported at all" claim is retired in full;
+> all five L11 criteria have now produced verdicts. V11.5 remains next-day consumption data
+> and is excluded from the rebuild clock by definition.
+>
+> Still true and still worth doing before any further teardown:
 > 1. **Fix F203 first** (`layer-07-apps.yml` defaults `image_tag` to `latest`), *then* run
->    L7 — otherwise the L7 run needed for item 2 re-breaks showpiece #3.
-> 2. **Let that L7 run deploy the Key Vault grant** in
->    `infra/bicep/apps/modules/key-vault-secret-role.bicep`. It has **never been deployed**;
->    today's V8.6/V8.7 passes rest on a hand-applied role assignment, and a teardown returns
->    both criteria to `SKIP` **without anything going red**.
+>    L7 — otherwise that L7 run re-breaks showpiece #3.
+> 2. **Confirm the Key Vault grant in `infra/bicep/apps/modules/key-vault-secret-role.bicep`
+>    is in the template's deploy path**, rather than assuming it. It was hand-applied when
+>    this box was first written; the 09-21 passes suggest it survived, but "the thing works"
+>    is not "a rebuild reproduces it", and that distinction is the one this repo keeps paying
+>    for.
 
 Two notes carried from the amendment: (a) warm the agent during setup, not on stage — the
 Ask tab's first question is the slowest of the day; (b) the self-heal chain is

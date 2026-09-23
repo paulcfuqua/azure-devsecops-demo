@@ -478,9 +478,16 @@ function Invoke-Main {
         -Expected 'report artifact present for the staging URL; zero alerts at risk level High' -NoRetry `
         -Test { Test-ZapReport -Repository $repositoryName -RunId $zapRun -ArtifactName $ZapArtifactName -DownloadRoot $downloads } | Out-Null
 
-    # -Control @(): this asserts Defender for Containers ends the demo OFF (a cost-control
-    # toggle, exercised then disabled) - the opposite of a protection being in place, so
-    # mapping it to a scanning/detection requirement would misrepresent what it proves.
+    # -Control @(): CORRECTED 2026-09-22. This comment said the criterion "asserts Defender
+    # for Containers ends the demo OFF", which is the pre-F165 premise and the OPPOSITE of the
+    # -Expected three lines below. F165 settled it - "Decision: the plan stays on" - because a
+    # security demo whose normal condition is protection switched off is backwards, and the
+    # old failure text called an enabled security control "a cost leak: disable immediately".
+    #
+    # So V9.5 asserts the plan is STANDARD and a disabled plan is the failure. It stays
+    # -Control @() because "a paid plan is enabled" is a cost/posture statement about this
+    # estate's own choices, not evidence for a scanning requirement - V9.6 is what asserts
+    # the plan actually produces posture, and that carries 3.11.2 / 3.12.1.
     Invoke-MlsCriterion -Context $context -Id 'V9.5' -Control @() `
         -Description 'Defender for Containers is enabled (the plan protects the estate)' `
         -Command "az security pricing show --name $DefenderPlanName --query `"{tier:pricingTier}`"`naz monitor activity-log list --offset $ActivityLogOffset --query `"[?contains(operationName.value,'Microsoft.Security/pricings')].{op:operationName.value, status:status.value, time:eventTimestamp}`"" `

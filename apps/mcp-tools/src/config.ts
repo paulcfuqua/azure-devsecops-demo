@@ -4,7 +4,7 @@
  * There is no LLM here and therefore no model, no API key and no prompt: this
  * process is an MCP server. The Copilot Studio agent owns all orchestration
  * (amendment 2026-08-24). The knobs are the listen port, which adapter set the
- * six tools run against, and — on the cloud set — where each upstream lives.
+ * seven tools run against, and — on the cloud set — where each upstream lives.
  *
  * ── Tenant activation is CONFIGURATION, not development ──────────────────────
  * `MLS_TOOL_BACKENDS=cloud` used to throw "not wired yet". It is now real: the
@@ -143,8 +143,8 @@ const REQUIRED_AWS_VARS: Array<[string, string]> = [
  * Resolve `query_aws_lakehouse_sql`'s settings, or throw.
  *
  * Three outcomes, not two: an absent GitHub/env variable is the empty string,
- * not an error (F125's lesson), so treating "none of the six are set" and
- * "some of the six are set" the same way would let a partial configuration
+ * not an error (F125's lesson), so treating "none of the seven are set" and
+ * "some of the seven are set" the same way would let a partial configuration
  * silently disable the tool — indistinguishable from one never built. So:
  *   - none set      -> undefined (the tool is simply not offered);
  *   - some set      -> throw, naming exactly what is missing;
