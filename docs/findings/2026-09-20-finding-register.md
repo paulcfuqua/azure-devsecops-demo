@@ -1036,3 +1036,28 @@ no NIST control while V9.6 carries 3.11.2/3.12.1.
 The deploy job is a code change with a cost attached (~USD 0.29/day, free trial to
 2026-10-01), and *whether the estate ends a run with the plan on* is a spend decision that
 belongs to the sponsor under G2, not to a documentation sweep. Recorded rather than taken.
+
+### CLOSED AS RECORDED, 2026-09-22 — the two halves are each right, for different phases
+
+The sponsor's decision is **change nothing**, and the framing above overstated the defect by
+treating a lifecycle distinction as a contradiction.
+
+**Both artifacts are correct for the phase they belong to.** F165's *"the plan stays on"* is
+the right end-state for a **running** demo — a security estate whose normal condition is
+protection disabled is backwards, which is exactly what F165 said. The deploy job's insistence
+on ending at `Free` is the right end-state for **shutdown** — the estate is disposable, it
+retires around 2026-09-27, and leaving a paid plan enabled on an estate nobody is watching is
+the cost leak the *old* failure text was clumsily reaching for. What the estate never had is a
+way to say which phase it is in, so the two ended up reading as a disagreement.
+
+**The contradiction is latent and has never fired.** Verified against the live estate on
+2026-09-22: `pricingTier = Standard`, free trial 8 days remaining, and the last L9 run was
+**2026-09-02**. `defender_toggle` has defaulted off ever since, so no run has ever executed
+both halves. **V9.5 passes today**, and the trial outlasts the shutdown date — so the cost
+that would justify the change will not be incurred before the estate is gone.
+
+Left as-is deliberately. The finding stays in the register because the *class* is real and
+worth carrying: **a decision applied to the verifier and not to the deployer is half a
+decision**, and the reason it looked like a contradiction rather than a lifecycle gap is that
+nothing in the estate distinguishes "running" from "being put away". On a long-lived estate
+that distinction is a feature to build. On this one it is a note.
