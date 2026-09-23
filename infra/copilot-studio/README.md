@@ -340,8 +340,13 @@ None of this travels in a solution. Verified, not guessed.
 
    Confirm by arithmetic afterwards: *"how many
    rows are in the launches table?"* must name **both** lakehouses — **1,200** (Meridian,
-   synthetic) and **286,473** (AWS launch-intelligence, real). A single unqualified 1,200
-   means the AWS tool is not reachable no matter what the list shows.
+   synthetic) and a six-figure count (AWS launch-intelligence, real). A single unqualified
+   1,200 means the AWS tool is not reachable no matter what the list shows.
+
+   **Do not pin the AWS number.** It is real launch-industry data and it accumulates:
+   286,473 on 2026-09-16, **334,296 on 2026-09-22**. The discriminator is *"not 1,200"* —
+   1,200 is the synthetic Meridian count and is pinned by V5.3. A check that asserts the
+   literal AWS figure will fail for the wrong reason within weeks.
 
    **[verified 2026-08-31]** `pac solution create-settings` emits a
    `ConnectionReferences` entry with an empty `ConnectionId`, so this step is automatable

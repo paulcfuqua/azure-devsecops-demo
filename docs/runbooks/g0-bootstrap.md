@@ -1356,13 +1356,17 @@ has run. Each one is an audit input that cannot be derived from ARM:
 CI holds **no LLM key and no cloud credential**: everything Azure authenticates by OIDC /
 workload identity federation (2026-08-24 amendment § 2). It does **not** hold "no secret
 at all" — that claim, which several documents in this repo used to make above this very
-table, was finding **F28**. Six long-lived credentials exist in this system: the four
-below, plus two in Key Vault (the **Direct Line secret**, read at run time and never
-stored here, and `mcp-auth-token`). Each of the four exists because no federated path
+table, was finding **F28**. Seven long-lived credentials exist in this system: the four
+below, plus three in Key Vault (the **Direct Line secret**, read at run time and never
+stored here, `mcp-auth-token`, and `mls-data-api-github-token` — the read-only GitHub PAT
+behind the control tower's Dev and Sec tabs, created by step 11b for F116. *This read
+"two in Key Vault" until 2026-09-22; the third was legitimate from the day it was created
+and simply never reached the list, which is the drift `failure-classes.Tests.ps1` now
+sweeps for.*). Each of the four exists because no federated path
 does the job — **Security & Compliance PowerShell has no federated auth**, so certificate
 app-only is the only way to touch Purview labels unattended, and a `GITHUB_TOKEN` push
 does not trigger workflows, which is why the self-heal chain needs a PAT.
-`.github/workflows/gitleaks.yml` prints all six as the rotation list when it finds
+`.github/workflows/gitleaks.yml` prints all seven as the rotation list when it finds
 something; if you add a seventh, add it there too. The two verifier-only secrets (`MLS_VERIFIER_CERT_*`,
 `MLS_VERIFIER_GH_TOKEN`) are read inside `verify` jobs, which now run under the `verify`
 environment (2026-08-26 findings F6/F7) — set them with `--env verify`, not `--env demo`;

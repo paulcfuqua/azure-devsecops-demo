@@ -513,11 +513,11 @@
 
   <div class="glance">
     <div class="stat"><b>12</b><span>Layers, each independently audited</span></div>
-    <div class="stat"><b>57</b><span>Verification criteria</span></div>
-    <div class="stat"><b>2,719</b><span>Automated tests</span></div>
-    <div class="stat"><b>90 min</b><span>Destroy &amp; rebuild, measured</span></div>
-    <div class="stat"><b>$15</b><span>Monthly run cost</span></div>
-    <div class="stat"><b>1</b><span>Manual step remaining</span></div>
+    <div class="stat"><b>65</b><span>Verification criteria</span></div>
+    <div class="stat"><b>3,097</b><span>Automated tests</span></div>
+    <div class="stat"><b>87&ndash;152 min</b><span>Destroy &amp; rebuild, measured twice</span></div>
+    <div class="stat"><b>&lt;$15</b><span>Monthly run cost, parked</span></div>
+    <div class="stat"><b>3</b><span>Manual steps, all one portal</span></div>
   </div>
 
   <section>
@@ -530,7 +530,7 @@
     <ul class="claims">
       <li>
         <h3>The repository is the source of truth</h3>
-        <p>Nothing is configured by hand in a portal. Anything that exists in the estate can be recreated by replaying pipelines — which means configuration drift becomes visible instead of accumulating quietly. Exactly one manual step survives, and it is documented as an exception rather than glossed over.</p>
+        <p>Nothing is configured by hand in a portal. Anything that exists in the estate can be recreated by replaying pipelines — which means configuration drift becomes visible instead of accumulating quietly. Three manual steps survive, all of them inside one portal-authored product that has no deployment API, and each is documented as an exception rather than glossed over.</p>
       </li>
       <li>
         <h3>Verification is independent, and it is code</h3>
@@ -574,7 +574,7 @@
       <li>
         <h3>No stored Azure credentials</h3>
         <p>Every pipeline authenticates to Azure by workload identity federation; every service authenticates to Azure data planes by managed identity. The Azure SQL server enforces Entra-only authentication, so no database password exists to leak. Nothing authenticating to Azure is a stored secret, and the repository itself holds none at all — a full-history scanner fails the build on any finding.</p>
-        <p class="qualifier">Six long-lived credentials do exist, and naming them is the point: two Entra app certificates, because Security &amp; Compliance PowerShell has no federated path; two GitHub tokens, because a <code>GITHUB_TOKEN</code> push does not trigger workflows; and two values in Key Vault, read at run time. None of them authenticates to Azure, none is in the repository, and all six are listed in the incident-response rotation text. An earlier revision of this page said continuous integration &ldquo;holds no secret at all&rdquo;. That was false, it is recorded as finding F28, and it is corrected here rather than quietly dropped.</p>
+        <p class="qualifier">Seven long-lived credentials do exist, and naming them is the point: two Entra app certificates, because Security &amp; Compliance PowerShell has no federated path; two GitHub tokens, because a <code>GITHUB_TOKEN</code> push does not trigger workflows; and three values in Key Vault, read at run time. None of them authenticates to Azure, none is in the repository, and all seven are listed in the incident-response rotation text. An earlier revision of this page said continuous integration &ldquo;holds no secret at all&rdquo;. That was false, it is recorded as finding F28, and it is corrected here rather than quietly dropped &mdash; as is the count itself, which read &ldquo;six&rdquo; until a third vault secret that had been legitimate all along was found never to have reached the list.</p>
       </li>
       <li>
         <h3>Infrastructure on Azure Verified Modules</h3>
@@ -636,7 +636,7 @@
           <tr><td class="svc">Azure Container Apps</td><td>Five applications, every one scaling to zero</td><td>Idle cost near zero without losing the platform</td></tr>
           <tr><td class="svc">Azure SQL Database</td><td>Serverless with auto-pause; Entra-only authentication</td><td>An operational store with no password in existence</td></tr>
           <tr><td class="svc">Azure Functions</td><td>Cost-export ingestion and token exchange</td><td>Event-driven glue on consumption pricing</td></tr>
-          <tr><td class="svc">Azure Key Vault</td><td>Custodian of the system's single stored secret</td><td>A deliberately minimal secret footprint</td></tr>
+          <tr><td class="svc">Azure Key Vault</td><td>Custodian of the three run-time secrets</td><td>A deliberately minimal secret footprint</td></tr>
           <tr><td class="svc">Azure Monitor</td><td>Log Analytics and Application Insights as the telemetry sink</td><td>Operational evidence the dashboards query live</td></tr>
           <tr><td class="svc">Microsoft Defender for Cloud</td><td>Secure score, control breakdown, container plan toggled on demand</td><td>Security posture measured continuously and costed explicitly</td></tr>
           <tr><td class="svc">Azure Cost Management</td><td>Daily exports into the lakehouse, budgets with alert thresholds</td><td>FinOps evidence rather than FinOps intention</td></tr>
