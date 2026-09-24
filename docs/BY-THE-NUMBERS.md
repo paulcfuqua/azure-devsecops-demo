@@ -1,6 +1,6 @@
 # By the Numbers
 
-What this estate is. **Repository counts were re-measured on 2026-09-22** from `git ls-files`
+What this estate is. **Repository counts were re-measured on 2026-09-24** from `git ls-files`
 and real test runs; **estate counts date from the 2026-09-03 rebuild** unless a row says
 otherwise, and come from live Azure, Graph, Fabric and GitHub APIs.
 
@@ -10,26 +10,26 @@ Nothing here is an estimate, and nothing is rounded in the flattering direction.
 
 | | |
 |---|---|
-| **Automated tests** | **3,097 passing, 0 failing** |
-| **Tracked files** | **691** |
-| **Committed lines** | **239,831** — see the note under "Lines by area"; 97,221 of them are machine-written compliance state |
+| **Automated tests** | **3,110 passing, 0 failing** |
+| **Tracked files** | **695** |
+| **Committed lines** | **248,116** — see the note under "Lines by area"; 104,843 of them are machine-written compliance state |
 | **Verification criteria** | **65**, each run read-only by a separate identity |
 | **Azure resources** | **30**, across 4 resource groups in 1 region |
 | **Resources after a destroy and rebuild** | **30** — identical, twice over |
 | **Workflows** | **23** |
 | **NIST SP 800-171 requirements rendered** | **110** — of which **0 are machine-verified**, and that is the honest answer |
 
-## Tests: 3,097
+## Tests: 3,110
 
 | Runner | Scope | Tests |
 |---|---|---|
-| Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, the fuse, the 12 Verifier audits, and the compliance catalog / collectors / derivation / emitter | **1,908** |
-| Vitest | mcp-tools (442), data-api (309), control-tower (140), spec-renderer (59), compliance (50), launch-ops (34) | **1,034** |
+| Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, the fuse, the 12 Verifier audits, and the compliance catalog / collectors / derivation / emitter | **1,909** |
+| Vitest | mcp-tools (442), data-api (309), control-tower (152), spec-renderer (59), compliance (50), launch-ops (34) | **1,046** |
 | `node --test` | cost-ingest (84), directline-token (26) | **110** |
 | pytest | data generators, determinism and schema parity | **45** |
 
-*Counted 2026-09-22.* Pester comes from the last green `lint-ci` run on `main`
-(1,908 passed / 0 failed / 1 skipped); the rest from `npm test` and `python -m pytest -q`
+*Counted 2026-09-24.* Pester comes from the last green `lint-ci` run on `main`
+(1,909 passed / 0 failed / 1 skipped); the rest from `npm test` and `python -m pytest -q`
 locally, which is the same per-workspace invocation CI uses. **Do not count them with a
 bare `npx vitest run` from the repository root** — that pulls `cost-ingest` and
 `directline-token`, which are `node --test` packages, into vitest and resolves every
@@ -63,7 +63,7 @@ the point rather than an embarrassment: the deploys are Bicep and they are fast;
 wait on real propagation, real scale-in cycles and real cost-export windows, because a
 criterion that does not wait is a criterion that guesses.
 
-**It is not the test suites.** All 3,097 of those run in CI on pull requests, in about
+**It is not the test suites.** All 3,110 of those run in CI on pull requests, in about
 94 seconds for the Pester half, and none of them runs during a rebuild — they never contact
 a cloud API at all. The rebuild's time is spent *waiting on Azure*, and overwhelmingly inside
 one job: **L7's verify, 96.7 of the 152 minutes.** Its dominant criterion is **V7.5, which
@@ -77,25 +77,70 @@ it *did*, which is the substitution this repository exists to refuse.
 
 | Area | Files | Lines | |
 |---|---|---|---|
-| `compliance/` | 114 | 97,221 | the NIST catalog, the assessment register, 5 collectors, the derivation, the emitter — **and the nightly committed state, which is the bulk of it and is machine-written** |
-| `apps/` | 269 | 40,394 | 8 packages: 3 frontends, MCP server, data API, 2 Functions, shared renderer (+ the vulnerable lab) |
-| `verification/` | 50 | 28,052 | the audit engine and 12 layer audits |
-| `docs/` | 47 | 24,869 | brief, specs, 12 layer playbooks, runbooks, the finding register |
-| `infra/` | 90 | 18,768 | Bicep, Entra manifest, Purview labels, Fabric REST, Copilot Studio ALM |
-| `.github/` | 33 | 14,244 | layer deploys, per-app CI, the DevSecOps chain, self-healing, compliance collection |
+| `compliance/` | 116 | 104,843 | the NIST catalog, the assessment register, 5 collectors, the derivation, the emitter — **and the nightly committed state, which is the bulk of it and is machine-written** |
+| `apps/` | 271 | 40,721 | 8 packages: 3 frontends, MCP server, data API, 2 Functions, shared renderer (+ the vulnerable lab) |
+| `verification/` | 50 | 28,057 | the audit engine and 12 layer audits |
+| `docs/` | 47 | 25,149 | brief, specs, 12 layer playbooks, runbooks, the finding register |
+| `infra/` | 90 | 18,817 | Bicep, Entra manifest, Purview labels, Fabric REST, Copilot Studio ALM |
+| `.github/` | 33 | 14,246 | layer deploys, per-app CI, the DevSecOps chain, self-healing, compliance collection |
 | `data/` | 46 | 7,659 | generators, SQL schema, lakehouse loaders |
 | `scripts/` | 20 | 7,062 | bootstrap, the `up`/`down` fuse, the Defender toggle |
 | root and other | 16 | 1,562 | `CLAUDE.md`, the root README, configs |
 
 **Method, because a number nobody can reproduce is not a measurement.** `git ls-files`,
 excluding lockfiles and binaries (`.pdf .png .jpg .svg .ico .woff .woff2 .zip .gz`),
-counting newlines. That totals **239,831 across 685 files** and the rows above sum to it.
+counting newlines. That totals **248,116 across 689 files** at commit `d025ced`, and the
+rows above sum to it.
+
+**This figure counts the file you are reading, so recording it moves it.** Three successive
+measurements today read 248,070, 248,109 and 248,114 — the drift was this page and the
+finding register growing, not the estate. Quote it with a commit or not at all.
 
 An earlier revision of this page reported **148,199** with no method recorded, and the
 rows under it summed to 166,594 — neither figure is reachable from the repository today and
 neither can be checked, which is the entire reason the method now sits next to the number.
 Most of the growth since is `compliance/`: the nightly collection commits its state, so that
 row is a record of how long the estate has been running rather than of anything anyone wrote.
+
+## What kind of lines
+
+The table above says *where* the lines are. This says *what they are*, and the two answer
+different questions — because the largest area in that table is mostly not authored.
+
+| | files | lines | share |
+|---|---|---|---|
+| **Generated** — nightly compliance state | 23 | **87,595** | 35.3% |
+| **Source code** | 207 | **52,499** | 21.2% |
+| **Tests** | 156 | **45,189** | 18.2% |
+| **Documentation** (`.md`) | 74 | **34,877** | 14.1% |
+| CI / workflow YAML | 37 | 13,645 | 5.5% |
+| Config and data | 149 | 11,538 | 4.7% |
+| Generated — NIST catalog import | 1 | 1,797 | 0.7% |
+| Generated — Copilot Studio portal export | 42 | 976 | 0.4% |
+
+**Over a third of this repository (36.4%) is machine-written**, and almost all of it is one thing:
+23 nightly snapshots of compliance state at roughly 3,800 lines each. That is the
+audit-evidence trail accumulating, which is the point of having it — but it is not work
+anyone did, and it is why the total grew ~8,000 lines in two days with no feature work.
+`compliance/` reads as the largest area above and is **84% this**.
+
+Of the **157,748 lines a person actually wrote**: source **33%**, tests **29%**,
+documentation **22%**, YAML and config **16%**.
+
+**There are 0.86 lines of test for every line of source** — 45,189 against 52,499.
+`verification/tests/failure-classes.Tests.ps1` alone is 4,350 lines, larger than every
+source file in the repository except `verification/MlsAudit.psm1`. That ratio is this
+register's habit of turning each finding into a check, measured rather than claimed.
+
+**Classification rule, so this is reproducible rather than asserted.** `.md` is
+documentation **wherever it sits** — that ordering matters, and the first version of this
+rule got it wrong: it classified by path first and swallowed `compliance/catalog/README.md`,
+202 hand-written lines, into the generated bucket. `.yml`/`.yaml` is CI; anything else under
+`compliance/state/`, `compliance/catalog/` or `infra/copilot-studio/solution/` is generated; a source-language
+file (`.ts .tsx .js .mjs .ps1 .psm1 .py .bicep .bicepparam .sh .sql .css`) counts as a test
+when its path contains `.test.`, `.tests.`, `/tests/`, `/__tests__/`, `/evals/` or
+`/fixtures/`, and as source otherwise; everything else is config and data. Same file set and
+same exclusions as "Lines by area", so the two tables sum to the same total.
 
 ## What the counts do not show
 

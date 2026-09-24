@@ -150,8 +150,12 @@ call each and say which number came from where.
    **which** one: "from Meridian's operations lakehouse" or "from the AWS
    launch-intelligence lakehouse". "From the launches table" is no longer a source,
    because there are two of them. Never show raw SQL or raw JSON unless asked.
-3. When a result is a comparison, a ranking, a time series, or more than three related
-   figures, return an Adaptive Card (see below). Otherwise plain text is better.
+3. **A table is an Adaptive Card, never markdown and never ASCII art.** When a result
+   is a comparison, a ranking, a time series, a table of rows, or more than three
+   related figures, emit an Adaptive Card (see below) - and do so even when the user
+   asks in so many words for "a table". A markdown pipe table, a +---+ box drawing,
+   or a fenced code block is not an acceptable substitute. Plain text is right only
+   when the answer is genuinely one or two figures.
 4. Round nothing that the data gives exactly. Meridian's dataset is deterministic and an
    AWS query returns exactly what it counted, so an exact figure is always available and
    "about 340" is a defect. Money is the one exception: present currency to two decimal
@@ -748,14 +752,29 @@ code. JSON that parses but is not a card is deliberately left in the prose — a
 quoting a tool result is saying something, and deleting it would be worse than the wall of
 JSON this fixes.
 
-**What this does NOT fix: V8.4.** The eval collects cards from `activity.attachments`
-(`apps/mcp-tools/evals/directline.ts`), which is still empty, so V8.4 continues to report
-*"no Adaptive Card payload was recorded for any question"* — correctly, because the agent
-genuinely does not send card attachments. Making V8.4 green means either sharing
-`extractCardsFromText` with the eval (it lives in `control-tower`, and `mcp-tools` depends
-on no shared package today) or authoring the card templates in topics as below. Do not
-duplicate the parser into the verification path: two copies of a parser drift, and the
+**What this does NOT fix: V8.4.** *Superseded 2026-09-22 — see the note below; kept because
+it is the reasoning the decision was taken against.* The eval collects cards from
+`activity.attachments` (`apps/mcp-tools/evals/directline.ts`), which is still empty, so V8.4
+continues to report *"no Adaptive Card payload was recorded for any question"* — correctly,
+because the agent genuinely does not send card attachments. Making V8.4 green means either
+sharing `extractCardsFromText` with the eval (it lives in `control-tower`, and `mcp-tools`
+depends on no shared package today) or authoring the card templates in topics as below. Do
+not duplicate the parser into the verification path: two copies of a parser drift, and the
 criterion would then be graded by a different implementation than the one users see.
+
+**RESOLVED 2026-09-22, by the option this section told you not to take.** The eval now
+extracts text-borne cards (`directline.ts`), so V8.4 reads the transport the agent actually
+uses. The parser **was** duplicated rather than shared, and the paragraph above is left
+standing rather than edited because a rule overruled without its reasoning visible is a rule
+the next person re-litigates.
+
+Why the override: a Node eval harness importing a React application is a worse coupling than
+two copies of a 40-line scanner, and `mcp-tools` depends on no shared package. The drift
+this section warned about is real, and it is guarded — **not** by comparing the two copies,
+which would only prove they share an assumption, but by pinning each against a **real
+captured agent reply**: `apps/mcp-tools/tests/text-borne-cards.test.ts` on the eval side, and
+the control tower's own transcript tests on the other. Two implementations agreeing with
+reality is stronger evidence than two implementations agreeing with each other.
 
 **The original gap, which stands as the durable fix.** The two documented ways an agent
 emits a card are both authoring-canvas constructs: an **Adaptive card** attached to a
