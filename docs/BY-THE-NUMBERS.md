@@ -1,6 +1,6 @@
 # By the Numbers
 
-What this estate is. **Repository counts were re-measured on 2026-09-22** from `git ls-files`
+What this estate is. **Repository counts were re-measured on 2026-09-24** from `git ls-files`
 and real test runs; **estate counts date from the 2026-09-03 rebuild** unless a row says
 otherwise, and come from live Azure, Graph, Fabric and GitHub APIs.
 
@@ -10,26 +10,26 @@ Nothing here is an estimate, and nothing is rounded in the flattering direction.
 
 | | |
 |---|---|
-| **Automated tests** | **3,097 passing, 0 failing** |
-| **Tracked files** | **691** |
-| **Committed lines** | **239,831** — see the note under "Lines by area"; 97,221 of them are machine-written compliance state |
+| **Automated tests** | **3,110 passing, 0 failing** |
+| **Tracked files** | **695** |
+| **Committed lines** | **248,070** — see the note under "Lines by area"; 104,843 of them are machine-written compliance state |
 | **Verification criteria** | **65**, each run read-only by a separate identity |
 | **Azure resources** | **30**, across 4 resource groups in 1 region |
 | **Resources after a destroy and rebuild** | **30** — identical, twice over |
 | **Workflows** | **23** |
 | **NIST SP 800-171 requirements rendered** | **110** — of which **0 are machine-verified**, and that is the honest answer |
 
-## Tests: 3,097
+## Tests: 3,110
 
 | Runner | Scope | Tests |
 |---|---|---|
-| Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, the fuse, the 12 Verifier audits, and the compliance catalog / collectors / derivation / emitter | **1,908** |
-| Vitest | mcp-tools (442), data-api (309), control-tower (140), spec-renderer (59), compliance (50), launch-ops (34) | **1,034** |
+| Pester (PowerShell 7) | bootstrap, Entra, Purview, Fabric, seed, Defender, the fuse, the 12 Verifier audits, and the compliance catalog / collectors / derivation / emitter | **1,909** |
+| Vitest | mcp-tools (442), data-api (309), control-tower (152), spec-renderer (59), compliance (50), launch-ops (34) | **1,046** |
 | `node --test` | cost-ingest (84), directline-token (26) | **110** |
 | pytest | data generators, determinism and schema parity | **45** |
 
-*Counted 2026-09-22.* Pester comes from the last green `lint-ci` run on `main`
-(1,908 passed / 0 failed / 1 skipped); the rest from `npm test` and `python -m pytest -q`
+*Counted 2026-09-24.* Pester comes from the last green `lint-ci` run on `main`
+(1,909 passed / 0 failed / 1 skipped); the rest from `npm test` and `python -m pytest -q`
 locally, which is the same per-workspace invocation CI uses. **Do not count them with a
 bare `npx vitest run` from the repository root** — that pulls `cost-ingest` and
 `directline-token`, which are `node --test` packages, into vitest and resolves every
@@ -63,7 +63,7 @@ the point rather than an embarrassment: the deploys are Bicep and they are fast;
 wait on real propagation, real scale-in cycles and real cost-export windows, because a
 criterion that does not wait is a criterion that guesses.
 
-**It is not the test suites.** All 3,097 of those run in CI on pull requests, in about
+**It is not the test suites.** All 3,110 of those run in CI on pull requests, in about
 94 seconds for the Pester half, and none of them runs during a rebuild — they never contact
 a cloud API at all. The rebuild's time is spent *waiting on Azure*, and overwhelmingly inside
 one job: **L7's verify, 96.7 of the 152 minutes.** Its dominant criterion is **V7.5, which
@@ -77,19 +77,19 @@ it *did*, which is the substitution this repository exists to refuse.
 
 | Area | Files | Lines | |
 |---|---|---|---|
-| `compliance/` | 114 | 97,221 | the NIST catalog, the assessment register, 5 collectors, the derivation, the emitter — **and the nightly committed state, which is the bulk of it and is machine-written** |
-| `apps/` | 269 | 40,394 | 8 packages: 3 frontends, MCP server, data API, 2 Functions, shared renderer (+ the vulnerable lab) |
-| `verification/` | 50 | 28,052 | the audit engine and 12 layer audits |
-| `docs/` | 47 | 24,869 | brief, specs, 12 layer playbooks, runbooks, the finding register |
-| `infra/` | 90 | 18,768 | Bicep, Entra manifest, Purview labels, Fabric REST, Copilot Studio ALM |
-| `.github/` | 33 | 14,244 | layer deploys, per-app CI, the DevSecOps chain, self-healing, compliance collection |
+| `compliance/` | 116 | 104,843 | the NIST catalog, the assessment register, 5 collectors, the derivation, the emitter — **and the nightly committed state, which is the bulk of it and is machine-written** |
+| `apps/` | 271 | 40,721 | 8 packages: 3 frontends, MCP server, data API, 2 Functions, shared renderer (+ the vulnerable lab) |
+| `verification/` | 50 | 28,057 | the audit engine and 12 layer audits |
+| `docs/` | 47 | 25,103 | brief, specs, 12 layer playbooks, runbooks, the finding register |
+| `infra/` | 90 | 18,817 | Bicep, Entra manifest, Purview labels, Fabric REST, Copilot Studio ALM |
+| `.github/` | 33 | 14,246 | layer deploys, per-app CI, the DevSecOps chain, self-healing, compliance collection |
 | `data/` | 46 | 7,659 | generators, SQL schema, lakehouse loaders |
 | `scripts/` | 20 | 7,062 | bootstrap, the `up`/`down` fuse, the Defender toggle |
 | root and other | 16 | 1,562 | `CLAUDE.md`, the root README, configs |
 
 **Method, because a number nobody can reproduce is not a measurement.** `git ls-files`,
 excluding lockfiles and binaries (`.pdf .png .jpg .svg .ico .woff .woff2 .zip .gz`),
-counting newlines. That totals **239,831 across 685 files** and the rows above sum to it.
+counting newlines. That totals **248,070 across 689 files** and the rows above sum to it.
 
 An earlier revision of this page reported **148,199** with no method recorded, and the
 rows under it summed to 166,594 — neither figure is reachable from the repository today and
