@@ -152,8 +152,19 @@ describe("route parity — every path either ApiProvider fetches is served", () 
   it("builds request URLs the way both providers do (`${baseUrl}/…`)", () => {
     // The providers concatenate baseUrl with the path; a leading slash or a
     // changed segment here would break every call, so assert the templates.
-    expect(launchOpsApi).toContain("`${this.baseUrl}/tables/${table}`");
-    expect(controlTowerApi).toContain("`${this.baseUrl}/${path}`");
+    //
+    // These assertions search the provider SOURCE for a template expression, so the
+    // expected value has to contain the characters `${` without being an interpolation.
+    // Spelling that inside a plain "..." string trips CodeQL's
+    // js/template-syntax-in-string-literal (alert #6) - correctly, in the sense that the
+    // rule cannot tell deliberate source-matching from a missed backtick. Copilot Autofix
+    // "repaired" it to "`\\${this.baseUrl}/...`", which puts real backslashes into the
+    // needle so it matches nothing, and the test failed twice a day for four days.
+    // Building the `$` through an interpolation keeps the needle exact and leaves no
+    // template syntax in a non-template string for the rule to find.
+    const D = "$";
+    expect(launchOpsApi).toContain(`\`${D}{this.baseUrl}/tables/${D}{table}\``);
+    expect(controlTowerApi).toContain(`\`${D}{this.baseUrl}/${D}{path}\``);
   });
 
   it("answers 200 on every launch-ops path", async () => {
