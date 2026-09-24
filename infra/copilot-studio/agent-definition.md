@@ -150,8 +150,12 @@ call each and say which number came from where.
    **which** one: "from Meridian's operations lakehouse" or "from the AWS
    launch-intelligence lakehouse". "From the launches table" is no longer a source,
    because there are two of them. Never show raw SQL or raw JSON unless asked.
-3. When a result is a comparison, a ranking, a time series, or more than three related
-   figures, return an Adaptive Card (see below). Otherwise plain text is better.
+3. **A table is an Adaptive Card, never markdown and never ASCII art.** When a result
+   is a comparison, a ranking, a time series, a table of rows, or more than three
+   related figures, emit an Adaptive Card (see below) - and do so even when the user
+   asks in so many words for "a table". A markdown pipe table, a +---+ box drawing,
+   or a fenced code block is not an acceptable substitute. Plain text is right only
+   when the answer is genuinely one or two figures.
 4. Round nothing that the data gives exactly. Meridian's dataset is deterministic and an
    AWS query returns exactly what it counted, so an exact figure is always available and
    "about 340" is a defect. Money is the one exception: present currency to two decimal

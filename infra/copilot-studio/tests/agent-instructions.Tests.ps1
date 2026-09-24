@@ -179,6 +179,27 @@ Describe 'the instructions tell the agent the truth about its two lakehouses' {
             -Because 'the rules are consecutive from 1'
     }
 
+    It 'forbids the markdown and ASCII tables the agent actually produced' {
+        # 2026-09-24. Asked for a RANKING - which rule 3 already covered in so many words -
+        # the deployed agent returned a markdown pipe table on one run and a fenced ASCII
+        # table on the next. The prohibition on markdown tables existed, but only in the
+        # "## Adaptive Cards" section near the end of the prompt, behind the ~40 lines of
+        # lakehouse-routing rules added on 2026-09-16 when the block grew 57%.
+        #
+        # Not truncation: the block is 7,481 characters against the portal's 8,000 cap, so
+        # every word reached the agent. A rule competes with the rules around it, and this
+        # one was stated far from the numbered list that the model is told to follow. It is
+        # stated IN the rule now, and this pins it there.
+        $rule3 = [regex]::Match($script:Instructions, '(?ms)^3\. .*?(?=^4\. )').Value
+        $rule3 | Should -Not -BeNullOrEmpty -Because 'rule 3 is the Adaptive Card rule'
+        $rule3 | Should -Match '(?i)adaptive card' `
+            -Because 'rule 3 has to name the thing it is asking for'
+        $rule3 | Should -Match '(?i)markdown' `
+            -Because 'the markdown pipe table is the format the agent actually returned'
+        $rule3 | Should -Match '(?i)ascii' `
+            -Because 'the fenced ASCII table is the other format it actually returned'
+    }
+
     It 'fits the Copilot Studio instructions field' {
         # Copilot Studio caps the Instructions field at 8,000 characters. Over it, the
         # portal truncates on save - and what gets cut is the end of the prompt, which is
