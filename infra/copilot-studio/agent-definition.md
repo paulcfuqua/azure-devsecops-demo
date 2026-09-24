@@ -752,14 +752,29 @@ code. JSON that parses but is not a card is deliberately left in the prose — a
 quoting a tool result is saying something, and deleting it would be worse than the wall of
 JSON this fixes.
 
-**What this does NOT fix: V8.4.** The eval collects cards from `activity.attachments`
-(`apps/mcp-tools/evals/directline.ts`), which is still empty, so V8.4 continues to report
-*"no Adaptive Card payload was recorded for any question"* — correctly, because the agent
-genuinely does not send card attachments. Making V8.4 green means either sharing
-`extractCardsFromText` with the eval (it lives in `control-tower`, and `mcp-tools` depends
-on no shared package today) or authoring the card templates in topics as below. Do not
-duplicate the parser into the verification path: two copies of a parser drift, and the
+**What this does NOT fix: V8.4.** *Superseded 2026-09-22 — see the note below; kept because
+it is the reasoning the decision was taken against.* The eval collects cards from
+`activity.attachments` (`apps/mcp-tools/evals/directline.ts`), which is still empty, so V8.4
+continues to report *"no Adaptive Card payload was recorded for any question"* — correctly,
+because the agent genuinely does not send card attachments. Making V8.4 green means either
+sharing `extractCardsFromText` with the eval (it lives in `control-tower`, and `mcp-tools`
+depends on no shared package today) or authoring the card templates in topics as below. Do
+not duplicate the parser into the verification path: two copies of a parser drift, and the
 criterion would then be graded by a different implementation than the one users see.
+
+**RESOLVED 2026-09-22, by the option this section told you not to take.** The eval now
+extracts text-borne cards (`directline.ts`), so V8.4 reads the transport the agent actually
+uses. The parser **was** duplicated rather than shared, and the paragraph above is left
+standing rather than edited because a rule overruled without its reasoning visible is a rule
+the next person re-litigates.
+
+Why the override: a Node eval harness importing a React application is a worse coupling than
+two copies of a 40-line scanner, and `mcp-tools` depends on no shared package. The drift
+this section warned about is real, and it is guarded — **not** by comparing the two copies,
+which would only prove they share an assumption, but by pinning each against a **real
+captured agent reply**: `apps/mcp-tools/tests/text-borne-cards.test.ts` on the eval side, and
+the control tower's own transcript tests on the other. Two implementations agreeing with
+reality is stronger evidence than two implementations agreeing with each other.
 
 **The original gap, which stands as the durable fix.** The two documented ways an agent
 emits a card are both authoring-canvas constructs: an **Adaptive card** attached to a

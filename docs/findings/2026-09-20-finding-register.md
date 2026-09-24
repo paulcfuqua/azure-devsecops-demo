@@ -6,7 +6,13 @@ controls over them, and the criteria that judge both. Everything here was found 
 
 Continues [2026-09-16](2026-09-16-finding-register.md) (F201–F217).
 
-**Seven findings.** Three share one shape worth naming up front: **a Fabric lakehouse SQL
+**Twenty-one findings, F218–F238** — this register outgrew its date. It opened on 2026-09-20
+with the seven below and kept taking entries through the teardown/rebuild cycle (F226–F235),
+the documentation sweep (F236–F237) and the Adaptive Card rate (F238). *The count read "seven"
+until 2026-09-24, which is the drift `CLAUDE.md` removed from its own header on 2026-09-22 for
+the same reason: a number written once and never recomputed.*
+
+**The original seven.** Three share one shape worth naming up front: **a Fabric lakehouse SQL
 analytics endpoint is not a SQL database, and its unsupported surface is discovered rather
 than documented.** `CREATE USER`, `DATABASE_PRINCIPAL_ID` and `EXECUTE AS` — all ordinary in
 any SQL Server reference — are each refused here, each with a distinct message number, and
@@ -1094,3 +1100,90 @@ worth carrying: **a decision applied to the verifier and not to the deployer is 
 decision**, and the reason it looked like a contradiction rather than a lifecycle gap is that
 nothing in the estate distinguishes "running" from "being put away". On a long-lived estate
 that distinction is a feature to build. On this one it is a note.
+
+---
+
+## F238 — the showpiece worked one time in eight, and two confident diagnoses were both wrong
+
+*2026-09-24. Found by the sponsor asking the agent a question and looking at the answer.*
+
+Showpiece #1's Adaptive Cards were emitting on **1 of 8** table-shaped questions. Nothing was
+red. V8.4 passes on the transport, the eval graded 9/10, the MCP server answered every call,
+and the agent returned correct figures with correct provenance every time. The only thing
+wrong was the *shape* of the answer, and no criterion reads that.
+
+**The measurement, because "sometimes" is not a rate.**
+
+| | before | after, run 1 | after, run 2 |
+|---|---|---|---|
+| phrased as a ranking or comparison | 1 of 4 | 4 of 4 | — |
+| phrased as *"a table"* | 0 of 4 | 4 of 4 | — |
+| **overall** | **1 of 8** | **8 of 8** | **8 of 8** |
+
+### The fix is one paragraph, and the failure wrote it
+
+Rule 3 of the agent's instructions already required an Adaptive Card for "a comparison, a
+ranking, a time series, or more than three related figures". A ranking is exactly what was
+asked for. What the rule never said is what to do when the **user's own wording contradicts
+it** — and "create a table of the 10 technicians" is a format instruction from the person the
+agent is trying to help. It obeyed the user and ignored the rule, which is defensible
+behaviour nobody had thought to forbid.
+
+Rule 3 now says *"and do so even when the user asks in so many words for 'a table'"*, and
+names the three formats it was actually producing: a markdown pipe table, a `+---+` box
+drawing, and a fenced code block. That phrasing went from **0 of 4** to **8 of 8** across two
+conversations.
+
+### Two diagnoses, both confident, both wrong
+
+**First: "the agent is not emitting cards at all."** A probe reported 0 cards on every
+question. The probe called `extractCardsFromText` on `reply.text` — and the client had
+*already* stripped the card out of that text, because removing it is the whole point of
+lifting it. The empty ` ```json ` fence left behind was read as evidence the agent had
+produced an empty card, when it was the residue of a **successful** extraction. This is
+F233's own shape, recurring inside the investigation of F233: *a probe built on the wrong
+assumption agrees with itself.* Count at the transport, once.
+
+**Second: "the word *table* in the question suppresses the card."** Six samples showed both
+misses on the two questions containing that word. A paired test — four questions, each asked
+once as a ranking and once as "a table", alternating in one conversation — returned 1 of 4
+against 0 of 4 and refuted it: the *neutral* phrasing had collapsed too, from 3 of 3 an hour
+earlier. The hypothesis was abandoned as unsupported.
+
+**It was right.** The post-fix paired data shows exactly the predicted split. The controlled
+test could not see it because the baseline was so low that a real effect was indistinguishable
+from noise at n=4. **A refuted hypothesis is not a false one; it is one the sample could not
+resolve** — and the honest move at the time was still to abandon it, because acting on it
+would have been acting on 6 observations and a story.
+
+### What nothing in the repository could see
+
+V8.4 asks whether a card is well-formed when one arrives. V8.3 reads the declared tool list.
+V8.6/V8.7 prove the MCP link. The eval grades answer correctness. **Not one of them asks how
+often the agent chooses a card**, so a capability degrading from reliable to one-in-eight is
+invisible to the entire verification suite. It stayed invisible for at least a week.
+
+A rate is not an artefact, and this estate's checks are good at artefacts. The thing that
+found it was a person looking at an answer and saying it looked wrong.
+
+### Recorded for whoever changes the prompt next
+
+**Edit the Instructions field in the portal; do not import the solution.** A solution import
+resets manual authentication (it is not solution-aware) and requires rebuilding the MCP
+connection and re-toggling all seven tools — the whole F202 hazard, for a text change. The
+portal edit is Save then Publish, touches nothing else, and took about ten minutes including
+the before/after measurement. Afterwards, **do not refresh the tool list** (F202).
+
+The committed copy must move with it: `agent-instructions.Tests.ps1` requires the two to
+match character for character, and only the solution copy survives a teardown (F159).
+
+### Also corrected here
+
+`agent-definition.md` §8 still said the eval *"collects cards from `activity.attachments`,
+which is still empty"* and instructed the reader not to duplicate the parser into the
+verification path. Both were overtaken on 2026-09-22: the eval extracts text-borne cards, and
+the parser **was** duplicated. The original paragraph is left standing with the override
+recorded beneath it, because a rule overruled without its reasoning visible is a rule the next
+person re-litigates. The drift it warned about is guarded by pinning each copy against a real
+captured agent reply rather than against the other copy — two implementations agreeing with
+reality beats two agreeing with each other.
