@@ -11,6 +11,7 @@ import {
 } from "@fluentui/react-components";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AdaptiveCardView } from "./AdaptiveCardView";
+import { splitMessageSegments } from "./agent/messageSegments";
 import { activityToTurn, appendTurn, userTurn } from "./agent/transcript";
 import type { AdaptiveAction, AgentConnection, AgentProvider, AgentTurn } from "./agent/types";
 import type { JSX } from "react";
@@ -39,6 +40,22 @@ const useStyles = makeStyles({
     alignSelf: "flex-start",
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  // Agent prose carries its own line breaks - a list of findings, a source sentence on its
+  // own line. HTML collapses them, so an answer arrived as one run-on paragraph.
+  prose: { whiteSpace: "pre-wrap" },
+  // Tables only read as tables in a monospace box that preserves every space. The agent
+  // sends them as markdown pipe tables or fenced ASCII art depending on the run.
+  pre: {
+    margin: 0,
+    padding: "0.5rem 0.625rem",
+    overflowX: "auto",
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    backgroundColor: tokens.colorNeutralBackground3,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusSmall,
   },
   composer: { display: "flex", flexDirection: "row", gap: "0.5rem", alignItems: "flex-end" },
   input: { flexGrow: 1 },
@@ -251,7 +268,22 @@ export function AskPanel({ provider }: AskPanelProps): JSX.Element {
               }`}
               data-testid={`turn-${turn.role}`}
             >
-              {turn.text ? <Text block>{turn.text}</Text> : null}
+              {splitMessageSegments(turn.text).map((segment, i) =>
+                segment.kind === "pre" ? (
+                  <pre
+                    key={i}
+                    className={styles.pre}
+                    data-testid="agent-pre"
+                    data-lang={segment.lang ?? ""}
+                  >
+                    {segment.text}
+                  </pre>
+                ) : (
+                  <Text key={i} block className={styles.prose}>
+                    {segment.text}
+                  </Text>
+                ),
+              )}
               {turn.cards.map((card, i) => (
                 <AdaptiveCardView key={i} card={card} onAction={onCardAction} />
               ))}

@@ -152,6 +152,57 @@ describe("Ask tab — connected", () => {
     expect(screen.getByText("what is our cost variance?")).toBeTruthy();
   });
 
+  it("renders a table answer in a monospace block instead of one run-on paragraph", async () => {
+    // The agent does not always answer with a card. This is a reply MEASURED over Direct
+    // Line on 2026-09-24 - a fenced ASCII table - which the Ask tab used to hand to a
+    // single <Text block>, where HTML collapsed every newline into one paragraph.
+    const connection = stubConnection();
+    render(withTheme(<AskPanel provider={stubProvider(connection)} />));
+    await waitFor(() => expect(screen.getByTestId("ask-ready")).toBeTruthy());
+
+    connection.emit({
+      type: "message",
+      id: "agent-table",
+      from: { id: "mls-agent", role: "bot" },
+      text: [
+        "The 10 technicians most frequently involved are:",
+        "",
+        "```text",
+        "| Technician        | Work Order Count |",
+        "| Yuki Tanabe       | 33               |",
+        "```",
+        "",
+        "Source: Meridian's operations lakehouse.",
+      ].join("\n"),
+    });
+
+    const pre = await waitFor(() => screen.getByTestId("agent-pre"));
+    expect(pre.tagName).toBe("PRE");
+    // Every space survives, because alignment is the only thing making it a table.
+    expect(pre.textContent).toContain("| Yuki Tanabe       | 33               |");
+    // The prose around it is still prose, and the provenance sentence is not swallowed.
+    expect(screen.getByText(/most frequently involved are:/)).toBeTruthy();
+    expect(screen.getByText(/Source: Meridian's operations lakehouse\./)).toBeTruthy();
+  });
+
+  it("shows no empty code block when a card was lifted out of the text", async () => {
+    // extractCardsFromText removes the card JSON and leaves a bare ```json fence behind.
+    // Rendering it would put an empty grey box under every successful card.
+    const connection = stubConnection();
+    render(withTheme(<AskPanel provider={stubProvider(connection)} />));
+    await waitFor(() => expect(screen.getByTestId("ask-ready")).toBeTruthy());
+
+    connection.emit({
+      type: "message",
+      id: "agent-residue",
+      from: { id: "mls-agent", role: "bot" },
+      text: "The top scrub causes are weather holds.\n\n```json\n\n```\n\nSource: the lakehouse.",
+    });
+
+    await waitFor(() => expect(screen.getByText(/weather holds/)).toBeTruthy());
+    expect(screen.queryByTestId("agent-pre")).toBeNull();
+  });
+
   it("turns an Adaptive Card Submit action into the next message", async () => {
     const connection = stubConnection();
     render(withTheme(<AskPanel provider={stubProvider(connection)} />));
