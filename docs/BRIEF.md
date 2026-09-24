@@ -11,7 +11,7 @@
 
 | Date | Amendment | What it changes below |
 |---|---|---|
-| 2026-08-24 | [Copilot Studio](superpowers/specs/2026-08-24-amendment-copilot-studio.md) — sponsor-directed | **Stack decisions → Copilot service (showpiece #1)**: the self-hosted LLM service is replaced by a custom **Microsoft Copilot Studio** agent, embedded in the control tower's Ask tab over Direct Line, with tools re-hosted as an **MCP server**. **Showpiece #3**: the authored triage script is replaced by **GitHub Copilot Autofix**. Consequence: there is **no LLM API key anywhere in the system**; the one stored secret is the Direct Line secret in Key Vault. The 2026-08-22 LLM-provider decision is void. |
+| 2026-08-24 | [Copilot Studio](superpowers/specs/2026-08-24-amendment-copilot-studio.md) — sponsor-directed | **Stack decisions → Copilot service (showpiece #1)**: the self-hosted LLM service is replaced by a custom **Microsoft Copilot Studio** agent, embedded in the control tower's Ask tab over Direct Line, with tools re-hosted as an **MCP server**. **Showpiece #3**: the authored triage script is replaced by **GitHub Copilot Autofix**. Consequence: there is **no LLM API key anywhere in the system**; the Direct Line secret in Key Vault is exchanged server-side for a short-lived token and never reaches a browser. The 2026-08-22 LLM-provider decision is void. *This amendment said "the one stored secret"; that was true of the LLM change it was describing and was never true of the estate — **seven** long-lived credentials exist, three of them in Key Vault, each enumerated in hard rule 5 and printed as the rotation list by `gitleaks.yml`. Claiming otherwise is finding F28; corrected here 2026-09-24.* |
 | 2026-08-26 | [Self-auditing compliance platform](superpowers/specs/2026-08-26-compliance-platform-design.md) — sponsor-approved design | Adds a **fourth showpiece** and a **twelfth layer**, and displaces nothing. Showpieces 1–3 and layers 1–11 are untouched. See below. |
 
 ### The 2026-08-26 amendment, in the brief's own terms
@@ -25,9 +25,10 @@ Auth) from an artifact collected in CI and **committed to this repo**, plus a si
 tool (`query_compliance`) so the agent can answer from the same artifact.
 
 It is cheap because most of it was already paid for: `verification/` was already a
-control-assessment engine — 43 criteria, each declaring the command it ran, the value it
-expected and the value it observed, executed by an identity structurally incapable of
-mutation. It was missing one field (which control each criterion evidences) and a surface.
+control-assessment engine — 43 criteria *(as of 2026-08-26, when this amendment was
+written; **65** today — `docs/BY-THE-NUMBERS.md` carries the live count)*, each declaring
+the command it ran, the value it expected and the value it observed, executed by an
+identity structurally incapable of mutation. It was missing one field (which control each criterion evidences) and a surface.
 
 Three constraints on it are non-negotiable, and are the reason it is worth having at all:
 
