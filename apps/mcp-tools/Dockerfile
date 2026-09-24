@@ -28,7 +28,7 @@
 # and no API key of any kind: all orchestration happens in Copilot Studio.
 
 # ---------- build ----------
-FROM node:24-bookworm-slim AS build
+FROM node:25-bookworm-slim AS build
 WORKDIR /repo
 
 # Manifests first for layer-cached installs. --workspace installs only this
@@ -47,7 +47,7 @@ RUN npm run build --workspace apps/mcp-tools
 RUN npm prune --omit=dev --ignore-scripts
 
 # ---------- runtime ----------
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     PORT=8080
 WORKDIR /repo/apps/mcp-tools
