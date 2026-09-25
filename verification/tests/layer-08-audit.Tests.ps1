@@ -71,6 +71,11 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
             Justification = 'Test fixture builder: writes one temp-directory JSON artifact the audit then reads; no system state is changed.')]
         param([int]$Passing = 10, [switch]$ToolsOnlyHarness, [string]$RogueTool = '', [switch]$GeneratedUi, [double]$SlowLatency = 0)
+        # PRESENTATION. q1 is declared "card" - a ranking whose correct answer is a table -
+        # and q2..q10 "text", so the default fixture exercises BOTH sides of V8.4's card
+        # requirement. Every question still carries a card: a "text" question that returns a
+        # valid card is fine and is validated like any other. The real golden set declares
+        # all ten "text" today; tests that need that shape rewrite the field explicitly.
         $questions = @()
         for ($i = 1; $i -le 10; $i++) {
             $pass = ($i -le $Passing)
@@ -94,6 +99,7 @@ BeforeAll {
                 id             = "q$i"
                 question       = 'Which day of the week has the most launches?'
                 pass           = $pass
+                presentation   = $(if ($i -eq 1) { 'card' } else { 'text' })
                 unobservable   = $false
                 latencySeconds = $latency
                 responses      = @($answer)
@@ -409,11 +415,10 @@ Describe 'layer-08-audit' {
                 -Because 'nothing was read, so nothing follows about what the agent sent'
         }
 
-        It 'V8.4 reports a real missing card when the responses WERE readable' {
-            # The estate's actual 2026-09-21 state: ten questions, one response each, zero
-            # cards. The agent answered in prose. That is a genuine finding and must read as
-            # one, naming how many responses were successfully examined so the verdict
-            # carries its own evidence of having looked.
+        It 'V8.4 fails a question declared presentation=card that was answered without a card' {
+            # The real missing-card defect: a card was OWED and prose came back. Only the
+            # declared-visual question is named; the nine text questions answered in prose
+            # did nothing wrong and must not appear in the verdict.
             New-EvalArtifact -Passing 10
             $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
             foreach ($q in $document.questions) { $q.cards = @() }
@@ -421,9 +426,86 @@ Describe 'layer-08-audit' {
 
             $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
             $row.Status | Should -Be 'FAIL'
-            $row.Observed | Should -BeLike '*no Adaptive Card payload in any of 10 question(s)*'
-            $row.Observed | Should -BeLike '*over 10 response(s) that WERE recorded*'
+            $row.Observed | Should -BeLike '*q1 is declared presentation=card and was answered without an Adaptive Card*'
+            $row.Observed | Should -Not -BeLike '*q2 *'
             $row.Observed | Should -Not -BeLike '*UNOBSERVABLE*'
+        }
+
+        It 'V8.4 is UNOBSERVABLE, not FAIL, when no question owes a card and the agent answered in prose' {
+            # INFRA-UP RUN 36095279150, the shape that produced the false claim: ten
+            # single-figure questions, all declared "text", one prose response each, zero
+            # cards. Prose was the correct form. The card requirement was never exercised,
+            # so the criterion may neither pass on it nor fail the agent for it.
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.cards = @(); $q.presentation = 'text' }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $context = Invoke-AuditForTest -NoRetry
+            $row = Get-Row -Context $context -Id 'V8.4'
+            $row.Status | Should -Be 'SKIP' -Because 'an unobserved requirement is neither a pass nor a defect in the agent'
+            $row.Observed | Should -BeLike 'UNOBSERVABLE:*no question declared presentation=card*'
+            $row.Observed | Should -BeLike '*no HTML/JS/JSX across 10 response(s)*' `
+                -Because 'the generated-UI scan still ran over every response and says so'
+            $row.Observed | Should -Not -BeLike '*answered in prose*'
+            $row.Detail | Should -BeLike '*not a claim that the agent failed*'
+        }
+
+        It 'V8.4 is UNOBSERVABLE when the artifact predates the presentation field' {
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.cards = @(); $q.PSObject.Properties.Remove('presentation') }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike "UNOBSERVABLE:*predates the per-question 'presentation' field*"
+        }
+
+        It 'V8.4 is UNOBSERVABLE when every card-declared question was throttled and never asked' {
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            $document.questions[0].unobservable = $true
+            $document.questions[0].cards = @()
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'SKIP'
+            $row.Observed | Should -BeLike '*1 question(s) declared presentation=card were throttled*'
+        }
+
+        It 'V8.4 still fails generated UI when no question owes a card' {
+            # The scan half does not depend on the card half being observable: an
+            # unobserved card requirement must not shelter an observed HTML response.
+            New-EvalArtifact -Passing 10 -GeneratedUi
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.cards = @(); $q.presentation = 'text' }
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*q1 response contains generated UI code*'
+        }
+
+        It 'V8.4 validates a card returned to a text-declared question, and fails an invalid one' {
+            # A card where prose would do is fine - but it is still a card, and it still
+            # has to meet the pinned profile.
+            New-EvalArtifact -Passing 10
+            $document = Get-Content -LiteralPath $script:EvalPath -Raw | ConvertFrom-Json
+            foreach ($q in $document.questions) { $q.presentation = 'text' }
+            $document.questions[4].cards[0].version = '1.2'
+            Set-Content -LiteralPath $script:EvalPath -Encoding utf8 -Value ($document | ConvertTo-Json -Depth 12)
+
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike "*q5 card: version is '1.2'*"
+        }
+
+        It 'V8.4 passes only when a card-declared question was asked and answered with a valid card' {
+            New-EvalArtifact -Passing 10
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry) -Id 'V8.4'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '1 question(s) declared presentation=card each answered with a card*'
         }
 
         It 'V8.2 records UNOBSERVABLE when no question carries a reference query' {

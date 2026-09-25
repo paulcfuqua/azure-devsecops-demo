@@ -290,6 +290,12 @@ export async function runAgentEval(options: AgentEvalOptions = {}): Promise<numb
       unobservable: throttled,
       latencySeconds,
       factScope: question.factScope,
+      // Whether a correct answer to this question is an Adaptive Card ("card") or prose
+      // ("text"). V8.4 requires a card only where this says "card": failing a prose answer
+      // to a single-figure question reports the agent's instructions being followed as a
+      // defect. An artifact without this field predates it, and V8.4 treats the card
+      // requirement as unobserved rather than guessing.
+      presentation: question.presentation,
       // The Verifier re-runs this against Fabric itself (V8.2 / F229). Serialised into the
       // artifact because that is the only channel from here to a separate audit process.
       referenceSql: question.referenceSql,

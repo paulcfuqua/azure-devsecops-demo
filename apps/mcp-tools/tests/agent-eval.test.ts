@@ -126,6 +126,41 @@ describe("no Direct Line secret configured", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* Declared presentation (V8.4)                                         */
+/* ------------------------------------------------------------------ */
+
+describe("every golden question declares the form of a correct answer", () => {
+  it("declares presentation as exactly 'card' or 'text'", () => {
+    for (const question of goldenQuestions) {
+      expect(["card", "text"], question.id).toContain(question.presentation);
+    }
+  });
+
+  it("declares 'text' only where the expected answer is one or two figures", async () => {
+    // The agent's rule 3: plain text is right ONLY when the answer is genuinely one or two
+    // figures; more than three related figures is a card. A 'text' declaration over an
+    // answer with more facts than that would let V8.4 excuse prose that owed a card. The
+    // fact count comes from each question's own independent expectation, not from here.
+    for (const question of goldenQuestions.filter((q) => q.presentation === "text")) {
+      const facts = await question.expected();
+      expect(facts.length, question.id).toBeGreaterThan(0);
+      expect(facts.length, question.id).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("does not declare 'text' for a question whose tool call returns a ranked list it must show", () => {
+    // A ranking question is 'text' only because it asks for the WINNER - row 0 - which
+    // is what factScope "first-row" encodes. A 'text' ranking scored over the whole
+    // payload would be asking for the list, and the list is a card.
+    for (const question of goldenQuestions.filter((q) => q.presentation === "text")) {
+      if (/\bORDER BY\b/i.test(String(question.call.arguments.sql ?? ""))) {
+        expect(question.factScope, question.id).toBe("first-row");
+      }
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* The Direct Line protocol                                            */
 /* ------------------------------------------------------------------ */
 
@@ -475,6 +510,14 @@ describe("runAgentEval against a scripted agent", () => {
     expect(artifact.questions[0].toolCalls).toContainEqual({ name: "query_lakehouse_sql" });
     expect(artifact.questions[0].cards[0].type).toBe("AdaptiveCard");
     expect(typeof artifact.p95LatencySeconds).toBe("number");
+    // V8.4 reads each question's declared presentation from the artifact, so it must
+    // arrive there per question, matched by id to the declaration it came from.
+    const declared = new Map(goldenQuestions.map((q) => [q.id, q.presentation]));
+    expect(artifact.questions).toHaveLength(goldenQuestions.length);
+    for (const recorded of artifact.questions) {
+      expect(["card", "text"]).toContain(recorded.presentation);
+      expect(recorded.presentation, recorded.id).toBe(declared.get(recorded.id));
+    }
   });
 
   it("scores a rate-limited reply UNOBSERVABLE, not a failure (F186)", async () => {
