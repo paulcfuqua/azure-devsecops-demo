@@ -9,6 +9,32 @@ common defect this project has recorded.
 A layer is done when the independent auditor says so, not when a deploy exits zero. Read
 the criterion tables, not the job status.
 
+> **THE ESTATE IS SHUT DOWN — 2026-09-25 20:30 UTC.** Everything below describes an estate
+> that no longer exists and is kept as the record of what it was.
+>
+> - **Final cycle:**
+>   - Teardown, run `36091001637`: 30.5 min.
+>   - Rebuild, run `36095279150`: **V11.4 PASS at 154.5 min**, under the 180-minute gate.
+>     Every standalone audit from L2 to L7 passed, and V8.6/V8.7 passed on the rebuilt
+>     estate.
+>   - Final teardown, run `36183943645`: 22 min. **V11.1 and V11.2 PASS.**
+> - **What the cycle found:** four criteria that judged the estate wrongly, recorded as
+>   F239–F242 in the [2026-09-25 register](findings/2026-09-25-finding-register.md).
+>   F239–F241 are fixed (#328, #329) but have never run against a live estate. **V11.5 was
+>   never measured** (F242).
+> - **Still standing on purpose:**
+>   - `mls-rg-identity` and the AWS role and providers behind it.
+>   - Every tenant-level object (G3): Entra, Purview, the Fabric workspace shell, the
+>     management group and policy assignments, and the OIDC federation.
+>   - The Power Platform developer environment.
+> - **Workflows:** `self-heal` and `compliance` are **disabled**. Re-enable both with
+>   `gh workflow enable` before any rebuild. `codeql` and `gitleaks` still run weekly against
+>   the repository.
+> - **Before the trials end:** cancel the Microsoft 365 E5 trial (ends 2026-09-29) and the
+>   Power Apps Premium trial (ends 2026-09-30) in the Microsoft 365 admin center. See
+>   [lifecycle-and-shutdown.md](runbooks/lifecycle-and-shutdown.md) § 3. **Nothing in this
+>   repository can do that.**
+
 **Refreshed 2026-09-22.** (The previous refresh was 2026-09-17 ~01:30 UTC. The dated block that follows this header supersedes it and names what drifted; where the two disagree, the newer one wins.)
 
 **Superseded text, kept for provenance — 2026-09-17, ~01:30 UTC.** The previous refresh was the morning of 2026-09-16 and
