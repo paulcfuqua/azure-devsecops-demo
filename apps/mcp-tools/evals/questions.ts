@@ -53,6 +53,24 @@ export interface GoldenQuestion {
    */
   factScope: "payload" | "first-row";
   /**
+   * The form a CORRECT answer takes, declared per question so V8.4 knows which answers
+   * it may require to be an Adaptive Card.
+   *
+   *   "card" — the answer is a comparison, a ranking, a time series, a table of rows or
+   *            more than three related figures. The agent's instructions (rule 3 in
+   *            botcomponents/mls_MeridianLaunchCopilot.gpt.default/data) require a card.
+   *   "text" — the answer is genuinely one or two figures ("Saturday, 309"; "93.6%").
+   *            The same rule says plain text is right, so prose is not a defect.
+   *
+   * WHY IT IS DECLARED AND NOT INFERRED. Until 2026-09-25 V8.4 required a card from every
+   * question and failed the agent for "answering in prose" on ten questions that each ask
+   * for a single figure - ten correct answers in the correct form, reported as a defect.
+   * An audit cannot tell from the answer alone whether a card was owed; the question's
+   * author can. Declare honestly: a "text" question asking for a ranked list would let
+   * V8.4 pass over prose that should have been a card.
+   */
+  presentation: "card" | "text";
+  /**
    * T-SQL the VERIFIER re-runs against the Fabric lakehouse, independently of this
    * process, to re-derive the answer and compare (L08 V8.2, F229).
    *
@@ -94,6 +112,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT TOP 1 DATENAME(weekday, actual_date) AS weekday, COUNT(*) AS launches FROM dbo.launches GROUP BY DATENAME(weekday, actual_date) ORDER BY COUNT(*) DESC",
     factScope: "first-row",
+    presentation: "text",
     question: "Which day of the week has the most launches?",
     call: { tool: "query_lakehouse_sql", arguments: { sql: WEEKDAY_SQL } },
     expected: async () => {
@@ -117,6 +136,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT COUNT(launch_id) AS total_launches FROM dbo.launches",
     factScope: "payload",
+    presentation: "text",
     question: "How many launches are in the lakehouse?",
     call: {
       tool: "query_lakehouse_sql",
@@ -129,6 +149,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT CAST(ROUND(100.0 * SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) / COUNT(*), 1) AS DECIMAL(5,1)) AS success_rate_pct FROM dbo.launches",
     factScope: "payload",
+    presentation: "text",
     question: "What is the overall launch success rate?",
     call: {
       tool: "query_lakehouse_sql",
@@ -152,6 +173,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT TOP 1 v.name FROM dbo.launches l JOIN dbo.vehicles v ON v.vehicle_id = l.vehicle_id GROUP BY v.name ORDER BY COUNT(*) DESC, v.name ASC",
     factScope: "first-row",
+    presentation: "text",
     question: "Which vehicle has flown the most launches?",
     call: {
       tool: "query_lakehouse_sql",
@@ -174,6 +196,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT TOP 1 p.name FROM dbo.launches l JOIN dbo.pads p ON p.pad_id = l.pad_id GROUP BY p.name ORDER BY COUNT(*) DESC, p.name ASC",
     factScope: "first-row",
+    presentation: "text",
     question: "Which pad hosted the most launches?",
     call: {
       tool: "query_lakehouse_sql",
@@ -196,6 +219,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT TOP 1 category FROM dbo.scrubs GROUP BY category ORDER BY COUNT(scrub_id) DESC, category ASC",
     factScope: "first-row",
+    presentation: "text",
     question: "What is the most common scrub category?",
     call: {
       tool: "query_lakehouse_sql",
@@ -218,6 +242,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT COUNT(DISTINCT launch_id) AS scrubbed_launches FROM dbo.scrubs",
     factScope: "payload",
+    presentation: "text",
     question: "How many launches were scrubbed at least once?",
     call: {
       tool: "query_lakehouse_sql",
@@ -234,6 +259,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT TOP 1 cost_center FROM dbo.cost_daily GROUP BY cost_center ORDER BY SUM(amount_usd) DESC, cost_center ASC",
     factScope: "first-row",
+    presentation: "text",
     question: "Which cost center has the highest total spend?",
     call: {
       tool: "query_lakehouse_sql",
@@ -256,6 +282,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT COUNT(*) AS open_findings FROM dbo.findings_history WHERE status = 'open'",
     factScope: "payload",
+    presentation: "text",
     question: "How many security findings are currently open?",
     call: {
       tool: "query_lakehouse_sql",
@@ -273,6 +300,7 @@ export const goldenQuestions: GoldenQuestion[] = [
     referenceSql:
       "SELECT TOP 1 name FROM dbo.suppliers WHERE on_time_pct = (SELECT MIN(on_time_pct) FROM dbo.suppliers) ORDER BY name ASC",
     factScope: "first-row",
+    presentation: "text",
     question: "Which supplier has the lowest on-time delivery percentage?",
     call: {
       tool: "query_lakehouse_sql",

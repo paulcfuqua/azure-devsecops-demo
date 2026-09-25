@@ -24,7 +24,10 @@
             server advertising only the prior six would now fail this criterion for being
             short until the AWS backend is actually wired up and deployed (Task 9).
       V8.4  Every visual answer is an Adaptive Card payload that validates against the
-            pinned Adaptive Cards schema; zero HTML/JS/JSX in any response.
+            pinned Adaptive Cards schema; zero HTML/JS/JSX in any response. "Visual" is
+            what each golden question DECLARES (presentation = "card" | "text" in
+            apps/mcp-tools/evals/questions.ts); with no visual question asked, the card
+            half is UNOBSERVABLE and the criterion SKIPs rather than passing or failing.
       V8.5  p95 latency < 20 s.
       V8.6  The AWS Athena lakehouse answers through the deployed query_aws_lakehouse_sql
             tool with ROWS, not merely with a status code - V7.6's rule, one cloud over,
@@ -553,15 +556,35 @@ function Test-AdaptiveCardAnswer {
     #
     # Two readers of one artifact and nothing compared them (F145's class). The sweep in
     # verification/tests/failure-classes.Tests.ps1 now does.
+    #
+    # THE CARD REQUIREMENT APPLIES ONLY WHERE A CARD WAS OWED (2026-09-25). This criterion
+    # used to demand a card from every question, and infra-up run 36095279150 failed it with
+    # "no Adaptive Card payload in any of 10 question(s)" - over ten correct answers to ten
+    # questions that each ask for a single figure. The agent's own rule 3 says plain text is
+    # right for one or two figures, so the verdict was a confident wrong claim: the agent
+    # following its instructions, reported as the agent failing them.
+    #
+    # Each question now carries 'presentation' ("card" | "text"), declared in questions.ts
+    # by the question's author. A card is required only of questions declared "card" that
+    # were actually asked (not throttled). With no such question the card requirement was
+    # NOT OBSERVED, and this returns SKIP with UNOBSERVABLE - never PASS (nothing about card
+    # behaviour was seen) and never FAIL (prose was the correct form). The two halves that
+    # rest on evidence stand regardless: every card that WAS returned is validated, "text"
+    # questions included, and every response is scanned for generated UI.
     $questions = @(Get-MlsProperty -InputObject $Artifact -Name 'questions')
     $cardCount = 0
     $responseCount = 0
+    $visualAsked = 0
+    $visualThrottled = 0
+    $undeclared = 0
     $problem = [System.Collections.Generic.List[string]]::new()
     foreach ($question in $questions) {
         $id = "$(Get-MlsProperty -InputObject $question -Name 'id')"
+        $questionCards = 0
         foreach ($card in @(Get-MlsProperty -InputObject $question -Name 'cards')) {
             if ($null -eq $card) { continue }
             $cardCount++
+            $questionCards++
             $validation = Test-MlsAdaptiveCard -Card $card -Version $Version
             if (-not $validation.Valid) { $problem.Add("$id card: $($validation.Problem -join '; ')") }
         }
@@ -570,6 +593,15 @@ function Test-AdaptiveCardAnswer {
             if ([string]::IsNullOrWhiteSpace($text)) { continue }
             $responseCount++
             if (Test-MlsGeneratedUi -Text $text) { $problem.Add("$id response contains generated UI code") }
+        }
+        $presentation = "$(Get-MlsProperty -InputObject $question -Name 'presentation')"
+        if ([string]::IsNullOrWhiteSpace($presentation)) { $undeclared++ }
+        if ($presentation -ne 'card') { continue }
+        # A throttled question was never asked (F186): it owes nothing and proves nothing.
+        if ([bool](Get-MlsProperty -InputObject $question -Name 'unobservable')) { $visualThrottled++; continue }
+        $visualAsked++
+        if ($questionCards -eq 0) {
+            $problem.Add("$id is declared presentation=card and was answered without an Adaptive Card")
         }
     }
 
@@ -581,16 +613,29 @@ function Test-AdaptiveCardAnswer {
             -Observed "UNOBSERVABLE: $($questions.Count) question(s) in the artifact, none carrying a 'cards' or 'responses' field with content" -Final `
             -Detail 'This criterion reads the fields agent-eval.ts writes: "cards" and "responses". An artifact with neither is one this check could not read - not evidence about the agent. Compare the artifact schema against what this function reads before concluding anything about the deployment.'
     }
-    if ($questions.Count -gt 0 -and $cardCount -eq 0) {
-        return New-MlsCheckResult -Passed $false `
-            -Observed "no Adaptive Card payload in any of $($questions.Count) question(s), over $responseCount response(s) that WERE recorded" -Final `
-            -Detail 'The responses were readable and carried no card, so the surface was exercised and the agent answered in prose. Every visual answer must be a card: check whether the deployed agent is on the tools-only path, which returns text, rather than the card-building path.'
+    # EVIDENCE FIRST. A generated-UI response, an invalid card, or a visual question answered
+    # without a card is an observed defect whatever else the artifact lacks.
+    if ($problem.Count -gt 0) {
+        return New-MlsCheckResult -Passed $false -Observed ($problem -join ' | ') -Final `
+            -Detail 'The repo pins schema 1.5 and Action.Submit so one payload renders identically in the Web Chat embed and in Teams (L08.md V8.4). A card is required only of questions declared presentation=card; prose answering a presentation=text question is correct and is not counted here.'
     }
-    if ($problem.Count -eq 0) {
-        return New-MlsCheckResult -Passed $true -Observed "$cardCount card(s) valid against the pinned $Version profile; no HTML/JS/JSX across $responseCount response(s)"
+    $scanned = "$cardCount card(s) valid against the pinned $Version profile; no HTML/JS/JSX across $responseCount response(s)"
+    if ($visualAsked -eq 0) {
+        # NEVER PASS ON AN UNOBSERVED REQUIREMENT, NEVER FAIL FOR CORRECT PROSE.
+        $why = if ($questions.Count -gt 0 -and $undeclared -eq $questions.Count) {
+            "the artifact predates the per-question 'presentation' field, so no question is known to owe a card"
+        }
+        elseif ($visualThrottled -gt 0) {
+            "all $visualThrottled question(s) declared presentation=card were throttled (UNOBSERVABLE) and never asked"
+        }
+        else {
+            "the eval contains no question declared presentation=card, and prose is the correct form for a question asking for one or two figures"
+        }
+        return New-MlsCheckResult -Status 'SKIP' `
+            -Observed "UNOBSERVABLE: card requirement not observed - $why. Observed half: $scanned" `
+            -Detail 'This is not a claim that the agent failed to produce a card: no question in this run owed one, so card behaviour was not observed at all. The HTML/JS/JSX scan above did run over every response. Adding a golden question whose correct answer is a comparison, ranking, time series or table (presentation "card" in apps/mcp-tools/evals/questions.ts) is what makes this half observable.'
     }
-    return New-MlsCheckResult -Passed $false -Observed ($problem -join ' | ') -Final `
-        -Detail 'The repo pins schema 1.5 and Action.Submit so one payload renders identically in the Web Chat embed and in Teams (L08.md V8.4).'
+    return New-MlsCheckResult -Passed $true -Observed "$visualAsked question(s) declared presentation=card each answered with a card; $scanned"
 }
 
 function Test-LatencyBudget {
@@ -1181,8 +1226,8 @@ function Invoke-Main {
 
     Invoke-MlsCriterion -Context $context -Id 'V8.4' -Control @('3.14.2') `
         -Description 'Every visual answer is an Adaptive Card payload that validates against the pinned Adaptive Cards schema; zero HTML/JS/JSX in any response' `
-        -Command "validate each recorded card payload against the pinned Adaptive Cards $AdaptiveCardVersion profile`ngrep every response body for generated UI code" `
-        -Expected "every card `"type`":`"AdaptiveCard`" with `"version`":`"$AdaptiveCardVersion`", no Action.Execute; the code-grep returns empty" -NoRetry `
+        -Command "validate each recorded card payload against the pinned Adaptive Cards $AdaptiveCardVersion profile`nrequire a card of every asked question declared presentation=card`ngrep every response body for generated UI code" `
+        -Expected "every card `"type`":`"AdaptiveCard`" with `"version`":`"$AdaptiveCardVersion`", no Action.Execute; every presentation=card question carries one (none declared -> UNOBSERVABLE SKIP); the code-grep returns empty" -NoRetry `
         -Test { Test-AdaptiveCardAnswer -Artifact $artifact -Version $AdaptiveCardVersion } | Out-Null
 
     # -Control @(): latency SLA, not CUI protection.
