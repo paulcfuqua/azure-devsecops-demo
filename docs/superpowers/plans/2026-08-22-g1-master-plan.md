@@ -43,7 +43,7 @@ showpiece #3, Trivy, ZAP, Syft/sbom-tool, OpenTelemetry.
 **Amendment in force:** `docs/superpowers/specs/2026-08-24-amendment-copilot-studio.md`
 
 > **G1 status (2026-08-22):** sponsor approved the plan's shape and locked the three
-> open decisions (monorepo / Anthropic API / dual E5 trials), and amended execution:
+> open decisions (monorepo / LLM provider / dual E5 trials), and amended execution:
 > **Phase P** (pre-tenant scaffold — see
 > `2026-08-22-phase-p-pre-tenant-scaffold.md`) runs first with zero cloud writes;
 > layers L1+ deploy only after the sponsor activates the tenant (G1b) and G0
@@ -51,7 +51,7 @@ showpiece #3, Trivy, ZAP, Syft/sbom-tool, OpenTelemetry.
 >
 > **Amended 2026-08-24 (sponsor-directed):** the LLM-provider decision is **void**.
 > All runtime LLM work moves inside the Microsoft landscape — L8 is rebuilt as a
-> custom **Copilot Studio** agent, L10 on **GitHub Copilot Autofix**, and no Anthropic
+> custom **Copilot Studio** agent, L10 on **GitHub Copilot Autofix**, and no LLM
 > API key exists anywhere in the system. L8's and L10's entries, the cost envelope and
 > the risk register below are rewritten accordingly; every other layer is unchanged.
 

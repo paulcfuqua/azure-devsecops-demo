@@ -394,7 +394,7 @@ Expected: FAIL (exit 1) — no `keyVaultUrl` secret exists yet.
 
 - [ ] **Step 2: Implement**
 
-Repurpose the existing unreferenced module (its header still cites `copilot-svc` and `ANTHROPIC_API_KEY`, both deleted in August — update it), grant the mcp-tools UAMI `Key Vault Secrets User` on the platform vault, and switch the container app to a vault reference:
+Repurpose the existing unreferenced module (its header still cites an app and a secret that were both deleted in August — update it), grant the mcp-tools UAMI `Key Vault Secrets User` on the platform vault, and switch the container app to a vault reference:
 
 ```bicep
 resource platformKv 'Microsoft.KeyVault/vaults@2024-11-01' existing = {

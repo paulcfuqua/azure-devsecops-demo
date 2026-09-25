@@ -174,8 +174,8 @@ scale-to-zero. Functions (consumption) for small glue.
 **Frontend:** React + Fluent UI v9 as container apps, sharing a JSON-spec renderer
 library (~8–10 components: bar/line charts, stat cards, tables, timelines).
 
-**Copilot service (showpiece #1):** LLM-backed service (Anthropic API or Azure AI
-Foundry) with tools over the Fabric lakehouse SQL analytics endpoint plus the
+**Copilot service (showpiece #1):** custom Copilot Studio agent (see the
+2026-08-24 amendment) with tools over the Fabric lakehouse SQL analytics endpoint plus the
 ops/sec/cost APIs. Answers cross-domain natural-language questions (e.g., "which day of
 the week has the most launches and which day of the year has the most scrubs") by
 generating SQL, executing it, and returning a JSON component spec — never
@@ -195,7 +195,8 @@ App Insights.
 
 **Self-healing code (showpiece #3):** Dependabot/CodeQL finding → agent triage → PR with
 patch and explanation → CI gauntlet (SAST, tests, ZAP) → auto-merge on green → deploy →
-finding closed. GitHub Actions + Claude API. Seed intentionally vulnerable dependencies
+finding closed. GitHub Actions + GitHub Copilot Autofix (code flaws) and Dependabot
+security updates (dependency CVEs). Seed intentionally vulnerable dependencies
 so it has something to heal.
 
 **FinOps:** Policy-enforced tag taxonomy; daily cost exports to the lakehouse;
