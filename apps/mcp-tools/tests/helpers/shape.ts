@@ -45,7 +45,7 @@ export interface ShapeRecord {
 export const ABSENT = "absent";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === "object" && value != null && !Array.isArray(value);
 }
 
 function isRecord(value: Shape): value is ShapeRecord {
