@@ -1331,7 +1331,7 @@ function Invoke-Main {
                 return New-MlsCheckResult -Passed $false -Observed 'the self-heal select job could NOT read the alert surface (readable=false)' `
                     -Detail 'This is a DENIAL, not an empty alert list, and the chain must never report it as "nothing to heal" (F123). SELF_HEAL_TOKEN is a REPOSITORY secret per the rotation table in gitleaks.yml; if it was created as an environment secret it is invisible to every job that uses it, because none of them declares an environment, and the GITHUB_TOKEN fallback cannot read /dependabot/alerts.'
             }
-            return New-MlsCheckResult -Passed $false -Observed "the self-heal chain did not report whether the alert surface was readable (value: '$AlertSurfaceReadable')" `
+            return New-MlsCheckResult -Passed $false -Unobservable -Observed "the self-heal chain did not report whether the alert surface was readable (value: '$AlertSurfaceReadable')" `
                 -Detail 'UNOBSERVABLE, not healthy. The select job emits a readable output for exactly this criterion; an absent value means the audit was invoked without it, so nothing here can say whether the chain can see its own work.'
         } | Out-Null
 

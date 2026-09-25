@@ -187,7 +187,7 @@ function Test-TrivyNegativeTest {
         [AllowEmptyString()][string]$RunId
     )
     if ([string]::IsNullOrWhiteSpace($RunId)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no layer-09 run id supplied' -Final `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no layer-09 run id supplied' -Final `
             -Detail 'The DevSecOps lead posts the layer-09-devsecops.yml run id; pass -LayerRunId / $env:MLS_L9_RUN_ID. Without it the negative test cannot be located, and the audit will not assume it ran.'
     }
     $jobs = @(Get-MlsCollection -Response (Invoke-MlsGh -Argument @('api', "repos/$Repository/actions/runs/$RunId/jobs")))
@@ -217,7 +217,7 @@ function Test-SbomArtifact {
         [Parameter(Mandatory)][string]$DownloadRoot
     )
     if ([string]::IsNullOrWhiteSpace($Tag)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no release tag supplied' -Final `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no release tag supplied' -Final `
             -Detail 'SBOMs attach to the release created on tagged builds; pass -ReleaseTag / $env:MLS_L9_RELEASE_TAG.'
     }
     $release = Invoke-MlsGh -AllowFailure -Argument @('release', 'view', $Tag, '--repo', $Repository, '--json', 'assets')
@@ -267,7 +267,7 @@ function Test-ZapReport {
         [Parameter(Mandatory)][string]$DownloadRoot
     )
     if ([string]::IsNullOrWhiteSpace($RunId)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no ZAP run id supplied' -Final `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no ZAP run id supplied' -Final `
             -Detail 'Pass -ZapRunId / $env:MLS_L9_ZAP_RUN_ID (the zap.yml run whose artifact carries the baseline report).'
     }
     $target = Join-Path -Path $DownloadRoot -ChildPath "zap-$RunId"

@@ -601,7 +601,7 @@ function Test-SeededRowCount {
     )
     if ([string]::IsNullOrWhiteSpace($SqlEndpoint)) {
         return New-MlsCheckResult -Passed $false `
-            -Observed 'no SQL analytics endpoint available' `
+            -Unobservable -Observed 'no SQL analytics endpoint available' `
             -Detail "V5.1's lakehouse metadata carries properties.sqlEndpointProperties.connectionString; supply it with -SqlEndpoint / `$env:MLS_SQL_ENDPOINT when the metadata omits it. Reads on a PAUSED capacity fail - run V5.1-V5.3 inside the resumed window." -Final
     }
     $query = (@($ExpectedTable | ForEach-Object { "SELECT '$_' AS t, COUNT(*) AS n FROM $_" }) -join ' UNION ALL ')

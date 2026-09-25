@@ -97,7 +97,7 @@ function Test-PublicEndpoint {
         [AllowNull()]$Manifest
     )
     if ($null -eq $Manifest) {
-        return New-MlsCheckResult -Passed $false -Observed 'no deploy manifest supplied' -Final `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no deploy manifest supplied' -Final `
             -Detail 'V7.1 binds "endpoint is up" to "endpoint serves the audited build", so it needs the per-app image digests the deploy run stamped. The app CI workflows must publish a manifest {"apps":[{"name":...,"imageDigest":...}]} for the Verifier; pass it with -DeployManifestPath / $env:MLS_L7_MANIFEST. Refusing to pass on liveness alone.'
     }
     $problem = [System.Collections.Generic.List[string]]::new()
@@ -235,7 +235,7 @@ function Test-OtelSpan {
         [Parameter(Mandatory)][hashtable]$TraceIdByApp
     )
     if ([string]::IsNullOrWhiteSpace($WorkspaceId)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no Log Analytics workspace (customer) id available' -Final `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no Log Analytics workspace (customer) id available' -Final `
             -Detail 'Pass -LogAnalyticsWorkspaceId / $env:MLS_LAW_CUSTOMER_ID (the L6 deployment output).'
     }
     $problem = [System.Collections.Generic.List[string]]::new()
@@ -534,7 +534,7 @@ function Test-CanaryPipeline {
         [AllowEmptyString()][string]$PullRequestNumber
     )
     if ([string]::IsNullOrWhiteSpace($PullRequestNumber)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no canary PR number supplied' -Final `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no canary PR number supplied' -Final `
             -Detail 'The L7 lead opens the canary PR (the Verifier never writes to the repo) and posts its number; pass -CanaryPrNumber / $env:MLS_L7_CANARY_PR.'
     }
     $pullRequest = Invoke-MlsGh -AllowFailure -Argument @(

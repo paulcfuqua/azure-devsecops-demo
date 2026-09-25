@@ -61,6 +61,7 @@ Describe 'layer-11-audit' {
         $script:FailingChildLayer = @()
         $script:BlindChildLayer = @()
         $script:FilteredChildLayer = @()
+        $script:NoReportChildLayer = @()
         $script:CapacityState = 'Paused'
         $script:BlindChildLayer = @()
         $script:FilteredChildLayer = @()
@@ -72,21 +73,58 @@ Describe 'layer-11-audit' {
         # missing), 3 it was filtered to a diagnostic. This mock only ever produced 0 and 1,
         # which is why nothing caught F227 - the case where every child exits 2 had no test
         # because the fixture could not express it.
+        # THE CHILD'S REPORT IS PART OF ITS ANSWER NOW. V11.3 reads what each child OBSERVED
+        # from the JSON report it wrote, not only its exit code - an exit 0 over eight SKIPs
+        # (the L8 child, 2026-09-25) is not a green layer. So a child that reaches a verdict
+        # here writes a REAL report through the real engine (New-MlsAuditContext,
+        # Invoke-MlsCriterion, Write-MlsReport) and prints the "report: <path>" line every
+        # audit prints, and its exit code is whatever Get-MlsExitCode makes of those rows.
+        # The fixture supplies what each criterion SAW; the classification under test is the
+        # audit's own.
+        #
+        # $script:ChildRows[<layer>] overrides the rows for one layer; each row is
+        # @{ Id; Result } where Result is what the criterion's -Test returns.
+        $script:ChildRows = @{}
+        $script:ChildLaunch = [System.Collections.Generic.List[object]]::new()
         Mock Invoke-MlsChildAudit {
             $layer = [int]([regex]::Match($ScriptPath, 'layer-(\d+)-audit').Groups[1].Value)
-            $exitCode = if ($script:FailingChildLayer -contains $layer) { 1 }
-            elseif ($script:BlindChildLayer -contains $layer) { 2 }
-            elseif ($script:FilteredChildLayer -contains $layer) { 3 }
-            else { 0 }
-            $tail = switch ($exitCode) {
-                2 { "layer-$('{0:d2}' -f $layer)-audit could not start: Required input 'SubscriptionId' was not supplied." }
-                3 { "L$layer run was FILTERED with -OnlyCriterion; no verdict." }
-                default { "L$layer audit finished with exit $exitCode" }
+            $script:ChildLaunch.Add([pscustomobject]@{ Layer = $layer; Environment = $Environment }) | Out-Null
+            if ($script:BlindChildLayer -contains $layer) {
+                return [pscustomobject]@{ ScriptPath = $ScriptPath; ExitCode = 2
+                    Output = @("layer-$('{0:d2}' -f $layer)-audit could not start: Required input 'SubscriptionId' was not supplied.") }
             }
+            if ($script:FilteredChildLayer -contains $layer) {
+                return [pscustomobject]@{ ScriptPath = $ScriptPath; ExitCode = 3
+                    Output = @("L$layer run was FILTERED with -OnlyCriterion; no verdict.") }
+            }
+            if ($script:NoReportChildLayer -contains $layer) {
+                return [pscustomobject]@{ ScriptPath = $ScriptPath; ExitCode = 0
+                    Output = @("L$layer audit finished with exit 0") }
+            }
+            $rows = if ($script:ChildRows.ContainsKey($layer)) { @($script:ChildRows[$layer]) }
+            elseif ($script:FailingChildLayer -contains $layer) {
+                @(
+                    @{ Id = "V$layer.1"; Result = (New-MlsCheckResult -Passed $true -Observed 'as declared') },
+                    @{ Id = "V$layer.2"; Result = (New-MlsCheckResult -Passed $false -Final -Observed 'value differs from the declared baseline') }
+                )
+            }
+            else {
+                @(
+                    @{ Id = "V$layer.1"; Result = (New-MlsCheckResult -Passed $true -Observed 'as declared') },
+                    @{ Id = "V$layer.2"; Result = (New-MlsCheckResult -Passed $true -Observed 'as declared') }
+                )
+            }
+            $child = New-MlsAuditContext -Layer $layer -Title 'fixture child' -ReportRoot $script:ReportRoot -NoRetry
+            foreach ($row in $rows) {
+                $answer = $row.Result
+                Invoke-MlsCriterion -Context $child -Id $row.Id -Control @() -Description 'fixture' -Command 'fixture' `
+                    -Expected 'fixture' -NoRetry -Test { $answer }.GetNewClosure() | Out-Null
+            }
+            $written = Write-MlsReport -Context $child -Timestamp ([guid]::NewGuid().ToString('n'))
             return [pscustomobject]@{
                 ScriptPath = $ScriptPath
-                ExitCode   = $exitCode
-                Output     = @($tail)
+                ExitCode   = (Get-MlsExitCode -Context $child)
+                Output     = @("L$layer audit finished", "report: $($written.MarkdownPath)")
             }
         }
 
@@ -251,6 +289,135 @@ Describe 'layer-11-audit' {
             $row.Status | Should -Be 'FAIL'
             $row.Observed | Should -BeLike '*L6=FAIL*'
         }
+    }
+
+    Context 'V11.3 counts what a child OBSERVED, not only how it exited' {
+        It 'never counts a child that SKIPped every criterion as PASS' {
+            # PAID FOR 2026-09-25. The L8 child SKIPped 8 of 8 (no environment URL, no eval
+            # artifact, no MCP server), exited 0, and V11.3 recorded L8=PASS. SKIP does not
+            # fail a run, so the exit code was right about "nothing failed" and wrong about
+            # everything a reader took from it.
+            $script:ChildRows = @{
+                8 = @(
+                    @{ Id = 'V8.1'; Result = (New-MlsCheckResult -Status 'SKIP' -Observed 'no deployed environment to compare against') },
+                    @{ Id = 'V8.2'; Result = (New-MlsCheckResult -Status 'SKIP' -Observed 'no eval artifact') },
+                    @{ Id = 'V8.6'; Result = (New-MlsCheckResult -Status 'SKIP' -Observed 'no deployed MCP server to ask') }
+                )
+            }
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike 'UNOBSERVABLE:*'
+            $row.Observed | Should -Not -BeLike '*L8=PASS*'
+            $row.Observed | Should -BeLike '*L8=UNOBSERVABLE(0)*0 of 3 observed*3 SKIP*'
+            $row.Unobservable | Should -BeTrue
+            Get-MlsExitCode -Context $context | Should -Not -Be 0
+        }
+
+        It 'applies the same rule to V11.2: an all-SKIP tenant audit supports no claim that tenant objects are intact' {
+            $script:ChildRows = @{
+                4 = @(@{ Id = 'V4.1'; Result = (New-MlsCheckResult -Status 'SKIP' -Observed 'no Security & Compliance session') })
+            }
+            $context = Invoke-AuditForTest -Phase 'Down' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike 'UNOBSERVABLE:*L4=UNOBSERVABLE(0)*'
+            $row.Detail | Should -Not -BeLike '*crossed the tenant-object line*'
+        }
+
+        It 'names genuinely failing layers apart from layers that could not look' {
+            # L7's criterion FAILed because an input never arrived - the audit said so with
+            # -Unobservable. L6's FAILed on a value it read. Only one of those is a broken layer.
+            $script:ChildRows = @{
+                6 = @(
+                    @{ Id = 'V6.1'; Result = (New-MlsCheckResult -Passed $true -Observed 'sku as declared') },
+                    @{ Id = 'V6.7'; Result = (New-MlsCheckResult -Passed $false -Final -Observed 'mls-cost-ingest-demo-func reports 0 functions') }
+                )
+                7 = @(
+                    @{ Id = 'V7.1'; Result = (New-MlsCheckResult -Passed $false -Final -Unobservable -Observed 'no deploy manifest supplied') },
+                    @{ Id = 'V7.6'; Result = (New-MlsCheckResult -Passed $true -Observed 'rows=1200') }
+                )
+            }
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike 'FAILING: L6; UNOBSERVABLE: L7 --*'
+            $row.Observed | Should -BeLike '*L6=FAIL(1)`[V6.7`]*'
+            $row.Observed | Should -BeLike '*L7=UNOBSERVABLE(1)`[unobservable V7.1`]*'
+        }
+
+        It 'treats the UNOBSERVABLE text convention in a child row as unobservable' {
+            # L5 and L8 already write "UNOBSERVABLE: ..." into Observed; that is the child
+            # saying it could not look, and it must read that way here too.
+            $script:ChildRows = @{
+                5 = @(
+                    @{ Id = 'V5.1'; Result = (New-MlsCheckResult -Passed $true -Observed 'workspace present') },
+                    @{ Id = 'V5.5'; Result = (New-MlsCheckResult -Passed $false -Final -Observed 'UNOBSERVABLE: the SQL analytics endpoint could not be read') }
+                )
+            }
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry
+            (Get-Row -Context $context -Id 'V11.3').Observed | Should -BeLike 'UNOBSERVABLE:*L5=UNOBSERVABLE(1)`[unobservable V5.5`]*'
+        }
+
+        It 'still passes a layer whose own design SKIPs some criteria alongside real passes' {
+            # L4's V4.2 and L1's V1.5 SKIP by design and their layers sign off; one SKIP next
+            # to observed PASSes is not a blind layer.
+            $script:ChildRows = @{
+                4 = @(
+                    @{ Id = 'V4.1'; Result = (New-MlsCheckResult -Passed $true -Observed '4 labels, GUIDs unchanged') },
+                    @{ Id = 'V4.2'; Result = (New-MlsCheckResult -Status 'SKIP' -Observed 'no recorded baseline at the layer checkpoint') }
+                )
+            }
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.3'
+            $row.Status | Should -Be 'PASS'
+            $row.Observed | Should -BeLike '*L4=PASS(0)`[1/2`]*'
+        }
+
+        It 'does not take exit 0 as a pass when the child left no readable report' {
+            $script:NoReportChildLayer = @(9)
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry
+            $row = Get-Row -Context $context -Id 'V11.3'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*L9=UNOBSERVABLE(0)`[no readable report`]*'
+        }
+
+        It 'keeps every layer, and each failing criterion, readable in the written report' {
+            # PAID FOR 2026-09-25: the V11.3 Observed line carried every child's console tail
+            # and the report cut it off after L2, hiding which criteria failed in L5-L10.
+            $long = 'x' * 400
+            $script:ChildRows = @{}
+            foreach ($n in 1..10) {
+                $script:ChildRows[$n] = @(
+                    @{ Id = "V$n.1"; Result = (New-MlsCheckResult -Passed $true -Observed $long) },
+                    @{ Id = "V$n.2"; Result = (New-MlsCheckResult -Passed $false -Final -Observed "L$n broke: $long") },
+                    @{ Id = "V$n.3"; Result = (New-MlsCheckResult -Passed $false -Final -Unobservable -Observed "no input for L$n") }
+                )
+            }
+            $context = Invoke-AuditForTest -Phase 'Up' -NoRetry
+            $written = Write-MlsReport -Context $context -Timestamp ([guid]::NewGuid().ToString('n'))
+            $markdown = Get-Content -LiteralPath $written.MarkdownPath -Raw
+            $v113 = @(($markdown -split "`n") | Where-Object { $_ -like '- **Observed:** FAILING:*' })
+            $v113.Count | Should -Be 1
+            $v113[0] | Should -Not -BeLike '*(truncated)*'
+            foreach ($n in 1..10) {
+                $v113[0] | Should -BeLike "*L$n=FAIL(1)``[V$n.2``]*"
+                # The per-criterion evidence survives in full in the notes.
+                $markdown | Should -BeLike "*V11.3 child L$n FAIL*V$n.2 FAIL - L$n broke*V$n.3 FAIL, unobservable - no input for L$n*"
+            }
+        }
+
+        It 'hands every child the rebuild start instant, so event windows cover the rebuild' {
+            $start = [datetime]::UtcNow.AddMinutes(-170).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            Invoke-AuditForTest -Phase 'Up' -NoRetry -UpStartUtc $start | Out-Null
+            $script:ChildLaunch.Count | Should -Be 12
+            foreach ($launch in $script:ChildLaunch) {
+                $launch.Environment['MLS_REBUILD_START_UTC'] | Should -Be $start
+            }
+        }
+    }
+
+    Context 'the post-up checkpoint: clocks and run-rate' {
 
         It 'fails V11.4 when the rebuild took 180 minutes or more' {
             # THE GATE MOVED, SO THIS MOVED. 95 minutes used to fail and now passes: the
