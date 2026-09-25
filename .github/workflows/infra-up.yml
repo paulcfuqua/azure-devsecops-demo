@@ -444,8 +444,19 @@ jobs:
     #
     # FABRIC_CAPACITY_ID is the one addition over the down block: the down phase re-runs
     # only L3/L4, the up phase re-runs L1-L10, and L5's audit requires it.
+    #
+    # THE SECOND PASS, 2026-09-25 (run 36095279150). With the block above in place every
+    # child STARTED - and then L1, L5, L6, L7, L8, L9 and L10 still could not observe,
+    # because a started audit needs what its own verify job hands it, not just enough to
+    # get past preflight. Each addition below names the criterion that was blind without
+    # it; each mirrors the per-layer verify job it was copied from. What cannot be had in
+    # this run (L9's run id / release tag / ZAP run, L10's self-heal `readable` output, a
+    # canary PR when MLS_L7_CANARY_PR is unset) is left absent on purpose: the child reports
+    # that criterion UNOBSERVABLE, and V11.3 reports the layer as unobservable, never green.
     env:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # V1.3 sweeps the tree for this value, like verify-l1.yml's job does.
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       FABRIC_CAPACITY_ID: ${{ vars.FABRIC_CAPACITY_ID }}
       MLS_REPOSITORY: ${{ github.repository }}
       MLS_TENANT_DOMAIN: ${{ vars.MLS_TENANT_DOMAIN || vars.ENTRA_DOMAIN }}
@@ -454,6 +465,23 @@ jobs:
       MLS_ENTRA_MANIFEST: infra/entra/manifest.json
       MLS_LABEL_GUID_PATH: verification/reports/label-guids.json
       MLS_VERIFIER_GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+      # gh reads GH_TOKEN, not MLS_VERIFIER_GH_TOKEN. Without this every GitHub read in L1
+      # (V1.1, V1.2), L9 (V9.1) and L10 exited 4 "set the GH_TOKEN environment variable",
+      # and V11.4's second clock read "not available". MlsAudit's Invoke-MlsGh now falls
+      # back to MLS_VERIFIER_GH_TOKEN as well; this keeps the job correct on its own.
+      GH_TOKEN: ${{ secrets.MLS_VERIFIER_GH_TOKEN || github.token }}
+      # V1.2's optional admin-read token, exactly as verify-l1.yml passes it. Unset, V1.2
+      # records SKIP naming what it could not see.
+      MLS_REPO_SETTINGS_TOKEN: ${{ secrets.MLS_REPO_SETTINGS_TOKEN }}
+      # L5 V5.2/V5.3/V5.5/V5.6 and L8 V8.2 read the lakehouse SQL analytics endpoint.
+      MLS_SQL_ENDPOINT: ${{ vars.MLS_SQL_ENDPOINT }}
+      # L6 V6.3's 24 h cost-export deadline runs from L6 completion; without it a
+      # not-yet-arrived export is recorded FAIL rather than PENDING.
+      MLS_L6_COMPLETED_AT: ${{ needs.layer-06.outputs.completed-at }}
+      # L7 V7.4's canary PR, the same fallback layer-07-apps.yml's verify job uses.
+      MLS_L7_CANARY_PR: ${{ vars.MLS_L7_CANARY_PR }}
+      # L8 V8.1's Power Platform environment, as layer-08-copilot-studio.yml passes it.
+      MLS_POWER_PLATFORM_ENV_URL: ${{ vars.MLS_POWER_PLATFORM_ENV_URL || vars.POWERPLATFORM_ENVIRONMENT_URL }}
       # STAGING THE PFX IS HALF OF IT. The 2026-09-21 L11 up-phase run staged the
       # certificate successfully and L4 still could not start:
       #
@@ -527,6 +555,164 @@ jobs:
       - name: Stamp the completion instant
         id: done
         run: echo "completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
+      # -------------------------------------------------------------------------------
+      # CHILD-AUDIT INPUTS. Everything from here to the audit step exists so the V11.3
+      # children can OBSERVE, not merely start. Each mirrors the step in the per-layer
+      # verify job that supplies the same input, and each runs AFTER the completion stamp
+      # above so tooling installs do not count against the rebuild wall clock (V11.4).
+      #
+      # None of these fails the job. A step that cannot produce its input leaves it
+      # absent, the child criterion that needed it reports UNOBSERVABLE, and V11.3 names
+      # that layer as unobservable - which is the effect this job asserts instead of the
+      # step's exit code (CLAUDE.md: a step allowed to fail is watched by its effect).
+      # -------------------------------------------------------------------------------
+
+      # L5 V5.2/V5.3/V5.5/V5.6 and L8 V8.2 query the lakehouse SQL analytics endpoint.
+      # SqlServer 22+ is required for Invoke-Sqlcmd -AccessToken; identical to the install
+      # in layer-05-fabric.yml's verify job. Without it the four L5 criteria threw
+      # "'Invoke-Sqlcmd' is not available on this machine" (2026-09-25).
+      - name: Install SqlServer (L5/L8 child criteria query the SQL analytics endpoint)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module SqlServer -Force -Scope CurrentUser -MinimumVersion 22.0.0 -AllowClobber
+
+      # L7 V7.2 runs the renderer's golden-spec validator from the audited commit; without
+      # the workspace install it failed ERR_MODULE_NOT_FOUND. Same as layer-07-apps.yml.
+      - uses: actions/setup-node@v7
+        continue-on-error: true
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install workspace dependencies (L7 V7.2 runs the golden-spec validator)
+        continue-on-error: true
+        run: npm ci
+
+      # L7 V7.1 binds "endpoint is up" to "serves the audited build" through the per-app
+      # digests the L7 deploy in THIS run uploaded. Absent when L7 was not selected.
+      - name: Download the L7 deploy manifest (V7.1)
+        id: l7manifest
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: layer-07-deploy-manifest
+          path: l7-manifest
+
+      # L8 V8.2/V8.4/V8.5 read the agent eval artifact from THIS run's L8 eval job.
+      # Absent whenever that job did not upload one, which is today's normal state.
+      - name: Download the L8 agent eval artifact
+        id: l8eval
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: layer-08-agent-eval
+          path: l8-eval
+
+      # Values that are derived from the rebuilt estate rather than stored, resolved as
+      # mls-verifier exactly as the per-layer verify jobs do, and handed to the children
+      # through GITHUB_ENV - the only channel that crosses into their processes.
+      - name: Resolve child-audit inputs from this run and the rebuilt estate
+        env:
+          RG_PLATFORM: ${{ steps.names.outputs.rg-platform }}
+          LAW_NAME: ${{ steps.names.outputs.law }}
+          RG_APPS: ${{ steps.names.outputs.rg-apps }}
+          CA_MCP: ${{ steps.names.outputs.ca-mcp }}
+          MCP_OVERRIDE: ${{ vars.MLS_MCP_SERVER_URL }}
+          # See layer-08-copilot-studio.yml: the variable is deliberately undefined and
+          # '/mcp' is the path the server serves.
+          ENDPOINT_PATH: ${{ vars.MCP_ENDPOINT_PATH || '/mcp' }}
+        run: |
+          set -uo pipefail
+          resolved=()
+          missing=()
+
+          manifest="l7-manifest/l7-verifier-manifest.json"
+          if [ -f "${manifest}" ]; then
+            echo "MLS_L7_MANIFEST=${GITHUB_WORKSPACE}/${manifest}" >> "${GITHUB_ENV}"
+            resolved+=("MLS_L7_MANIFEST (V7.1)")
+          else
+            missing+=("MLS_L7_MANIFEST (V7.1): no layer-07-deploy-manifest artifact in this run")
+          fi
+
+          eval_file="l8-eval/agent-eval-results.json"
+          if [ -f "${eval_file}" ]; then
+            echo "MLS_EVAL_RESULTS=${GITHUB_WORKSPACE}/${eval_file}" >> "${GITHUB_ENV}"
+            resolved+=("MLS_EVAL_RESULTS (V8.2/V8.4/V8.5)")
+          else
+            missing+=("MLS_EVAL_RESULTS (V8.2/V8.4/V8.5): no layer-08-agent-eval artifact in this run")
+          fi
+
+          # L7 V7.3 needs the Log Analytics CUSTOMER id - read from ARM as the Verifier,
+          # the same way layer-07-apps.yml's verify job resolves it.
+          customer_id="$(az monitor log-analytics workspace show \
+            --resource-group "${RG_PLATFORM}" --workspace-name "${LAW_NAME}" \
+            --query customerId -o tsv 2>/dev/null || true)"
+          if [ -n "${customer_id}" ]; then
+            echo "MLS_LAW_CUSTOMER_ID=${customer_id}" >> "${GITHUB_ENV}"
+            resolved+=("MLS_LAW_CUSTOMER_ID (V7.3)")
+          else
+            missing+=("MLS_LAW_CUSTOMER_ID (V7.3): ${LAW_NAME} in ${RG_PLATFORM} not readable")
+          fi
+
+          # L8 V8.3/V8.6/V8.7/V8.8 ask the DEPLOYED MCP server. Derived from ARM so a
+          # rebuilt Container Apps environment (new domain suffix) cannot leave the child
+          # pointing at a dead FQDN - which is the whole point of a rebuild proof.
+          url="${MCP_OVERRIDE}"
+          if [ -z "${url}" ]; then
+            fqdn="$(az containerapp show --resource-group "${RG_APPS}" --name "${CA_MCP}" \
+              --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)"
+            if [ -n "${fqdn}" ]; then url="https://${fqdn}${ENDPOINT_PATH}"; fi
+          fi
+          if [ -n "${url}" ]; then
+            echo "MLS_MCP_SERVER_URL=${url}" >> "${GITHUB_ENV}"
+            resolved+=("MLS_MCP_SERVER_URL (V8.3/V8.6-V8.8)")
+          else
+            missing+=("MLS_MCP_SERVER_URL (V8.3/V8.6-V8.8): no ingress FQDN for ${CA_MCP}")
+          fi
+
+          {
+            echo "### L11 child-audit inputs"
+            echo
+            echo "Resolved: ${resolved[*]:-none}"
+            echo
+            echo "Absent (the child criterion reports UNOBSERVABLE, and V11.3 says so):"
+            for item in "${missing[@]}"; do echo "- ${item}"; done
+            echo "- MLS_L9_RUN_ID / MLS_L9_RELEASE_TAG / MLS_L9_ZAP_RUN_ID (V9.2-V9.4): layer-09-devsecops.yml is not part of infra-up, so this run has none"
+            echo "- AlertSurfaceReadable (V10.3): an output of self-heal.yml's select job, which this run does not contain"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # L8 V8.6/V8.7 authenticate to the MCP server with mcp-auth-token. The grant in
+      # infra/bicep/apps/main.bicep lets mls-verifier read that ONE secret; the value is
+      # masked and passed by ENVIRONMENT, never as an argument. Same three-way handling as
+      # layer-08-copilot-studio.yml: a value, a genuinely absent secret, and a refusal are
+      # reported as three different things, and only the first feeds the child.
+      - name: Read mcp-auth-token for the L8 child (Verifier, one secret only)
+        env:
+          KEY_VAULT_NAME: ${{ steps.names.outputs.key-vault }}
+          SECRET_NAME: mcp-auth-token
+        run: |
+          set -uo pipefail
+          stderr_file="$(mktemp)"
+          token="$(az keyvault secret show --vault-name "${KEY_VAULT_NAME}" --name "${SECRET_NAME}" \
+            --query value -o tsv 2>"${stderr_file}")"
+          read_rc=$?
+          read_err="$(cat "${stderr_file}")"
+          rm -f "${stderr_file}"
+          if [ "${read_rc}" -eq 0 ] && [ -n "${token}" ]; then
+            echo "::add-mask::${token}"
+            echo "MLS_MCP_AUTH_TOKEN=${token}" >> "${GITHUB_ENV}"
+            echo "Read '${SECRET_NAME}' from ${KEY_VAULT_NAME} for the L8 child audit."
+          elif printf '%s' "${read_err}" | grep -qiE 'SecretNotFound|was not found|not found in this key vault'; then
+            echo "::warning title=No MCP auth token::${KEY_VAULT_NAME} holds no '${SECRET_NAME}'. The L8 child's V8.6/V8.7 will report SKIP."
+          elif printf '%s' "${read_err}" | grep -qiE 'forbidden|authoriz|access denied|does not have secrets get'; then
+            echo "::warning title=Cannot read the MCP auth token::UNOBSERVABLE, not absent: the Verifier was refused by ${KEY_VAULT_NAME}. The L8 child's V8.6/V8.7 will report SKIP."
+          else
+            echo "::warning title=MCP auth token read failed::Unclassified failure; claiming nothing about the secret. The L8 child's V8.6/V8.7 will report SKIP."
+          fi
 
       - name: Resolve the child-audit selection
         id: children

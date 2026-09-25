@@ -17,14 +17,18 @@ BeforeAll {
         return @($Context.Criterion | Where-Object { $_.Id -eq $Id })[0]
     }
 
+    $script:SavedRebuildStart = [Environment]::GetEnvironmentVariable('MLS_REBUILD_START_UTC')
+
     function Invoke-AuditForTest {
-        param([switch]$NoRetry, [string]$SubscriptionId = $script:Subscription)
-        Invoke-Main -SubscriptionId $SubscriptionId -ReportRoot $script:ReportRoot -NoRetry:$NoRetry
+        param([switch]$NoRetry, [string]$SubscriptionId = $script:Subscription, [string]$ActivityLogStartUtc = '')
+        Invoke-Main -SubscriptionId $SubscriptionId -ReportRoot $script:ReportRoot -NoRetry:$NoRetry `
+            -ActivityLogStartUtc $ActivityLogStartUtc
     }
 }
 
 AfterAll {
     [Environment]::SetEnvironmentVariable('AZURE_SUBSCRIPTION_ID', $script:SavedSubscription)
+    [Environment]::SetEnvironmentVariable('MLS_REBUILD_START_UTC', $script:SavedRebuildStart)
     Remove-Item Env:\MLS_SKIP_MAIN -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $script:ReportRoot) {
         Remove-Item -LiteralPath $script:ReportRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -33,6 +37,7 @@ AfterAll {
 
 Describe 'layer-02-audit' {
     BeforeEach {
+        [Environment]::SetEnvironmentVariable('MLS_REBUILD_START_UTC', $null)
         Mock Write-MlsStatus {} -ModuleName 'MlsAudit'
         Mock Wait-MlsRetryInterval {} -ModuleName 'MlsAudit'
 
@@ -104,6 +109,53 @@ Describe 'layer-02-audit' {
             $row.Observed | Should -BeLike '*RequestDisallowedByPolicy*'
             $row.Detail | Should -BeLike '*performed by the deploy workflow*'
             Should -Invoke Invoke-MlsAz -ParameterFilter { ($Argument -join ' ') -like '*group create*' } -Exactly -Times 0
+        }
+    }
+
+    Context 'V2.2 evidence window' {
+        # PAID FOR 2026-09-25. Inside L11's rebuild proof this audit ran as a V11.3 child
+        # ~3h after L2 deployed, and its trailing 2h Activity Log window could not contain
+        # the canary denial L2's deploy had written. The estate was fine; the window was
+        # in the wrong place.
+        It 'keeps the trailing offset when no start instant is given (the standalone L2 verify job)' {
+            Invoke-AuditForTest | Out-Null
+            Should -Invoke Invoke-MlsAz -Exactly -Times 1 -ParameterFilter {
+                $joined = $Argument -join ' '
+                $joined -like 'monitor activity-log list*' -and $joined -like '*--offset 2h*' -and $joined -notlike '*--start-time*'
+            }
+        }
+
+        It 'searches from an explicit start instant to now, bounding BOTH ends' {
+            # Both ends: with --start-time alone az stops at start + its default 6h offset,
+            # so a long rebuild would silently stop looking before now.
+            $start = '2026-09-25T04:38:52Z'
+            $context = Invoke-AuditForTest -ActivityLogStartUtc $start
+            Should -Invoke Invoke-MlsAz -Exactly -Times 1 -ParameterFilter {
+                $joined = $Argument -join ' '
+                $joined -like 'monitor activity-log list*' -and $joined -like "*--start-time $start*" -and
+                $joined -like '*--end-time *' -and $joined -notlike '*--offset*'
+            }
+            (Get-Row -Context $context -Id 'V2.2').Status | Should -Be 'PASS'
+            (@($context.Preflight | Where-Object { $_.Name -eq 'V2.2 Activity Log window' })[0]).Value | Should -BeLike "*$start*"
+        }
+
+        It 'takes the start from MLS_REBUILD_START_UTC, which L11 hands every child it runs' {
+            [Environment]::SetEnvironmentVariable('MLS_REBUILD_START_UTC', '2026-09-25T04:38:52Z')
+            Invoke-AuditForTest | Out-Null
+            Should -Invoke Invoke-MlsAz -Exactly -Times 1 -ParameterFilter {
+                ($Argument -join ' ') -like 'monitor activity-log list --start-time 2026-09-25T04:38:52Z --end-time *'
+            }
+        }
+
+        It 'names the window it searched when it finds no denial' {
+            $script:CanaryEvents = @()
+            $row = Get-Row -Context (Invoke-AuditForTest -NoRetry -ActivityLogStartUtc '2026-09-25T04:38:52Z') -Id 'V2.2'
+            $row.Status | Should -Be 'FAIL'
+            $row.Observed | Should -BeLike '*since 2026-09-25T04:38:52Z*'
+        }
+
+        It 'refuses an unparseable start rather than silently falling back to the trailing window' {
+            { Invoke-AuditForTest -ActivityLogStartUtc 'not-a-time' } | Should -Throw '*not a timestamp*'
         }
     }
 

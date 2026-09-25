@@ -528,8 +528,58 @@ function Assert-MlsCommand {
         [Parameter(Mandatory)][string]$Hint
     )
     if (-not (Get-Command -Name $Name -ErrorAction SilentlyContinue)) {
-        throw "'$Name' is not available on this machine. $Hint"
+        # A CONFIGURATION ERROR, not a propagation delay: no amount of waiting installs a
+        # module. Marked so the criterion loop stops on it rather than retrying it for the
+        # criterion's whole window (L5's V5.2 spent thirty minutes re-asking whether
+        # Invoke-Sqlcmd had appeared, on the 2026-09-25 L11 rebuild proof).
+        throw (New-MlsConfigurationError -Message "'$Name' is not available on this machine. $Hint")
     }
+}
+
+function New-MlsConfigurationError {
+    <#
+    .SYNOPSIS
+        An exception meaning "this RUNNER cannot make the observation", as distinct from
+        "the estate is wrong" or "the estate is not ready yet".
+    .DESCRIPTION
+        Two properties follow from that, and Invoke-MlsCriterion applies both:
+
+          FINAL        retrying cannot fix it. A missing tool or a missing credential is
+                       still missing thirty minutes later; the retry window exists for
+                       propagation, and spending it here only delays the report.
+          UNOBSERVABLE nothing was looked at, so nothing follows about the thing measured.
+                       The criterion still FAILs - a runner that could not look must never
+                       exit green - but the row says it could not see, so a reader (and
+                       L11's V11.3) can tell a broken harness from a broken layer.
+
+        The marker lives in Exception.Data rather than in the message so it survives any
+        rewording of the text, and Test-MlsConfigurationError also recognises the handful of
+        messages external tools print for this class, for errors raised outside this module.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Constructs an exception object; no system state is changed.')]
+    param([Parameter(Mandatory)][string]$Message)
+    $exception = [System.InvalidOperationException]::new($Message)
+    $exception.Data['MlsConfigurationError'] = $true
+    return $exception
+}
+
+function Test-MlsConfigurationError {
+    <#
+    .SYNOPSIS
+        True when an error record is a runner configuration error (see
+        New-MlsConfigurationError): a missing tool, module or credential.
+    #>
+    param([Parameter(Mandatory)]$ErrorRecord)
+    $exception = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } else { $ErrorRecord }
+    for ($current = $exception; $null -ne $current; $current = $current.InnerException) {
+        if ($current -is [System.Exception] -and $current.Data.Contains('MlsConfigurationError')) { return $true }
+    }
+    $text = if ($null -ne $exception) { "$($exception.Message)" } else { "$ErrorRecord" }
+    # The texts external tools print for this class. gh's own "set the GH_TOKEN environment
+    # variable" / "gh auth login" is what every GitHub read in the L11 child audits returned
+    # on 2026-09-25, and V1.1 retried it for its full thirty-minute window.
+    return ($text -match 'is not available on this machine|set the GH_TOKEN environment variable|To get started with GitHub CLI, please run:\s+gh auth login|is not recognized as a name of a cmdlet')
 }
 
 # --- transports (the only code in the repo that talks to anything) ---------------------
@@ -851,6 +901,18 @@ function Invoke-MlsGh {
     # read` for that job alone. Read-only, this repository only, expires with the job. The
     # read-only ARGUMENT guard above still applies: a different token does not widen what
     # may be asked, only who is asking.
+    # THE VERIFIER'S TOKEN MUST REACH gh, NOT JUST THE PREFLIGHT. Every audit resolves its
+    # GitHub token from MLS_VERIFIER_GH_TOKEN / GH_TOKEN / GITHUB_TOKEN and reports it
+    # present - but gh itself reads only GH_TOKEN and GITHUB_TOKEN. So a job whose env: block
+    # carried MLS_VERIFIER_GH_TOKEN alone passed every preflight and then failed every gh
+    # call with exit 4 (the 2026-09-25 L11 rebuild proof: L1 V1.1/V1.2, L9 V9.1). A value
+    # that exists, is spelled correctly and cannot be SEEN by the thing that reads it - so
+    # the one place that runs gh hands it over. An explicit -Token still wins, and a caller
+    # that already set GH_TOKEN keeps it.
+    if ([string]::IsNullOrWhiteSpace($Token) -and [string]::IsNullOrWhiteSpace($env:GH_TOKEN) -and
+        -not [string]::IsNullOrWhiteSpace($env:MLS_VERIFIER_GH_TOKEN)) {
+        $Token = $env:MLS_VERIFIER_GH_TOKEN
+    }
     $previousToken = $env:GH_TOKEN
     $tokenOverridden = -not [string]::IsNullOrWhiteSpace($Token)
     if ($tokenOverridden) { $env:GH_TOKEN = $Token }
@@ -870,7 +932,12 @@ function Invoke-MlsGh {
     if ($exitCode -ne 0) {
         if ($AllowFailure) { return $null }
         $why = if ([string]::IsNullOrWhiteSpace($run.StdErr)) { '' } else { ": $($run.StdErr.Trim())" }
-        throw "gh $($Argument -join ' ') failed with exit code $exitCode$why"
+        $message = "gh $($Argument -join ' ') failed with exit code $exitCode$why"
+        # gh exits 4 when it has no credential at all ("authentication required"). That is
+        # the runner's configuration, not the repository's state, and no retry supplies a
+        # token - so it is raised as a configuration error the criterion loop stops on.
+        if ($exitCode -eq 4) { throw (New-MlsConfigurationError -Message $message) }
+        throw $message
     }
     $output = $run.StdOut
     $text = ($output | Out-String).Trim()
@@ -1591,16 +1658,34 @@ function Invoke-MlsChildAudit {
     #>
     param(
         [Parameter(Mandatory)][string]$ScriptPath,
-        [AllowEmptyCollection()][string[]]$Argument = @()
+        [AllowEmptyCollection()][string[]]$Argument = @(),
+        # Extra environment for the CHILD only - the one channel across the process
+        # boundary besides argv. Set for the duration of the child and restored after, so
+        # the parent's own environment is unchanged when this returns. Empty values are not
+        # exported: an absent input must stay absent, never become an empty string that a
+        # child could mistake for a supplied one.
+        [hashtable]$Environment = @{}
     )
     if (-not (Test-Path -LiteralPath $ScriptPath)) {
         return [pscustomobject]@{ ScriptPath = $ScriptPath; ExitCode = 127; Output = @("audit script not found: $ScriptPath") }
     }
     Assert-MlsCommand -Name 'pwsh' -Hint 'PowerShell 7 runs the per-layer audits (CLAUDE.md: never assume Windows PowerShell 5.1).'
-    $output = & pwsh -NoProfile -File $ScriptPath @Argument 2>&1
+    $saved = @{}
+    foreach ($name in @($Environment.Keys)) {
+        if ([string]::IsNullOrWhiteSpace("$($Environment[$name])")) { continue }
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+        [Environment]::SetEnvironmentVariable($name, "$($Environment[$name])")
+    }
+    try {
+        $output = & pwsh -NoProfile -File $ScriptPath @Argument 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        foreach ($name in @($saved.Keys)) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+    }
     return [pscustomobject]@{
         ScriptPath = $ScriptPath
-        ExitCode   = $LASTEXITCODE
+        ExitCode   = $exitCode
         Output     = @($output | ForEach-Object { "$_" })
     }
 }
@@ -1628,16 +1713,30 @@ function New-MlsCheckResult {
         [AllowEmptyString()][string]$Observed = '',
         [AllowEmptyString()][string]$Detail = '',
         [ValidateSet('PASS', 'FAIL', 'SKIP')][string]$Status = '',
-        [switch]$Final
+        [switch]$Final,
+        # The criterion could not LOOK - a required input was never supplied, a tool or a
+        # credential was missing on the runner. It still FAILs (an auditor that could not see
+        # must never exit green), but the row records that nothing was observed, so a reader
+        # and L11's V11.3 can tell "the layer is broken" from "this run could not tell".
+        # An Observed text beginning UNOBSERVABLE - the convention every audit already uses -
+        # sets it too, so the two can never disagree.
+        [switch]$Unobservable
     )
     if ($Status -eq 'SKIP') { $Passed = $false }
     return [pscustomobject]@{
-        Passed   = $Passed
-        Observed = $Observed
-        Detail   = $Detail
-        Status   = $Status
-        Final    = [bool]$Final
+        Passed       = $Passed
+        Observed     = $Observed
+        Detail       = $Detail
+        Status       = $Status
+        Final        = [bool]$Final
+        Unobservable = ([bool]$Unobservable -or (Test-MlsUnobservableText -Text $Observed))
     }
+}
+
+function Test-MlsUnobservableText {
+    <# True when an Observed text declares that nothing could be observed. #>
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    return ("$Text" -match '^\s*UNOBSERVABLE\b')
 }
 
 function New-MlsAuditContext {
@@ -1847,6 +1946,9 @@ function Invoke-MlsCriterion {
             StartedUtc         = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
             FinishedUtc        = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
             Control            = @($Control)
+            # NOT ASKED is not CANNOT SEE: nobody tried to observe this, so it is a SKIP
+            # and not an unobservable result.
+            Unobservable       = $false
         }
         $Context.Criterion.Add($skipRow) | Out-Null
         Write-MlsStatus -Message ("[SKIP   ] {0}  {1}  (not selected)" -f $Id, $Description) -Color DarkGray
@@ -1904,8 +2006,20 @@ function Invoke-MlsCriterion {
             $errorDetails = if ($null -ne $_.ErrorDetails) { "$($_.ErrorDetails.Message)" } else { '' }
             $errorText = "$($_.Exception.Message)`n$errorDetails"
             $final = $errorText -match 'AuthorizationFailed|Authorization_RequestDenied|InsufficientPrivileges|\bForbidden\b|\b403\b'
-            $result = New-MlsCheckResult -Passed $false -Final:$final -Observed "check threw: $($_.Exception.Message)" `
-                -Detail "$($_.Exception.GetType().Name) at $($_.InvocationInfo.ScriptLineNumber)$(if ($final) { ' - permission failure, not retried: the identity cannot see this, and waiting will not change that' })"
+            # A CONFIGURATION ERROR IS NEVER A PROPAGATION FAILURE EITHER, and it is also
+            # UNOBSERVABLE: the runner lacked a tool or a credential, so the estate was never
+            # asked. Same reasoning as the permission case above, one step earlier.
+            $configuration = Test-MlsConfigurationError -ErrorRecord $_
+            $why = if ($configuration) {
+                ' - runner configuration error, not retried: a missing tool, module or credential is still missing after any wait, and nothing about the estate was observed'
+            }
+            elseif ($final) {
+                ' - permission failure, not retried: the identity cannot see this, and waiting will not change that'
+            }
+            else { '' }
+            $result = New-MlsCheckResult -Passed $false -Final:($final -or $configuration) -Unobservable:$configuration `
+                -Observed "check threw: $($_.Exception.Message)" `
+                -Detail "$($_.Exception.GetType().Name) at $($_.InvocationInfo.ScriptLineNumber)$why"
         }
         if ($result.Status -eq 'SKIP' -or $result.Passed -or $result.Final) { break }
         # Budget consumed is the greater of wall-clock elapsed and the sleep we asked for.
@@ -1962,6 +2076,8 @@ function Invoke-MlsCriterion {
         StartedUtc         = $started.ToString('yyyy-MM-ddTHH:mm:ssZ')
         FinishedUtc        = $finishedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
         Control            = @($Control)
+        # Only a result that did not PASS can be unobservable: a pass is an observation.
+        Unobservable       = ($status -ne 'PASS' -and [bool]$result.Unobservable)
     }
     $Context.Criterion.Add($row) | Out-Null
 
@@ -2001,12 +2117,14 @@ function ConvertTo-MlsCheckResult {
         return New-MlsCheckResult -Passed $false -Observed (Format-MlsValue -Value $candidate) `
             -Detail 'A criterion must return New-MlsCheckResult.' -Final
     }
+    $observedText = [string](Get-MlsProperty -InputObject $candidate -Name 'Observed')
     return [pscustomobject]@{
-        Passed   = [bool]$passed
-        Observed = [string](Get-MlsProperty -InputObject $candidate -Name 'Observed')
-        Detail   = [string](Get-MlsProperty -InputObject $candidate -Name 'Detail')
-        Status   = [string](Get-MlsProperty -InputObject $candidate -Name 'Status')
-        Final    = [bool](Get-MlsProperty -InputObject $candidate -Name 'Final')
+        Passed       = [bool]$passed
+        Observed     = $observedText
+        Detail       = [string](Get-MlsProperty -InputObject $candidate -Name 'Detail')
+        Status       = [string](Get-MlsProperty -InputObject $candidate -Name 'Status')
+        Final        = [bool](Get-MlsProperty -InputObject $candidate -Name 'Final')
+        Unobservable = ([bool](Get-MlsProperty -InputObject $candidate -Name 'Unobservable') -or (Test-MlsUnobservableText -Text $observedText))
     }
 }
 
@@ -2146,6 +2264,9 @@ function Write-MlsReport {
         $lines.Add('')
         $lines.Add("- **Expected:** $(Format-MlsValue -Value $row.Expected -MaximumLength 1200)")
         $lines.Add("- **Observed:** $(Format-MlsValue -Value $row.Observed -MaximumLength 1200)")
+        if ((Test-MlsHasProperty -InputObject $row -Name 'Unobservable') -and $row.Unobservable) {
+            $lines.Add('- **Observability:** UNOBSERVABLE - this run could not look (a missing input, tool or credential), so the result says nothing about the thing measured. It still counts as a FAIL here: an audit that could not see must never exit green.')
+        }
         if (-not [string]::IsNullOrWhiteSpace($row.Detail)) {
             $lines.Add("- **Note:** $(Format-MlsValue -Value $row.Detail -MaximumLength 1200)")
         }
@@ -2328,6 +2449,9 @@ Export-ModuleMember -Function @(
     'Assert-MlsReadOnlyAzArgument',
     'Assert-MlsReadOnlyGhArgument',
     'Assert-MlsCommand',
+    'New-MlsConfigurationError',
+    'Test-MlsConfigurationError',
+    'Test-MlsUnobservableText',
     'Invoke-MlsAz',
     'Restore-MlsAzLogin',
     'Invoke-MlsGh',

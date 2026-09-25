@@ -30,6 +30,10 @@ param(
     [string]$ManagementGroupName = 'mls',
     [string]$CanaryResourceGroupName = 'mls-rg-canary-untagged',
     [string]$ActivityLogOffset = '2h',
+    # V2.2's evidence window as an explicit START instant (ISO-8601), instead of the
+    # trailing -ActivityLogOffset. Falls back to $env:MLS_REBUILD_START_UTC, which L11's
+    # V11.3 hands to every child it runs. See Test-CanaryPolicyDenial for why.
+    [string]$ActivityLogStartUtc,
     [string]$NistAssignmentPattern = 'nist',
     [string]$ReportRoot,
     [switch]$NoRetry,
@@ -106,13 +110,31 @@ function Test-CanaryPolicyDenial {
        confirms the denial from the Activity Log and confirms the canary is gone. #>
     param(
         [Parameter(Mandatory)][string]$CanaryResourceGroupName,
-        [Parameter(Mandatory)][string]$ActivityLogOffset
+        [Parameter(Mandatory)][string]$ActivityLogOffset,
+        # THE WINDOW MUST COVER THE EVENT, NOT THE CLOCK. The canary write happens when L2
+        # DEPLOYS; this audit may run long after. Standalone, the L2 verify job runs minutes
+        # after its own deploy and a trailing 2h is ample. Inside L11's rebuild proof the
+        # same audit runs as a V11.3 child ~3h after L2 deployed, so a trailing 2h could
+        # never contain the event and V2.2 failed on a working estate (2026-09-25). Given a
+        # start instant - the rebuild's own start - the window runs from there to now, which
+        # contains the canary by construction and excludes anything from a previous cycle.
+        [datetime]$StartUtc = [datetime]::MinValue
     )
-    $events = @(Invoke-MlsAz -AllowFailure -Argument @(
-            'monitor', 'activity-log', 'list', '--offset', $ActivityLogOffset, '--status', 'Failed',
-            '--query', "[?contains(resourceGroupName,'$CanaryResourceGroupName')].{op:operationName.value, sub:subStatus.localizedValue, code:properties.statusMessage}",
-            '--output', 'json'
-        ))
+    $windowArgument = @('--offset', $ActivityLogOffset)
+    $windowText = "in the last $ActivityLogOffset"
+    if ($StartUtc -ne [datetime]::MinValue) {
+        # BOTH ends, explicitly. With --start-time alone az computes the end as start plus
+        # its default 6h offset, so a rebuild proof that ran longer than six hours would
+        # silently stop looking before now.
+        $startText = $StartUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $windowArgument = @('--start-time', $startText, '--end-time', [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))
+        $windowText = "since $startText"
+    }
+    $events = @(Invoke-MlsAz -AllowFailure -Argument (@('monitor', 'activity-log', 'list') + $windowArgument + @(
+                '--status', 'Failed',
+                '--query', "[?contains(resourceGroupName,'$CanaryResourceGroupName')].{op:operationName.value, sub:subStatus.localizedValue, code:properties.statusMessage}",
+                '--output', 'json'
+            )))
     $exists = Invoke-MlsAz -AllowFailure -Raw -Argument @('group', 'exists', '--name', $CanaryResourceGroupName)
     $existsValue = "$exists".Trim().ToLowerInvariant()
 
@@ -123,7 +145,7 @@ function Test-CanaryPolicyDenial {
         })
     if ($denials.Count -eq 0) {
         return New-MlsCheckResult -Passed $false `
-            -Observed "no failed resourceGroups/write event carrying RequestDisallowedByPolicy for '$CanaryResourceGroupName' in the last $ActivityLogOffset (events matched: $($events.Count)); az group exists = $existsValue" `
+            -Observed "no failed resourceGroups/write event carrying RequestDisallowedByPolicy for '$CanaryResourceGroupName' $windowText (events matched: $($events.Count)); az group exists = $existsValue" `
             -Detail 'If the Activity Log shows the canary SUCCEEDING, the tag-deny assignment had not propagated - the deploy workflow retries it, and this audit polls inside the standard 30-minute window before declaring failure (L02.md V2.2).'
     }
     if ($existsValue -eq 'true') {
@@ -223,6 +245,7 @@ function Invoke-Main {
         [string]$ManagementGroupName = 'mls',
         [string]$CanaryResourceGroupName = 'mls-rg-canary-untagged',
         [string]$ActivityLogOffset = '2h',
+        [string]$ActivityLogStartUtc,
         [string]$NistAssignmentPattern = 'nist',
         [string]$ReportRoot,
         [switch]$NoRetry,
@@ -232,12 +255,33 @@ function Invoke-Main {
         -EnvironmentVariable @('AZURE_SUBSCRIPTION_ID') `
         -Hint 'The demo subscription the landing zone governs; the audit reads it as mls-verifier (Reader).'
 
+    # V2.2's window start: explicit value, then the rebuild start L11 hands its children.
+    # An unparseable value is refused here rather than silently replaced by the trailing
+    # offset - a window nobody asked for is how V2.2 looked in the wrong place for a whole
+    # rebuild proof.
+    $windowStartText = $ActivityLogStartUtc
+    if ([string]::IsNullOrWhiteSpace($windowStartText)) { $windowStartText = [Environment]::GetEnvironmentVariable('MLS_REBUILD_START_UTC') }
+    $windowStart = [datetime]::MinValue
+    if (-not [string]::IsNullOrWhiteSpace($windowStartText)) {
+        $parsedStart = [datetime]::MinValue
+        if (-not [datetime]::TryParse($windowStartText, [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsedStart)) {
+            throw "ActivityLogStartUtc / MLS_REBUILD_START_UTC '$windowStartText' is not a timestamp. Pass an ISO-8601 instant such as 2026-09-25T04:38:52Z."
+        }
+        $windowStart = $parsedStart
+    }
+    $windowDescription = if ($windowStart -ne [datetime]::MinValue) {
+        "--start-time $($windowStart.ToString('yyyy-MM-ddTHH:mm:ssZ')) --end-time <now>"
+    }
+    else { "--offset $ActivityLogOffset" }
+
     $context = New-MlsAuditContext -Layer 2 -Title 'Landing zone: management groups, policies, NIST' `
         -ScriptName 'verification/layer-02-audit.ps1' -ReportRoot $ReportRoot -NoRetry:$NoRetry `
         -OnlyCriterion $OnlyCriterion
     Add-MlsPreflight -Context $context -Name 'SubscriptionId' -Value $subscription
     Add-MlsPreflight -Context $context -Name 'Management group' -Value $ManagementGroupName
     Add-MlsPreflight -Context $context -Name 'Canary resource group' -Value "$CanaryResourceGroupName (written by the deploy workflow, never by this audit)"
+    Add-MlsPreflight -Context $context -Name 'V2.2 Activity Log window' -Value $windowDescription
 
     # -Control @(): confirms subscription placement under the management group, a
     # governance-hierarchy precondition for policy scope (V2.3). Placement alone implements
@@ -253,10 +297,10 @@ function Invoke-Main {
     # L02: Activity Log ingestion lag, minutes not tens of minutes
     Invoke-MlsCriterion -Context $context -Id 'V2.2' -Control @('3.4.2') `
         -Description 'Creating an untagged canary RG fails with policy denial (then cleaned up)' `
-        -Command "az monitor activity-log list --offset $ActivityLogOffset --status Failed --query `"[?contains(resourceGroupName,'$CanaryResourceGroupName')].{op:operationName.value, sub:subStatus.localizedValue, code:properties.statusMessage}`"`naz group exists --name $CanaryResourceGroupName" `
+        -Command "az monitor activity-log list $windowDescription --status Failed --query `"[?contains(resourceGroupName,'$CanaryResourceGroupName')].{op:operationName.value, sub:subStatus.localizedValue, code:properties.statusMessage}`"`naz group exists --name $CanaryResourceGroupName" `
         -Expected 'at least one Microsoft.Resources/subscriptions/resourceGroups/write event with RequestDisallowedByPolicy; az group exists == false' `
         -RetryWindowMinutes 10 `
-        -Test { Test-CanaryPolicyDenial -CanaryResourceGroupName $CanaryResourceGroupName -ActivityLogOffset $ActivityLogOffset } | Out-Null
+        -Test { Test-CanaryPolicyDenial -CanaryResourceGroupName $CanaryResourceGroupName -ActivityLogOffset $ActivityLogOffset -StartUtc $windowStart } | Out-Null
 
     Invoke-MlsCriterion -Context $context -Id 'V2.3' -Control @('3.12.1', '3.12.3') `
         -Description 'az policy state summarize returns NIST compliance data within 30 min of assignment' `
@@ -272,6 +316,7 @@ if (-not $env:MLS_SKIP_MAIN) {
     try {
         $auditContext = Invoke-Main -SubscriptionId $SubscriptionId -ManagementGroupName $ManagementGroupName `
             -CanaryResourceGroupName $CanaryResourceGroupName -ActivityLogOffset $ActivityLogOffset `
+            -ActivityLogStartUtc $ActivityLogStartUtc `
             -NistAssignmentPattern $NistAssignmentPattern -ReportRoot $ReportRoot -NoRetry:$NoRetry `
             -OnlyCriterion $OnlyCriterion
     }

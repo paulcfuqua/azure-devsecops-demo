@@ -306,7 +306,7 @@ function Test-ArmStateMatchesManifest {
         [Parameter(Mandatory)][double]$ExpectedMinCapacity
     )
     if ([string]::IsNullOrWhiteSpace($SqlDatabaseId)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no SQL database resource id available' `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no SQL database resource id available' `
             -Detail 'The layer-06 deployment outputs must carry the SQL database resource id (L06 deploy step 5 records resource IDs, SQL server/DB names and the LAW workspace id as the layer manifest artifact). Pass -SqlDatabaseId / $env:MLS_SQL_DB_ID meanwhile.' -Final
     }
     $problem = [System.Collections.Generic.List[string]]::new()
@@ -354,7 +354,7 @@ function Test-LogAnalyticsQuery {
        Row content may be empty this early; success of the query is the criterion. #>
     param([AllowEmptyString()][string]$WorkspaceId)
     if ([string]::IsNullOrWhiteSpace($WorkspaceId)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no Log Analytics workspace (customer) id available' `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no Log Analytics workspace (customer) id available' `
             -Detail 'Supply the LAW workspace id from the layer-06 deployment outputs, or pass -LogAnalyticsWorkspaceId / $env:MLS_LAW_CUSTOMER_ID.' -Final
     }
     $result = Invoke-MlsAz -AllowFailure -Argument @(
@@ -419,7 +419,7 @@ function Test-CostExportLanded {
         [Parameter(Mandatory)][string]$ContainerName
     )
     if ([string]::IsNullOrWhiteSpace($AccountName)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no cost-export storage account name available' `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no cost-export storage account name available' `
             -Detail 'Supply it from the layer-06 deployment outputs or -CostExportAccountName / $env:MLS_COST_EXPORT_ACCOUNT.' -Final
     }
     $blobs = @(Invoke-MlsAz -AllowFailure -Argument @(
@@ -441,7 +441,7 @@ function Test-SqlAutoPause {
     <# V6.4 - 75 minutes = the 60-minute auto-pause delay plus 15 minutes of margin. #>
     param([AllowEmptyString()][string]$SqlDatabaseId)
     if ([string]::IsNullOrWhiteSpace($SqlDatabaseId)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no SQL database resource id available' -Final `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no SQL database resource id available' -Final `
             -Detail 'Pass -SqlDatabaseId / $env:MLS_SQL_DB_ID, or record it in the layer-06 deployment outputs.'
     }
     $status = Invoke-MlsAz -AllowFailure -Raw -Argument @(
@@ -469,7 +469,7 @@ function Test-SqlBackupPosture {
         [Parameter(Mandatory)][string]$ExpectedStorageRedundancy
     )
     if ([string]::IsNullOrWhiteSpace($SqlDatabaseId)) {
-        return New-MlsCheckResult -Passed $false -Observed 'no SQL database resource id available' -Final `
+        return New-MlsCheckResult -Passed $false -Unobservable -Observed 'no SQL database resource id available' -Final `
             -Detail 'Pass -SqlDatabaseId / $env:MLS_SQL_DB_ID, or record it in the layer-06 deployment outputs.'
     }
     $problem = [System.Collections.Generic.List[string]]::new()
@@ -672,7 +672,14 @@ function Invoke-Main {
         -Expected 'each Function App reports at least one function' `
         -RetryWindowMinutes 2 `
         -Test {
-            Test-FunctionAppsHaveCode -SubscriptionId $SubscriptionId `
+            # $subscription, the RESOLVED value - not the raw -SubscriptionId parameter.
+            # Every other criterion here read the resolved one; these two read the raw
+            # parameter, which is empty whenever the id arrives through
+            # AZURE_SUBSCRIPTION_ID instead of argv. The standalone L6 verify job passes it
+            # as an argument and never noticed; L11's V11.3 hands its children only the
+            # environment, and both criteria threw "Cannot bind argument to parameter
+            # 'SubscriptionId' because it is an empty string" on the 2026-09-25 rebuild.
+            Test-FunctionAppsHaveCode -SubscriptionId $subscription `
                 -ResourceGroupName $functionResourceGroupName `
                 -FunctionAppName $FunctionAppNames
         } | Out-Null
@@ -691,7 +698,8 @@ function Invoke-Main {
         -Expected 'every reference reports status == Resolved' `
         -RetryWindowMinutes 2 `
         -Test {
-            Test-KeyVaultReferencesResolve -SubscriptionId $SubscriptionId `
+            # The resolved value, for the reason given at V6.7.
+            Test-KeyVaultReferencesResolve -SubscriptionId $subscription `
                 -ResourceGroupName $functionResourceGroupName `
                 -FunctionAppName $FunctionAppNames
         } | Out-Null

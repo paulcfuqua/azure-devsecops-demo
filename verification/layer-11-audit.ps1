@@ -101,31 +101,195 @@ function Invoke-LayerAuditSet {
     param(
         [Parameter(Mandatory)][int[]]$Layer,
         [Parameter(Mandatory)][string]$Root,
-        [AllowEmptyCollection()][string[]]$Argument = @()
+        [AllowEmptyCollection()][string[]]$Argument = @(),
+        # Environment handed to every child for the duration of its run (see
+        # Invoke-MlsChildAudit). Today: MLS_REBUILD_START_UTC, so criteria that look for
+        # an event the rebuild caused (V2.2's canary denial) search from the rebuild's
+        # start rather than a trailing window that the proof's own duration outruns.
+        [hashtable]$Environment = @{}
     )
     $result = foreach ($number in $Layer) {
         $path = Get-ChildAuditPath -Layer $number -Root $Root
-        $run = Invoke-MlsChildAudit -ScriptPath $path -Argument $Argument
-        [pscustomobject]@{
-            Layer    = $number
-            ExitCode = $run.ExitCode
-            Passed   = ($run.ExitCode -eq 0)
-            # Could not start (2) or produced no verdict (3): not a pass, and NOT a failure.
-            Blind    = ($run.ExitCode -in @(2, 3))
-            Tail     = (@($run.Output | Select-Object -Last 3) -join ' / ')
-        }
+        $run = Invoke-MlsChildAudit -ScriptPath $path -Argument $Argument -Environment $Environment
+        Get-ChildAuditVerdict -Layer $number -Run $run
     }
     return @($result)
+}
+
+function Read-ChildAuditReport {
+    <#
+    .SYNOPSIS
+        Find and parse the JSON report a child audit wrote, from the "report: <path>.md"
+        line every audit prints last. $null when there is none or it cannot be read.
+    #>
+    param([AllowEmptyCollection()][string[]]$Output = @())
+    $line = @($Output | Where-Object { "$_" -match '^\s*report:\s*(\S.*\.md)\s*$' } | Select-Object -Last 1)
+    if ($line.Count -eq 0) { return $null }
+    [void]("$($line[0])" -match '^\s*report:\s*(\S.*\.md)\s*$')
+    $markdownPath = $Matches[1].Trim()
+    $jsonPath = [IO.Path]::ChangeExtension($markdownPath, '.json')
+    if (-not (Test-Path -LiteralPath $jsonPath)) { return $null }
+    try {
+        $document = Get-Content -LiteralPath $jsonPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch { return $null }
+    return [pscustomobject]@{
+        Path     = $jsonPath
+        Criteria = @(Get-MlsCollection -Response (Get-MlsProperty -InputObject $document -Name 'criteria'))
+    }
+}
+
+function Get-ChildAuditVerdict {
+    <#
+    .SYNOPSIS
+        Classify one child audit run as PASS, FAIL or UNOBSERVABLE - from what it OBSERVED,
+        not just from its exit code.
+    .DESCRIPTION
+        AN EXIT CODE OF 0 SAYS NOTHING FAILED. IT DOES NOT SAY ANYTHING WAS SEEN. SKIP does
+        not fail a run, so an audit whose every criterion SKIPs exits 0 - and on the
+        2026-09-25 rebuild proof the L8 child did exactly that, 8 of 8 SKIP for want of an
+        environment URL, an eval artifact and an MCP server, and V11.3 counted L8 as PASS.
+        The symmetric error to F102/F103/F105: an auditor that could not see a control must
+        not be able to report it PRESENT.
+
+        So the child's own JSON report is read, criterion by criterion:
+
+          FAIL          at least one criterion FAILed on something it actually observed.
+          UNOBSERVABLE  nothing failed on an observation, but the layer was not fully seen:
+                        the audit could not start (exit 2), was filtered (exit 3), reached
+                        no PASS at all (every criterion SKIP/PENDING/unobservable), or had
+                        criteria that FAILed only because they could not look - a missing
+                        input, tool or credential (the row's Unobservable flag).
+          PASS          at least one PASS, and no FAIL of either kind.
+
+        Where the report cannot be read the exit code is all there is: a non-zero code
+        stays a FAIL, as before, and a zero is UNOBSERVABLE - "nothing failed" cannot be
+        confirmed as "something was seen" without the report that would say so.
+    #>
+    param(
+        [Parameter(Mandatory)][int]$Layer,
+        [Parameter(Mandatory)]$Run
+    )
+    $exitCode = [int]$Run.ExitCode
+    $output = @($Run.Output | ForEach-Object { "$_" })
+    $tail = (@($output | Select-Object -Last 3) -join ' / ')
+    $report = Read-ChildAuditReport -Output $output
+
+    $realFail = @()
+    $unobservable = @()
+    $passCount = 0
+    $skipCount = 0
+    $pendingCount = 0
+    $total = 0
+    $criterionNote = @()
+    if ($null -ne $report) {
+        foreach ($row in $report.Criteria) {
+            $total++
+            $id = "$(Get-MlsProperty -InputObject $row -Name 'Id')"
+            $status = "$(Get-MlsProperty -InputObject $row -Name 'Status')"
+            $observedText = "$(Get-MlsProperty -InputObject $row -Name 'Observed')"
+            # The row's own flag, or the UNOBSERVABLE text convention for a report written
+            # before the flag existed. Either way the CHILD said it could not look; this
+            # never infers blindness from a text the child did not write that way.
+            $blindRow = [bool](Get-MlsProperty -InputObject $row -Name 'Unobservable') -or (Test-MlsUnobservableText -Text $observedText)
+            switch ($status) {
+                'PASS' { $passCount++ }
+                'SKIP' { $skipCount++ }
+                'PENDING' { $pendingCount++ }
+                'FAIL' {
+                    if ($blindRow) { $unobservable += $id } else { $realFail += $id }
+                }
+                default { $realFail += $id }
+            }
+            if ($status -ne 'PASS') {
+                $kind = if ($status -eq 'FAIL' -and $blindRow) { 'FAIL, unobservable' } else { $status }
+                $criterionNote += "$id $kind - $(Format-MlsValue -Value $observedText -MaximumLength 160)"
+            }
+        }
+    }
+
+    $verdict = 'PASS'
+    $why = ''
+    if ($exitCode -eq 2) {
+        $verdict = 'UNOBSERVABLE'; $why = 'could not start'
+    }
+    elseif ($exitCode -eq 3) {
+        $verdict = 'UNOBSERVABLE'; $why = 'filtered diagnostic'
+    }
+    elseif ($null -eq $report) {
+        if ($exitCode -eq 0) { $verdict = 'UNOBSERVABLE'; $why = 'no readable report' }
+        else { $verdict = 'FAIL'; $why = 'no readable report' }
+    }
+    elseif ($realFail.Count -gt 0) {
+        $verdict = 'FAIL'; $why = ($realFail -join ',')
+    }
+    elseif ($passCount -eq 0) {
+        $verdict = 'UNOBSERVABLE'
+        $why = "0 of $total observed: $skipCount SKIP, $($unobservable.Count) unobservable, $pendingCount PENDING"
+    }
+    elseif ($unobservable.Count -gt 0) {
+        $verdict = 'UNOBSERVABLE'; $why = "unobservable $($unobservable -join ',')"
+    }
+    elseif ($exitCode -ne 0) {
+        # Non-zero with nothing in the report to explain it: trust the exit code, which is
+        # the conservative direction.
+        $verdict = 'FAIL'; $why = 'exit code with no failing row'
+    }
+
+    $summary = "L$Layer=$verdict($exitCode)"
+    if ($null -ne $report -and $verdict -eq 'PASS') { $summary += "[$passCount/$total]" }
+    elseif ($why) { $summary += "[$why]" }
+
+    return [pscustomobject]@{
+        Layer        = $Layer
+        ExitCode     = $exitCode
+        Verdict      = $verdict
+        Passed       = ($verdict -eq 'PASS')
+        Blind        = ($verdict -eq 'UNOBSERVABLE')
+        Failed       = ($verdict -eq 'FAIL')
+        Summary      = $summary
+        FailedId     = @($realFail)
+        Unobservable = @($unobservable)
+        ReportPath   = $(if ($null -ne $report) { $report.Path } else { '' })
+        Note         = @($criterionNote)
+        Tail         = $tail
+    }
+}
+
+function Add-ChildAuditNote {
+    <#
+    .SYNOPSIS
+        Record, per non-passing child, which criteria did not pass and what each observed.
+    .DESCRIPTION
+        The criterion's Observed line is a one-line summary per layer, sized to survive the
+        report's truncation; the 2026-09-25 V11.3 row was cut off after L2 because it
+        carried every child's console tail. The per-criterion evidence lives here instead,
+        in notes, which the report writes in full.
+    #>
+    param(
+        $Context,
+        [Parameter(Mandatory)][string]$CriterionId,
+        [AllowEmptyCollection()][object[]]$Result = @()
+    )
+    if ($null -eq $Context) { return }
+    foreach ($child in @($Result | Where-Object { -not $_.Passed })) {
+        $where = if ($child.ReportPath) { "report $(Split-Path -Path $child.ReportPath -Leaf)" } else { "console: $($child.Tail)" }
+        $body = if (@($child.Note).Count -gt 0) { @($child.Note) -join ' ; ' } else { '(no criterion rows readable)' }
+        Add-MlsNote -Context $Context -Message "$CriterionId child L$($child.Layer) $($child.Verdict) (exit $($child.ExitCode), $where): $body"
+    }
 }
 
 function Get-BlindAuditDetail {
     <# The shared explanation for a child audit that never reached a verdict. #>
     param([Parameter(Mandatory)][object[]]$Blind)
     return 'UNOBSERVABLE, not failed: ' +
-    (@($Blind | ForEach-Object { "L$($_.Layer) exit=$($_.ExitCode)" }) -join ', ') +
-    '. Exit 2 means the audit COULD NOT START (a required input was missing) and exit 3 ' +
-    'means it was filtered to a diagnostic - in neither case was the estate examined, so ' +
-    'nothing follows about the layer. The child audits inherit their inputs from the ' +
+    (@($Blind | ForEach-Object { $_.Summary }) -join ', ') +
+    '. Exit 2 means the audit COULD NOT START (a required input was missing), exit 3 ' +
+    'means it was filtered to a diagnostic, and a child that reached no PASS - or FAILed ' +
+    'only criteria that could not look (a missing input, tool or credential) - observed ' +
+    'too little to support a verdict. In none of these was the layer shown broken, and in ' +
+    'none was it shown working; the per-criterion evidence is in this report''s notes. ' +
+    'The child audits inherit their inputs from the ' +
     # SINGLE-QUOTED ON PURPOSE. In a DOUBLE-quoted PowerShell string a backtick is the escape
     # character, so "`env:" renders as ESC + "nv:" - a literal control character in the
     # operator-facing text. The source file looks perfectly correct in a diff, which is the
@@ -195,16 +359,21 @@ function Test-TenantObjectIntact {
         [Parameter(Mandatory)][string]$Root,
         [AllowEmptyCollection()][string[]]$Argument,
         [Parameter(Mandatory)][string]$Checkpoint,
-        [switch]$SkipChildAudit
+        [switch]$SkipChildAudit,
+        [hashtable]$Environment = @{},
+        # Where per-criterion child evidence is recorded as notes; optional so the
+        # function stays callable on its own.
+        $Context = $null
     )
     if ($SkipChildAudit) {
         return New-MlsCheckResult -Status 'SKIP' -Observed 'child audits skipped by -SkipChildAudit' `
             -Detail 'V11.2 is defined as "the L3/L4 audits still pass"; with the child audits suppressed there is no evidence, so this records SKIP rather than a pass.'
     }
-    $result = Invoke-LayerAuditSet -Layer @(3, 4) -Root $Root -Argument $Argument
-    $failed = @($result | Where-Object { -not $_.Passed -and -not $_.Blind })
+    $result = Invoke-LayerAuditSet -Layer @(3, 4) -Root $Root -Argument $Argument -Environment $Environment
+    Add-ChildAuditNote -Context $Context -CriterionId 'V11.2' -Result $result
+    $failed = @($result | Where-Object { $_.Failed })
     $blind = @($result | Where-Object { $_.Blind })
-    $observed = (@($result | ForEach-Object { "layer-$('{0:d2}' -f $_.Layer) exit=$($_.ExitCode)" }) -join '; ') + " at checkpoint '$Checkpoint'"
+    $observed = (@($result | ForEach-Object { "layer-$('{0:d2}' -f $_.Layer) exit=$($_.ExitCode) $($_.Summary)" }) -join '; ') + " at checkpoint '$Checkpoint'"
     # A blind child cannot support the claim OR refute it. Reporting it as a G3-boundary
     # violation sends someone to stop the line over a missing environment variable.
     # NOT ASKED vs CANNOT SEE, and this is the CANNOT SEE side.
@@ -221,15 +390,15 @@ function Test-TenantObjectIntact {
     # teardown crossed the tenant-object line.
     if ($blind.Count -gt 0 -and $failed.Count -eq 0) {
         return New-MlsCheckResult -Passed $false -Final `
-            -Observed ('UNOBSERVABLE: ' + $observed + ' | ' + (@($blind | ForEach-Object { "L$($_.Layer): $($_.Tail)" }) -join ' | ')) `
+            -Observed ('UNOBSERVABLE: ' + $observed) `
             -Detail (Get-BlindAuditDetail -Blind $blind)
     }
     if ($failed.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed $observed `
             -Detail 'The L4 run here is V4.2''s L11 re-execution: L4 owns the criterion, L11 owns the schedule.'
     }
-    return New-MlsCheckResult -Passed $false -Observed ($observed + ' | ' + (@($failed | ForEach-Object { "L$($_.Layer): $($_.Tail)" }) -join ' | ')) -Final `
-        -Detail 'Any regression here means down.ps1 crossed the tenant-object line: stop, do not run up.ps1, escalate. That is simultaneously a G3-boundary violation and a G4 event (L11.md V11.2).'
+    return New-MlsCheckResult -Passed $false -Observed $observed -Final `
+        -Detail 'Any regression here means down.ps1 crossed the tenant-object line: stop, do not run up.ps1, escalate. That is simultaneously a G3-boundary violation and a G4 event (L11.md V11.2). The failing criteria and what each observed are in this report''s notes.'
 }
 
 function Test-AllLayerAuditGreen {
@@ -238,7 +407,9 @@ function Test-AllLayerAuditGreen {
         [Parameter(Mandatory)][int[]]$Layer,
         [Parameter(Mandatory)][string]$Root,
         [AllowEmptyCollection()][string[]]$Argument,
-        [switch]$SkipChildAudit
+        [switch]$SkipChildAudit,
+        [hashtable]$Environment = @{},
+        $Context = $null
     )
     if ($SkipChildAudit) {
         return New-MlsCheckResult -Status 'SKIP' -Observed 'child audits skipped by -SkipChildAudit' `
@@ -262,15 +433,12 @@ function Test-AllLayerAuditGreen {
     $expected = 1..10
     $missing = @($expected | Where-Object { $_ -notin $Layer })
     if ($missing.Count -gt 0) {
-        $ran = Invoke-LayerAuditSet -Layer $Layer -Root $Root -Argument $Argument
-        $summary = @($ran | ForEach-Object {
-                if ($_.Passed) { "L$($_.Layer)=PASS" }
-                elseif ($_.Blind) { "L$($_.Layer)=UNOBSERVABLE($($_.ExitCode))" }
-                else { "L$($_.Layer)=FAIL($($_.ExitCode))" }
-            }) -join ' '
+        $ran = Invoke-LayerAuditSet -Layer $Layer -Root $Root -Argument $Argument -Environment $Environment
+        Add-ChildAuditNote -Context $Context -CriterionId 'V11.3' -Result $ran
+        $summary = @($ran | ForEach-Object { $_.Summary }) -join ' '
         # A FAILURE INSIDE A NARROWED SET IS STILL A FAILURE. Narrowing removes the right to
         # claim the whole; it does not excuse what was actually seen to be broken.
-        $broke = @($ran | Where-Object { -not $_.Passed -and -not $_.Blind })
+        $broke = @($ran | Where-Object { $_.Failed })
         if ($broke.Count -gt 0) {
             return New-MlsCheckResult -Passed $false -Final `
                 -Observed "$summary (partial run: $($Layer.Count) of 10)" `
@@ -281,30 +449,36 @@ function Test-AllLayerAuditGreen {
             -Detail "V11.3 asserts every layer audit L1-L10 is green against the rebuilt environment. This run was narrowed with -ChildAuditLayer and never examined layers $($missing -join ', '), so the claim was not tested and is not made. Re-run with the full set for a sign-off."
     }
 
-    $result = Invoke-LayerAuditSet -Layer $Layer -Root $Root -Argument $Argument
-    $failed = @($result | Where-Object { -not $_.Passed -and -not $_.Blind })
+    $result = Invoke-LayerAuditSet -Layer $Layer -Root $Root -Argument $Argument -Environment $Environment
+    Add-ChildAuditNote -Context $Context -CriterionId 'V11.3' -Result $result
+    $failed = @($result | Where-Object { $_.Failed })
     $blind = @($result | Where-Object { $_.Blind })
-    $observed = @($result | ForEach-Object {
-            if ($_.Passed) { "L$($_.Layer)=PASS" }
-            elseif ($_.Blind) { "L$($_.Layer)=UNOBSERVABLE($($_.ExitCode))" }
-            else { "L$($_.Layer)=FAIL($($_.ExitCode))" }
-        }) -join ' '
+    # ONE SHORT LINE PER LAYER, sized to survive the report's truncation. The 2026-09-25 row
+    # appended each child's console tail and was cut off after L2, hiding which criteria
+    # failed in the eight layers that followed. Criterion ids ride in the brackets; what
+    # each one observed is in the notes (Add-ChildAuditNote).
+    $observed = @($result | ForEach-Object { $_.Summary }) -join ' | '
     # "Every layer audit is green" cannot be claimed over a layer that was never examined,
-    # and must not be DENIED over one either. SKIP names which, and why.
+    # and must not be DENIED over one either.
     # CANNOT SEE, not NOT ASKED - see the note on V11.2 above. "Every layer audit is green"
     # is the broadest claim this estate makes, and it must never be reachable by an exit
-    # code of 0 over layers that were never examined.
+    # code of 0 over layers that were never examined - nor over a layer whose audit exited
+    # 0 having SKIPped every criterion (the L8 child, 2026-09-25).
     if ($blind.Count -gt 0 -and $failed.Count -eq 0) {
-        return New-MlsCheckResult -Passed $false -Final `
-            -Observed ('UNOBSERVABLE: ' + $observed + ' | ' + (@($blind | ForEach-Object { "L$($_.Layer): $($_.Tail)" }) -join ' | ')) `
+        return New-MlsCheckResult -Passed $false -Final -Unobservable `
+            -Observed ('UNOBSERVABLE: ' + $observed) `
             -Detail (Get-BlindAuditDetail -Blind $blind)
     }
     if ($failed.Count -eq 0) {
         return New-MlsCheckResult -Passed $true -Observed $observed `
             -Detail 'Async criteria V6.3/V6.4 re-attach on their own clocks and are recorded PENDING->PASS in the proof report.'
     }
-    return New-MlsCheckResult -Passed $false -Observed ($observed + ' | ' + (@($failed | ForEach-Object { "L$($_.Layer): $($_.Tail)" }) -join ' | ')) `
-        -Detail 'The failing layer''s own playbook rollback applies, and L11 then re-runs from down.ps1 - the proof must be a clean uninterrupted cycle, not a patched one.'
+    # Genuinely failing layers are named FIRST and apart from the unobservable ones, so a
+    # reader acting on this row starts with the layers that were seen to be broken.
+    $prefix = "FAILING: $(@($failed | ForEach-Object { "L$($_.Layer)" }) -join ', ')"
+    if ($blind.Count -gt 0) { $prefix += "; UNOBSERVABLE: $(@($blind | ForEach-Object { "L$($_.Layer)" }) -join ', ')" }
+    return New-MlsCheckResult -Passed $false -Observed "$prefix -- $observed" `
+        -Detail 'The failing layer''s own playbook rollback applies, and L11 then re-runs from down.ps1 - the proof must be a clean uninterrupted cycle, not a patched one. An UNOBSERVABLE layer is not shown broken: its audit could not see enough to say. The failing criteria and what each observed are in this report''s notes.'
 }
 
 function Test-WallClock {
@@ -495,6 +669,13 @@ function Invoke-Main {
     $childArgument = @()
     if (-not [string]::IsNullOrWhiteSpace($ReportRoot)) { $childArgument += @('-ReportRoot', $ReportRoot) }
     if ($NoRetry) { $childArgument += '-NoRetry' }
+    # The rebuild's start instant, handed to every child. A criterion that looks for an
+    # event the rebuild itself caused must search from here: V2.2's trailing two-hour
+    # Activity Log window could never contain a canary denial written ~3h before the child
+    # ran (2026-09-25). Empty when unknown, and Invoke-MlsChildAudit then exports nothing.
+    $childEnvironment = @{ MLS_REBUILD_START_UTC = "$startUtc" }
+    Add-MlsPreflight -Context $context -Name 'Child environment: MLS_REBUILD_START_UTC' `
+        -Value "$($childEnvironment['MLS_REBUILD_START_UTC'])" -Status $(if ($childEnvironment['MLS_REBUILD_START_UTC']) { 'OK' } else { 'ABSENT' })
 
     # V11.1 -Control @('3.4.1'): post-teardown inventory matches the declared empty
     # baseline (no mls-rg-* survives) - the same "actual state matches the declared
@@ -525,7 +706,8 @@ function Invoke-Main {
         -Command "pwsh verification/layer-03-audit.ps1   # users/groups/CA/app registrations (V3.1-V3.4)`npwsh verification/layer-04-audit.ps1   # labels + GUIDs (V4.1) - this is V4.2's L11 re-execution" `
         -Expected 'both audits PASS: 5 users, 4 groups, 3 app registrations, CA still enabledForReportingButNotEnforced, licences Active for every user flagged licensed, 4 labels with unchanged GUIDs' -NoRetry `
         -Test {
-        Test-TenantObjectIntact -Root $PSScriptRoot -Argument $childArgument -Checkpoint $Phase -SkipChildAudit:$SkipChildAudit
+        Test-TenantObjectIntact -Root $PSScriptRoot -Argument $childArgument -Checkpoint $Phase -SkipChildAudit:$SkipChildAudit `
+            -Environment $childEnvironment -Context $context
     } | Out-Null
 
     if ($Phase -eq 'Up') {
@@ -537,14 +719,15 @@ function Invoke-Main {
             -Command 'foreach ($n in 1..10) { pwsh verification/layer-$(''{0:d2}'' -f $n)-audit.ps1 }' `
             -Expected 'PASS for every layer audit L1-L10 against the rebuilt environment' -NoRetry `
             -Test {
-            Test-AllLayerAuditGreen -Layer $ChildAuditLayer -Root $PSScriptRoot -Argument $childArgument -SkipChildAudit:$SkipChildAudit
+            Test-AllLayerAuditGreen -Layer $ChildAuditLayer -Root $PSScriptRoot -Argument $childArgument -SkipChildAudit:$SkipChildAudit `
+                -Environment $childEnvironment -Context $context
         } | Out-Null
 
         # -Control @(): rebuild wall-clock is an operational SLA, not CUI protection.
         Invoke-MlsCriterion -Context $context -Id 'V11.4' -Control @() `
             -Description 'Wall-clock < 180 min' `
             -Command "timestamps recorded by up.ps1 (start) and the Verifier's audit runner (last synchronous audit green), cross-checked against gh api repos/$repositoryName/actions/runs created_at/updated_at" `
-            -Expected "elapsed < $WallClockBudgetMinutes:00 minutes on both clocks" -NoRetry `
+            -Expected "elapsed < $($WallClockBudgetMinutes) minutes on both clocks" -NoRetry `
             -Test {
             Test-WallClock -StartUtc $startUtc -CompletedUtc $completedUtc -BudgetMinutes $WallClockBudgetMinutes -Repository $repositoryName
         } | Out-Null

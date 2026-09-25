@@ -39,6 +39,15 @@ on:
         type: boolean
         required: false
         default: false
+    outputs:
+      # V6.3's 24 h cost-export window starts at L6 COMPLETION. infra-up.yml's L11 up-phase
+      # proof re-runs the L6 audit as a V11.3 child, and without this instant the child
+      # cannot compute the deadline and records a not-yet-arrived export as FAIL rather than
+      # PENDING (layer-06-audit.ps1, -LayerCompletedUtc / MLS_L6_COMPLETED_AT). Empty when
+      # the deploy job did not run (verify_only, dry run).
+      completed-at:
+        description: UTC instant the L6 deploy recorded as its completion (ISO-8601).
+        value: ${{ jobs.deploy.outputs.completed-at }}
   workflow_dispatch:
     inputs:
       location:
