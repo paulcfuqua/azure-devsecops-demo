@@ -26,8 +26,8 @@ may still want the capability they describe.
 > trial-rate strategy is designed so the entire demo window runs at ~$0 licensing cost.
 >
 > **2026-08-24 amendment (sponsor decision, `specs/2026-08-24-amendment-copilot-studio.md`):**
-> the **Anthropic API key item is gone** — there is no LLM key anywhere in the system.
-> In its place, four Microsoft-side items: a Power Platform environment, the Copilot
+> there is no LLM key anywhere in the system. Runtime LLM work needs four Microsoft-side
+> items: a Power Platform environment, the Copilot
 > Studio pay-as-you-go meter bound to this Azure subscription, the Fabric data agent's
 > tenant enablement, and the Direct Line channel for the embedded surface. See § B for
 > what this does — and does not — cost, and § C items 5–7.
