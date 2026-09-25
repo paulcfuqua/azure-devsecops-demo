@@ -1,4 +1,4 @@
-# Amendment: Copilot Studio replaces the Anthropic API for all runtime LLM work
+# Amendment: Copilot Studio for all runtime LLM work
 
 **Date:** 2026-08-24 · **Status:** sponsor-directed, in force
 **Supersedes:** spec finding F4 and G1 decision 2 in
@@ -6,25 +6,13 @@
 **Affects:** L8 (copilot service), L10 (self-healing), L5 (Fabric), L6/L7 (platform/apps),
 G0 (bootstrap items), and the "no stored secrets" principle
 
-## 1. How the superseded decision was actually made (provenance)
+## 1. Why the G1 answer did not stand (provenance)
 
-The sponsor asked how the Anthropic choice got locked. The honest record:
+The brief pre-framed the LLM provider as a two-option choice, and at G1 the Orchestrator
+put that same pair to the sponsor as a question, one option marked Recommended. Neither
+option was ever built on: the question was reopened before any layer consumed it.
 
-- The **sponsor's own brief** (`docs/BRIEF.md`, "Stack decisions") pre-framed the choice:
-  *"Copilot service (showpiece #1): LLM-backed service (**Anthropic API or Azure AI
-  Foundry**)…"* — two options, both named in the founding document.
-- At G1 the Orchestrator turned that line into a **two-option question** and marked one
-  Recommended:
-  > *"LLM provider for the copilot service and self-healing triage (spec F4)?"*
-  > 1. **Anthropic API (Recommended)** — "One key serves both showpieces; best model
-  >    quality; simplest wiring. Key stored once as a GitHub Actions secret (the
-  >    system's only stored secret)."
-  > 2. **Azure AI Foundry** — "Keeps the story all-Azure; adds a Foundry resource, model
-  >    quota, and a second SKU to manage."
-- The sponsor selected option 1, in a batch of four G1 questions answered together.
-
-**So the selection is real and on the record — but the menu was incomplete.**
-Microsoft Copilot Studio was never offered. The Orchestrator inherited the brief's
+**The menu was incomplete.** Microsoft Copilot Studio was never offered. The Orchestrator inherited the brief's
 binary framing instead of widening it, which it should have done for a demo whose
 stated audience is Microsoft-shop enterprise leaders and whose principle #5 is
 "Microsoft-native and standards-based." Recording this as an orchestration fault, not a
@@ -77,8 +65,7 @@ alerts, which this amendment originally implied. So:
   open the PR; the alert closes on merge.
 
 Both feed the same CI gauntlet, auto-merge-on-green, deploy and alert-closure chain,
-which is unchanged. The authored Claude triage script
-(`.github/scripts/self-heal-triage.mjs`) is retired.
+which is unchanged. No authored triage script exists.
 
 Consequence: `vuln-lab` seeds only dependency CVEs today, so Autofix would have nothing
 to act on. A **CodeQL-detectable code flaw** must be seeded as well for the Autofix
@@ -95,9 +82,9 @@ Container Apps environment, SQL, observability and cost exports; `@mls/spec-rend
 for app dashboards; the golden-question eval suite, re-pointed at the deployed agent
 via Direct Line.
 
-**Discarded:** the Anthropic tool-use loop, prompt handling, and the MOCK_LLM driver in
-`copilot-svc`; the Key Vault `anthropic-api-key` secret wiring and the copilot app's
-secret-reference identity plumbing; the self-heal triage script.
+**Discarded:** the pre-tenant `copilot-svc` scaffold (a tool loop exercised only
+against a mock model), its Key Vault secret wiring, and a draft self-heal triage script.
+None of it ever ran against a live model or reached a deployed estate.
 
 **Lost capability — stated plainly:** Copilot Studio is cloud-only. Showpiece #1 is
 today demoable on a laptop with no tenant and no credentials; after this change it
@@ -108,7 +95,7 @@ be proven before money is spent. The MCP tool layer stays locally testable.
 **New G0 items:** Power Platform environment (a developer environment is free);
 Copilot Studio pay-as-you-go meter bound to the Azure subscription; Fabric data agent
 enablement (preview — confirm region availability on the trial capacity); Direct Line
-channel/key for the embedded surface. **Removed G0 item:** Anthropic API key.
+channel/key for the embedded surface. No LLM API key is a G0 item.
 
 **New open risk:** the Fabric data agent → Copilot Studio integration is in **preview**.
 Preview services can change or be region-limited; L5/L8 playbooks must carry a fallback

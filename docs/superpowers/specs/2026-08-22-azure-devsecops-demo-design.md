@@ -70,21 +70,10 @@ enabled per-repo either way.
 > **This finding no longer governs.** All runtime LLM work moved inside the Microsoft
 > landscape: a **custom Copilot Studio agent** (Fabric data agent for NL→SQL, MCP server
 > for ops/sec/cost tools, embedded in the control tower via Direct Line) and **GitHub
-> Copilot Autofix** for self-healing. No Anthropic API key exists in the system, so the
-> stored-secret exception below is void. The option list this finding offered was
-> incomplete — it never included Copilot Studio. See
+> Copilot Autofix** for self-healing. No LLM API key exists in the system. The option
+> list this finding offered was incomplete — it never included Copilot Studio. See
 > [2026-08-24-amendment-copilot-studio.md](2026-08-24-amendment-copilot-studio.md),
-> which also records how the superseded decision came to be locked.
-
-
-
-**Recommendation: Anthropic API direct** (claude-sonnet-5 for the copilot tools loop;
-the self-healing workflow already assumes Claude API per the brief). One key serves both.
-Azure AI Foundry remains the alternative if "everything on Azure" matters more to the
-demo story than model quality; it adds a Foundry resource, quota requests, and a second
-SKU to manage. The key is a stored secret (GitHub Actions secret + Key Vault reference) —
-a documented, deliberate exception to "no stored cloud secrets in CI": OIDC covers all
-*Azure* auth; a third-party SaaS key has no OIDC path.
+> which also records how that gap was caught.
 
 ### F5 — Public repo hygiene (MEDIUM)
 
@@ -169,9 +158,8 @@ Per the brief's stack decisions (final, restated for one-page reference):
 ## 4. Decisions resolved at G1 (sponsor, 2026-08-22)
 
 1. **Repo shape:** single public monorepo (F3 recommendation adopted).
-2. ~~**LLM provider:** Anthropic API direct (F4 recommendation adopted).~~
-   **SUPERSEDED 2026-08-24 → custom Copilot Studio agent + GitHub Copilot Autofix**;
-   see [2026-08-24-amendment-copilot-studio.md](2026-08-24-amendment-copilot-studio.md).
+2. **LLM provider:** custom Copilot Studio agent + GitHub Copilot Autofix (settled
+   2026-08-24); see [2026-08-24-amendment-copilot-studio.md](2026-08-24-amendment-copilot-studio.md).
 3. **Licensing path:** dual free trials — M365 E5 (30 d, provides the Exchange-backed
    compliance portal for label creation) + EMS E5 (90 d, keeps CA/sign-in-risk
    licensed); full E3-vs-E5 breakdown in `docs/runbooks/g0-bootstrap.md` §B.
