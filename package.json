@@ -28,6 +28,6 @@
     "dev:mcp-tools": "npm run dev --workspace apps/mcp-tools"
   },
   "devDependencies": {
-    "playwright": "^1.62.1"
+    "playwright": "^1.63.0"
   }
 }
