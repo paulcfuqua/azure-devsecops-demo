@@ -1,4 +1,9 @@
 # =============================================================================
+# ESTATE SHUT DOWN 2026-09-25. Every `open-pull-requests-limit` below was set to
+# 0 on 2026-10-20 so Dependabot stops opening version-update PRs against an
+# estate that no longer exists. Before any rebuild, restore the limits from git
+# history (they were 5, 3 and 0 per entry) and re-enable Actions.
+# =============================================================================
 # Dependabot configuration — L9 DevSecOps chain, feeding the L10 self-healing
 # showpiece. Playbook: docs/runbooks/layers/L09.md (failure mode 5: "Dependabot
 # config valid but silent" — wrong directory globs or an ecosystem typo means no
@@ -43,7 +48,7 @@ updates:
       interval: weekly
       day: monday
       time: '06:00'
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     # One PR per ecosystem for minor and patch bumps, instead of one PR each.
     # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
     # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
@@ -154,7 +159,7 @@ updates:
       interval: weekly
       day: monday
       time: '06:00'
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     # One PR per ecosystem for minor and patch bumps, instead of one PR each.
     # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
     # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
@@ -183,7 +188,7 @@ updates:
       interval: weekly
       day: monday
       time: '06:00'
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     # One PR per ecosystem for minor and patch bumps, instead of one PR each.
     # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
     # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
@@ -226,7 +231,7 @@ updates:
       interval: weekly
       day: monday
       time: '06:00'
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     # One PR per ecosystem for minor and patch bumps, instead of one PR each.
     # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
     # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
@@ -251,7 +256,7 @@ updates:
       interval: weekly
       day: monday
       time: '06:00'
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     # One PR per ecosystem for minor and patch bumps, instead of one PR each.
     # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
     # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
@@ -276,7 +281,7 @@ updates:
       interval: weekly
       day: monday
       time: '06:00'
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     # One PR per ecosystem for minor and patch bumps, instead of one PR each.
     # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
     # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
@@ -301,7 +306,7 @@ updates:
       interval: weekly
       day: monday
       time: '06:00'
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     # One PR per ecosystem for minor and patch bumps, instead of one PR each.
     # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
     # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
@@ -326,7 +331,7 @@ updates:
       interval: weekly
       day: monday
       time: '06:00'
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     # One PR per ecosystem for minor and patch bumps, instead of one PR each.
     # MAJORS ARE DELIBERATELY NOT GROUPED: they need individual judgement, and
     # 2026-08-29 proved it -- typescript 7 had to be declined (it breaks the tsup
